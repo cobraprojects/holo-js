@@ -349,6 +349,7 @@ describe('auth runtime utilities', () => {
     expect(readSessionPayload(record)).toBe(payload)
     expect(readSessionPayload(record, 'missing')).toBeNull()
     expect(readSessionPayloads({ ...record, data: { auth: { invalid: true } } })).toBeNull()
+    expect(readSessionPayloads({ ...record, data: { auth: { ...payload, authenticatedAt: 'invalid' } } })).toBeNull()
     expect(readSessionPayloads({ ...record, data: { auth: { web: payload, invalid: true } } })).toEqual({ web: payload })
     expect(writeSessionPayloads({ auth: payload, preserved: true }, {})).toEqual({ preserved: true })
     expect(resolveSessionPayloadProvider({ ...payload, provider: 'workos' })).toBe('workos')

@@ -24,6 +24,10 @@ type RuntimePayload = {
   readonly runtimeConfig?: RuntimeConfigPayload
   readonly models?: readonly string[]
   readonly migrations?: readonly string[]
+  readonly migrationPublishers?: readonly {
+    readonly packageName: string
+    readonly url: string
+  }[]
   readonly seeders?: readonly string[]
   readonly generatedSchema?: string
   readonly generatedSchemaOutputPath?: string
@@ -84,7 +88,7 @@ if (typeof payload.projectRoot === 'string') {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 async function loadModule(path: string): Promise<unknown> {
@@ -330,6 +334,48 @@ async function loadMigrations(entries: readonly string[]): Promise<RuntimeMigrat
   return migrations.map((migration, index) => normalizeRuntimeMigration(entries[index] ?? '', migration))
 }
 
+async function loadPublishedMigrations(
+  publishers: RuntimePayload['migrationPublishers'],
+): Promise<RuntimeMigration[]> {
+  const migrations: RuntimeMigration[] = []
+  for (const publisher of publishers ?? []) {
+    const loaded = await loadModule(publisher.url)
+    const candidate = isRecord(loaded) && Array.isArray(loaded.migrations)
+      ? loaded.migrations
+      : isRecord(loaded) && Array.isArray(loaded.default)
+        ? loaded.default
+        : undefined
+    if (!candidate) {
+      throw new Error(`Plugin ${publisher.packageName} migration publisher must export a migrations array.`)
+    }
+
+    for (const migration of candidate) {
+      if (!isMigration(migration) || typeof migration.name !== 'string' || !migration.name.trim()) {
+        throw new Error(`Plugin ${publisher.packageName} migrations must define explicit stable names and up handlers.`)
+      }
+      migrations.push({ ...migration, name: migration.name.trim() })
+    }
+  }
+  return migrations
+}
+
+function assertUniqueMigrationNames(migrations: readonly RuntimeMigration[]): void {
+  const names = new Set<string>()
+  for (const migration of migrations) {
+    if (names.has(migration.name)) throw new Error(`Duplicate migration name: ${migration.name}.`)
+    names.add(migration.name)
+  }
+}
+
+async function loadAllMigrations(): Promise<RuntimeMigration[]> {
+  const migrations = [
+    ...await loadMigrations(payloadEntries(payload.migrations)),
+    ...await loadPublishedMigrations(payload.migrationPublishers),
+  ]
+  assertUniqueMigrationNames(migrations)
+  return migrations
+}
+
 async function loadSeeders(entries: readonly string[]): Promise<RuntimeSeeder[]> {
   return loadRuntimeItems(entries, isSeeder, 'seeder')
 }
@@ -370,25 +416,25 @@ const resolvedRuntimeConfig = resolveRuntimeConfig(payload.runtimeConfig)
 await loadProjectDatabaseDrivers(payload.projectRoot ?? process.cwd(), resolvedRuntimeConfig.db)
 const manager = resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
 configureDB(manager)
+const migrations = payload.kind === 'migrate' || payload.kind === 'hydrate-schema' || payload.kind === 'fresh' || payload.kind === 'rollback'
+  ? await loadAllMigrations()
+  : []
 
 try {
   await manager.initializeAll()
 
   if (payload.kind === 'migrate') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
-    const migrations = await loadMigrations(payloadEntries(payload.migrations))
     await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
     const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
   } else if (payload.kind === 'hydrate-schema') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
-    const migrations = await loadMigrations(payloadEntries(payload.migrations))
     await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     writeOutput('Generated schema metadata refreshed.')
   } else if (payload.kind === 'fresh') {
-    const migrations = await loadMigrations(payloadEntries(payload.migrations))
     const schema = createSchemaService(manager.connection())
     await dropAllTablesForFresh(manager.connection(), schema)
     manager.connection().getSchemaRegistry().clear()
@@ -409,7 +455,6 @@ try {
     }
   } else if (payload.kind === 'rollback') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
-    const migrations = await loadMigrations(payloadEntries(payload.migrations))
     await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
     const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)

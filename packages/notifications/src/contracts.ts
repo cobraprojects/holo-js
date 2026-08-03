@@ -3,16 +3,16 @@ import type { NormalizedHoloNotificationsConfig } from './config'
 const HOLO_NOTIFICATION_DEFINITION_MARKER = Symbol.for('holo-js.notifications.definition')
 const BUILT_IN_NOTIFICATION_CHANNELS = ['email', 'database', 'broadcast'] as const
 
-type NotificationJsonPrimitive = string | number | boolean | null
+export type NotificationJsonScalar = string | number | boolean | null
 export type NotificationJsonValue
-  = NotificationJsonPrimitive
+  = NotificationJsonScalar
   | readonly NotificationJsonValue[]
   | { readonly [key: string]: NotificationJsonValue }
 
 export type NotificationDelayValue = number | Date
 
 function isObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function normalizeOptionalString(
@@ -262,6 +262,8 @@ export interface PendingNotificationDispatch<TResult = NotificationDispatchResul
     value: NotificationDelayValue,
   ): PendingNotificationDispatch<TResult>
   afterCommit(): PendingNotificationDispatch<TResult>
+  deduplicate(key: string): this
+  dispatch(): Promise<TResult>
   then<TResult1 = TResult, TResult2 = never>(
     onfulfilled?: ((value: TResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
@@ -305,13 +307,37 @@ export interface NotificationRecord<TData extends NotificationJsonValue = Notifi
   readonly updatedAt: Date
 }
 
+export interface NotificationDataMatch {
+  readonly path: readonly string[]
+  readonly value: NotificationJsonScalar
+}
+
+export interface NotificationPagination {
+  readonly limit: number
+  readonly offset: number
+}
+
+export interface NotificationQuery {
+  readonly recipient: NotificationDatabaseRoute
+  readonly type?: string
+  readonly dataMatches?: readonly NotificationDataMatch[]
+}
+
+export interface NotificationPage<TData extends NotificationJsonValue = NotificationJsonValue> {
+  readonly records: readonly NotificationRecord<TData>[]
+  readonly limit: number
+  readonly offset: number
+  readonly total: number
+  readonly unread: number
+}
+
 export interface NotificationStore {
   create(record: NotificationRecord): Promise<void>
-  list(notifiable: NotificationDatabaseRoute): Promise<readonly NotificationRecord[]>
-  unread(notifiable: NotificationDatabaseRoute): Promise<readonly NotificationRecord[]>
-  markAsRead(ids: readonly string[]): Promise<number>
-  markAsUnread(ids: readonly string[]): Promise<number>
-  delete(ids: readonly string[]): Promise<number>
+  list(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+  unread(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+  markAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  markAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  delete(query: NotificationQuery, ids: readonly string[]): Promise<number>
 }
 
 export interface NotificationDispatchTarget {
@@ -325,6 +351,7 @@ export interface NotificationDispatchOptions {
   readonly delay?: NotificationDelayValue
   readonly delayByChannel?: Partial<Record<string, NotificationDelayValue>>
   readonly afterCommit?: boolean
+  readonly deduplicationKey?: string
 }
 
 export interface NotificationDispatchInput<
@@ -356,7 +383,7 @@ export interface RegisteredNotificationChannel<TChannel extends string = string>
 }
 
 export function isNotificationDefinition(value: unknown): value is NotificationDefinition {
-  return !!value
+  return value !== null
     && typeof value === 'object'
     && 'via' in value
     && typeof (value as { via?: unknown }).via === 'function'

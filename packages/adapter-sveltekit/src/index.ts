@@ -363,7 +363,7 @@ function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
     return null
   }
 
-  const options: SvelteKitCookieOptions = { path: '/' }
+  const options: SvelteKitCookieOptions = { path: '/', secure: false }
   for (const rawAttribute of attributes) {
     const attribute = rawAttribute.trim()
     if (!attribute) {

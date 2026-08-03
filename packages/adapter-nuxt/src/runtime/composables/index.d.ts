@@ -26,6 +26,27 @@ export interface HoloRuntimeDefaultConnection extends HoloRuntimeConnection {
 }
 
 export declare const holo: HoloAdapterProjectAccessors
+export type NuxtAuthRequestEvent = {
+  readonly headers?: Pick<Headers, 'get'>
+  readonly request?: {
+    readonly headers?: Pick<Headers, 'get'>
+  }
+  readonly web?: {
+    readonly request?: {
+      readonly headers?: Pick<Headers, 'get'>
+    }
+  }
+  readonly node?: {
+    readonly req?: {
+      readonly headers?: Readonly<Record<string, string | readonly string[] | undefined>>
+    }
+    readonly res?: {
+      getHeader(name: string): number | string | readonly string[] | undefined
+      setHeader(name: string, value: number | string | readonly string[]): void
+    }
+  }
+}
+export declare function runWithNuxtRequest<TValue>(event: NuxtAuthRequestEvent, callback: () => TValue): Promise<Awaited<TValue>>
 export declare function useHoloDb(): HoloRuntimeDatabaseGroup | HoloRuntimeDefaultConnection
 export declare function useHoloEnv(): 'production' | 'development' | 'test'
 export declare function useHoloDebug(): boolean

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/storage",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - Portable storage runtime and config helpers",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-nuxt",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - Nuxt adapter",
   "type": "module",
   "license": "MIT",
@@ -44,7 +44,8 @@
     "@holo-js/core": "catalog:",
     "@holo-js/db": "catalog:",
     "@holo-js/validation": "catalog:",
-    "h3": "catalog:"
+    "h3": "catalog:",
+    "nitropack": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/broadcast": "catalog:",

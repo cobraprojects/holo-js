@@ -14,6 +14,7 @@ describe('@holo-js/core config contribution composition', () => {
     expect(loadDirect.mock.calls.map(([specifier]) => specifier)).toEqual(
       configRuntimeInternals.featureConfigContributionSpecifiers,
     )
+    expect(loadDirect).toHaveBeenCalledWith('@holo-js/media/config', '/project')
     expect(loadOptional).not.toHaveBeenCalled()
   })
 

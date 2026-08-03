@@ -3,6 +3,7 @@ import {
   consumeRememberMeToken,
   cookies,
   createSession,
+  flashSession,
   invalidateSession,
   issueRememberMeToken,
   readSession,
@@ -10,6 +11,7 @@ import {
   rotateSession,
   sessionCookie,
   touchSession,
+  takeSession,
   writeSession,
 } from './runtime'
 
@@ -44,6 +46,7 @@ export type {
   SessionRuntimeBindings,
   SessionRuntimeFacade,
   SessionStore,
+  SessionStoreTakeResult,
   TouchSessionOptions,
 } from './contracts'
 import type {
@@ -56,6 +59,7 @@ export {
   consumeRememberMeToken,
   cookies,
   createSession,
+  flashSession,
   getSessionRuntime,
   invalidateSession,
   issueRememberMeToken,
@@ -68,6 +72,7 @@ export {
   sessionCookie,
   sessionRuntimeInternals,
   touchSession,
+  takeSession,
   writeSession,
 } from './runtime'
 export {
@@ -98,6 +103,8 @@ const session = Object.assign(
     touch: touchSession,
     issueRememberMeToken,
     consumeRememberMeToken,
+    flash: flashSession,
+    take: takeSession,
     cookie,
     sessionCookie,
     rememberMeCookie,

@@ -41,6 +41,11 @@ export interface SessionRecord {
   readonly rememberTokenHash?: string
 }
 
+export interface SessionStoreTakeResult {
+  readonly found: boolean
+  readonly value?: unknown
+}
+
 export interface CookieSerializeOptions {
   readonly path?: string
   readonly domain?: string
@@ -56,6 +61,9 @@ export interface SessionStore {
   read(sessionId: string): Promise<SessionRecord | null>
   write(record: SessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
+  rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
+  flash?(sessionId: string, key: string, value: unknown): Promise<void>
+  take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
 }
 
 export interface SessionRuntimeBindings {
@@ -72,6 +80,8 @@ export interface SessionRuntimeFacade {
   touch(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null>
   issueRememberMeToken(sessionId: string, options?: RememberTokenOptions): Promise<string>
   consumeRememberMeToken(token: string, options?: RememberTokenOptions): Promise<SessionRecord | null>
+  flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>
+  take<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined>
   cookie(name: string, value: string, options?: CookieSerializeOptions): string
   sessionCookie(value: string, options?: CookieSerializeOptions): string
   rememberMeCookie(value: string, options?: CookieSerializeOptions): string
@@ -92,6 +102,8 @@ export interface SessionFacade {
   touch(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null>
   issueRememberMeToken(sessionId: string, options?: RememberTokenOptions): Promise<string>
   consumeRememberMeToken(token: string, options?: RememberTokenOptions): Promise<SessionRecord | null>
+  flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>
+  take<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined>
   cookie(name: string, value: string, options?: CookieSerializeOptions): string
   sessionCookie(value: string, options?: CookieSerializeOptions): string
   rememberMeCookie(value: string, options?: CookieSerializeOptions): string

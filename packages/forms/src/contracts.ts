@@ -436,7 +436,7 @@ async function importNextHeadersModule(): Promise<NextHeadersModule | undefined>
     const runtime = globalThis as FormsRuntimeGlobal
     const module = runtime.__holoFormsNextHeadersImport__
       ? await runtime.__holoFormsNextHeadersImport__()
-      : await import(/* @vite-ignore */ nextHeadersModuleSpecifier)
+      : await import(/* @vite-ignore */ /* webpackIgnore: true */ nextHeadersModuleSpecifier)
 
     /* v8 ignore next -- V8 marks this guard uncovered even though both branches are exercised. */
     if (isNextHeadersModule(module)) {

@@ -36,6 +36,14 @@ describe('auth config normalization', () => {
         },
       },
       emailVerification: { required: true, route: ' /confirm-email ' },
+      multiFactor: {
+        issuer: ' Holo Admin ',
+        challengeRoute: ' /admin/mfa ',
+        enrollmentTtl: '900',
+        challengeTtl: 180,
+        recoveryCodes: 10,
+        allowedDriftSteps: 2,
+      },
       personalAccessTokens: { defaultAbilities: ['read', 'write'] },
       socialEncryptionKey: ' social-key ',
       social: {
@@ -85,6 +93,15 @@ describe('auth config normalization', () => {
         admins: { table: 'admin_resets', expire: 30, throttle: 10, route: '/admin/reset' },
       },
       emailVerification: { required: true, route: '/confirm-email' },
+      multiFactor: {
+        enabled: true,
+        issuer: 'Holo Admin',
+        challengeRoute: '/admin/mfa',
+        enrollmentTtl: 900,
+        challengeTtl: 180,
+        recoveryCodes: 10,
+        allowedDriftSteps: 2,
+      },
       personalAccessTokens: { defaultAbilities: ['read', 'write'] },
       socialEncryptionKey: 'social-key',
       social: { github: { runtime: 'github-runtime', encryptTokens: true } },
@@ -100,6 +117,16 @@ describe('auth config normalization', () => {
       required: true,
       route: DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
     })
+    expect(normalizeAuthConfig({ multiFactor: true }).multiFactor).toEqual({
+      enabled: true,
+      issuer: 'Holo',
+      challengeRoute: '/mfa-challenge',
+      enrollmentTtl: 600,
+      challengeTtl: 300,
+      recoveryCodes: 8,
+      allowedDriftSteps: 1,
+    })
+    expect(normalizeAuthConfig({ multiFactor: false }).multiFactor.enabled).toBe(false)
     expect(normalizeAuthConfig({}, { appKey: ' app-key ' }).socialEncryptionKey).toBe('app-key')
     const defaultClerkApp = normalizeAuthConfig({ clerk: { app: {} } }).clerk.app
     expect(defaultClerkApp && typeof defaultClerkApp === 'object' && 'sessionCookie' in defaultClerkApp
@@ -140,6 +167,22 @@ describe('auth config normalization', () => {
       [{ passwords: { users: { throttle: -1 } } }, 'must be greater than or equal to 0'],
       [{ defaults: { guard: 'missing' } }, 'default auth guard'],
       [{ defaults: { passwords: 'missing' } }, 'default password broker'],
+    ]
+    for (const [config, message] of cases) expectConfigError(config, message)
+  })
+
+  it('rejects unsafe multi-factor configuration', () => {
+    const cases: ReadonlyArray<readonly [unknown, string]> = [
+      [{ multiFactor: null }, 'multi-factor configuration must be a boolean or object'],
+      [{ multiFactor: [] }, 'multi-factor configuration must be a boolean or object'],
+      [{ multiFactor: { issuer: `bad\nissuer` } }, 'issuer must be a bounded printable string'],
+      [{ multiFactor: { challengeRoute: 'https://example.com/mfa' } }, 'challenge route must be a safe local path'],
+      [{ multiFactor: { challengeRoute: '/../mfa' } }, 'challenge route must be a safe local path'],
+      [{ multiFactor: { enrollmentTtl: 59 } }, 'enrollment TTL must be greater than or equal to 60'],
+      [{ multiFactor: { challengeTtl: 29 } }, 'challenge TTL must be greater than or equal to 30'],
+      [{ multiFactor: { recoveryCodes: 0 } }, 'recovery code count must be greater than or equal to 1'],
+      [{ multiFactor: { allowedDriftSteps: -1 } }, 'allowed drift steps must be greater than or equal to 0'],
+      [{ multiFactor: { recoveryCodes: 21 } }, 'configuration exceeds its security bounds'],
     ]
     for (const [config, message] of cases) expectConfigError(config, message)
   })

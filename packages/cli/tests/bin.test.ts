@@ -83,6 +83,8 @@ async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
       'export const DEFAULT_HOLO_PROJECT_PATHS = Object.freeze({ models: "app/models", migrations: "database/migrations", seeders: "database/seeders", commands: "app/commands", jobs: "app/jobs", events: "app/events", listeners: "app/listeners", generatedSchema: ".holo-js/generated/schema.generated.ts" })',
       'export function normalizeHoloProjectConfig(config = {}) { return { ...config, paths: { ...DEFAULT_HOLO_PROJECT_PATHS, ...(config.paths ?? {}) } } }',
       'export function normalizeHoloPluginDefinition(value) { return value.default ?? value.plugin ?? value }',
+      'export class HoloProjectPrepareError extends Error {}',
+      'export const HOLO_PROJECT_PREPARE_API_VERSION = 1',
       'export async function loadHoloPluginDefinitions() { return [] }',
     ].join('\n'),
   )
@@ -102,6 +104,7 @@ async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
       'export function inferMigrationTableName(value) { return value }',
       'export function inferMigrationTemplateKind() { return "blank" }',
       'export function configureDB() {}',
+      'export function createMigrationService() { return { status: async () => [], migrate: async () => [] } }',
       'export function resetDB() {}',
       'export function resolveRuntimeConnectionManagerOptions() { return {} }',
     ].join('\n'),
@@ -115,6 +118,21 @@ async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
     packageRoot,
     'inflection',
     'export default { pluralize: value => value.endsWith("s") ? value : `${value}s` }\n',
+  )
+  await writeStubPackage(
+    packageRoot,
+    'minimatch',
+    'export function minimatch() { return false }\n',
+  )
+  await writeStubPackage(
+    packageRoot,
+    'semver',
+    'export function gte() { return false }\nexport function minVersion() {}\nexport function satisfies() { return false }\nexport function validRange() {}\n',
+  )
+  await writeStubPackage(
+    packageRoot,
+    'yaml',
+    'export function parse() { return {} }\n',
   )
 }
 

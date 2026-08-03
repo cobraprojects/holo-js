@@ -41,7 +41,7 @@ describe('sqlite query compiler module coverage', () => {
         },
         jsonValueBindings,
       ),
-    ).toBe(`json_extract("settings", '$.profile.region') = ?`)
+    ).toBe(`json_type("settings", '$.profile.region') = 'text' AND json_extract("settings", '$.profile.region') = ?`)
     expect(jsonValueBindings).toEqual(['mena'])
 
     const updateBindings: unknown[] = []

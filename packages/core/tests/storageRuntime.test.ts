@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
 const tempDirs: string[] = []
@@ -27,7 +27,46 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
+async function createSymlinkedStorageDirectory(): Promise<{
+  readonly backend: ReturnType<typeof storageRuntimeInternals.createFileStorageBackend>
+  readonly outside: string
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'holo-storage-symlink-'))
+  tempDirs.push(root)
+  const storage = join(root, 'storage')
+  const outside = join(root, 'outside')
+  await Promise.all([mkdir(storage), mkdir(outside)])
+  await symlink(outside, join(storage, 'escape'))
+  return {
+    backend: storageRuntimeInternals.createFileStorageBackend(storage),
+    outside,
+  }
+}
+
 describe('@holo-js/core storage runtime optional imports', () => {
+  it('rejects streamed writes through a symlinked storage parent', async () => {
+    const { backend, outside } = await createSymlinkedStorageDirectory()
+    if (!backend.setItemStream) throw new Error('The file storage backend must support streamed writes.')
+    const source = (async function* (): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode('private')
+    })()
+
+    await expect(backend.setItemStream('escape:private.txt', source, { overwrite: true })).rejects.toThrow(
+      'Storage paths must stay inside the configured disk root',
+    )
+    await expect(readFile(join(outside, 'private.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects paginated listings through a symlinked storage directory', async () => {
+    const { backend, outside } = await createSymlinkedStorageDirectory()
+    if (!backend.getKeysPage) throw new Error('The file storage backend must support paginated listings.')
+    await writeFile(join(outside, 'private.txt'), 'private')
+
+    await expect(backend.getKeysPage('escape:', { cursor: null, limit: 10 })).rejects.toThrow(
+      'Storage paths must stay inside the configured disk root',
+    )
+  })
+
   it('resets the storage runtime through the dynamic loader', async () => {
     const resetStorageRuntime = vi.fn()
     vi.spyOn(storageRuntimeInternals, 'importOptionalModule').mockResolvedValueOnce({
@@ -104,6 +143,24 @@ describe('@holo-js/core storage runtime optional imports', () => {
     await withoutVitestEnv(async () => {
       await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(join(root, 'missing.mjs')).href)).resolves.toBeUndefined()
     })
+  })
+
+  it('retries partial stream writes until the complete chunk is persisted', async () => {
+    const offsets: number[] = []
+    const handle = {
+      async write(_buffer: Uint8Array, offset: number, length: number) {
+        offsets.push(offset)
+        return { bytesWritten: Math.min(2, length) }
+      },
+    }
+
+    await storageRuntimeInternals.writeCompleteChunk(handle, new Uint8Array(5))
+    expect(offsets).toEqual([0, 2, 4])
+    await expect(storageRuntimeInternals.writeCompleteChunk({
+      async write() {
+        return { bytesWritten: 0 }
+      },
+    }, new Uint8Array(1))).rejects.toThrow('made no progress')
   })
 
 })

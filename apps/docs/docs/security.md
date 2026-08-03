@@ -11,6 +11,8 @@ npx holo install security
 That writes `config/security.ts` and `config/cors.ts`, adds `@holo-js/security`, and lets core boot the package lazily only when
 it is installed.
 
+If you installed Auth, Security is already installed and configured. You do not need to run this command again.
+
 ## What the package owns
 
 - CSRF token helpers for server-rendered forms and browser clients
@@ -125,6 +127,7 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 - `cors.credentials` must be true when the frontend uses cookie-backed auth with `fetch(..., { credentials: 'include' })`.
 - `cors.statefulDomains` lists browser hosts that should be treated as first-party cookie clients.
 - `rateLimit.driver` must be `memory`, `file`, or `redis`.
+- MFA uses the selected rate-limit driver. Use `redis` when multiple application instances must share attempt limits.
 - `rateLimit.redis.connection` must reference a named shared Redis connection when `rateLimit.driver` is `redis`.
 - `rateLimit.limiters` is the named limiter registry used by `validate(...)`, `protect(...)`, and
   `rateLimit(...)`.

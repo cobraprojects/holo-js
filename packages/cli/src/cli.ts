@@ -33,6 +33,7 @@ import {
   type SupportedAuthSocialProvider,
 } from './project/shared'
 import type { LoadedProjectConfig, CommandFlagValue, CommandExecutionContext } from './types'
+import { createAppCommandRuntimeBoundary } from './app-command-runtime'
 import type {
   IoStreams,
   CommandDefinition,
@@ -97,12 +98,14 @@ export function createCommandContext(
   loadProject: () => Promise<LoadedProjectConfig>,
   input: PreparedInput,
 ): CommandExecutionContext {
+  const withRuntime = createAppCommandRuntimeBoundary(projectRoot, loadProject)
   return {
     cwd: io.cwd,
     projectRoot,
     args: input.args,
     flags: input.flags,
     loadProject,
+    withRuntime,
   }
 }
 
@@ -230,6 +233,10 @@ function formatPluginContributionLines(plugin: ProjectPluginsModule.HoloPluginDe
 
   if (contributes.framework) {
     lines.push(`framework: ${contributes.framework.displayName}`)
+  }
+
+  if (contributes.project?.prepare) {
+    lines.push(`project preparer: ${contributes.project.prepare}`)
   }
 
   if (contributes.dependencies?.holo?.length) {
@@ -714,7 +721,7 @@ export function createInternalCommands(
           const changed = eventsResult.updatedPackageJson
             || eventsResult.createdEventsDirectory
             || eventsResult.createdListenersDirectory
-            || !!queueResult
+            || Boolean(queueResult)
 
           writeLine(context.stdout, changed ? 'Installed events support.' : 'Events support is already installed.')
           if (eventsResult.updatedPackageJson || queueResult?.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
@@ -964,6 +971,8 @@ export function createInternalCommands(
         let contributedDependencies: readonly string[] = []
         let updatedContributedDependencies = false
         let activated = false
+        let createdSecurityConfig = false
+        let securityScaffoldSnapshots: DirectorySnapshot[] = []
 
         try {
           updatedPackageJson = await upsertProjectDependency(context.projectRoot, packageName)
@@ -995,6 +1004,17 @@ export function createInternalCommands(
             await pinProjectDependencyVersions(context.projectRoot, contributedDependencies)
           }
 
+          if (contributedDependencies.includes('@holo-js/security')) {
+            securityScaffoldSnapshots = await Promise.all([
+              readDirectorySnapshot(context.projectRoot, 'config'),
+              readDirectorySnapshot(context.projectRoot, 'storage/framework/rate-limits'),
+            ])
+            const installSecurityIntoProject = projectExecutors.installSecurityIntoProject
+              ?? (await loadProjectScaffoldModule()).installSecurityIntoProject
+            const securityResult = await installSecurityIntoProject(context.projectRoot)
+            createdSecurityConfig = securityResult.createdSecurityConfig
+          }
+
           activated = await plugins.activateProjectPlugin(context.projectRoot, packageName)
 
           if (activated) {
@@ -1005,10 +1025,12 @@ export function createInternalCommands(
           await restoreAppConfigSnapshot(appConfigSnapshot)
           await restorePackageJsonSnapshot(context.projectRoot, packageJsonSnapshot)
           await restoreDirectorySnapshot(holoDirectorySnapshot)
+          await Promise.all(securityScaffoldSnapshots.map(restoreDirectorySnapshot))
           if (updatedDependencies && dependencyInstallSucceeded) {
             await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot).catch(() => undefined)
           }
           await cleanupDirectorySnapshot(holoDirectorySnapshot)
+          await Promise.all(securityScaffoldSnapshots.map(cleanupDirectorySnapshot))
 
           throw error
         }
@@ -1025,11 +1047,15 @@ export function createInternalCommands(
         if (activated) {
           writeLine(context.stdout, '  - refreshed generated artifacts')
         }
+        if (createdSecurityConfig) {
+          writeLine(context.stdout, '  - created config/security.ts')
+        }
 
         for (const line of formatPluginContributionLines(loadedPlugin.definition)) {
           writeLine(context.stdout, `  - ${line}`)
         }
         await cleanupDirectorySnapshot(holoDirectorySnapshot)
+        await Promise.all(securityScaffoldSnapshots.map(cleanupDirectorySnapshot))
       },
     },
     {
@@ -1142,6 +1168,10 @@ export function createInternalCommands(
           return
         }
 
+        if (failedPlugins.length === 0) {
+          await plugins.loadProjectPluginPreparers(context.projectRoot)
+        }
+
         for (const resolvedPlugin of resolvedPlugins) {
           if (resolvedPlugin.loaded) {
             writeLine(context.stdout, `Loaded ${resolvedPlugin.packageName}: ${formatPluginLabel(resolvedPlugin.loaded.definition)}`)
@@ -1199,7 +1229,7 @@ export function createInternalCommands(
       },
       async run() {
         const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
-        await runProjectPrepare(context.projectRoot, context)
+        await runProjectPrepare(context.projectRoot, context, { command: 'prepare', reason: 'explicit' })
         writeLine(context.stdout, 'Prepared Holo discovery artifacts.')
       },
     },
@@ -1219,17 +1249,23 @@ export function createInternalCommands(
     {
       name: 'build',
       description: 'Prepare Holo discovery artifacts and run the project build script.',
-      usage: 'holo build',
+      usage: 'holo build [...frameworkArgs]',
       source: 'internal',
-      async prepare() {
-        return { args: [], flags: {} }
+      async prepare(input) {
+        return { args: input.args, flags: input.flags }
       },
-      async run() {
+      async run(input) {
         const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
         const runProjectBuild = await resolveProjectExecutor(projectExecutors, 'runProjectBuild')
         const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
-        await runProjectPrepare(context.projectRoot, context)
+        await runProjectPrepare(context.projectRoot, context, { command: 'build', reason: 'initial' })
         await executeRuntime(context.projectRoot, 'hydrate-schema', {}, async () => undefined)
+        const passthroughArgs = serializePassthroughInput(input)
+        if (passthroughArgs.length > 0) {
+          await runProjectBuild(context, context.projectRoot, undefined, passthroughArgs)
+          return
+        }
+
         await runProjectBuild(context, context.projectRoot)
       },
     },
@@ -2068,7 +2104,11 @@ export function createAppCommandDefinition(command: DiscoveredAppCommand): Comma
     usage: command.usage ?? `holo ${command.name}`,
     source: 'app',
     async run(context) {
-      await (await command.load()).run(context)
+      if (!context.withRuntime) throw new Error(`Application command "${command.name}" requires a complete execution context.`)
+      await (await command.load()).run({
+        ...context,
+        withRuntime: context.withRuntime,
+      })
     },
   }
 }

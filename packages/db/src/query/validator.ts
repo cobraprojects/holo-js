@@ -36,6 +36,13 @@ const JOIN_OPERATORS = new Set<QueryColumnPredicate['operator']>(['=', '!=', '>'
 const FULLTEXT_MODES = new Set(['natural', 'boolean'])
 const HAVING_EXPRESSION_PATTERN = /^(?:[A-Z_]\w*|(?:count|sum|avg|min|max)\((?:\*|[A-Z_]\w*)\))$/i
 
+function isJsonScalar(value: unknown): boolean {
+  return value === null
+    || typeof value === 'string'
+    || typeof value === 'boolean'
+    || (typeof value === 'number' && Number.isFinite(value))
+}
+
 function assertExplicitBindings(bindings: readonly unknown[], kind: string): void {
   if (bindings.some(value => typeof value === 'undefined')) {
     throw new SecurityError(`${kind} bindings cannot contain undefined values.`)
@@ -342,6 +349,14 @@ function assertPredicate(
 
       if (typeof predicate.value === 'undefined') {
         throw new SecurityError(`JSON value predicate for column "${predicate.column}" cannot be undefined.`)
+      }
+
+      if (!isJsonScalar(predicate.value)) {
+        throw new SecurityError(`JSON value predicate for column "${predicate.column}" requires a finite scalar value.`)
+      }
+
+      if (predicate.value === null && predicate.operator !== '=' && predicate.operator !== '!=') {
+        throw new SecurityError('JSON null comparisons only support the "=" and "!=" operators.')
       }
 
       return

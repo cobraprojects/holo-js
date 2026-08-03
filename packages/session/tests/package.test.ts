@@ -33,7 +33,7 @@ const tempDirs: string[] = []
 
 afterEach(async () => {
   resetSessionRuntime()
-  fileSessionDriverInternals.resetMakeDirectory()
+  vi.restoreAllMocks()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
@@ -707,33 +707,31 @@ describe('@holo-js/session package surface', () => {
   it('surfaces file lock creation failures and retries transient contention', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-session-file-lock-'))
     tempDirs.push(root)
-    const store = createFileSessionStore(root)
     const record = createRecord('locked-session')
 
-    fileSessionDriverInternals.setMakeDirectory((async (path, options) => {
+    const failingStore = fileSessionDriverInternals.createStore(root, (async (path, options) => {
       if (options) return mkdir(path, options)
       throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
     }) as typeof mkdir)
-    await expect(store.write(record)).rejects.toThrow('permission denied')
+    await expect(failingStore.write(record)).rejects.toThrow('permission denied')
 
     let attempts = 0
-    fileSessionDriverInternals.setMakeDirectory((async (path, options) => {
+    const retryingStore = fileSessionDriverInternals.createStore(root, (async (path, options) => {
       if (options) return mkdir(path, options)
       attempts += 1
       if (attempts === 1) throw Object.assign(new Error('exists'), { code: 'EEXIST' })
       return mkdir(path)
     }) as typeof mkdir)
-    await expect(store.write(record)).resolves.toBeUndefined()
+    await expect(retryingStore.write(record)).resolves.toBeUndefined()
     expect(attempts).toBe(2)
   })
 
   it('times out when a file session lock remains active', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-session-file-timeout-'))
     tempDirs.push(root)
-    const store = createFileSessionStore(root)
     const recordPath = fileSessionDriverInternals.getRecordPath(root, 'timed-out-session')
     await mkdir(`${recordPath}.lock`)
-    fileSessionDriverInternals.setMakeDirectory((async (path, options) => {
+    const store = fileSessionDriverInternals.createStore(root, (async (path, options) => {
       if (options) return mkdir(path, options)
       throw Object.assign(new Error('exists'), { code: 'EEXIST' })
     }) as typeof mkdir)

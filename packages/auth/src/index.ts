@@ -1,5 +1,5 @@
 import { getAuthRuntime, hashPassword, needsPasswordRehash, resendEmailVerification, sendEmailVerification, verifyPassword } from './runtime'
-import { check, currentAccessToken, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, provider, refreshUser, register, requestPasswordReset, resetPassword, stopImpersonating, tokens, user, verification, verifyEmail } from './facade'
+import { check, currentAccessToken, findUserById, flash, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, multiFactor, provider, refreshUser, register, requestPasswordReset, resetPassword, stopImpersonating, take, tokens, user, verification, verifyEmail } from './facade'
 import type { AuthFacade } from './contracts'
 
 export { AUTH_ERROR_CODES, AuthError, isAuthError } from './contracts'
@@ -11,6 +11,7 @@ export {
 export type {
   AuthClerkProviderConfig,
   AuthEmailVerificationConfig,
+  AuthMultiFactorConfiguration,
   AuthHostedIdentityRecord,
   AuthHostedIdentityStore,
   AuthPasswordBrokerConfig,
@@ -31,6 +32,8 @@ export type {
 export {
   check,
   currentAccessToken,
+  findUserById,
+  flash,
   id,
   impersonate,
   impersonateById,
@@ -39,12 +42,14 @@ export {
   loginUsing,
   loginUsingId,
   logout,
+  multiFactor,
   provider,
   refreshUser,
   register,
   requestPasswordReset,
   resetPassword,
   stopImpersonating,
+  take,
   tokens,
   user,
   verification,
@@ -97,6 +102,16 @@ export type {
   AuthImpersonationState,
   AuthLoginErrorCode,
   AuthLogoutResult,
+  AuthMultiFactorChallenge,
+  AuthMultiFactorCodeInput,
+  AuthMultiFactorCredentialRecord,
+  AuthMultiFactorEnrollment,
+  AuthMultiFactorFacade,
+  AuthMultiFactorRecoveryCodes,
+  AuthMultiFactorStatus,
+  AuthMultiFactorStore,
+  AuthMultiFactorVerificationInput,
+  AuthMultiFactorVerificationState,
   AuthSessionLoginOptions,
   AuthPasswordHasher,
   AuthPasswordResetInput,
@@ -143,6 +158,8 @@ const auth: AuthFacade = Object.freeze({
   provider,
   id,
   currentAccessToken,
+  findUserById,
+  flash,
   hashPassword,
   login,
   loginUsing,
@@ -151,6 +168,7 @@ const auth: AuthFacade = Object.freeze({
   impersonateById,
   impersonation,
   logout,
+  multiFactor,
   needsPasswordRehash,
   register,
   requestPasswordReset,
@@ -158,6 +176,7 @@ const auth: AuthFacade = Object.freeze({
   resetPassword,
   sendEmailVerification,
   stopImpersonating,
+  take,
   tokens,
   verification,
   verifyEmail,

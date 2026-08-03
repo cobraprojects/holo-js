@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-social-discord",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - Discord social auth provider",
   "type": "module",
   "license": "MIT",

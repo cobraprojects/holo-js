@@ -2,7 +2,7 @@ import type {
   NormalizedSessionRedisStoreConfig,
 } from '../config'
 import Redis from 'ioredis'
-import type { SessionRecord } from '../contracts'
+import type { SessionRecord, SessionStoreTakeResult } from '../contracts'
 import type { SessionRedisDriverAdapter } from './redis'
 
 export interface SessionRedisAdapterOptions {
@@ -33,12 +33,65 @@ type RedisClusterStartupNode = {
 
 type RedisClientLike = {
   connect?(): Promise<unknown>
-  get(key: string): Promise<string | null>
-  set(key: string, value: string, mode: 'PX', durationMs: number): Promise<'OK' | null>
+  eval(script: string, numberOfKeys: number, ...args: readonly (string | number)[]): Promise<unknown>
   del(key: string): Promise<number>
   quit(): Promise<unknown>
   disconnect(): void
 }
+
+const WRITE_SESSION_SCRIPT = `
+local nextRecord = ARGV[1]
+redis.call('HSET', KEYS[1], 'record', nextRecord)
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return 1
+`
+
+const ROTATE_SESSION_SCRIPT = `
+local previousKey = KEYS[1]
+local nextKey = KEYS[2]
+if redis.call('HEXISTS', previousKey, 'record') == 0 then
+  return 0
+end
+if redis.call('HEXISTS', nextKey, 'record') == 1 then
+  return -1
+end
+local fields = redis.call('HGETALL', previousKey)
+for index = 1, #fields, 2 do
+  if fields[index] ~= 'record' then
+    redis.call('HSET', nextKey, fields[index], fields[index + 1])
+  end
+end
+redis.call('HSET', nextKey, 'record', ARGV[1])
+redis.call('PEXPIRE', nextKey, ARGV[2])
+redis.call('DEL', previousKey)
+return 1
+`
+
+const READ_SESSION_SCRIPT = `
+return redis.call('HGET', KEYS[1], 'record')
+`
+
+const FLASH_SESSION_SCRIPT = `
+local flashValue = ARGV[2]
+if redis.call('HEXISTS', KEYS[1], 'record') == 0 then
+  return 0
+end
+redis.call('HSET', KEYS[1], 'flash:' .. ARGV[1], flashValue)
+return 1
+`
+
+const TAKE_SESSION_SCRIPT = `
+if redis.call('HEXISTS', KEYS[1], 'record') == 0 then
+  return {0}
+end
+local flashField = 'flash:' .. ARGV[1]
+local value = redis.call('HGET', KEYS[1], flashField)
+if not value then
+  return {0}
+end
+redis.call('HDEL', KEYS[1], flashField)
+return {1, value}
+`
 
 type RedisCtor = typeof Redis & {
   Cluster: new (
@@ -229,6 +282,25 @@ function deserializeSessionRecord(value: string): SessionRecord | null {
   }
 }
 
+function serializeFlashValue(value: unknown): string {
+  const encoded = JSON.stringify(value)
+  if (typeof encoded !== 'string') {
+    throw new Error('[@holo-js/session] Redis flash values must be JSON serializable.')
+  }
+  return encoded
+}
+
+function deserializeTakeResult(result: unknown): SessionStoreTakeResult {
+  if (!Array.isArray(result) || (result[0] !== 0 && result[0] !== 1)) {
+    throw new Error('[@holo-js/session] Redis returned an invalid atomic take result.')
+  }
+  if (result[0] === 0) return { found: false }
+  if (typeof result[1] !== 'string') {
+    throw new Error('[@holo-js/session] Redis returned an invalid atomic take value.')
+  }
+  return { found: true, value: JSON.parse(result[1]) as unknown }
+}
+
 export class RedisSessionAdapter implements SessionRedisDriverAdapter {
   private readonly client: RedisClientLike
   private readonly prefix: string
@@ -244,7 +316,7 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
   }
 
   private qualifyKey(sessionId: string): string {
-    return `${this.prefix}${sessionId}`
+    return `${this.prefix}{holo-session}:${sessionId}`
   }
 
   async connect(): Promise<void> {
@@ -252,17 +324,67 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
   }
 
   async get(sessionId: string): Promise<SessionRecord | null> {
-    const encoded = await this.client.get(this.qualifyKey(sessionId))
-    return encoded ? deserializeSessionRecord(encoded) : null
+    const encoded = await this.client.eval(READ_SESSION_SCRIPT, 1, this.qualifyKey(sessionId))
+    return typeof encoded === 'string' ? deserializeSessionRecord(encoded) : null
   }
 
   async set(record: SessionRecord): Promise<void> {
     const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
-    await this.client.set(this.qualifyKey(record.id), serializeSessionRecord(record), 'PX', ttlMs)
+    await this.client.eval(
+      WRITE_SESSION_SCRIPT,
+      1,
+      this.qualifyKey(record.id),
+      serializeSessionRecord(record),
+      ttlMs,
+    )
   }
 
   async del(sessionId: string): Promise<void> {
     await this.client.del(this.qualifyKey(sessionId))
+  }
+
+  async rotate(previousSessionId: string, record: SessionRecord): Promise<void> {
+    if (previousSessionId === record.id) {
+      await this.set(record)
+      return
+    }
+    const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
+    const result = await this.client.eval(
+      ROTATE_SESSION_SCRIPT,
+      2,
+      this.qualifyKey(previousSessionId),
+      this.qualifyKey(record.id),
+      serializeSessionRecord(record),
+      ttlMs,
+    )
+    if (result === -1) {
+      throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
+    }
+    if (result !== 1) {
+      throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
+    }
+  }
+
+  async flash(sessionId: string, key: string, value: unknown): Promise<void> {
+    const result = await this.client.eval(
+      FLASH_SESSION_SCRIPT,
+      1,
+      this.qualifyKey(sessionId),
+      key,
+      serializeFlashValue(value),
+    )
+    if (result !== 1) {
+      throw new Error(`[@holo-js/session] Session "${sessionId}" was not found.`)
+    }
+  }
+
+  async take(sessionId: string, key: string): Promise<SessionStoreTakeResult> {
+    return deserializeTakeResult(await this.client.eval(
+      TAKE_SESSION_SCRIPT,
+      1,
+      this.qualifyKey(sessionId),
+      key,
+    ))
   }
 
   async close(): Promise<void> {
@@ -289,11 +411,13 @@ export const sessionRedisAdapterInternals = {
   createClusterOptions,
   createRedisClient,
   createStandaloneOptions,
+  deserializeTakeResult,
   deserializeSessionRecord,
   isRedisSocketConnectionTarget,
   isRedisUrlTarget,
   parseClusterNodeUrl,
   resolveClusterStartupNodes,
   serializeSessionRecord,
+  serializeFlashValue,
   toRedisSocketPath,
 }

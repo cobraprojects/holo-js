@@ -29,6 +29,15 @@ export interface AuthEmailVerificationConfig {
   readonly route?: string
 }
 
+export interface AuthMultiFactorConfiguration {
+  readonly issuer?: string
+  readonly challengeRoute?: string
+  readonly enrollmentTtl?: number | string
+  readonly challengeTtl?: number | string
+  readonly recoveryCodes?: number
+  readonly allowedDriftSteps?: number
+}
+
 export interface AuthPersonalAccessTokenConfig {
   readonly defaultAbilities?: readonly string[]
 }
@@ -105,6 +114,7 @@ export interface HoloAuthConfig {
   readonly providers?: Readonly<Record<string, AuthProviderConfig>>
   readonly passwords?: Readonly<Record<string, AuthPasswordBrokerConfig>>
   readonly emailVerification?: boolean | AuthEmailVerificationConfig
+  readonly multiFactor?: boolean | AuthMultiFactorConfiguration
   readonly personalAccessTokens?: AuthPersonalAccessTokenConfig
   readonly socialEncryptionKey?: string
   readonly social?: Readonly<Record<string, AuthSocialProviderConfig>>
@@ -192,6 +202,15 @@ export interface NormalizedHoloAuthConfig {
     readonly required: boolean
     readonly route: string
   }
+  readonly multiFactor: {
+    readonly enabled: boolean
+    readonly issuer: string
+    readonly challengeRoute: string
+    readonly enrollmentTtl: number
+    readonly challengeTtl: number
+    readonly recoveryCodes: number
+    readonly allowedDriftSteps: number
+  }
   readonly personalAccessTokens: {
     readonly defaultAbilities: readonly string[]
   }
@@ -210,6 +229,7 @@ export const DEFAULT_AUTH_PASSWORD_EXPIRE = 60
 export const DEFAULT_AUTH_PASSWORD_THROTTLE = 60
 export const DEFAULT_AUTH_PASSWORD_RESET_ROUTE = '/reset-password'
 export const DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE = '/verify-email'
+export const DEFAULT_AUTH_MULTI_FACTOR_CHALLENGE_ROUTE = '/mfa-challenge'
 export const DEFAULT_WORKOS_SESSION_COOKIE = 'wos-session'
 export const DEFAULT_CLERK_SESSION_COOKIE = '__session'
 
@@ -245,6 +265,15 @@ export const holoAuthDefaults: Readonly<NormalizedHoloAuthConfig> = Object.freez
   emailVerification: Object.freeze({
     required: false,
     route: DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
+  }),
+  multiFactor: Object.freeze({
+    enabled: false,
+    issuer: 'Holo',
+    challengeRoute: DEFAULT_AUTH_MULTI_FACTOR_CHALLENGE_ROUTE,
+    enrollmentTtl: 600,
+    challengeTtl: 300,
+    recoveryCodes: 8,
+    allowedDriftSteps: 1,
   }),
   personalAccessTokens: Object.freeze({
     defaultAbilities: Object.freeze(['*']),
@@ -622,6 +651,68 @@ function normalizeClerkConfig(
   })
 }
 
+function isSafeMultiFactorChallengeRoute(route: string): boolean {
+  return route.startsWith('/')
+    && !route.startsWith('//')
+    && !route.includes('\\')
+    && !route.includes('?')
+    && !route.includes('#')
+    && !route.split('/').some(segment => (
+      segment === '.'
+      || segment === '..'
+      || /%(?:2e|2f|5c)/iu.test(segment)
+    ))
+}
+
+function normalizeMultiFactorConfig(
+  config: HoloAuthConfig['multiFactor'],
+): NormalizedHoloAuthConfig['multiFactor'] {
+  if (
+    typeof config !== 'undefined'
+    && typeof config !== 'boolean'
+    && (!config || typeof config !== 'object' || Array.isArray(config))
+  ) {
+    throw new Error('[Holo Auth] multi-factor configuration must be a boolean or object.')
+  }
+
+  const input = config && typeof config === 'object' ? config : {}
+  const explicitEnabled = 'enabled' in input && typeof input.enabled === 'boolean'
+    ? input.enabled
+    : undefined
+  const enabled = explicitEnabled ?? (config === true || typeof config === 'object')
+  const issuer = input.issuer?.trim() || holoAuthDefaults.multiFactor.issuer
+  const hasControlCharacter = [...issuer].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0
+    return codePoint < 32 || codePoint === 127
+  })
+  if (issuer.length > 100 || hasControlCharacter) {
+    throw new Error('[Holo Auth] multi-factor issuer must be a bounded printable string.')
+  }
+
+  const challengeRoute = input.challengeRoute?.trim() || holoAuthDefaults.multiFactor.challengeRoute
+  if (!isSafeMultiFactorChallengeRoute(challengeRoute)) {
+    throw new Error('[Holo Auth] multi-factor challenge route must be a safe local path.')
+  }
+
+  const enrollmentTtl = parseInteger(input.enrollmentTtl, holoAuthDefaults.multiFactor.enrollmentTtl, 'Holo Auth', 'multi-factor enrollment TTL', { minimum: 60 })
+  const challengeTtl = parseInteger(input.challengeTtl, holoAuthDefaults.multiFactor.challengeTtl, 'Holo Auth', 'multi-factor challenge TTL', { minimum: 30 })
+  const recoveryCodes = parseInteger(input.recoveryCodes, holoAuthDefaults.multiFactor.recoveryCodes, 'Holo Auth', 'multi-factor recovery code count', { minimum: 1 })
+  const allowedDriftSteps = parseInteger(input.allowedDriftSteps, holoAuthDefaults.multiFactor.allowedDriftSteps, 'Holo Auth', 'multi-factor allowed drift steps', { minimum: 0 })
+  if (enrollmentTtl > 3600 || challengeTtl > 1800 || recoveryCodes > 20 || allowedDriftSteps > 2) {
+    throw new Error('[Holo Auth] multi-factor configuration exceeds its security bounds.')
+  }
+
+  return Object.freeze({
+    enabled,
+    issuer,
+    challengeRoute,
+    enrollmentTtl,
+    challengeTtl,
+    recoveryCodes,
+    allowedDriftSteps,
+  })
+}
+
 export function normalizeAuthConfig(
   config: HoloAuthConfig = {},
   _options: {
@@ -681,6 +772,7 @@ export function normalizeAuthConfig(
   const workos = normalizeWorkosConfig(config.workos, guards, providers)
 
   const clerk = normalizeClerkConfig(config.clerk, guards, providers)
+  const multiFactor = normalizeMultiFactorConfig(config.multiFactor)
 
   return Object.freeze({
     defaults: Object.freeze({
@@ -698,6 +790,7 @@ export function normalizeAuthConfig(
         ? DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE
         : config.emailVerification?.route?.trim() || DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
     }),
+    multiFactor,
     personalAccessTokens: Object.freeze({
       defaultAbilities: Object.freeze([...(config.personalAccessTokens?.defaultAbilities ?? holoAuthDefaults.personalAccessTokens.defaultAbilities)]),
     }),

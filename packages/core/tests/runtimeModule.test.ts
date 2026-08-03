@@ -53,6 +53,37 @@ describe('@holo-js/core runtime module helpers', () => {
     await expect(runtimeModuleInternals.writeLoaderTsconfig(projectRoot, tempDir)).resolves.toBe(tsconfigPath)
   })
 
+  it('does not import package export targets pruned from a production artifact', async () => {
+    const projectRoot = await createTempProject()
+    const packageRoot = join(projectRoot, 'node_modules/@fixture/optional')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: '@fixture/optional',
+      type: 'module',
+      exports: {
+        './config': './dist/config.mjs',
+      },
+    }), 'utf8')
+
+    expect(runtimeModuleInternals.resolveOptionalImportSpecifier(
+      '@fixture/optional/config',
+      projectRoot,
+    )).toBeUndefined()
+    await expect(runtimeModuleInternals.importOptionalRuntimeModule(
+      '@fixture/optional/config',
+      { projectRoot },
+    )).resolves.toBeUndefined()
+  })
+
+  it('defers absent package roots to the runtime module loader', async () => {
+    const projectRoot = await createTempProject()
+
+    expect(runtimeModuleInternals.resolveOptionalImportSpecifier(
+      '@fixture/runtime-alias',
+      projectRoot,
+    )).toBe('@fixture/runtime-alias')
+  })
+
   it('writes a loader tsconfig with default project aliases when no tsconfig exists', async () => {
     const projectRoot = await createTempProject()
     const tempDir = await createTempProject()
@@ -120,6 +151,22 @@ describe('@holo-js/core runtime module helpers', () => {
     await expect(
       runtimeModuleInternals.importOptionalRuntimeModule(pathToFileURL(entryPath).href),
     ).rejects.toThrow()
+
+    const packageRoot = join(projectRoot, 'node_modules/@fixture/optional')
+    await mkdir(join(packageRoot, 'dist'), { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: '@fixture/optional',
+      type: 'module',
+      exports: {
+        './config': './dist/config.mjs',
+      },
+    }), 'utf8')
+    await writeFile(join(packageRoot, 'dist/config.mjs'), 'import "./missing-child.mjs"\nexport const loaded = true\n', 'utf8')
+
+    await expect(runtimeModuleInternals.importOptionalRuntimeModule(
+      '@fixture/optional/config',
+      { projectRoot },
+    )).rejects.toThrow('missing-child.mjs')
   })
 
   it('recognizes missing package roots for every optional package subpath', () => {

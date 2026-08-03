@@ -112,6 +112,8 @@ type StaticModelQueryForwardMethod =
   | 'lock'
   | 'lockForUpdate'
   | 'sharedLock'
+  | 'withoutGlobalScope'
+  | 'withoutGlobalScopes'
   | 'with'
   | 'withCount'
   | 'withExists'

@@ -135,7 +135,9 @@ import {
 import {
   isIgnorableWatchError,
   collectDiscoveryWatchRoots,
+  classifyWatchedPathChange,
   isDiscoveryRelevantPath,
+  readPluginPrepareWatches,
   resolvePackageManagerCommand,
   resolvePackageManagerInstallInvocation,
   runProjectDependencyInstall,
@@ -964,6 +966,7 @@ export default defineDatabaseConfig({})
 async function writeFakeHoloPluginPackage(
   projectRoot: string,
   packageName = 'holo-plugin-demo',
+  holoDependencies: readonly string[] = ['@holo-js/broadcast'],
 ): Promise<string> {
   const packageRoot = join(projectRoot, 'node_modules', ...packageName.split('/'))
   await mkdir(packageRoot, { recursive: true })
@@ -983,7 +986,7 @@ export default {
   contributes: {
     dependencies: {
       runtime: ['ably'],
-      holo: ['@holo-js/broadcast'],
+      holo: ${JSON.stringify(holoDependencies)},
     },
     config: {
       files: ['config/demo.ts'],
@@ -1544,6 +1547,93 @@ export default {
     expect(output).toContain('Removed Holo plugin activation.')
   }, 90000)
 
+  it('scaffolds security support contributed by a Holo plugin', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot, 'holo-plugin-security', ['@holo-js/security'])
+    const installSecurityIntoProject = vi.fn(async (root: string) => {
+      await writeProjectFile(root, 'config/security.ts', "export default { rateLimit: { driver: 'file' } }\n")
+      return {
+        updatedPackageJson: false,
+        createdSecurityConfig: true,
+        createdCorsConfig: false,
+      }
+    })
+    const commandIo = createIo(projectRoot)
+    const addCommand = createInternalCommands(
+      {
+        ...commandIo.io,
+        projectRoot,
+        registry: [],
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      },
+      undefined,
+      {},
+      {
+        installSecurityIntoProject,
+        runProjectDependencyInstall: vi.fn(async () => undefined),
+        runProjectPrepare: vi.fn(async () => undefined),
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-security'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+
+    expect(installSecurityIntoProject).toHaveBeenCalledWith(projectRoot)
+    await expect(readFile(join(projectRoot, 'config/security.ts'), 'utf8')).resolves.toContain("driver: 'file'")
+    await expect(readFile(join(projectRoot, 'package.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      dependencies: {
+        '@holo-js/security': `^${HOLO_PACKAGE_VERSION}`,
+      },
+    })
+    expect(commandIo.read().stdout).toContain('created config/security.ts')
+  }, 180000)
+
+  it('rolls back contributed security scaffolding when plugin installation fails', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot, 'holo-plugin-security-failure', ['@holo-js/security'])
+    const packageJsonSnapshot = await readFile(join(projectRoot, 'package.json'), 'utf8')
+    const appConfigSnapshot = await readFile(join(projectRoot, 'config/app.ts'), 'utf8')
+    const addCommand = createInternalCommands(
+      {
+        ...createIo(projectRoot).io,
+        projectRoot,
+        registry: [],
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      },
+      undefined,
+      {},
+      {
+        async installSecurityIntoProject(root) {
+          await writeProjectFile(root, 'config/security.ts', 'export default {}\n')
+          await writeProjectFile(root, 'storage/framework/rate-limits/.gitignore', '*\n!.gitignore\n')
+          throw new Error('security scaffold failed')
+        },
+        runProjectDependencyInstall: vi.fn(async () => undefined),
+        runProjectPrepare: vi.fn(async () => undefined),
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-security-failure'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).rejects.toThrow('security scaffold failed')
+
+    await expect(readFile(join(projectRoot, 'package.json'), 'utf8')).resolves.toBe(packageJsonSnapshot)
+    await expect(readFile(join(projectRoot, 'config/app.ts'), 'utf8')).resolves.toBe(appConfigSnapshot)
+    await expect(readFile(join(projectRoot, 'config/security.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(projectRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 180000)
+
   it('rolls back the package dependency when plugin:add cannot load the plugin manifest', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -2055,10 +2145,10 @@ throw new Error('APP_KEY is required before config can load')
       '',
     ].join('\n'))
 
-    const result = runNodeScript(projectRoot, join(projectRoot, '.holo-js/framework/run.mjs'), ['build'])
+    const result = runNodeScript(projectRoot, join(projectRoot, '.holo-js/framework/run.mjs'), ['build', '--host', '127.0.0.1'])
 
     expect(result.status, result.stderr || result.stdout).toBe(0)
-    expect(result.stdout).toContain('build --logLevel error')
+    expect(result.stdout).toContain('build --logLevel error --host 127.0.0.1')
     expect(result.stderr).not.toContain('Circular dependency:')
     expect(result.stderr).toContain('framework warning')
   })
@@ -2147,6 +2237,19 @@ APP_ENV=development
       optionalPackages: ['auth'],
     }).map(file => file.path)
     expect(svelteCurrentAuthRoutePaths).not.toContain('src/routes/api/auth/user/+server.ts')
+  })
+
+  it('renders scaffolded Nuxt pages through the root component', () => {
+    const appVue = projectInternals.renderFrameworkFiles({
+      projectName: 'Nuxt Pages App',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    }).find(file => file.path === 'app/app.vue')?.contents
+
+    expect(appVue).toContain('<NuxtPage />')
   })
 
   it('installs queue support into an existing project with sync as the default driver', async () => {
@@ -2247,7 +2350,7 @@ export default defineAppConfig({
     expect(result.stdout).toContain('created config/security.ts')
     expect(result.stdout).toContain('created config/cors.ts')
     expect(result.stdout).toContain('created server/models/User.ts')
-    expect(result.stdout).toContain('created 6 auth migrations')
+    expect(result.stdout).toContain('created 7 auth migrations')
 
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -2262,7 +2365,7 @@ export default defineAppConfig({
     expect(await readFile(join(projectRoot, 'config/security.ts'), 'utf8')).toContain('defineSecurityConfig')
     expect(await readFile(join(projectRoot, 'config/cors.ts'), 'utf8')).toContain('defineCorsConfig')
     expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\']')
-    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(7)
 
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
     expect(rerun.status).toBe(0)
@@ -2413,7 +2516,7 @@ export default defineSessionConfig({
       createdCorsConfig: true,
       createdUserModel: true,
     })
-    expect(initial.createdMigrationFiles).toHaveLength(6)
+    expect(initial.createdMigrationFiles).toHaveLength(7)
     expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('AUTH_GOOGLE_CLIENT_ID')
 
     await expect(projectInternals.installAuthIntoProject(projectRoot, { workos: true, clerk: true })).resolves.toEqual({
@@ -2654,6 +2757,7 @@ module.exports = {
       'create_personal_access_tokens',
       'create_password_reset_tokens',
       'create_email_verification_tokens',
+      'create_auth_multi_factor_credentials',
     ] as const) {
       const timestamp = `2026_01_01_00000${index + 1}`
       await writeProjectFile(
@@ -3886,7 +3990,7 @@ export default defineBroadcastConfig({})
     })
   })
 
-  it('preserves workspace versions when syncing managed dependencies in workspace apps', async () => {
+  it('normalizes workspace versions when the packages do not belong to a workspace', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
@@ -3946,16 +4050,44 @@ export default defineCacheConfig({
     await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
       dependencies: {
-        '@holo-js/auth': 'workspace:*',
-        '@holo-js/cache': 'workspace:*',
-        '@holo-js/cache-db': 'workspace:*',
-        '@holo-js/core': 'workspace:*',
-        '@holo-js/db': 'workspace:*',
-        '@holo-js/db-sqlite': 'workspace:*',
-        '@holo-js/security': 'workspace:*',
-        '@holo-js/session': 'workspace:*',
+        '@holo-js/auth': expectedHoloPackageRange,
+        '@holo-js/cache': expectedHoloPackageRange,
+        '@holo-js/cache-db': expectedHoloPackageRange,
+        '@holo-js/core': expectedHoloPackageRange,
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+        '@holo-js/security': expectedHoloPackageRange,
+        '@holo-js/session': expectedHoloPackageRange,
       },
     })
+  }, 60000)
+
+  it('does not infer framework workspace versions from a workspace plugin', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const packageJson = {
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/adapter-next': 'catalog:',
+        '@holo-js/core': 'catalog:',
+        '@holo-js/db': 'catalog:',
+        '@holo-js/db-sqlite': '^99.0.0',
+        '@holo-js/kernel': 'catalog:',
+        '@holo-js/panels': 'workspace:*',
+        '@holo-js/security': 'catalog:',
+        next: expectedNextPackageRange,
+      },
+    }
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify(packageJson, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', `
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({})
+    `)
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(false)
+    await expect(readFile(join(projectRoot, 'package.json'), 'utf8').then(JSON.parse)).resolves.toEqual(packageJson)
   }, 60000)
 
   it('syncs lazy optional holo packages from config and discovery registry entries', async () => {
@@ -6391,6 +6523,72 @@ export default defineMigration({
     expect(generated).toContain('registerGeneratedTables(tables)')
     expect(generated).not.toContain('defineGeneratedTable("users"')
   }, 30000)
+
+  it('executes plugin-published migrations through the existing migration lifecycle', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const built = await runWorkspacePackageBuild('@holo-js/db')
+    expect(built.status).toBe(0)
+
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  plugins: ['fixture-migrations'],
+}
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+    const pluginRoot = join(projectRoot, 'node_modules/fixture-migrations')
+    await mkdir(pluginRoot, { recursive: true })
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'fixture-migrations',
+      type: 'module',
+      holo: { plugin: './plugin.mjs' },
+    }))
+    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'fixture-migrations',
+  contributes: {
+    migrations: { publish: './migrations.mjs' },
+  },
+}
+`)
+    await writeFile(join(pluginRoot, 'migrations.mjs'), `
+import { defineMigration } from '@holo-js/db'
+
+export const migrations = [defineMigration({
+  name: '2026_07_29_000001_create_plugin_roles',
+  async up({ schema }) {
+    await schema.createTable('plugin_roles', table => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('plugin_roles')
+  },
+})]
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('2026_07_29_000001_create_plugin_roles')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
+      .resolves.toContain('defineGeneratedTable("plugin_roles"')
+
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'])
+    expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
+    expect(rolledBack.stdout).toContain('2026_07_29_000001_create_plugin_roles')
+  }, 60000)
 
   it('rescans the migration directory before running migrate with an existing registry', async () => {
     const projectRoot = await createTempProject()
@@ -9549,7 +9747,7 @@ export default defineConfig({
     }
     const buildCommands = createInternalCommands(buildCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const buildCommand = buildCommands.find(command => command.name === 'build')
-    expect(await buildCommand?.prepare?.({ args: [], flags: {} }, buildCommandContext as never)).toEqual({ args: [], flags: {} })
+    expect(await buildCommand?.prepare?.({ args: ['artifact'], flags: { webpack: true } }, buildCommandContext as never)).toEqual({ args: ['artifact'], flags: { webpack: true } })
 
     await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
       name: 'fixture',
@@ -9603,8 +9801,8 @@ export default defineConfig({
     await buildLifecycleCommand?.run({
       projectRoot,
       cwd: projectRoot,
-      args: [],
-      flags: {},
+      args: ['artifact'],
+      flags: { webpack: true },
       loadProject: lifecycleContext.loadProject,
     } as never)
     await startLifecycleCommand?.run({
@@ -9619,7 +9817,7 @@ export default defineConfig({
     expect(runPrepare).toHaveBeenCalledTimes(2)
     expect(hydrateSchema).toHaveBeenCalledWith(projectRoot, 'hydrate-schema', {}, expect.any(Function))
     expect(runDevServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
-    expect(runBuild).toHaveBeenCalledWith(lifecycleContext, projectRoot)
+    expect(runBuild).toHaveBeenCalledWith(lifecycleContext, projectRoot, undefined, ['artifact', '--webpack'])
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
@@ -10248,12 +10446,16 @@ throw 'string discovery failure'
     await mkdir(join(projectRoot, 'server/models'), { recursive: true })
     await mkdir(join(projectRoot, 'server/db/migrations'), { recursive: true })
     await mkdir(join(projectRoot, 'server/db/seeders'), { recursive: true })
+    await mkdir(join(projectRoot, '.holo-js/generated'), { recursive: true })
     const project = { config: defaultProjectConfig() }
 
     expect(isDiscoveryRelevantPath('config/app.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.env.local', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(false)
     expect(isDiscoveryRelevantPath('.holo-js/generated/schema.generated.ts', project as never)).toBe(true)
+    const broadPluginWatch = [{ pluginId: 'demo', roots: ['.'], excludes: [] }]
+    expect(isDiscoveryRelevantPath('node_modules/plugin/source.ts', project as never, broadPluginWatch)).toBe(false)
+    expect(isDiscoveryRelevantPath('.next/server/app.js', project as never, broadPluginWatch)).toBe(false)
     expect(isDiscoveryRelevantPath('server/commands/hello.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/jobs/send-email.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/events/user-registered.ts', project as never)).toBe(true)
@@ -10281,7 +10483,7 @@ throw 'string discovery failure'
     expect(isDiscoveryRelevantPath('server/abilities/fallback.ts', fallbackProject as never)).toBe(true)
 
     const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
-    expect(roots).not.toContain(join(projectRoot, '.holo-js/generated'))
+    expect(roots).toContain(join(projectRoot, '.holo-js/generated'))
     expect(roots).toContain(join(projectRoot, 'server/policies'))
     expect(roots).toContain(join(projectRoot, 'server/policies/admin'))
     expect(roots).toContain(join(projectRoot, 'server/abilities'))
@@ -10291,6 +10493,130 @@ throw 'string discovery failure'
     expect(fallbackRoots).toContain(join(projectRoot, 'server/policies'))
     expect(fallbackRoots).toContain(join(projectRoot, 'server/abilities'))
   }, 20000)
+
+  it('applies plugin watch exclusions without weakening core discovery roots', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))
+    tempDirs.push(projectRoot)
+    await mkdir(join(projectRoot, 'extensions/demo/cache/nested'), { recursive: true })
+    await mkdir(join(projectRoot, 'extensions/demo/plugin/nested'), { recursive: true })
+    await mkdir(join(projectRoot, 'extensions/demo/source/nested'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/models/nested'), { recursive: true })
+    const project = { config: defaultProjectConfig() }
+    const pluginWatches = [{
+      pluginId: 'demo',
+      roots: ['extensions/demo', 'server'],
+      excludes: ['extensions/demo/cache', 'server/models'],
+      packageRoot: 'extensions/demo/plugin',
+    }]
+
+    expect(isDiscoveryRelevantPath('extensions/demo/source/widget.ts', project as never, pluginWatches)).toBe(true)
+    expect(isDiscoveryRelevantPath('extensions/demo/cache/widget.ts', project as never, pluginWatches)).toBe(false)
+    expect(isDiscoveryRelevantPath('extensions/demo/plugin/source.ts', project as never, pluginWatches)).toBe(false)
+    expect(isDiscoveryRelevantPath('server/models/User.ts', project as never, pluginWatches)).toBe(true)
+    expect(isDiscoveryRelevantPath('.holo-js/generated/demo/registry.ts', project as never, pluginWatches)).toBe(false)
+
+    const roots = await collectDiscoveryWatchRoots(projectRoot, project as never, pluginWatches)
+    expect(roots).toContain(join(projectRoot, 'extensions/demo/source'))
+    expect(roots).toContain(join(projectRoot, 'extensions/demo/source/nested'))
+    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/cache'))
+    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/cache/nested'))
+    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/plugin'))
+    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/plugin/nested'))
+    expect(roots).toContain(join(projectRoot, 'server/models'))
+    expect(roots).toContain(join(projectRoot, 'server/models/nested'))
+    expect(roots).not.toContain(join(projectRoot, '.holo-js'))
+
+    await mkdir(join(projectRoot, 'extensions/replacement/source'), { recursive: true })
+    const refreshedRoots = await collectDiscoveryWatchRoots(projectRoot, project as never, [{
+      pluginId: 'replacement',
+      roots: ['extensions/replacement'],
+      excludes: [],
+    }])
+    expect(refreshedRoots).toContain(join(projectRoot, 'extensions/replacement/source'))
+    expect(refreshedRoots).not.toContain(join(projectRoot, 'extensions/demo/source'))
+  })
+
+  it('reads the last successful plugin watch roots and exclusions', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))
+    tempDirs.push(projectRoot)
+    const pluginRoot = join(projectRoot, 'plugins/demo')
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: { 'holo-plugin-demo': 'file:plugins/demo' },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  plugins: ['holo-plugin-demo'],
+}
+`)
+    await writeProjectFile(projectRoot, 'plugins/demo/package.json', JSON.stringify({
+      name: 'holo-plugin-demo',
+      version: '1.0.0',
+      type: 'module',
+      holo: { plugin: './plugin.mjs' },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'plugins/demo/plugin.mjs', `
+export default {
+  id: 'demo',
+  contributes: {
+    project: {
+      prepare: './prepare.mjs',
+    },
+  },
+}
+`)
+    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+    await symlink(pluginRoot, join(projectRoot, 'node_modules/holo-plugin-demo'))
+    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/demo.json', JSON.stringify({
+      watch: {
+        roots: ['extensions/demo'],
+        excludes: ['extensions/demo/cache'],
+      },
+    }))
+    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/invalid.json', '{')
+    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/escape.json', JSON.stringify({
+      watch: { roots: ['../outside'], excludes: [] },
+    }))
+    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/uncontained.json', JSON.stringify({
+      watch: { roots: ['extensions/other'], excludes: ['secrets'] },
+    }))
+    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/inactive.json', JSON.stringify({
+      watch: { roots: ['.'], excludes: [] },
+    }))
+
+    const [activePlugin] = await resolveProjectPlugins(projectRoot)
+    if (!activePlugin?.loaded) {
+      throw new Error(activePlugin?.error ?? 'Expected the local plugin package to resolve.')
+    }
+    await expect(readPluginPrepareWatches(projectRoot)).resolves.toEqual([{
+      pluginId: 'demo',
+      roots: ['extensions/demo'],
+      excludes: ['extensions/demo/cache'],
+      packageRoot: 'plugins/demo',
+    }])
+  })
+
+  it('classifies atomic saves, creations, and deletions from previous path snapshots', () => {
+    const originalSnapshot = { modifiedAt: 1, size: 10 }
+    const snapshots = new Map([['extensions/demo/widget.ts', originalSnapshot]])
+
+    expect(classifyWatchedPathChange(
+      'extensions/demo/widget.ts',
+      { modifiedAt: 2, size: 12 },
+      snapshots,
+    )).toEqual({ path: 'extensions/demo/widget.ts', kind: 'changed' })
+    expect(classifyWatchedPathChange(
+      'extensions/demo/new-widget.ts',
+      { modifiedAt: 2, size: 4 },
+      snapshots,
+    )).toEqual({ path: 'extensions/demo/new-widget.ts', kind: 'created' })
+    expect(classifyWatchedPathChange(
+      'extensions/demo/widget.ts',
+      undefined,
+      snapshots,
+    )).toEqual({ path: 'extensions/demo/widget.ts', kind: 'deleted' })
+  })
 
   it('treats package manifests and lockfiles as discovery relevant', () => {
     const project = { config: defaultProjectConfig() }
@@ -10331,8 +10657,19 @@ throw 'string discovery failure'
   }, 20000)
 
   it('ignores generated discovery artifacts during holo dev watch reloads', async () => {
-    const projectRoot = await createTempProject()
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))
     tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  plugins: ['holo-plugin-demo'],
+}
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', 'export default {}\n')
+    await writeFakeHoloPluginPackage(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/demo.json', JSON.stringify({
+      watch: { roots: ['.'], excludes: [] },
+    }))
     const io = createIo(projectRoot)
     const child = new EventEmitter() as EventEmitter & {
       stdout: PassThrough
@@ -10357,34 +10694,36 @@ throw 'string discovery failure'
       prepare,
     ))
 
-    while (!watchCallback || child.listenerCount('close') === 0) {
-      await new Promise(resolve => setTimeout(resolve, 5))
+    await vi.waitFor(() => {
+      expect(watchCallback).toBeDefined()
+      expect(child.listenerCount('close')).toBeGreaterThan(0)
+      expect(prepare).toHaveBeenCalledTimes(1)
+    })
+    if (!watchCallback) {
+      throw new Error('Expected the development watcher callback to be registered.')
     }
-
-    while (prepare.mock.calls.length < 1) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
+    const emitWatchEvent = watchCallback
     prepare.mockClear()
+    expect(io.read().stderr).toContain('[demo] Project prepare watch root "." watches the entire application')
 
-    watchCallback('change', '.holo-js/generated/registry.json')
+    emitWatchEvent('change', '.holo-js/generated/registry.json')
+    emitWatchEvent('change', '../outside.ts')
+    emitWatchEvent('change', join(projectRoot, '..', 'outside.ts'))
     await new Promise(resolve => setTimeout(resolve, 25))
     expect(prepare).toHaveBeenCalledTimes(0)
 
-    watchCallback('change', '.holo-js/generated/schema.generated.ts')
-    while (prepare.mock.calls.length < 1) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
+    emitWatchEvent('change', '.holo-js/generated/schema.generated.ts')
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1))
     expect(prepare).toHaveBeenCalledTimes(1)
     prepare.mockClear()
 
-    watchCallback('change', 'config/app.ts')
-    while (prepare.mock.calls.length < 1) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
+    emitWatchEvent('change', 'config/app.ts')
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1))
 
     child.emit('close', 0)
     await expect(devPromise).resolves.toBeUndefined()
     expect(prepare).toHaveBeenCalledTimes(1)
+    expect(io.read().stderr.split('Project prepare watch root "."').length - 1).toBe(1)
   }, 30000)
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
@@ -10919,8 +11258,11 @@ export default defineConfig({
   })
 
   it('queues one additional discovery prepare while a holo dev prepare is already running', async () => {
-    const projectRoot = await createTempProject()
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))
     tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', 'export default {}\n')
+    await writeProjectFile(projectRoot, 'config/database.ts', 'export default {}\n')
     const io = createIo(projectRoot)
     const child = new EventEmitter() as EventEmitter & {
       stdout: PassThrough
@@ -10956,17 +11298,27 @@ export default defineConfig({
       prepare,
     ))
 
-    while (!watchCallback || child.listenerCount('close') === 0) {
-      await new Promise(resolve => setTimeout(resolve, 5))
+    await vi.waitFor(() => {
+      expect(watchCallback).toBeDefined()
+      expect(child.listenerCount('close')).toBeGreaterThan(0)
+      expect(prepare).toHaveBeenCalledTimes(1)
+    })
+    if (!watchCallback) {
+      throw new Error('Expected the development watcher callback to be registered.')
     }
+    const emitWatchEvent = watchCallback
 
-    watchCallback('change', 'server/commands/hello.mjs')
-    watchCallback('change', 'server/commands/hello.mjs')
-    await new Promise(resolve => setTimeout(resolve, 10))
-    releasePrepare?.()
-    while (prepareCalls < 3) {
-      await new Promise(resolve => setTimeout(resolve, 5))
+    emitWatchEvent('change', 'server/commands/hello.mjs')
+    emitWatchEvent('change', 'server/commands/hello.mjs')
+    await vi.waitFor(() => {
+      expect(prepare).toHaveBeenCalledTimes(2)
+      expect(releasePrepare).toBeDefined()
+    })
+    if (!releasePrepare) {
+      throw new Error('Expected the in-flight prepare release callback to be registered.')
     }
+    releasePrepare()
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(3))
     child.emit('close', 0)
 
     await expect(devPromise).resolves.toBeUndefined()

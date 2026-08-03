@@ -5,6 +5,11 @@ import { constants as fsConstants } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import {
+  activateLocalWorkspacePackages,
+  restoreProjectManifest,
+  stageLocalWorkspacePackages,
+} from './local-workspace-packages.mjs'
 
 const rootDir = resolve(import.meta.dirname, '..')
 const optionalPackageNames = [
@@ -222,12 +227,16 @@ async function createInstallWrapper(tempRoot) {
   await mkdir(binRoot, { recursive: true })
   await writeFile(npmPath, [
     '#!/bin/sh',
-    'node -e "const fs=require(\'node:fs\');const p=JSON.parse(fs.readFileSync(\'package.json\',\'utf8\'));p.dependencies[\'@holo-js/kernel\']=\'file:\'+process.env.HOLO_KERNEL_ROOT;fs.writeFileSync(\'package.json\',JSON.stringify(p,null,2)+\'\\n\')"',
+    'node "$HOLO_SMOKE_SCRIPT" --activate-local-packages "$PWD" "$HOLO_LOCAL_PACKAGES_ROOT"',
+    'status=$?',
+    'if [ "$status" -ne 0 ]; then exit "$status"; fi',
     '"$HOLO_REAL_NPM" install --ignore-scripts',
     'status=$?',
-    'if [ "$status" -eq 0 ]; then node "$HOLO_SMOKE_SCRIPT" --overlay-local-packages "$PWD"; fi',
-    'node -e "const fs=require(\'node:fs\');const p=JSON.parse(fs.readFileSync(\'package.json\',\'utf8\'));p.dependencies[\'@holo-js/kernel\']=process.env.HOLO_KERNEL_RANGE;fs.writeFileSync(\'package.json\',JSON.stringify(p,null,2)+\'\\n\')"',
-    'exit $status',
+    'if [ "$status" -eq 0 ]; then node "$HOLO_SMOKE_SCRIPT" --overlay-local-packages "$PWD"; status=$?; fi',
+    'node "$HOLO_SMOKE_SCRIPT" --restore-project-manifest "$PWD"',
+    'restore_status=$?',
+    'if [ "$status" -eq 0 ]; then status=$restore_status; fi',
+    'exit "$status"',
     '',
   ].join('\n'), 'utf8')
   await chmod(npmPath, 0o755)
@@ -668,6 +677,26 @@ if (overlayIndex !== -1) {
   process.exit(0)
 }
 
+const activateIndex = process.argv.indexOf('--activate-local-packages')
+
+if (activateIndex !== -1) {
+  const projectRoot = process.argv[activateIndex + 1]
+  const stagingRoot = process.argv[activateIndex + 2]
+  assert.equal(typeof projectRoot, 'string')
+  assert.equal(typeof stagingRoot, 'string')
+  await activateLocalWorkspacePackages(projectRoot, stagingRoot)
+  process.exit(0)
+}
+
+const restoreIndex = process.argv.indexOf('--restore-project-manifest')
+
+if (restoreIndex !== -1) {
+  const projectRoot = process.argv[restoreIndex + 1]
+  assert.equal(typeof projectRoot, 'string')
+  await restoreProjectManifest(projectRoot)
+  process.exit(0)
+}
+
 const tempRoot = await mkdtemp(join(tmpdir(), 'holo-scaffold-user-journey-'))
 
 try {
@@ -676,13 +705,10 @@ try {
     run('workspace', 'bun', ['run', '--filter', '@holo-js/*', '--sequential', 'build'])
   }
   const realNpm = run('workspace', 'which', ['npm']).stdout.trim()
-  const rootManifest = JSON.parse(await readFile(join(rootDir, 'package.json'), 'utf8'))
-  const kernelRange = rootManifest.workspaces?.catalog?.['@holo-js/kernel']
-  assert.equal(typeof kernelRange, 'string')
+  const localPackagesRoot = await stageLocalWorkspacePackages(rootDir, tempRoot)
   const binRoot = await createInstallWrapper(tempRoot)
   const localPackageEnv = {
-    HOLO_KERNEL_RANGE: kernelRange,
-    HOLO_KERNEL_ROOT: join(rootDir, 'packages/kernel'),
+    HOLO_LOCAL_PACKAGES_ROOT: localPackagesRoot,
     HOLO_REAL_NPM: realNpm,
     HOLO_SMOKE_SCRIPT: import.meta.filename,
     PATH: `${binRoot}:${process.env.PATH ?? ''}`,
@@ -704,7 +730,12 @@ try {
   log('success', 'all scaffold user journeys passed')
 } finally {
   if (process.env.HOLO_KEEP_SMOKE_TMP !== '1') {
-    await rm(tempRoot, { recursive: true, force: true })
+    await rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    })
   } else {
     log('workspace', `kept ${tempRoot}`)
   }

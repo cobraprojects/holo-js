@@ -1093,11 +1093,23 @@ describe('model core slice', () => {
       sql: 'SELECT * FROM "users"',
       bindings: [],
       source: 'query:select:users' })
+    expect(User.withoutGlobalScope('activeOnly').toSQL()).toEqual({
+      sql: 'SELECT * FROM "users"',
+      bindings: [],
+      source: 'query:select:users' })
     expect(User.newQuery().withoutGlobalScopes().toSQL()).toEqual({
       sql: 'SELECT * FROM "users"',
       bindings: [],
       source: 'query:select:users' })
+    expect(User.withoutGlobalScopes().toSQL()).toEqual({
+      sql: 'SELECT * FROM "users"',
+      bindings: [],
+      source: 'query:select:users' })
     expect(User.newQuery().withoutGlobalScopes(['activeOnly']).toSQL()).toEqual({
+      sql: 'SELECT * FROM "users"',
+      bindings: [],
+      source: 'query:select:users' })
+    expect(User.withoutGlobalScopes(['activeOnly']).toSQL()).toEqual({
       sql: 'SELECT * FROM "users"',
       bindings: [],
       source: 'query:select:users' })
@@ -1121,8 +1133,11 @@ describe('model core slice', () => {
     expect((await User.named('Amina').first())?.get('email')).toBeUndefined()
     expect((await User.where('name', 'Mohamed').first())?.get('email')).toBe('m@example.com')
     expect((await User.newQuery().withoutGlobalScope('activeOnly').get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
+    expect((await User.withoutGlobalScope('activeOnly').get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
     expect((await User.newQuery().withoutGlobalScopes().get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
+    expect((await User.withoutGlobalScopes().get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
     expect((await User.newQuery().withoutGlobalScopes(['activeOnly']).get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
+    expect((await User.withoutGlobalScopes(['activeOnly']).get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
     expect((await User.all()).map(user => user.get('name'))).toEqual(['Mohamed'])
     expect((await User.find(1))?.get('name')).toBe('Mohamed')
     expect(await User.findMany([])).toEqual([])
@@ -1427,7 +1442,7 @@ describe('model core slice', () => {
       .whereJsonContains('settings->tags', 'beta')
       .whereJsonLength('settings->tags', '>=', 2)
       .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE json_extract("settings", '$.profile.region') = ?1 AND EXISTS (SELECT 1 FROM json_each(json_extract("settings", '$.tags')) WHERE value = ?2) AND json_array_length(json_extract("settings", '$.tags')) >= ?3`,
+      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.profile.region') = 'text' AND json_extract("settings", '$.profile.region') = ?1 AND EXISTS (SELECT 1 FROM json_each(json_extract("settings", '$.tags')) WHERE value = ?2) AND json_array_length(json_extract("settings", '$.tags')) >= ?3`,
       bindings: ['eu', 'beta', 2],
       source: 'query:select:users' })
 

@@ -47,8 +47,10 @@ async function createProjectRoot(): Promise<string> {
   tempDirs.push(root)
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await symlink(resolve(import.meta.dirname, '../../authorization'), join(root, 'node_modules/@holo-js/authorization'))
+  await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
   await symlink(resolve(import.meta.dirname, '../../events'), join(root, 'node_modules/@holo-js/events'))
   await symlink(resolve(import.meta.dirname, '../../queue'), join(root, 'node_modules/@holo-js/queue'))
+  await symlink(resolve(import.meta.dirname, '../../storage-s3'), join(root, 'node_modules/@holo-js/storage-s3'))
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'server/models'), { recursive: true })
   await mkdir(join(root, 'server/db/migrations'), { recursive: true })
@@ -216,7 +218,8 @@ describe('@holo-js/core adapter helpers', () => {
         }
       }
     }>
-    const accessors = createHoloProjectAccessors(async () => project)
+    const resolveProject = vi.fn(async () => project)
+    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
 
     await expect(accessors.getApp()).resolves.toBe(project)
     await expect(accessors.getProject()).resolves.toBe(project)
@@ -229,6 +232,54 @@ describe('@holo-js/core adapter helpers', () => {
     })
     await expect(accessors.useConfig('services.mailgun.secret')).resolves.toBe('typed-secret')
     await expect(accessors.config('services.mailgun.secret')).resolves.toBe('typed-secret')
+    expect(resolveProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries project resolution after an initialization failure', async () => {
+    const project = { runtime: {} } as HoloAdapterProject
+    const resolveProject = vi.fn()
+      .mockRejectedValueOnce(new Error('initialization failed'))
+      .mockResolvedValue(project)
+    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
+
+    await expect(accessors.getApp()).rejects.toThrow('initialization failed')
+    await expect(accessors.getApp()).resolves.toBe(project)
+    await expect(accessors.getProject()).resolves.toBe(project)
+    expect(resolveProject).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares one in-flight project resolution across cached accessors', async () => {
+    const project = { runtime: {} } as HoloAdapterProject
+    let finishInitialization: ((project: HoloAdapterProject) => void) | undefined
+    const resolveProject = vi.fn(() => new Promise<HoloAdapterProject>((resolveProjectPromise) => {
+      finishInitialization = resolveProjectPromise
+    }))
+    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
+
+    const projects = Promise.all([
+      accessors.getApp(),
+      accessors.getProject(),
+      accessors.getApp(),
+    ])
+
+    expect(resolveProject).toHaveBeenCalledOnce()
+    finishInitialization?.(project)
+    await expect(projects).resolves.toEqual([project, project, project])
+  })
+
+  it('resolves every accessor call independently when caching is disabled', async () => {
+    const first = { runtime: {} } as HoloAdapterProject
+    const second = { runtime: {} } as HoloAdapterProject
+    const resolveProject = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+    const accessors = createHoloProjectAccessors(resolveProject, { cache: false })
+
+    await expect(Promise.all([
+      accessors.getApp(),
+      accessors.getProject(),
+    ])).resolves.toEqual([first, second])
+    expect(resolveProject).toHaveBeenCalledTimes(2)
   })
 
   it('creates reusable singleton adapters with runtime-agnostic capabilities', async () => {

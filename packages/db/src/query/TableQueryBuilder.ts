@@ -566,7 +566,10 @@ export class TableQueryBuilder<
   }
 
   private isScalarJsonValue(value: unknown): boolean {
-    return value === null || ['string', 'number', 'boolean'].includes(typeof value)
+    return value === null
+      || typeof value === 'string'
+      || typeof value === 'boolean'
+      || (typeof value === 'number' && Number.isFinite(value))
   }
 
   private createAggregateSelection(
@@ -641,6 +644,10 @@ export class TableQueryBuilder<
 
     if (!this.isScalarJsonValue(normalizedValue)) {
       throw new SecurityError(`whereJson() only supports scalar JSON comparisons on "${columnPath}"; use whereJsonContains() for arrays or objects.`)
+    }
+
+    if (normalizedValue === null && normalizedOperator !== '=' && normalizedOperator !== '!=') {
+      throw new SecurityError('whereJson() only supports "=" or "!=" when comparing JSON values to null.')
     }
 
     return this.clone(withPredicate(this.plan, {

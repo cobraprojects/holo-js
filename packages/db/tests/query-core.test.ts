@@ -366,7 +366,7 @@ describe('query core slice', () => {
       source: 'query:select:users' })
 
     expect(DB.table(users).whereJson('meta', '=', 'Mohamed').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE json_extract("meta", \'$\') = ?1',
+      sql: 'SELECT * FROM "users" WHERE json_type("meta", \'$\') = \'text\' AND json_extract("meta", \'$\') = ?1',
       bindings: ['Mohamed'],
       source: 'query:select:users' })
     expect(DB.table(users).whereJson('meta->enabled', 'like', 'yes').toSQL()).toEqual({
@@ -959,6 +959,17 @@ describe('query core slice', () => {
     expect(() => validateQueryPlan({
       ...createSelectQueryPlan(createTableSource(users)),
       predicates: [{
+        kind: 'json',
+        boolean: 'and',
+        column: 'meta',
+        path: ['region'],
+        jsonMode: 'value',
+        operator: '>',
+        value: null }] } as never)).toThrow('JSON null comparisons only support')
+
+    expect(() => validateQueryPlan({
+      ...createSelectQueryPlan(createTableSource(users)),
+      predicates: [{
         kind: 'vector',
         boolean: 'and',
         column: 'name',
@@ -1151,6 +1162,28 @@ describe('query core slice', () => {
         boolean: 'and',
         column: 'meta',
         path: ['items'],
+        jsonMode: 'value',
+        operator: '=',
+        value: { nested: true } }] } as never)).toThrow('requires a finite scalar value')
+
+    expect(() => validateQueryPlan({
+      ...createSelectQueryPlan(createTableSource(users)),
+      predicates: [{
+        kind: 'json',
+        boolean: 'and',
+        column: 'meta',
+        path: ['items'],
+        jsonMode: 'value',
+        operator: '=',
+        value: Number.NaN }] } as never)).toThrow('requires a finite scalar value')
+
+    expect(() => validateQueryPlan({
+      ...createSelectQueryPlan(createTableSource(users)),
+      predicates: [{
+        kind: 'json',
+        boolean: 'and',
+        column: 'meta',
+        path: ['items'],
         jsonMode: 'contains',
         value: undefined }] } as never)).toThrow('cannot be undefined')
 
@@ -1307,7 +1340,7 @@ describe('query core slice', () => {
     expect(sqlite.datePredicate('year')).toBe(`strftime('%Y', "created_at") = ?1`)
     expect(sqlite.datePredicate('month')).toBe(`strftime('%m', "created_at") = ?1`)
     expect(sqlite.datePredicate('day')).toBe(`strftime('%d', "created_at") = ?1`)
-    expect(sqlite.jsonValueAtRoot()).toBe(`json_extract("meta", '$') = ?1`)
+    expect(sqlite.jsonValueAtRoot()).toBe(`json_type("meta", '$') IN ('integer', 'real') AND json_extract("meta", '$') = ?1`)
     expect(sqlite.directJsonPredicate({
       kind: 'json',
       boolean: 'and',
@@ -1315,7 +1348,7 @@ describe('query core slice', () => {
       path: [],
       jsonMode: 'value',
       operator: '=',
-      value: 1 })).toBe(`json_extract("meta", '$') = ?1`)
+      value: 1 })).toBe(`json_type("meta", '$') IN ('integer', 'real') AND json_extract("meta", '$') = ?1`)
     expect(sqlite.jsonValueAtRoot()).toContain(`json_extract("meta", '$') = ?1`)
     expect(sqlite.jsonValueAtPath()).toContain(`json_extract("meta", '$.enabled') LIKE ?1`)
     expect(sqlite.jsonContainsScalarAtPath()).toContain(`EXISTS (SELECT 1 FROM json_each(json_extract("meta", '$.roles')) WHERE value = ?1)`)
@@ -1332,7 +1365,7 @@ describe('query core slice', () => {
       predicates: [{ kind: 'json', column: 'meta', path: [], jsonMode: 'value', operator: '=', value: 'x' }],
       groupBy: [],
       having: [],
-      orderBy: [] } as never).sql).toContain('json_extract("meta", \'$\') = ?1')
+      orderBy: [] } as never).sql).toContain('json_type("meta", \'$\') = \'text\' AND json_extract("meta", \'$\') = ?1')
 
     expect(postgres.datePredicate('date')).toBe('CAST("created_at" AS DATE) = $1')
     expect(postgres.datePredicate('time')).toBe('CAST("created_at" AS TIME) = $1')
@@ -1340,7 +1373,7 @@ describe('query core slice', () => {
     expect(postgres.datePredicate('month')).toContain('EXTRACT(MONTH')
     expect(postgres.datePredicate('day')).toContain('EXTRACT(DAY')
     expect(() => postgres.datePredicate('unknown')).toThrow('Unsupported date predicate part')
-    expect(postgres.jsonValueAtRoot()).toContain(`#>> '{}'`)
+    expect(postgres.jsonValueAtRoot()).toContain('("meta")::jsonb = $1::jsonb')
     expect(postgres.jsonContainsAtRoot()).toContain('::jsonb')
 
     expect(mysql.datePredicate('date')).toBe('DATE(`created_at`) = ?')
@@ -2165,15 +2198,36 @@ describe('query core slice', () => {
       .whereJsonContains('settings->tags', 'beta')
       .whereJsonLength('settings->tags', '>=', 2)
       .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE json_extract("settings", '$.profile.region') = ?1 AND EXISTS (SELECT 1 FROM json_each(json_extract("settings", '$.tags')) WHERE value = ?2) AND json_array_length(json_extract("settings", '$.tags')) >= ?3`,
+      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.profile.region') = 'text' AND json_extract("settings", '$.profile.region') = ?1 AND EXISTS (SELECT 1 FROM json_each(json_extract("settings", '$.tags')) WHERE value = ?2) AND json_array_length(json_extract("settings", '$.tags')) >= ?3`,
       bindings: ['eu', 'beta', 2],
       source: 'query:select:users' })
 
     expect(DB.table(users)
       .where('settings->profile->region', 'eu')
       .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE json_extract("settings", '$.profile.region') = ?1`,
+      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.profile.region') = 'text' AND json_extract("settings", '$.profile.region') = ?1`,
       bindings: ['eu'],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->enabled', true)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.enabled') = 'true' AND json_extract("settings", '$.enabled') = ?1`,
+      bindings: [1],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->profile->region', '=', null)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.profile.region') = 'null'`,
+      bindings: [],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->profile->region', '!=', null)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.profile.region') IS NOT NULL AND json_type("settings", '$.profile.region') != 'null'`,
+      bindings: [],
       source: 'query:select:users' })
 
     expect(DB.table(users)
@@ -2195,15 +2249,36 @@ describe('query core slice', () => {
       .whereJsonContains('settings->tags', ['beta'])
       .whereJsonLength('settings->tags', 2)
       .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE ("settings")::jsonb #>> '{profile,region}' = $1 AND jsonb_extract_path(("settings")::jsonb, 'tags') @> $2::jsonb AND jsonb_array_length(jsonb_extract_path(("settings")::jsonb, 'tags')) = $3`,
-      bindings: ['eu', '["beta"]', 2],
+      sql: `SELECT * FROM "users" WHERE jsonb_extract_path(("settings")::jsonb, 'profile', 'region') = $1::jsonb AND jsonb_extract_path(("settings")::jsonb, 'tags') @> $2::jsonb AND jsonb_array_length(jsonb_extract_path(("settings")::jsonb, 'tags')) = $3`,
+      bindings: ['"eu"', '["beta"]', 2],
       source: 'query:select:users' })
 
     expect(DB.table(users)
       .where('settings->profile->region', 'eu')
       .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE ("settings")::jsonb #>> '{profile,region}' = $1`,
-      bindings: ['eu'],
+      sql: `SELECT * FROM "users" WHERE jsonb_extract_path(("settings")::jsonb, 'profile', 'region') = $1::jsonb`,
+      bindings: ['"eu"'],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->enabled', true)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM "users" WHERE jsonb_extract_path(("settings")::jsonb, 'enabled') = $1::jsonb`,
+      bindings: ['true'],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->profile->region', '=', null)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM "users" WHERE jsonb_typeof(jsonb_extract_path(("settings")::jsonb, 'profile', 'region')) = 'null'`,
+      bindings: [],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->profile->region', '!=', null)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM "users" WHERE jsonb_typeof(jsonb_extract_path(("settings")::jsonb, 'profile', 'region')) IS NOT NULL AND jsonb_typeof(jsonb_extract_path(("settings")::jsonb, 'profile', 'region')) != 'null'`,
+      bindings: [],
       source: 'query:select:users' })
 
     configureDB(createConnectionManager({
@@ -2218,15 +2293,36 @@ describe('query core slice', () => {
       .whereJsonContains('settings->tags', 'beta')
       .whereJsonLength('settings', '>=', 1)
       .toSQL()).toEqual({
-      sql: `SELECT * FROM \`users\` WHERE JSON_UNQUOTE(JSON_EXTRACT(\`settings\`, '$.profile.region')) = ? AND JSON_CONTAINS(JSON_EXTRACT(\`settings\`, '$.tags'), CAST(? AS JSON)) AND JSON_LENGTH(JSON_EXTRACT(\`settings\`, '$')) >= ?`,
-      bindings: ['eu', '"beta"', 1],
+      sql: `SELECT * FROM \`users\` WHERE JSON_EXTRACT(\`settings\`, '$.profile.region') = CAST(? AS JSON) AND JSON_CONTAINS(JSON_EXTRACT(\`settings\`, '$.tags'), CAST(? AS JSON)) AND JSON_LENGTH(JSON_EXTRACT(\`settings\`, '$')) >= ?`,
+      bindings: ['"eu"', '"beta"', 1],
       source: 'query:select:users' })
 
     expect(DB.table(users)
       .where('settings->profile->region', 'eu')
       .toSQL()).toEqual({
-      sql: `SELECT * FROM \`users\` WHERE JSON_UNQUOTE(JSON_EXTRACT(\`settings\`, '$.profile.region')) = ?`,
-      bindings: ['eu'],
+      sql: `SELECT * FROM \`users\` WHERE JSON_EXTRACT(\`settings\`, '$.profile.region') = CAST(? AS JSON)`,
+      bindings: ['"eu"'],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->enabled', true)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM \`users\` WHERE JSON_EXTRACT(\`settings\`, '$.enabled') = CAST(? AS JSON)`,
+      bindings: ['true'],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->profile->region', '=', null)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM \`users\` WHERE JSON_TYPE(JSON_EXTRACT(\`settings\`, '$.profile.region')) = 'NULL'`,
+      bindings: [],
+      source: 'query:select:users' })
+
+    expect(DB.table(users)
+      .whereJson('settings->profile->region', '!=', null)
+      .toSQL()).toEqual({
+      sql: `SELECT * FROM \`users\` WHERE JSON_TYPE(JSON_EXTRACT(\`settings\`, '$.profile.region')) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(\`settings\`, '$.profile.region')) != 'NULL'`,
+      bindings: [],
       source: 'query:select:users' })
 
     expect(DB.table(defineTable('analytics.users', {
@@ -2234,8 +2330,8 @@ describe('query core slice', () => {
       settings: column.json() }))
       .whereJson('settings->profile->region', 'eu')
       .toSQL()).toEqual({
-      sql: `SELECT * FROM \`analytics\`.\`users\` WHERE JSON_UNQUOTE(JSON_EXTRACT(\`settings\`, '$.profile.region')) = ?`,
-      bindings: ['eu'],
+      sql: `SELECT * FROM \`analytics\`.\`users\` WHERE JSON_EXTRACT(\`settings\`, '$.profile.region') = CAST(? AS JSON)`,
+      bindings: ['"eu"'],
       source: 'query:select:analytics.users' })
 
     expect(() => DB.table(users).whereJson('settings->', 'eu')).toThrow(SecurityError)
@@ -2244,8 +2340,11 @@ describe('query core slice', () => {
     expect(() => DB.table(users).whereJson('settings->>profile', 'eu')).toThrow(SecurityError)
     expect(() => DB.table(users).whereJsonContains('name->profile', 'eu')).toThrow(SecurityError)
     expect(() => DB.table(users).where('name->profile', 'eu')).toThrow(SecurityError)
+    expect(() => DB.table(users).whereJson('settings->profile', '>', null)).toThrow(SecurityError)
+    expect(() => DB.table(users).whereJson('settings->profile', 'like', null)).toThrow(SecurityError)
     await expect(DB.table(users).whereJsonLength('settings->tags', 'like' as never, 2).get()).rejects.toThrow(SecurityError)
     expect(() => DB.table(users).whereJson('settings->profile', { region: 'eu' } as never)).toThrow(SecurityError)
+    expect(() => DB.table(users).whereJson('settings->profile', Number.NaN)).toThrow(SecurityError)
   })
 
   it('compiles nested JSON updates per dialect and rejects unsafe update payloads', async () => {
@@ -3291,7 +3390,7 @@ describe('query core slice', () => {
       .toSQL()
     expect(JSON.stringify(sqliteSnapshot, null, 2)).toMatchInlineSnapshot(`
       "{
-        "sql": "SELECT \\"users\\".\\"id\\", \\"users\\".\\"name\\" AS \\"displayName\\", COUNT(*) AS \\"postCount\\" FROM \\"users\\" WHERE \\"users\\".\\"active\\" = ?1 AND json_extract(\\"users\\".\\"settings\\", '$.profile.region') = ?2 GROUP BY \\"users\\".\\"id\\", \\"users\\".\\"name\\" HAVING COUNT(*) >= ?3 ORDER BY \\"users\\".\\"id\\" DESC LIMIT 5",
+        "sql": "SELECT \\"users\\".\\"id\\", \\"users\\".\\"name\\" AS \\"displayName\\", COUNT(*) AS \\"postCount\\" FROM \\"users\\" WHERE \\"users\\".\\"active\\" = ?1 AND json_type(\\"users\\".\\"settings\\", '$.profile.region') = 'text' AND json_extract(\\"users\\".\\"settings\\", '$.profile.region') = ?2 GROUP BY \\"users\\".\\"id\\", \\"users\\".\\"name\\" HAVING COUNT(*) >= ?3 ORDER BY \\"users\\".\\"id\\" DESC LIMIT 5",
         "bindings": [
           true,
           "mena",
@@ -3318,10 +3417,10 @@ describe('query core slice', () => {
       .toSQL()
     expect(JSON.stringify(postgresSnapshot, null, 2)).toMatchInlineSnapshot(`
       "{
-        "sql": "SELECT \\"users\\".\\"id\\", \\"users\\".\\"name\\" AS \\"displayName\\", COUNT(*) AS \\"postCount\\" FROM \\"users\\" WHERE \\"users\\".\\"active\\" = $1 AND (\\"users\\".\\"settings\\")::jsonb #>> '{profile,region}' = $2 GROUP BY \\"users\\".\\"id\\", \\"users\\".\\"name\\" HAVING COUNT(*) >= $3 ORDER BY \\"users\\".\\"id\\" DESC LIMIT 5",
+        "sql": "SELECT \\"users\\".\\"id\\", \\"users\\".\\"name\\" AS \\"displayName\\", COUNT(*) AS \\"postCount\\" FROM \\"users\\" WHERE \\"users\\".\\"active\\" = $1 AND jsonb_extract_path((\\"users\\".\\"settings\\")::jsonb, 'profile', 'region') = $2::jsonb GROUP BY \\"users\\".\\"id\\", \\"users\\".\\"name\\" HAVING COUNT(*) >= $3 ORDER BY \\"users\\".\\"id\\" DESC LIMIT 5",
         "bindings": [
           true,
-          "mena",
+          "\\"mena\\"",
           1
         ],
         "source": "query:select:users"
@@ -3345,10 +3444,10 @@ describe('query core slice', () => {
       .toSQL()
     expect(JSON.stringify(mysqlSnapshot, null, 2)).toMatchInlineSnapshot(`
       "{
-        "sql": "SELECT \`users\`.\`id\`, \`users\`.\`name\` AS \`displayName\`, COUNT(*) AS \`postCount\` FROM \`users\` WHERE \`users\`.\`active\` = ? AND JSON_UNQUOTE(JSON_EXTRACT(\`users\`.\`settings\`, '$.profile.region')) = ? GROUP BY \`users\`.\`id\`, \`users\`.\`name\` HAVING COUNT(*) >= ? ORDER BY \`users\`.\`id\` DESC LIMIT 5",
+        "sql": "SELECT \`users\`.\`id\`, \`users\`.\`name\` AS \`displayName\`, COUNT(*) AS \`postCount\` FROM \`users\` WHERE \`users\`.\`active\` = ? AND JSON_EXTRACT(\`users\`.\`settings\`, '$.profile.region') = CAST(? AS JSON) GROUP BY \`users\`.\`id\`, \`users\`.\`name\` HAVING COUNT(*) >= ? ORDER BY \`users\`.\`id\` DESC LIMIT 5",
         "bindings": [
           true,
-          "mena",
+          "\\"mena\\"",
           1
         ],
         "source": "query:select:users"
@@ -3390,7 +3489,7 @@ describe('query core slice', () => {
     const second = builder.toSQL()
 
     expect(first).toEqual(second)
-    expect(first.bindings).toEqual([1, 'Hello%', 'Mohamed', 'mena', 2])
+    expect(first.bindings).toEqual([1, 'Hello%', 'Mohamed', '"mena"', 2])
   })
 
   it('fails closed for unsupported query dialects', async () => {

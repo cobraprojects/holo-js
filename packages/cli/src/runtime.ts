@@ -14,6 +14,7 @@ import {
 } from './project'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
 import { fileExists } from './fs-utils'
+import { loadProjectPluginMigrationPublishers } from './project/plugins'
 import type { RuntimeEnvironment, RuntimeSpawnResult, RuntimeMigrationCandidate, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
 
@@ -507,6 +508,9 @@ export async function withRuntimeEnvironment<T>(
     )
     const runtimeRoot = await ensureRuntimeDependencyLink(projectRoot)
     dependencyLinkEnsured = true
+    const migrationPublishers = kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'hydrate-schema'
+      ? await loadProjectPluginMigrationPublishers(projectRoot)
+      : []
     const runtimePayload = JSON.stringify({
       kind,
       projectRoot,
@@ -515,6 +519,10 @@ export async function withRuntimeEnvironment<T>(
       },
       models: environment.bundledModels.map(entry => pathToFileURL(entry).href),
       migrations: environment.bundledMigrations.map(entry => pathToFileURL(entry).href),
+      migrationPublishers: migrationPublishers.map(entry => ({
+        packageName: entry.packageName,
+        url: pathToFileURL(entry.path).href,
+      })),
       seeders: environment.bundledSeeders.map(entry => pathToFileURL(entry).href),
       generatedSchema: environment.bundledGeneratedSchema ? pathToFileURL(environment.bundledGeneratedSchema).href : undefined,
       generatedSchemaOutputPath: resolveGeneratedSchemaPath(projectRoot, environment.project.config),

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cli",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - project creation, discovery, and operational CLI",
   "type": "module",
   "license": "MIT",
@@ -37,7 +37,10 @@
     "@holo-js/security": "catalog:",
     "@holo-js/storage": "catalog:",
     "esbuild": "catalog:",
-    "inflection": "catalog:"
+    "inflection": "catalog:",
+    "minimatch": "catalog:",
+    "semver": "catalog:",
+    "yaml": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/broadcast": "catalog:",
@@ -67,6 +70,7 @@
     "@holo-js/queue-db": "catalog:",
     "@holo-js/session": "catalog:",
     "@types/node": "catalog:",
+    "@types/semver": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

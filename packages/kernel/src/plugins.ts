@@ -28,6 +28,7 @@ export type HoloPluginNotificationContributions = HoloPluginRuntimeMapContributi
 export type HoloPluginRuntimeContributions = { readonly boot?: string }
 export type HoloPluginCliContributions = { readonly commands?: string }
 export type HoloPluginMigrationContributions = { readonly publish?: string }
+export type HoloPluginProjectContributions = { readonly prepare?: string }
 
 export type HoloPluginFrameworkTsconfigKind = 'nuxt' | 'next' | 'sveltekit'
 export type HoloPluginPackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
@@ -76,6 +77,7 @@ export type HoloPluginContributions = {
   readonly runtime?: HoloPluginRuntimeContributions
   readonly cli?: HoloPluginCliContributions
   readonly migrations?: HoloPluginMigrationContributions
+  readonly project?: HoloPluginProjectContributions
 }
 
 export type HoloPluginDefinition = {
@@ -100,7 +102,7 @@ export type HoloPluginRuntimeModule = {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function normalizeString(value: unknown): string | undefined {
@@ -150,6 +152,24 @@ export function normalizeHoloPluginDefinition(value: unknown): HoloPluginDefinit
   if (!isRecord(candidate) || !normalizeString(candidate.id)) {
     throw new Error('[Holo Plugins] Plugin entry must export a plugin definition with an id.')
   }
+
+  if (isRecord(candidate.contributes) && 'project' in candidate.contributes) {
+    const project = candidate.contributes.project
+    if (!isRecord(project)) {
+      throw new Error('[Holo Plugins] contributes.project must be an object.')
+    }
+    if ('prepare' in project && !normalizeString(project.prepare)) {
+      throw new Error('[Holo Plugins] contributes.project.prepare must be a non-empty string.')
+    }
+    return Object.freeze({
+      ...candidate,
+      contributes: Object.freeze({
+        ...candidate.contributes,
+        project: Object.freeze({ prepare: normalizeString(project.prepare) }),
+      }),
+    } as HoloPluginDefinition)
+  }
+
   return Object.freeze({ ...candidate } as HoloPluginDefinition)
 }
 

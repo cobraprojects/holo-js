@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -127,6 +127,11 @@ function seedCacheRuntimeGlobalsForTest(): void {
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-runtime-'))
   tempDirs.push(root)
+  await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../../broadcast'), join(root, 'node_modules/@holo-js/broadcast'))
+  await symlink(resolve(import.meta.dirname, '../../db-mysql'), join(root, 'node_modules/@holo-js/db-mysql'))
+  await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
+  await symlink(resolve(import.meta.dirname, '../../queue-db'), join(root, 'node_modules/@holo-js/queue-db'))
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'server/models'), { recursive: true })
   await mkdir(join(root, 'server/db/migrations'), { recursive: true })
@@ -481,6 +486,34 @@ describe('@holo-js/core portable runtime', () => {
     expect(queueRuntimeInternals.getQueueRuntimeState().config.default).toBe('sync')
     await useStorage('local').setItem('runtime:storage-check', { ok: true })
     await expect(useStorage('local').getItem('runtime:storage-check')).resolves.toEqual({ ok: true })
+    const firstWrite = async function* (): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode('bounded-local-stream')
+    }
+    await expect(useStorage('local').writeStream('runtime/stream.bin', firstWrite(), { overwrite: false })).resolves.toBe(true)
+    await expect(useStorage('local').writeStream('runtime/stream.bin', firstWrite(), { overwrite: false })).resolves.toBe(false)
+    const localStream = await useStorage('local').readStream('runtime/stream.bin', { chunkBytes: 4096 })
+    const localChunks: Uint8Array[] = []
+    for await (const chunk of localStream ?? []) localChunks.push(chunk)
+    expect(Buffer.concat(localChunks).toString()).toBe('bounded-local-stream')
+    const outsideStoragePath = join(root, 'outside-storage.txt')
+    await writeFile(outsideStoragePath, 'outside-storage-root')
+    await symlink(outsideStoragePath, join(root, 'storage/app/runtime/escape.bin'))
+    await expect(useStorage('local').get('runtime/escape.bin')).rejects.toThrow(
+      'Storage paths must stay inside the configured disk root.',
+    )
+    await expect(useStorage('local').readStream('runtime/escape.bin')).rejects.toThrow(
+      'Storage paths must stay inside the configured disk root.',
+    )
+    await useStorage('local').writeStream('runtime/deferred.bin', firstWrite())
+    const deferredStream = await useStorage('local').readStream('runtime/deferred.bin')
+    await rm(join(root, 'storage/app/runtime/deferred.bin'))
+    await expect(async () => {
+      for await (const _chunk of deferredStream ?? []) {
+        throw new Error('The removed stream should not yield data.')
+      }
+    }).rejects.toThrow('ENOENT')
+    await writeFile(join(root, 'storage/app/not-a-directory'), 'file')
+    await expect(useStorage('local').listFiles('not-a-directory')).rejects.toThrow('File pagination failed')
 
     registerQueueJob({
       async handle() {},
@@ -5072,8 +5105,8 @@ export default defineBroadcastConfig({
     }
     const store = {
       create: vi.fn(async () => {}),
-      list: vi.fn(async () => []),
-      unread: vi.fn(async () => []),
+      list: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
+      unread: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
       markAsRead: vi.fn(async () => 0),
       markAsUnread: vi.fn(async () => 0),
       delete: vi.fn(async () => 0),
@@ -5197,8 +5230,8 @@ export default defineBroadcastConfig({
     }
     const store = {
       create: vi.fn(async () => {}),
-      list: vi.fn(async () => []),
-      unread: vi.fn(async () => []),
+      list: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
+      unread: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
       markAsRead: vi.fn(async () => 0),
       markAsUnread: vi.fn(async () => 0),
       delete: vi.fn(async () => 0),
@@ -5256,8 +5289,8 @@ export default defineBroadcastConfig({
     }
     const store = {
       create: vi.fn(async () => {}),
-      list: vi.fn(async () => []),
-      unread: vi.fn(async () => []),
+      list: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
+      unread: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
       markAsRead: vi.fn(async () => 0),
       markAsUnread: vi.fn(async () => 0),
       delete: vi.fn(async () => 0),
@@ -5307,41 +5340,142 @@ export default defineBroadcastConfig({
     })
 
     const store = holoRuntimeInternals.createCoreNotificationStore(runtime.loadedConfig)
-    await store.create({
-      id: 'notif-1',
-      type: 'invoice-paid',
-      notifiableType: 'users',
-      notifiableId: 'user-1',
-      data: { invoiceId: 'inv-1' },
-      readAt: null,
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-    })
-
-    await expect(store.list({ id: 'user-1', type: 'users' })).resolves.toEqual([
+    const createdAt = new Date('2026-01-01T00:00:00.000Z')
+    const notificationRecords = [
       {
         id: 'notif-1',
         type: 'invoice-paid',
         notifiableType: 'users',
         notifiableId: 'user-1',
-        data: { invoiceId: 'inv-1' },
+        data: { invoiceId: 'inv-1', metadata: { archivedAt: null }, tenant: { id: 'tenant-1' } },
         readAt: null,
-        createdAt: new Date('2026-01-01T00:00:00.000Z'),
-        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        createdAt,
+        updatedAt: createdAt,
       },
-    ])
-    await expect(store.unread({ id: 'user-1', type: 'users' })).resolves.toHaveLength(1)
-    await expect(store.markAsRead(['notif-1'])).resolves.toBe(1)
-    await expect(store.unread({ id: 'user-1', type: 'users' })).resolves.toHaveLength(0)
-    await expect(store.markAsUnread(['notif-1'])).resolves.toBe(1)
-    await expect(store.unread({ id: 'user-1', type: 'users' })).resolves.toHaveLength(1)
-    await expect(store.delete(['notif-1'])).resolves.toBe(1)
-    await expect(store.list({ id: 'user-1', type: 'users' })).resolves.toEqual([])
+      {
+        id: 'notif-2',
+        type: 'invoice-paid',
+        notifiableType: 'users',
+        notifiableId: 'user-1',
+        data: { invoiceId: 'inv-2', metadata: { archivedAt: null }, tenant: { id: 'tenant-1' } },
+        readAt: createdAt,
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: 'notif-other-recipient',
+        type: 'invoice-paid',
+        notifiableType: 'users',
+        notifiableId: 'user-2',
+        data: { metadata: { archivedAt: null }, tenant: { id: 'tenant-1' } },
+        readAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: 'notif-other-type',
+        type: 'subscription-renewed',
+        notifiableType: 'users',
+        notifiableId: 'user-1',
+        data: { metadata: { archivedAt: null }, tenant: { id: 'tenant-1' } },
+        readAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: 'notif-other-tenant',
+        type: 'invoice-paid',
+        notifiableType: 'users',
+        notifiableId: 'user-1',
+        data: { metadata: { archivedAt: null }, tenant: { id: 'tenant-2' } },
+        readAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: 'notif-missing-null',
+        type: 'invoice-paid',
+        notifiableType: 'users',
+        notifiableId: 'user-1',
+        data: { tenant: { id: 'tenant-1' } },
+        readAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+    ] as const
+    for (const record of notificationRecords) {
+      await store.create(record)
+    }
+    await expect(store.create(notificationRecords[0]!)).resolves.toBeUndefined()
+    await expect(store.create({
+      ...notificationRecords[0]!,
+      notifiableId: 'user-collision',
+    })).rejects.toThrow('Notification persistence collision failed closed')
+
+    const query = {
+      recipient: { id: 'user-1', type: 'users' },
+      type: 'invoice-paid',
+      dataMatches: [
+        { path: ['tenant', 'id'], value: 'tenant-1' },
+        { path: ['metadata', 'archivedAt'], value: null },
+      ],
+    } as const
+    await expect(store.list(query, { limit: 1, offset: 0 })).resolves.toMatchObject({
+      records: [{ id: 'notif-2' }],
+      limit: 1,
+      offset: 0,
+      total: 2,
+      unread: 1,
+    })
+    await expect(store.list(query, { limit: 1, offset: 1 })).resolves.toMatchObject({
+      records: [{ id: 'notif-1' }],
+      limit: 1,
+      offset: 1,
+      total: 2,
+      unread: 1,
+    })
+    await expect(store.unread(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [{ id: 'notif-1' }],
+      limit: 20,
+      offset: 0,
+      total: 1,
+      unread: 1,
+    })
+
+    const allIds = notificationRecords.map(record => record.id)
+    await expect(store.markAsRead(query, allIds)).resolves.toBe(2)
+    await expect(store.unread(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [],
+      total: 0,
+      unread: 0,
+    })
+    await expect(store.markAsUnread(query, allIds)).resolves.toBe(2)
+    await expect(store.delete(query, allIds)).resolves.toBe(2)
+    await expect(store.list(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [],
+      total: 0,
+      unread: 0,
+    })
+    await expect(store.list({ recipient: { id: 'user-1', type: 'users' } }, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [
+        { id: 'notif-other-type' },
+        { id: 'notif-other-tenant' },
+        { id: 'notif-missing-null' },
+      ],
+      total: 3,
+      unread: 3,
+    })
+    await expect(store.list({ recipient: { id: 'user-2', type: 'users' } }, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [{ id: 'notif-other-recipient' }],
+      total: 1,
+      unread: 1,
+    })
 
     await runtime.shutdown()
   })
 
   it('normalizes numeric notification route ids to strings for writes and reads', async () => {
+    let inserted: Record<string, unknown> | undefined
     const tableCalls: Array<{
       method: 'insert' | 'where'
       column?: string
@@ -5349,12 +5483,13 @@ export default defineBroadcastConfig({
       payload?: Record<string, unknown>
     }> = []
     const builder = {
-      insert(payload: Record<string, unknown>) {
+      insertOrIgnore(payload: Record<string, unknown>) {
+        inserted = payload
         tableCalls.push({
           method: 'insert',
           payload,
         })
-        return Promise.resolve()
+        return Promise.resolve({ affectedRows: 1 })
       },
       where(column: string, value: unknown) {
         tableCalls.push({
@@ -5367,11 +5502,23 @@ export default defineBroadcastConfig({
       orderBy() {
         return this
       },
+      limit() {
+        return this
+      },
+      offset() {
+        return this
+      },
       whereNull() {
         return this
       },
+      async count() {
+        return 0
+      },
       async get() {
         return []
+      },
+      async first() {
+        return inserted
       },
     }
     const tableSpy = vi.spyOn(DB, 'table').mockReturnValue(builder as never)
@@ -5394,8 +5541,9 @@ export default defineBroadcastConfig({
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       updatedAt: new Date('2026-01-01T00:00:00.000Z'),
     })
-    await store.list({ id: 42, type: 'users' })
-    await store.unread({ id: 42, type: 'users' })
+    const query = { recipient: { id: 42, type: 'users' } }
+    await store.list(query, { limit: 20, offset: 0 })
+    await store.unread(query, { limit: 20, offset: 0 })
 
     expect(tableCalls).toContainEqual({
       method: 'insert',

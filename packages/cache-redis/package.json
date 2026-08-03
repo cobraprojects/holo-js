@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cache-redis",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - Redis cache driver",
   "type": "module",
   "license": "MIT",

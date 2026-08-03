@@ -4,11 +4,11 @@ import {
   normalizeNotificationDefinition,
   type AnonymousNotificationTarget,
   type InferNotificationNotifiable,
+  type NotificationBuildFactories,
   type NotificationBuildContext,
   type NotificationChannel,
   type NotificationChannelDispatchResult,
   type NotificationChannelName,
-  type NotificationDatabaseRoute,
   type NotificationDefinition,
   type NotificationDelayValue,
   type NotificationDispatchInput,
@@ -16,7 +16,9 @@ import {
   type NotificationDispatchResult,
   type NotificationDispatchTarget,
   type NotificationQueueOptions,
-  type NotificationRecord,
+  type NotificationPage,
+  type NotificationPagination,
+  type NotificationQuery,
   type NotificationRouteFor,
   type NotificationRuntimeBindings,
   type NotificationSendContext,
@@ -41,6 +43,8 @@ import {
   normalizeEmailRouteFromValue,
   normalizeNotificationRecord,
   normalizeNotificationRecordIds,
+  normalizeNotificationPagination,
+  normalizeNotificationQuery,
   requireStore,
   resolveBroadcastRouteFromNotifiable,
   resolveDatabaseRouteFromNotifiable,
@@ -53,6 +57,14 @@ const HOLO_NOTIFICATIONS_DELIVER_JOB = 'holo.notifications.deliver'
 const normalizeOptionalString = normalizeOptionalNotificationString
 const normalizeDelayValue = normalizeNotificationDelay
 const normalizeQueueOptions = normalizeNotificationQueueOptions
+
+function normalizeDeduplicationKey(value: string): string {
+  if (typeof value !== 'string' || !/^[\x20-\x7e]{1,200}$/u.test(value)) {
+    throw new Error('[@holo-js/notifications] Notification deduplication keys must contain between 1 and 200 printable ASCII characters.')
+  }
+
+  return value
+}
 
 function getRuntimeBindings(): NotificationRuntimeBindings {
   return getRuntimeState().bindings ?? {}
@@ -90,7 +102,7 @@ function getDispatchHandler() {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  return import(specifier as string) as Promise<TModule>
+  return import(/* @vite-ignore */ /* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 async function loadQueueModule(): Promise<QueueModule> {
@@ -136,6 +148,7 @@ type MutableDispatchOptions = {
   delay?: NotificationDelayValue
   delayByChannel?: Record<string, NotificationDelayValue>
   afterCommit?: boolean
+  deduplicationKey?: string
 }
 
 type DispatchTargetInput = NotificationDispatchTarget | (() => NotificationDispatchTarget)
@@ -182,6 +195,7 @@ type QueuedNotificationDeliveryPayload = Readonly<{
   readonly notificationType?: string
   readonly payload: unknown
   readonly targetIndex: number
+  readonly deduplicationKey?: string
 }>
 
 const builtInChannels = createBuiltInChannels(getRuntimeBindings)
@@ -439,7 +453,7 @@ function resolveChannelDispatchPlan(
     ?? resolveNotificationDelay(notification, target, channel)
 
   const queued = notificationQueue === true
-    || !!notificationQueueOptions
+    || Boolean(notificationQueueOptions)
     || typeof options.connection !== 'undefined'
     || typeof options.queue !== 'undefined'
     || typeof resolvedDelay !== 'undefined'
@@ -469,6 +483,7 @@ function resolveChannelDispatchPlan(
 
 async function deliverResolvedNotificationChannel(
   context: NotificationSendContext,
+  deduplicationKey?: string,
 ): Promise<unknown> {
   const definition = getNotificationChannel(context.channel)
   if (!definition) {
@@ -487,10 +502,21 @@ async function deliverResolvedNotificationChannel(
         route: routeValidated,
       })
 
+  if (deduplicationKey !== undefined) {
+    if (!('sendDeduplicated' in definition) || typeof definition.sendDeduplicated !== 'function') {
+      throw new Error('[@holo-js/notifications] Notification deduplication requires the built-in database channel.')
+    }
+
+    return await definition.sendDeduplicated(runtimeContext, deduplicationKey)
+  }
+
   return await definition.send(runtimeContext)
 }
 
-function createQueuedDeliveryPayload(context: NotificationSendContext): QueuedNotificationDeliveryPayload {
+function createQueuedDeliveryPayload(
+  context: NotificationSendContext,
+  deduplicationKey?: string,
+): QueuedNotificationDeliveryPayload {
   return Object.freeze({
     channel: context.channel,
     anonymous: context.anonymous,
@@ -499,6 +525,7 @@ function createQueuedDeliveryPayload(context: NotificationSendContext): QueuedNo
     ...(typeof context.notificationType === 'undefined' ? {} : { notificationType: context.notificationType }),
     payload: context.payload,
     targetIndex: context.targetIndex,
+    ...(deduplicationKey === undefined ? {} : { deduplicationKey }),
   })
 }
 
@@ -518,7 +545,7 @@ async function runQueuedNotificationDelivery(
     notificationType: payload.notificationType,
     payload: payload.payload,
     targetIndex: payload.targetIndex,
-  }))
+  }), payload.deduplicationKey)
 }
 
 async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule): Promise<QueueModule> {
@@ -542,11 +569,12 @@ async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule):
 async function dispatchQueuedNotificationChannel(
   context: NotificationSendContext,
   plan: ResolvedChannelPlan,
+  deduplicationKey?: string,
 ): Promise<void> {
   const queueModule = await ensureNotificationsQueueJobRegistered()
   let pending = queueModule.dispatch(
     HOLO_NOTIFICATIONS_DELIVER_JOB,
-    createQueuedDeliveryPayload(context),
+    createQueuedDeliveryPayload(context, deduplicationKey),
   )
 
   if (typeof plan.connection !== 'undefined') {
@@ -632,6 +660,23 @@ async function dispatchNotifications(
     await loadNotificationPluginChannels(state.projectRoot, state.pluginNames)
   }
   const targetChannels = resolveRegisteredTargetChannels(declaredTargetChannels)
+  const deduplicationKey = input.options.deduplicationKey === undefined
+    ? undefined
+    : normalizeDeduplicationKey(input.options.deduplicationKey)
+
+  if (deduplicationKey !== undefined) {
+    const channels = targetChannels.flatMap(target => target.channels)
+    const databaseChannel = getNotificationChannel('database')
+    if (
+      channels.length === 0
+      || channels.some(channel => channel !== 'database')
+      || !databaseChannel
+      || !('sendDeduplicated' in databaseChannel)
+      || typeof databaseChannel.sendDeduplicated !== 'function'
+    ) {
+      throw new Error('[@holo-js/notifications] Notification deduplication requires every resolved channel to be the built-in database channel.')
+    }
+  }
 
   if (execution.allowAfterCommitDeferral !== false && shouldDeferDispatchAfterCommit(notification, targetChannels, input.options)) {
     const deferredResult = await deferDispatchUntilCommit(input, notification, targetChannels)
@@ -648,8 +693,8 @@ async function dispatchNotifications(
         const context = resolveChannelSendContext(notification, channel, target)
         const plan = resolveChannelDispatchPlan(notification, target, channel, input.options)
         const result = plan.queued
-          ? await dispatchQueuedNotificationChannel(context, plan)
-          : await deliverResolvedNotificationChannel(context)
+          ? await dispatchQueuedNotificationChannel(context, plan, deduplicationKey)
+          : await deliverResolvedNotificationChannel(context, deduplicationKey)
         results.push(Object.freeze({
           channel,
           targetIndex: target.index,
@@ -730,6 +775,15 @@ class PendingDispatch<TResult = NotificationDispatchResult> implements PendingNo
     return this
   }
 
+  deduplicate(key: string): this {
+    this.options.deduplicationKey = normalizeDeduplicationKey(key)
+    return this
+  }
+
+  dispatch(): Promise<TResult> {
+    return this.#execute()
+  }
+
   then<TResult1 = TResult, TResult2 = never>(
     onfulfilled?: ((value: TResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
@@ -759,6 +813,7 @@ class PendingDispatch<TResult = NotificationDispatchResult> implements PendingNo
             delay: this.options.delay,
             delayByChannel: this.options.delayByChannel ? Object.freeze({ ...this.options.delayByChannel }) : undefined,
             afterCommit: this.options.afterCommit,
+            ...(this.options.deduplicationKey === undefined ? {} : { deduplicationKey: this.options.deduplicationKey }),
           }) satisfies NotificationDispatchOptions,
         } as NotificationDispatchInput) as Promise<TResult>
       } catch (error) {
@@ -813,11 +868,11 @@ export interface NotificationRuntimeFacade {
     notification: TNotification,
   ): PendingNotificationDispatch<NotificationDispatchResult>
   notifyUsing(): PendingAnonymousNotification
-  listNotifications(notifiable: NotificationDatabaseRoute | Record<string, unknown>): Promise<readonly NotificationRecord[]>
-  unreadNotifications(notifiable: NotificationDatabaseRoute | Record<string, unknown>): Promise<readonly NotificationRecord[]>
-  markNotificationsAsRead(ids: readonly string[]): Promise<number>
-  markNotificationsAsUnread(ids: readonly string[]): Promise<number>
-  deleteNotifications(ids: readonly string[]): Promise<number>
+  listNotifications(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+  unreadNotifications(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+  markNotificationsAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  markNotificationsAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  deleteNotifications(query: NotificationQuery, ids: readonly string[]): Promise<number>
 }
 
 export function configureNotificationsRuntime(bindings?: NotificationRuntimeBindings): void {
@@ -858,6 +913,14 @@ type NotificationDefinitionLike<TNotification>
     ? TNotification
     : never
 
+export function notify<
+  TNotifiable,
+  TBuild extends NotificationBuildFactories<TNotifiable>,
+>(
+  notifiable: TNotifiable,
+  notification: NotificationDefinition<TNotifiable, TBuild>,
+): PendingNotificationDispatch<NotificationDispatchResult>
+
 export function notify<TNotification>(
   notifiable: InferNotificationNotifiable<TNotification>,
   notification: NotificationDefinitionLike<TNotification>,
@@ -893,27 +956,29 @@ export function notifyUsing(): PendingAnonymousNotification {
 }
 
 export async function listNotifications(
-  notifiable: NotificationDatabaseRoute | Record<string, unknown>,
-): Promise<readonly NotificationRecord[]> {
-  return requireStore(getRuntimeBindings()).list(resolveDatabaseRouteFromNotifiable(notifiable))
+  query: NotificationQuery,
+  pagination: NotificationPagination,
+): Promise<NotificationPage> {
+  return requireStore(getRuntimeBindings()).list(normalizeNotificationQuery(query), normalizeNotificationPagination(pagination))
 }
 
 export async function unreadNotifications(
-  notifiable: NotificationDatabaseRoute | Record<string, unknown>,
-): Promise<readonly NotificationRecord[]> {
-  return requireStore(getRuntimeBindings()).unread(resolveDatabaseRouteFromNotifiable(notifiable))
+  query: NotificationQuery,
+  pagination: NotificationPagination,
+): Promise<NotificationPage> {
+  return requireStore(getRuntimeBindings()).unread(normalizeNotificationQuery(query), normalizeNotificationPagination(pagination))
 }
 
-export async function markNotificationsAsRead(ids: readonly string[]): Promise<number> {
-  return requireStore(getRuntimeBindings()).markAsRead(normalizeNotificationRecordIds(ids))
+export async function markNotificationsAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number> {
+  return requireStore(getRuntimeBindings()).markAsRead(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
 }
 
-export async function markNotificationsAsUnread(ids: readonly string[]): Promise<number> {
-  return requireStore(getRuntimeBindings()).markAsUnread(normalizeNotificationRecordIds(ids))
+export async function markNotificationsAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number> {
+  return requireStore(getRuntimeBindings()).markAsUnread(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
 }
 
-export async function deleteNotifications(ids: readonly string[]): Promise<number> {
-  return requireStore(getRuntimeBindings()).delete(normalizeNotificationRecordIds(ids))
+export async function deleteNotifications(query: NotificationQuery, ids: readonly string[]): Promise<number> {
+  return requireStore(getRuntimeBindings()).delete(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
 }
 
 export function getNotificationsRuntime(): NotificationRuntimeFacade {
@@ -955,6 +1020,8 @@ export const notificationsRuntimeInternals = {
   normalizeEmailRouteFromValue,
   normalizeNotificationRecord,
   normalizeNotificationRecordIds,
+  normalizeNotificationPagination,
+  normalizeNotificationQuery,
   normalizeOptionalString,
   resolveBroadcastRouteFromNotifiable,
   resolveChannelDispatchPlan,

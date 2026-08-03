@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/realtime",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - realtime query and mutation runtime",
   "type": "module",
   "license": "MIT",
@@ -34,7 +34,8 @@
   },
   "dependencies": {
     "@holo-js/db": "catalog:",
-    "@holo-js/validation": "catalog:"
+    "@holo-js/validation": "catalog:",
+    "esbuild": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/auth": "catalog:"

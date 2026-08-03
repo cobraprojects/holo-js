@@ -1,4 +1,4 @@
-declare module 'next/server' {
+declare module 'next/server.js' {
   export const NextResponse: {
     next(): Response & {
       readonly cookies: {

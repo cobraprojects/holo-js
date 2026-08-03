@@ -85,7 +85,7 @@ describe('@holo-js/auth framework helpers', () => {
     vi.clearAllMocks()
     vi.doUnmock('#imports')
     vi.doUnmock('next/navigation.js')
-    vi.doUnmock('next/server')
+    vi.doUnmock('next/server.js')
     vi.doUnmock('react')
     vi.doUnmock('../src/client')
     vi.doUnmock('../src/index')
@@ -361,7 +361,7 @@ describe('@holo-js/auth framework helpers', () => {
         '--target=browser',
         '--format=esm',
         '--external',
-        'next/server',
+        'next/server.js',
         '--outfile',
         outputPath,
       ], {
@@ -404,7 +404,7 @@ describe('@holo-js/auth framework helpers', () => {
         '--target=browser',
         '--format=esm',
         '--external',
-        'next/server',
+        'next/server.js',
         '--outfile',
         outputPath,
       ], {
@@ -421,7 +421,7 @@ describe('@holo-js/auth framework helpers', () => {
     const connection = vi.fn(async () => {})
     let observedRequest: unknown
 
-    vi.doMock('next/server', () => ({ connection }))
+    vi.doMock('next/server.js', () => ({ connection }))
     vi.doMock('../src/index', async () => {
       const { getCurrentNextAuthRequest } = await import('../src/next/request-context')
 
@@ -1071,7 +1071,7 @@ describe('@holo-js/auth framework helpers', () => {
   it('returns a safe Next auth state when runtime user resolution fails', async () => {
     const connection = vi.fn(async () => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.doMock('next/server', () => ({ connection }))
+    vi.doMock('next/server.js', () => ({ connection }))
     vi.doMock('../src/index', () => ({
       default: { guard: () => ({ user: async () => { throw new Error('failed') }, provider: async () => null }) },
       authRuntimeInternals: { getRuntimeBindings: () => ({ config: { defaults: { guard: 'web' } } }) },

@@ -19,7 +19,7 @@ export default defineConfig({
   format: ['esm'],
   dts: true,
   clean: true,
-  external: ['#imports', 'next/navigation.js', 'next/server', 'react', 'svelte', 'svelte/reactivity'],
+  external: ['#imports', 'next/navigation.js', 'next/server.js', 'react', 'svelte', 'svelte/reactivity'],
   outDir,
   outExtension: () => ({ js: '.mjs' }),
   async onSuccess() {

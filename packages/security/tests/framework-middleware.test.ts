@@ -27,14 +27,14 @@ function configureSecurity(except: readonly string[] = []): void {
 
 afterEach(() => {
   vi.doUnmock('h3')
-  vi.doUnmock('next/server')
+  vi.doUnmock('next/server.js')
   vi.resetModules()
   resetSecurityRuntime()
 })
 
 describe('@holo-js/security framework csrf middleware', () => {
   it('wires Next csrf cookies and 419 responses without auth', async () => {
-    vi.doMock('next/server', () => ({
+    vi.doMock('next/server.js', () => ({
       NextResponse: {
         next() {
           const response = new Response(null, {

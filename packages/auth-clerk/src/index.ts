@@ -76,6 +76,7 @@ type SerializedClerkAuthUser = AuthenticatedAuthUser & {
 }
 
 type ClerkSessionPayload = {
+  readonly authenticatedAt: string
   readonly guard: string
   readonly provider: string
   readonly userId: string | number
@@ -548,6 +549,7 @@ function createClerkSessionPayload(
   const user = authenticated.user as SerializedClerkAuthUser
 
   return Object.freeze({
+    authenticatedAt: new Date().toISOString(),
     guard: authenticated.guard,
     provider: authenticated.authProvider,
     userId: user.id,

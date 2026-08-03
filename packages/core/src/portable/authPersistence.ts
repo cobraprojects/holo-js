@@ -127,3 +127,42 @@ export function serializePasswordResetTokenRecord(record: PasswordResetTokenReco
     updated_at: new Date().toISOString(),
   }
 }
+
+export type MultiFactorCredentialRecord = {
+  readonly provider: string
+  readonly userId: string | number
+  readonly encryptedSecret: string
+  readonly recoveryCodeHashes: readonly string[]
+  readonly lastUsedCounter: number | null
+  readonly enabledAt: Date
+  readonly updatedAt: Date
+}
+
+export function normalizeMultiFactorCredentialRecord(row: Record<string, unknown>): MultiFactorCredentialRecord {
+  const recoveryCodeHashes = normalizeJsonValue(row.recovery_code_hashes)
+  return Object.freeze({
+    provider: String(row.provider),
+    userId: normalizeStoredUserId(row.user_id),
+    encryptedSecret: String(row.encrypted_secret),
+    recoveryCodeHashes: Array.isArray(recoveryCodeHashes)
+      ? Object.freeze(recoveryCodeHashes.filter((value): value is string => typeof value === 'string'))
+      : Object.freeze([]),
+    lastUsedCounter: row.last_used_counter === null || typeof row.last_used_counter === 'undefined'
+      ? null
+      : Number(row.last_used_counter),
+    enabledAt: normalizeDateValue(row.enabled_at),
+    updatedAt: normalizeDateValue(row.updated_at),
+  })
+}
+
+export function serializeMultiFactorCredentialRecord(record: MultiFactorCredentialRecord): Record<string, unknown> {
+  return {
+    provider: record.provider,
+    user_id: String(record.userId),
+    encrypted_secret: record.encryptedSecret,
+    recovery_code_hashes: JSON.stringify(record.recoveryCodeHashes),
+    last_used_counter: record.lastUsedCounter,
+    enabled_at: record.enabledAt.toISOString(),
+    updated_at: record.updatedAt.toISOString(),
+  }
+}

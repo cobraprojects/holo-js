@@ -177,19 +177,23 @@ describe('@holo-js/realtime server definition resolution', () => {
     }
   })
 
-  it('imports realtime modules from files when no custom importer is provided', async () => {
+  it('imports TypeScript realtime modules with extensionless local dependencies', async () => {
     const projectRoot = await mkdtemp(join(import.meta.dirname, '../.tmp-realtime-server-dynamic-'))
     const realtimeRoot = join(projectRoot, 'server/realtime')
 
     try {
       await mkdir(realtimeRoot, { recursive: true })
-      await writeFile(join(realtimeRoot, 'definition.mjs'), `
-const definition = () => {}
+      await writeFile(join(realtimeRoot, 'definition-value.ts'), `
+export const result = [{ id: 2 }]
+`)
+      await writeFile(join(realtimeRoot, 'definition.ts'), `
+import { result } from './definition-value'
+const definition = () => result
 Object.defineProperties(definition, {
   kind: { value: 'query', enumerable: true },
   name: { value: 'posts.dynamic', enumerable: true },
   access: { value: 'public', enumerable: true },
-  handler: { value: () => [], enumerable: true },
+  handler: { value: () => result, enumerable: true },
   $types: { value: undefined, enumerable: true },
 })
 Object.defineProperty(definition, Symbol.for('holo-js.realtime.definition'), {
@@ -204,6 +208,7 @@ export { definition }
       })
       expect(resolvedDefinition.kind).toBe('query')
       expect(resolvedDefinition.name).toBe('posts.dynamic')
+      expect(await resolvedDefinition.handler({} as never)).toEqual([{ id: 2 }])
     } finally {
       await rm(projectRoot, { recursive: true, force: true })
     }

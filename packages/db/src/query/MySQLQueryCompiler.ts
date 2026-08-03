@@ -38,6 +38,18 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     const extracted = `JSON_EXTRACT(${column}, ${pathLiteral})`
 
     if (predicate.jsonMode === 'value') {
+      if (predicate.value === null) {
+        const extractedType = `JSON_TYPE(${extracted})`
+        return predicate.operator === '='
+          ? `${extractedType} = 'NULL'`
+          : `${extractedType} IS NOT NULL AND ${extractedType} != 'NULL'`
+      }
+
+      if (predicate.operator === '=' || predicate.operator === '!=') {
+        bindings.push(JSON.stringify(predicate.value))
+        return `${extracted} ${predicate.operator} CAST(${this.createPlaceholder(bindings.length)} AS JSON)`
+      }
+
       bindings.push(predicate.value)
       return `JSON_UNQUOTE(${extracted}) ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }

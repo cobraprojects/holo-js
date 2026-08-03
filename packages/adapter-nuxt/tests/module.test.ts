@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as RuntimeComposablesModule from '../src/runtime/composables'
@@ -1303,6 +1303,7 @@ describe('useHoloDb', () => {
         projectRoot: '/tmp/nuxt-project',
       },
     }
+    const runWithAuthRequestAccessors = vi.fn((_accessors: unknown, callback: () => unknown) => callback())
     const initializeHoloAdapterProject = vi.fn(async () => ({
       projectRoot: '/tmp/nuxt-project',
       config: {
@@ -1310,7 +1311,7 @@ describe('useHoloDb', () => {
           env: 'test',
         },
       },
-      runtime: {},
+      runtime: { runWithAuthRequestAccessors },
     }))
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/nuxt-runtime-cwd')
     vi.stubEnv('NODE_ENV', 'production')
@@ -1330,9 +1331,17 @@ describe('useHoloDb', () => {
 
     try {
       const runtime = await import('../src/runtime/composables')
+      const synchronousResult = runtime.runWithNuxtRequest({}, () => ({ mode: 'sync' as const }))
+      const asynchronousResult = runtime.runWithNuxtRequest({}, async () => ({ mode: 'async' as const }))
+      expectTypeOf(synchronousResult).toEqualTypeOf<Promise<{ mode: 'sync' }>>()
+      expectTypeOf(asynchronousResult).toEqualTypeOf<Promise<{ mode: 'async' }>>()
+      await expect(synchronousResult).resolves.toEqual({ mode: 'sync' })
+      await expect(asynchronousResult).resolves.toEqual({ mode: 'async' })
       await expect(runtime.holo.getApp()).resolves.toMatchObject({
         projectRoot: '/tmp/nuxt-project',
       })
+      expect(runWithAuthRequestAccessors).toHaveBeenCalledTimes(2)
+      expect(initializeHoloAdapterProject).toHaveBeenCalledOnce()
       expect(runtime.useHoloEnv()).toBe('test')
       expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
         envName: 'test',
@@ -1356,6 +1365,7 @@ describe('useHoloDb', () => {
         projectRoot: '/tmp/nuxt-project',
       },
     }
+    const runWithAuthRequestAccessors = vi.fn((_accessors: unknown, callback: () => unknown) => callback())
     const initializeHoloAdapterProject = vi.fn(async () => ({
       projectRoot: '/tmp/nuxt-project',
       config: {
@@ -1363,7 +1373,7 @@ describe('useHoloDb', () => {
           env: 'development',
         },
       },
-      runtime: {},
+      runtime: { runWithAuthRequestAccessors },
     }))
 
     vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
@@ -1380,7 +1390,10 @@ describe('useHoloDb', () => {
     })
 
     const runtime = await import('../src/runtime/composables')
-    await runtime.holo.getApp()
+    await expect(runtime.runWithNuxtRequest({}, () => 'first')).resolves.toBe('first')
+    await expect(runtime.runWithNuxtRequest({}, () => 'second')).resolves.toBe('second')
+    expect(initializeHoloAdapterProject).toHaveBeenCalledTimes(2)
+    expect(runWithAuthRequestAccessors).toHaveBeenCalledTimes(2)
     expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
       envName: 'development',
     }))

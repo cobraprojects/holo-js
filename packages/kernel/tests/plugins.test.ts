@@ -4,10 +4,12 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   defineHoloPlugin,
+  defineHoloProjectPreparer,
   loadHoloPluginBootModules,
   loadHoloPluginContributionModules,
   loadHoloPluginDefinitions,
   resolveHoloPluginModulePath,
+  HoloProjectPrepareError,
 } from '../src'
 
 async function createProject(): Promise<string> {
@@ -159,5 +161,35 @@ describe('plugin kernel', () => {
     const plugin = defineHoloPlugin({ id: 'demo' })
     expect(plugin).toEqual({ id: 'demo' })
     expect(Object.isFrozen(plugin)).toBe(true)
+  })
+
+  it('defines immutable versioned project preparers and structured errors', () => {
+    const preparer = defineHoloProjectPreparer({
+      apiVersion: 1,
+      prepare: () => ({ kind: 'prepared' }),
+    })
+
+    expect(Object.isFrozen(preparer)).toBe(true)
+    const error = new HoloProjectPrepareError({ code: 'TEST', message: 'failure' })
+    expect(error.failure).toEqual({ code: 'TEST', message: 'failure' })
+  })
+
+  it('validates explicitly declared project preparation contributions', async () => {
+    const root = await createProject()
+    await createPlugin(root, 'preparer', `({
+      id: 'preparer',
+      contributes: { project: { prepare: './prepare.mjs' } }
+    })`)
+    const [plugin] = await loadHoloPluginDefinitions(root, ['preparer'])
+    expect(plugin).toMatchObject({
+      definition: { contributes: { project: { prepare: './prepare.mjs' } } },
+    })
+    expect(Object.isFrozen(plugin?.definition.contributes?.project)).toBe(true)
+
+    await createPlugin(root, 'invalid-project', `({ id: 'invalid-project', contributes: { project: false } })`)
+    await expect(loadHoloPluginDefinitions(root, ['invalid-project'])).rejects.toThrow('contributes.project must be an object')
+
+    await createPlugin(root, 'invalid-prepare', `({ id: 'invalid-prepare', contributes: { project: { prepare: ' ' } } })`)
+    await expect(loadHoloPluginDefinitions(root, ['invalid-prepare'])).rejects.toThrow('project.prepare must be a non-empty string')
   })
 })

@@ -47,6 +47,16 @@ describe('notifications documentation smoke checks', () => {
     expect(reset).not.toContain('notifyUsing()')
   })
 
+  it('documents notification reads and mutations by recipient', async () => {
+    const storage = await readNotificationsDoc('notification-storage.md')
+
+    expect(storage).toContain("const recipient = { id: 'user-1', type: 'users' }")
+    expect(storage).toContain('dataMatches')
+    expect(storage).toContain('return `records`, `total`, and `unread`')
+    expect(storage).toContain('markNotificationsAsRead(')
+    expect(storage).toContain('trusted server code')
+  })
+
   it('covers the final fluent API and custom channel story', async () => {
     const defining = await readNotificationsDoc('defining-notifications.md')
     const sending = await readNotificationsDoc('sending-notifications.md')

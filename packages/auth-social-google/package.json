@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-social-google",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Holo-JS Framework - Google social auth provider",
   "type": "module",
   "license": "MIT",

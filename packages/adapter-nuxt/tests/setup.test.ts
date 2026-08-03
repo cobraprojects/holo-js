@@ -331,6 +331,9 @@ describe('@holo-js/adapter-nuxt module setup', () => {
 
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/index.js'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/index.d.ts'))).toBe(true)
+    expect(await readFile(resolve(build.adapterOutDir, 'runtime/composables/index.d.ts'), 'utf8')).toContain(
+      'export declare function runWithNuxtRequest<TValue>(event: NuxtAuthRequestEvent, callback: () => TValue): Promise<Awaited<TValue>>',
+    )
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.js'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.d.ts'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/server/routes/broadcast-auth.post.js'))).toBe(true)

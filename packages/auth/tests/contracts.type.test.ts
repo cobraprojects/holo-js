@@ -82,6 +82,14 @@ describe('@holo-js/auth typing', () => {
     type ApiGuardRegister = Awaited<ReturnType<ReturnType<typeof auth.guard<'api'>>['register']>>
     type ApiGuardHasLoginUsing = 'loginUsing' extends keyof ReturnType<typeof auth.guard<'api'>> ? true : false
     type ApiGuardHasImpersonate = 'impersonate' extends keyof ReturnType<typeof auth.guard<'api'>> ? true : false
+    type ApiGuardHasFlash = 'flash' extends keyof ReturnType<typeof auth.guard<'api'>> ? true : false
+    type ApiGuardHasMultiFactor = 'multiFactor' extends keyof ReturnType<typeof auth.guard<'api'>> ? true : false
+    type WebGuardMultiFactor = ReturnType<typeof auth.guard<'web'>>['multiFactor']
+    type WebGuardFlash = ReturnType<ReturnType<typeof auth.guard<'web'>>['flash']>
+    async function takeWebString() {
+      return auth.guard('web').take<string>('notice')
+    }
+    type WebGuardTake = Awaited<ReturnType<typeof takeWebString>>
     type DynamicGuard = ReturnType<typeof auth.guard<string>>
     type DynamicGuardTrustedSession = Awaited<ReturnType<DynamicGuard['loginUsing']>>
     type GuardLogin = Awaited<ReturnType<AuthGuardFacade['login']>>
@@ -120,6 +128,11 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<ApiGuardRegister>().toEqualTypeOf<PersonalAccessTokenResult>()
     expectTypeOf<ApiGuardHasLoginUsing>().toEqualTypeOf<false>()
     expectTypeOf<ApiGuardHasImpersonate>().toEqualTypeOf<false>()
+    expectTypeOf<ApiGuardHasFlash>().toEqualTypeOf<false>()
+    expectTypeOf<ApiGuardHasMultiFactor>().toEqualTypeOf<false>()
+    expectTypeOf<WebGuardMultiFactor>().toEqualTypeOf<typeof auth.multiFactor>()
+    expectTypeOf<WebGuardFlash>().toEqualTypeOf<Promise<void>>()
+    expectTypeOf<WebGuardTake>().toEqualTypeOf<string | undefined>()
     expectTypeOf<DynamicGuardTrustedSession>().toEqualTypeOf<AuthEstablishedSession>()
     expectTypeOf<GuardLogin>().toEqualTypeOf<AuthEstablishedSession | PersonalAccessTokenResult>()
     expectTypeOf<GuardRegister>().toEqualTypeOf<AppAuthenticatedUser | PersonalAccessTokenResult>()
@@ -292,6 +305,17 @@ describe('@holo-js/auth typing', () => {
       | 'password_reset_token_invalid'
       | 'password_reset_token_expired'
       | 'password_reset_user_missing'
+      | 'multi_factor_runtime_unconfigured'
+      | 'multi_factor_encryption_key_missing'
+      | 'multi_factor_authentication_required'
+      | 'multi_factor_already_enabled'
+      | 'multi_factor_not_enabled'
+      | 'multi_factor_enrollment_missing'
+      | 'multi_factor_enrollment_expired'
+      | 'multi_factor_reauthentication_required'
+      | 'multi_factor_code_invalid'
+      | 'multi_factor_challenge_missing'
+      | 'multi_factor_challenge_expired'
     >()
 
     const error: unknown = null

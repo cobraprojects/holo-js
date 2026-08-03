@@ -1,13 +1,18 @@
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { loadConfigDirectory } from '@holo-js/config'
+import type { MigrationDefinition } from '@holo-js/db'
 import {
   type HoloPluginBroadcastContributions,
   type HoloPluginConfigContributions,
   type HoloPluginContributions,
   type HoloPluginDefinition,
   type HoloPluginDependencyContributions,
+  HOLO_PROJECT_PREPARE_API_VERSION,
+  HoloProjectPrepareError,
+  type HoloProjectPreparer,
   loadHoloPluginDefinitions,
   normalizeHoloPluginDefinition as normalizeKernelPluginDefinition,
 } from '@holo-js/kernel'
@@ -22,6 +27,7 @@ export type {
   HoloPluginMailContributions,
   HoloPluginMigrationContributions,
   HoloPluginNotificationContributions,
+  HoloPluginProjectContributions,
   HoloPluginQueueContributions,
   HoloPluginRuntimeContributions,
 } from '@holo-js/kernel'
@@ -32,7 +38,7 @@ import {
   resolveFirstExistingPath,
   writeTextFile,
 } from './runtime'
-import { normalizeCommandAliases } from './discovery-helpers'
+import { isMigrationDefinition, normalizeCommandAliases, validateMigrationName } from './discovery-helpers'
 import type { FrameworkDescriptor, FrameworkTsconfigKind } from './frameworks'
 import type { DiscoveredAppCommand } from './shared'
 import type { HoloAppCommand } from '../types'
@@ -59,7 +65,7 @@ export type ResolvedProjectPlugin = {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function normalizeString(value: unknown): string | undefined {
@@ -316,7 +322,7 @@ function normalizeFrameworkSync(value: unknown): FrameworkSync | undefined {
     : undefined
 }
 
-function normalizeSinglePathContribution<TContribution extends 'boot' | 'commands' | 'publish'>(
+function normalizeSinglePathContribution<TContribution extends 'boot' | 'commands' | 'publish' | 'prepare'>(
   value: unknown,
   key: TContribution,
 ): Readonly<Record<TContribution, string>> | undefined {
@@ -326,6 +332,22 @@ function normalizeSinglePathContribution<TContribution extends 'boot' | 'command
 
   const entry = normalizeString(value[key])
   return entry ? Object.freeze({ [key]: entry } as Record<TContribution, string>) : undefined
+}
+
+function normalizeProjectContribution(value: unknown): HoloPluginContributions['project'] {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (!isRecord(value)) {
+    throw new Error('Plugin contributes.project must be an object.')
+  }
+
+  if ('prepare' in value && !normalizeString(value.prepare)) {
+    throw new Error('Plugin contributes.project.prepare must be a non-empty string.')
+  }
+
+  return normalizeSinglePathContribution(value, 'prepare')
 }
 
 function normalizePluginContributions(value: unknown): HoloPluginContributions | undefined {
@@ -344,8 +366,9 @@ function normalizePluginContributions(value: unknown): HoloPluginContributions |
   const cli = normalizeSinglePathContribution(value.cli, 'commands')
   const migrations = normalizeSinglePathContribution(value.migrations, 'publish')
   const framework = normalizeFrameworkContribution(value.framework)
+  const project = normalizeProjectContribution(value.project)
 
-  if (!dependencies && !config && !broadcast && !cache && !queue && !mail && !notifications && !runtime && !cli && !migrations && !framework) {
+  if (!dependencies && !config && !broadcast && !cache && !queue && !mail && !notifications && !runtime && !cli && !migrations && !framework && !project) {
     return undefined
   }
 
@@ -361,6 +384,7 @@ function normalizePluginContributions(value: unknown): HoloPluginContributions |
     ...(cli ? { cli } : {}),
     ...(migrations ? { migrations } : {}),
     ...(framework ? { framework } : {}),
+    ...(project ? { project } : {}),
   })
 }
 
@@ -388,7 +412,7 @@ export async function loadHoloPluginFromPackage(
 ): Promise<LoadedHoloPlugin> {
   assertValidPackageName(packageName)
   const [loaded] = await loadHoloPluginDefinitions(projectRoot, [packageName], {
-    moduleVersion: String(Date.now()),
+    moduleVersion: randomUUID(),
   })
   if (!loaded) throw new Error(`Plugin package failed to load: ${packageName}.`)
 
@@ -439,7 +463,170 @@ async function importPluginModule(modulePath: ResolvedPluginModulePath): Promise
     throw new Error(`Plugin module does not exist: ${modulePath.specifier}.`)
   }
 
-  return await import(`${pathToFileURL(modulePath.path).href}?t=${Date.now()}`) as unknown
+  return await import(`${pathToFileURL(modulePath.path).href}?t=${randomUUID()}`) as unknown
+}
+
+function resolveProjectPreparerExport(moduleValue: unknown): unknown {
+  if (!isRecord(moduleValue)) return moduleValue
+  if ('default' in moduleValue) return moduleValue.default
+  if ('preparer' in moduleValue) return moduleValue.preparer
+  return moduleValue
+}
+
+function normalizeProjectPreparer(value: unknown): HoloProjectPreparer {
+  const candidate = resolveProjectPreparerExport(value)
+  if (!isRecord(candidate)) {
+    throw new HoloProjectPrepareError({
+      code: 'HOLO_PLUGIN_PREPARE_INVALID_EXPORT',
+      message: 'Project preparer export must be an object.',
+    })
+  }
+  if (candidate.apiVersion !== HOLO_PROJECT_PREPARE_API_VERSION) {
+    const actual = typeof candidate.apiVersion === 'undefined' ? 'missing' : String(candidate.apiVersion)
+    throw new HoloProjectPrepareError({
+      code: 'HOLO_PLUGIN_PREPARE_VERSION_MISMATCH',
+      message: `Project preparer expected apiVersion ${HOLO_PROJECT_PREPARE_API_VERSION}, received ${actual}.`,
+    })
+  }
+  if (typeof candidate.prepare !== 'function') {
+    throw new HoloProjectPrepareError({
+      code: 'HOLO_PLUGIN_PREPARE_INVALID_EXPORT',
+      message: 'Project preparer export must provide a prepare() method.',
+    })
+  }
+
+  return Object.freeze({
+    apiVersion: HOLO_PROJECT_PREPARE_API_VERSION,
+    prepare: candidate.prepare as HoloProjectPreparer['prepare'],
+  })
+}
+
+export interface LoadedProjectPreparer {
+  readonly plugin: LoadedHoloPlugin
+  readonly specifier: string
+  readonly preparer: HoloProjectPreparer
+}
+
+export interface LoadedProjectPluginPreparation {
+  readonly activePlugins: readonly LoadedHoloPlugin[]
+  readonly preparers: readonly LoadedProjectPreparer[]
+}
+
+export async function loadProjectPluginPreparation(projectRoot: string): Promise<LoadedProjectPluginPreparation> {
+  const plugins = await resolveProjectPlugins(projectRoot)
+  const activePlugins: LoadedHoloPlugin[] = []
+  const preparers: LoadedProjectPreparer[] = []
+
+  for (const resolvedPlugin of plugins) {
+    if (resolvedPlugin.error) {
+      throw new Error(`[Holo Plugins] ${resolvedPlugin.packageName} project.prepare: ${resolvedPlugin.error}`)
+    }
+
+    const plugin = resolvedPlugin.loaded
+    if (!plugin) {
+      continue
+    }
+    activePlugins.push(plugin)
+
+    const specifier = plugin.definition.contributes?.project?.prepare
+    if (!specifier) continue
+
+    if (!/^[a-z][a-z0-9-]*$/.test(plugin.definition.id)) {
+      throw new Error(`[Holo Plugins] ${plugin.packageName} project.prepare requires a filesystem-safe plugin id.`)
+    }
+
+    try {
+      const modulePath = resolvePluginModulePath(projectRoot, plugin, specifier)
+      const moduleValue = await importPluginModule(modulePath)
+      preparers.push({
+        plugin,
+        specifier,
+        preparer: normalizeProjectPreparer(moduleValue),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof HoloProjectPrepareError) {
+        throw new HoloProjectPrepareError({
+          ...error.failure,
+          message: `[Holo Plugins] ${plugin.definition.name ?? plugin.definition.id} (${plugin.packageName}) project.prepare ${specifier}: ${error.failure.message}`,
+        })
+      }
+      throw new HoloProjectPrepareError({
+        code: message.includes('does not exist') || message.includes('Cannot find module')
+          ? 'HOLO_PLUGIN_PREPARE_MODULE_NOT_FOUND'
+          : 'HOLO_PLUGIN_PREPARE_INVALID_EXPORT',
+        message: `[Holo Plugins] ${plugin.definition.name ?? plugin.definition.id} (${plugin.packageName}) project.prepare ${specifier}: ${message}`,
+      })
+    }
+  }
+
+  return Object.freeze({
+    activePlugins: Object.freeze(activePlugins),
+    preparers: Object.freeze(preparers),
+  })
+}
+
+export async function loadProjectPluginPreparers(projectRoot: string): Promise<readonly LoadedProjectPreparer[]> {
+  return (await loadProjectPluginPreparation(projectRoot)).preparers
+}
+
+export interface LoadedPluginMigrationPublisher {
+  readonly packageName: string
+  readonly path: string
+  readonly specifier: string
+}
+
+export async function loadProjectPluginMigrationPublishers(
+  projectRoot: string,
+): Promise<readonly LoadedPluginMigrationPublisher[]> {
+  const plugins = await resolveProjectPlugins(projectRoot)
+  const publishers: LoadedPluginMigrationPublisher[] = []
+
+  for (const resolvedPlugin of plugins) {
+    if (resolvedPlugin.error) {
+      throw new Error(`[Holo Plugins] ${resolvedPlugin.packageName} migrations.publish: ${resolvedPlugin.error}`)
+    }
+
+    const plugin = resolvedPlugin.loaded
+    const specifier = plugin?.definition.contributes?.migrations?.publish
+    if (!plugin || !specifier) continue
+    const modulePath = resolvePluginModulePath(projectRoot, plugin, specifier)
+    if (!(await pathExists(modulePath.path))) {
+      throw new Error(`[Holo Plugins] ${plugin.packageName} migration publisher does not exist: ${specifier}.`)
+    }
+    publishers.push(Object.freeze({
+      packageName: plugin.packageName,
+      path: modulePath.path,
+      specifier,
+    }))
+  }
+
+  return Object.freeze(publishers)
+}
+
+export async function loadProjectPluginMigrations(projectRoot: string): Promise<readonly MigrationDefinition[]> {
+  const migrations: MigrationDefinition[] = []
+  for (const publisher of await loadProjectPluginMigrationPublishers(projectRoot)) {
+    const loaded = await import(`${pathToFileURL(publisher.path).href}?t=${randomUUID()}`) as unknown
+    const candidate = isRecord(loaded) && Array.isArray(loaded.migrations)
+      ? loaded.migrations
+      : isRecord(loaded) && Array.isArray(loaded.default)
+        ? loaded.default
+        : undefined
+    if (!candidate) throw new Error(`Plugin ${publisher.packageName} migration publisher must export a migrations array.`)
+
+    for (const migration of candidate) {
+      if (!isMigrationDefinition(migration) || !migration.name) {
+        throw new Error(`Plugin ${publisher.packageName} migrations must define explicit stable names and up handlers.`)
+      }
+      migrations.push(Object.freeze({
+        ...migration,
+        name: validateMigrationName(migration.name),
+      }))
+    }
+  }
+
+  return Object.freeze(migrations)
 }
 
 function normalizePluginCommandExports(

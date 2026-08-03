@@ -17,14 +17,20 @@ type RuntimeConfigShape = {
 }
 
 type RuntimeGlobals = typeof globalThis & {
+  __holoNuxtAuthRequestRunner?: <TValue>(accessors: NonNullable<CreateHoloOptions['authRequest']>, callback: () => TValue) => TValue
   __holoRuntimeConfig?: RuntimeConfigShape
   useRuntimeConfig?: () => RuntimeConfigShape
 }
 
-type NuxtAuthRequestEvent = {
-  readonly headers?: Headers
+export type NuxtAuthRequestEvent = {
+  readonly headers?: Pick<Headers, 'get'>
   readonly request?: {
-    readonly headers?: Headers
+    readonly headers?: Pick<Headers, 'get'>
+  }
+  readonly web?: {
+    readonly request?: {
+      readonly headers?: Pick<Headers, 'get'>
+    }
   }
   readonly node?: {
     readonly req?: {
@@ -85,7 +91,7 @@ async function loadNitroContextModule(): Promise<NitroContextModule> {
   return await import('nitropack/runtime/context') as NitroContextModule
 }
 
-export function createNuxtAuthRequestAccessors() {
+export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEvent) {
   function safeDecode(value: string): string | undefined {
     try {
       return decodeURIComponent(value)
@@ -96,7 +102,7 @@ export function createNuxtAuthRequestAccessors() {
 
   async function readHeader(name: string): Promise<string | undefined> {
     const nitroContext = await loadNitroContextModule()
-    const event = nitroContext.useEvent()
+    const event = requestEvent ?? nitroContext.useEvent()
 
     if (!event) {
       return undefined
@@ -104,12 +110,9 @@ export function createNuxtAuthRequestAccessors() {
 
     const normalizedName = name.toLowerCase()
 
-    if (event.headers instanceof Headers) {
-      return event.headers.get(name) ?? undefined
-    }
-
-    if (event.request?.headers instanceof Headers) {
-      return event.request.headers.get(name) ?? undefined
+    const headerSources = [event.headers, event.web?.request?.headers, event.request?.headers]
+    for (const headers of headerSources) {
+      if (headers && typeof headers.get === 'function') return headers.get(name) ?? undefined
     }
 
     const value = event.node?.req?.headers?.[normalizedName]
@@ -155,7 +158,7 @@ export function createNuxtAuthRequestAccessors() {
 
   async function appendCookie(cookie: string): Promise<void> {
     const nitroContext = await loadNitroContextModule()
-    const event = nitroContext.useEvent()
+    const event = requestEvent ?? nitroContext.useEvent()
     const response = event?.node?.res
     if (!response) {
       return
@@ -189,7 +192,7 @@ export function createNuxtAuthRequestAccessors() {
 
   const redirectResponse: NonNullable<CreateHoloOptions['authRequest']>['redirectResponse'] = async (url, status) => {
     const nitroContext = await loadNitroContextModule()
-    const event = nitroContext.useEvent()
+    const event = requestEvent ?? nitroContext.useEvent()
     if (!event) {
       throw new TypeError('Holo Nuxt auth redirect requires an active Nitro event.')
     }
@@ -206,19 +209,29 @@ export function createNuxtAuthRequestAccessors() {
   } satisfies NonNullable<CreateHoloOptions['authRequest']>
 }
 
+export async function runWithNuxtRequest<TValue>(event: NuxtAuthRequestEvent, callback: () => TValue): Promise<Awaited<TValue>> {
+  const accessors = createNuxtAuthRequestAccessors(event)
+  await holo.getApp()
+  const runner = (globalThis as RuntimeGlobals).__holoNuxtAuthRequestRunner
+  return await (runner ? runner(accessors, callback) : callback())
+}
+
 export const holo = createHoloProjectAccessors(async () => {
   const config = getRuntimeConfig()
-
-  return initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
+  const authRequest = createNuxtAuthRequestAccessors()
+  const project = await initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
     envName: resolveRuntimeEnvName(config.holo.appEnv),
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
-    authRequest: createNuxtAuthRequestAccessors(),
+    authRequest,
     authorizationError: {
       createError: createNuxtAuthorizationError,
     },
   })
-})
+  const runtimeGlobals = globalThis as RuntimeGlobals
+  runtimeGlobals.__holoNuxtAuthRequestRunner = (accessors, callback) => project.runtime.runWithAuthRequestAccessors(accessors, callback)
+  return project
+}, { cache: process.env.NODE_ENV === 'production' })
 
 function resolveDefaultConnectionName(group: {
   defaultConnection?: string

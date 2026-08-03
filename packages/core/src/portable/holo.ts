@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
-import type { AuthHostedIdentityStore } from '@holo-js/auth'
+import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState } from '@holo-js/auth'
 import type {} from '@holo-js/auth/config'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/cache/config'
@@ -30,6 +30,7 @@ import {
   configureDB,
   DB,
   Entity,
+  TableQueryBuilder,
   registerDatabaseDriverFactory,
   resetDB,
   unregisterDatabaseDriverFactory,
@@ -55,10 +56,12 @@ import {
   normalizeDateValue,
   normalizeEmailVerificationTokenRecord,
   normalizeJsonValue,
+  normalizeMultiFactorCredentialRecord,
   normalizePasswordResetTokenRecord,
   normalizeStoredUserId,
   serializeAccessTokenRecord,
   serializeEmailVerificationTokenRecord,
+  serializeMultiFactorCredentialRecord,
   serializePasswordResetTokenRecord,
 } from './authPersistence'
 import {
@@ -74,11 +77,10 @@ import {
 import { createRequestAwareAuthContext } from './authRequestContext'
 import {
   normalizeNotificationRecordFromRow,
-  normalizeSessionRecordFromRow,
   serializeNotificationRecordForRow,
-  serializeSessionRecordForRow,
 } from './recordPersistence'
 import { createCoreNotificationStore } from './notificationPersistence'
+import { createCoreDatabaseSessionAdapter } from './sessionPersistence'
 import {
   createAuthActionUrl,
   createAuthEmailHtml,
@@ -110,19 +112,6 @@ type PortableRuntimeConfig<TCustom extends HoloConfigMap> = {
   readonly queue: LoadedHoloConfig<TCustom>['queue']
 }
 
-type HoloAuthResult<TData> = {
-  readonly data: TData
-  readonly error: null
-} | {
-  readonly data: null
-  readonly error: {
-    readonly code: string
-    readonly message: string
-    readonly status: number
-    readonly fields: Readonly<Partial<Record<string, readonly string[]>>>
-  }
-}
-
 type CoreHostedIdentityRecord = {
   readonly provider: string
   readonly providerUserId: string
@@ -149,203 +138,15 @@ export interface HoloSessionRuntimeBinding {
   touch(sessionId: string, options?: { readonly store?: string }): Promise<unknown | null>
   issueRememberMeToken(sessionId: string, options?: { readonly store?: string }): Promise<string>
   consumeRememberMeToken(token: string, options?: { readonly store?: string }): Promise<unknown | null>
+  flash(sessionId: string, key: string, value: unknown, options?: { readonly store?: string }): Promise<void>
+  take<TValue = unknown>(sessionId: string, key: string, options?: { readonly store?: string }): Promise<TValue | undefined>
   cookie(name: string, value: string, options?: Record<string, unknown>): string
   sessionCookie(value: string, options?: Record<string, unknown>): string
   rememberMeCookie(value: string, options?: Record<string, unknown>): string
 }
 
-export interface HoloAuthRuntimeBinding {
-  check(): Promise<boolean>
-  user(): Promise<unknown | null>
-  refreshUser(): Promise<unknown | null>
-  id(): Promise<string | number | null>
-  currentAccessToken(): Promise<unknown | null>
-  hashPassword(password: string): Promise<string>
-  verifyPassword(password: string, digest: string): Promise<boolean>
-  needsPasswordRehash(digest: string): Promise<boolean>
-  login(credentials: Readonly<Record<string, unknown>> & {
-    readonly password: string
-    readonly remember?: boolean
-  }): Promise<{
-    readonly guard: string
-    readonly user: unknown
-    readonly sessionId: string
-    readonly rememberToken?: string
-    readonly cookies: readonly string[]
-  }>
-  loginUsing(
-    user: unknown,
-    options?: {
-      readonly remember?: boolean
-    },
-  ): Promise<{
-    readonly guard: string
-    readonly user: unknown
-    readonly sessionId: string
-    readonly rememberToken?: string
-    readonly cookies: readonly string[]
-  }>
-  loginUsingId(
-    userId: string | number,
-    options?: {
-      readonly remember?: boolean
-    },
-  ): Promise<{
-    readonly guard: string
-    readonly user: unknown
-    readonly sessionId: string
-    readonly rememberToken?: string
-    readonly cookies: readonly string[]
-  }>
-  impersonate(
-    user: unknown,
-    options?: {
-      readonly remember?: boolean
-      readonly actorGuard?: string
-    },
-  ): Promise<{
-    readonly guard: string
-    readonly user: unknown
-    readonly sessionId: string
-    readonly rememberToken?: string
-    readonly cookies: readonly string[]
-  }>
-  impersonateById(
-    userId: string | number,
-    options?: {
-      readonly remember?: boolean
-      readonly actorGuard?: string
-    },
-  ): Promise<{
-    readonly guard: string
-    readonly user: unknown
-    readonly sessionId: string
-    readonly rememberToken?: string
-    readonly cookies: readonly string[]
-  }>
-  impersonation(): Promise<unknown | null>
-  stopImpersonating(): Promise<unknown | null>
-  logout(): Promise<{
-    readonly guard: string
-    readonly cookies: readonly string[]
-  }>
-  register(input: Readonly<Record<string, unknown>> & {
-    readonly password: string
-    readonly passwordConfirmation: string
-    readonly remember?: boolean
-  }): Promise<HoloAuthResult<unknown>>
-  logoutAll(guardName?: string): Promise<readonly {
-    readonly guard: string
-    readonly cookies: readonly string[]
-  }[]>
-  guard(name: string): {
-    check(): Promise<boolean>
-    user(): Promise<unknown | null>
-    refreshUser(): Promise<unknown | null>
-    id(): Promise<string | number | null>
-    currentAccessToken(): Promise<unknown | null>
-    login(credentials: Readonly<Record<string, unknown>> & {
-      readonly password: string
-      readonly remember?: boolean
-    }): Promise<{
-      readonly guard: string
-      readonly user: unknown
-      readonly sessionId: string
-      readonly rememberToken?: string
-      readonly cookies: readonly string[]
-    }>
-    loginUsing(
-      user: unknown,
-      options?: {
-        readonly remember?: boolean
-      },
-    ): Promise<{
-      readonly guard: string
-      readonly user: unknown
-      readonly sessionId: string
-      readonly rememberToken?: string
-      readonly cookies: readonly string[]
-    }>
-    loginUsingId(
-      userId: string | number,
-      options?: {
-        readonly remember?: boolean
-      },
-    ): Promise<{
-      readonly guard: string
-      readonly user: unknown
-      readonly sessionId: string
-      readonly rememberToken?: string
-      readonly cookies: readonly string[]
-    }>
-    impersonate(
-      user: unknown,
-      options?: {
-        readonly remember?: boolean
-        readonly actorGuard?: string
-      },
-    ): Promise<{
-      readonly guard: string
-      readonly user: unknown
-      readonly sessionId: string
-      readonly rememberToken?: string
-      readonly cookies: readonly string[]
-    }>
-    impersonateById(
-      userId: string | number,
-      options?: {
-        readonly remember?: boolean
-        readonly actorGuard?: string
-      },
-    ): Promise<{
-      readonly guard: string
-      readonly user: unknown
-      readonly sessionId: string
-      readonly rememberToken?: string
-      readonly cookies: readonly string[]
-    }>
-    impersonation(): Promise<unknown | null>
-    stopImpersonating(): Promise<unknown | null>
-    logout(): Promise<{
-      readonly guard: string
-      readonly cookies: readonly string[]
-    }>
-  }
-  tokens: {
-    create(user: unknown, options: {
-      readonly name: string
-      readonly abilities?: readonly string[]
-      readonly expiresAt?: Date | null
-      readonly guard?: string
-    }): Promise<unknown>
-    list(user: unknown, options?: { readonly guard?: string }): Promise<readonly unknown[]>
-    revoke(options?: { readonly guard?: string }): Promise<void>
-    revokeAll(user: unknown, options?: { readonly guard?: string }): Promise<number>
-    authenticate(plainTextToken: string): Promise<unknown | null>
-    can(token: string, ability: string): Promise<boolean>
-  }
-  verification: {
-    create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<unknown>
-    resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<HoloAuthResult<unknown>>
-    consume(plainTextToken: string): Promise<HoloAuthResult<unknown>>
-  }
-  verifyEmail(token: string): Promise<HoloAuthResult<unknown>>
-  sendEmailVerification(email?: string, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<HoloAuthResult<unknown>>
-  resendEmailVerification(email?: string, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<HoloAuthResult<unknown>>
-  requestPasswordReset(
-    input: {
-      readonly email: string
-    },
-    options?: {
-      readonly broker?: string
-      readonly expiresAt?: Date
-    },
-  ): Promise<HoloAuthResult<void>>
-  resetPassword(input: {
-    readonly token: string
-    readonly password: string
-    readonly passwordConfirmation: string
-  }): Promise<HoloAuthResult<unknown>>
+export interface HoloAuthRuntimeBinding extends AuthFacade {
+  logoutAll(guardName?: string): Promise<readonly AuthLogoutResult[]>
 }
 
 interface HoloAuthAuthorizationTargetConstructor<TInstance = object> {
@@ -444,34 +245,23 @@ type EventsModule = {
   unregisterListener(id: string): void
 }
 
+type CoreSessionStoreBinding = {
+  read(sessionId: string): Promise<unknown | null>
+  write(record: unknown): Promise<void>
+  delete(sessionId: string): Promise<void>
+  rotate?(previousSessionId: string, record: unknown): Promise<void>
+  flash?(sessionId: string, key: string, value: unknown): Promise<void>
+  take?(sessionId: string, key: string): Promise<{ readonly found: boolean, readonly value?: unknown }>
+}
+
 type SessionModule = {
   configureSessionRuntime(options?: {
     readonly config: LoadedHoloConfig['session']
-    readonly stores: Readonly<Record<string, {
-      read(sessionId: string): Promise<unknown | null>
-      write(record: unknown): Promise<void>
-      delete(sessionId: string): Promise<void>
-    }>>
+    readonly stores: Readonly<Record<string, CoreSessionStoreBinding>>
   }): void
-  createDatabaseSessionStore(adapter: {
-    read(sessionId: string): Promise<unknown | null>
-    write(record: unknown): Promise<void>
-    delete(sessionId: string): Promise<void>
-  }): {
-    read(sessionId: string): Promise<unknown | null>
-    write(record: unknown): Promise<void>
-    delete(sessionId: string): Promise<void>
-  }
-  createFileSessionStore(root: string): {
-    read(sessionId: string): Promise<unknown | null>
-    write(record: unknown): Promise<void>
-    delete(sessionId: string): Promise<void>
-  }
-  createRedisSessionStore(adapter: SessionRedisAdapter): {
-    read(sessionId: string): Promise<unknown | null>
-    write(record: unknown): Promise<void>
-    delete(sessionId: string): Promise<void>
-  }
+  createDatabaseSessionStore(adapter: CoreSessionStoreBinding): CoreSessionStoreBinding
+  createFileSessionStore(root: string): CoreSessionStoreBinding
+  createRedisSessionStore(adapter: SessionRedisAdapter): CoreSessionStoreBinding
   getSessionRuntime(): HoloSessionRuntimeBinding
   resetSessionRuntime(): void
 }
@@ -553,6 +343,28 @@ function closeSessionRedisAdapter(adapter: SessionRedisAdapter): Promise<void> |
   return adapter.disconnect?.() || adapter.close?.()
 }
 
+type NotificationQuery = {
+  readonly recipient: { readonly id: string | number, readonly type: string }
+  readonly type?: string
+  readonly dataMatches?: readonly {
+    readonly path: readonly string[]
+    readonly value: string | number | boolean | null
+  }[]
+}
+
+type NotificationPagination = {
+  readonly limit: number
+  readonly offset: number
+}
+
+type NotificationPage = {
+  readonly records: readonly unknown[]
+  readonly limit: number
+  readonly offset: number
+  readonly total: number
+  readonly unread: number
+}
+
 type NotificationsModule = {
   configureNotificationsRuntime(options?: {
     readonly config: LoadedHoloConfig['notifications']
@@ -577,11 +389,11 @@ type NotificationsModule = {
     }
     readonly store?: {
       create(record: unknown): Promise<void>
-      list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-      unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-      markAsRead(ids: readonly string[]): Promise<number>
-      markAsUnread(ids: readonly string[]): Promise<number>
-      delete(ids: readonly string[]): Promise<number>
+      list(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+      unread(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+      markAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number>
+      markAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number>
+      delete(query: NotificationQuery, ids: readonly string[]): Promise<number>
     }
     readonly broadcaster?: ReturnType<typeof createCoreNotificationBroadcaster>
   }): void
@@ -601,11 +413,11 @@ type NotificationsModule = {
     }
     readonly store?: {
       create(record: unknown): Promise<void>
-      list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-      unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-      markAsRead(ids: readonly string[]): Promise<number>
-      markAsUnread(ids: readonly string[]): Promise<number>
-      delete(ids: readonly string[]): Promise<number>
+      list(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+      unread(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
+      markAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number>
+      markAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number>
+      delete(query: NotificationQuery, ids: readonly string[]): Promise<number>
     }
   }
   defineNotification(definition: {
@@ -763,6 +575,15 @@ type AuthModule = {
       delete(id: string, options?: { readonly table?: string }): Promise<void>
       deleteByEmail(provider: string, email: string, options?: { readonly table?: string }): Promise<number>
     }
+    readonly multiFactor?: {
+      find(provider: string, userId: string | number): Promise<unknown | null>
+      save(record: unknown): Promise<void>
+      delete(provider: string, userId: string | number): Promise<void>
+      advanceCounter(provider: string, userId: string | number, counter: number): Promise<AuthMultiFactorVerificationState | null>
+      consumeRecoveryCode(provider: string, userId: string | number, recoveryCodeHash: string): Promise<AuthMultiFactorVerificationState | null>
+      replaceRecoveryCodes(provider: string, userId: string | number, recoveryCodeHashes: readonly string[], updatedAt: Date, verification: AuthMultiFactorVerificationState): Promise<boolean>
+    }
+    readonly multiFactorEncryptionKey?: string
     readonly delivery?: {
       sendEmailVerification(input: {
         readonly provider: string
@@ -930,6 +751,13 @@ export interface CreateHoloOptions {
     readonly createError?: (decision: { readonly message?: string, readonly status: 200 | 403 | 404 }) => Error
   }
 }
+
+type HoloRuntimeReconfigureOptions = Pick<
+  CreateHoloOptions,
+  'authRequest' | 'authorizationError' | 'renderView'
+>
+
+const reconfigureRuntime = Symbol('holo.runtime.reconfigure')
 
 const frameworkBuildEnvKey = 'HOLO_INTERNAL_FRAMEWORK_BUILD'
 
@@ -1204,11 +1032,11 @@ const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')
 
 function hasEventDefinitionMarker(value: unknown): boolean {
-  return !!value && typeof value === 'object' && HOLO_EVENT_DEFINITION_MARKER in value
+  return value !== null && typeof value === 'object' && HOLO_EVENT_DEFINITION_MARKER in value
 }
 
 function hasListenerDefinitionMarker(value: unknown): boolean {
-  return !!value && typeof value === 'object' && HOLO_LISTENER_DEFINITION_MARKER in value
+  return value !== null && typeof value === 'object' && HOLO_LISTENER_DEFINITION_MARKER in value
 }
 
 function resolveEventExport(moduleValue: unknown): unknown {
@@ -1286,18 +1114,10 @@ async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
   sessionModule: SessionModule,
 ): Promise<{
-  readonly stores: Readonly<Record<string, {
-    read(sessionId: string): Promise<unknown | null>
-    write(record: unknown): Promise<void>
-    delete(sessionId: string): Promise<void>
-  }>>
+  readonly stores: Readonly<Record<string, CoreSessionStoreBinding>>
   readonly redisAdapters: readonly SessionRedisAdapter[]
 }> {
-  const stores: Record<string, {
-    read(sessionId: string): Promise<unknown | null>
-    write(record: unknown): Promise<void>
-    delete(sessionId: string): Promise<void>
-  }> = {}
+  const stores: Record<string, CoreSessionStoreBinding> = {}
   const redisAdapters: SessionRedisAdapter[] = []
 
   for (const [name, config] of Object.entries(loadedConfig.session.stores)) {
@@ -1310,40 +1130,7 @@ async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
       const connectionName = config.connection === 'default' && !(config.connection in loadedConfig.database.connections)
         ? loadedConfig.database.defaultConnection
         : config.connection
-      stores[name] = sessionModule.createDatabaseSessionStore({
-        async read(sessionId) {
-          const row = await DB.table(config.table, connectionName)
-            .where('id', sessionId)
-            .whereNull('invalidated_at')
-            .first<Record<string, unknown>>()
-          return row ? normalizeSessionRecordFromRow(row) : null
-        },
-        async write(record) {
-          const normalized = serializeSessionRecordForRow(record as {
-            readonly id: string
-            readonly store: string
-            readonly data: Readonly<Record<string, unknown>>
-            readonly createdAt: Date
-            readonly lastActivityAt: Date
-            readonly expiresAt: Date
-            readonly rememberTokenHash?: string
-          })
-          const existing = await DB.table(config.table, connectionName).find(String(normalized.id))
-          if (existing) {
-            await DB.table(config.table, connectionName)
-              .where('id', normalized.id)
-              .update(normalized)
-            return
-          }
-
-          await DB.table(config.table, connectionName).insert(normalized)
-        },
-        async delete(sessionId) {
-          await DB.table(config.table, connectionName)
-            .where('id', sessionId)
-            .delete()
-        },
-      })
+      stores[name] = sessionModule.createDatabaseSessionStore(createCoreDatabaseSessionAdapter(config.table, connectionName))
       continue
     }
 
@@ -2150,6 +1937,14 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     delete(id: string, options?: { readonly table?: string }): Promise<void>
     deleteByEmail(provider: string, email: string, options?: { readonly table?: string }): Promise<number>
   }
+  readonly multiFactor: {
+    find(provider: string, userId: string | number): Promise<unknown | null>
+    save(record: unknown): Promise<void>
+    delete(provider: string, userId: string | number): Promise<void>
+    advanceCounter(provider: string, userId: string | number, counter: number): Promise<AuthMultiFactorVerificationState | null>
+    consumeRecoveryCode(provider: string, userId: string | number, recoveryCodeHash: string): Promise<AuthMultiFactorVerificationState | null>
+    replaceRecoveryCodes(provider: string, userId: string | number, recoveryCodeHashes: readonly string[], updatedAt: Date, verification: AuthMultiFactorVerificationState): Promise<boolean>
+  }
 } {
   return Object.freeze({
     tokens: Object.freeze({
@@ -2294,6 +2089,75 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           .delete()
         /* v8 ignore next -- DB adapters that omit affectedRows normalize to 0. */
         return result.affectedRows ?? 0
+      },
+    }),
+    multiFactor: Object.freeze({
+      async find(provider: string, userId: string | number) {
+        const row = await DB.table('auth_multi_factor_credentials')
+          .where('provider', provider)
+          .where('user_id', String(userId))
+          .first<Record<string, unknown>>()
+        return row ? normalizeMultiFactorCredentialRecord(row) : null
+      },
+      async save(record: unknown) {
+        const value = record as Parameters<typeof serializeMultiFactorCredentialRecord>[0]
+        await DB.table('auth_multi_factor_credentials').insert(serializeMultiFactorCredentialRecord(value))
+      },
+      async delete(provider: string, userId: string | number) {
+        await DB.table('auth_multi_factor_credentials')
+          .where('provider', provider)
+          .where('user_id', String(userId))
+          .delete()
+      },
+      async advanceCounter(provider: string, userId: string | number, counter: number) {
+        return DB.writeTransaction(async (transaction) => {
+          let query = new TableQueryBuilder('auth_multi_factor_credentials', transaction)
+            .where('provider', provider)
+            .where('user_id', String(userId))
+          if (transaction.getCapabilities().lockForUpdate) query = query.lockForUpdate()
+          const row = await query.first<Record<string, unknown>>()
+          if (!row) return null
+          const record = normalizeMultiFactorCredentialRecord(row)
+          if (record.lastUsedCounter !== null && counter <= record.lastUsedCounter) return null
+          await new TableQueryBuilder('auth_multi_factor_credentials', transaction)
+            .where('provider', provider)
+            .where('user_id', String(userId))
+            .update({ last_used_counter: counter, updated_at: new Date().toISOString() })
+          return Object.freeze({ lastUsedCounter: counter, recoveryCodeHashes: record.recoveryCodeHashes })
+        })
+      },
+      async consumeRecoveryCode(provider: string, userId: string | number, recoveryCodeHash: string) {
+        return DB.writeTransaction(async (transaction) => {
+          let query = new TableQueryBuilder('auth_multi_factor_credentials', transaction)
+            .where('provider', provider)
+            .where('user_id', String(userId))
+          if (transaction.getCapabilities().lockForUpdate) query = query.lockForUpdate()
+          const row = await query.first<Record<string, unknown>>()
+          if (!row) return null
+          const record = normalizeMultiFactorCredentialRecord(row)
+          const index = record.recoveryCodeHashes.indexOf(recoveryCodeHash)
+          if (index < 0) return null
+          const hashes = record.recoveryCodeHashes.filter((_, candidateIndex) => candidateIndex !== index)
+          await new TableQueryBuilder('auth_multi_factor_credentials', transaction)
+            .where('provider', provider)
+            .where('user_id', String(userId))
+            .update({ recovery_code_hashes: JSON.stringify(hashes), updated_at: new Date().toISOString() })
+          return Object.freeze({ lastUsedCounter: record.lastUsedCounter, recoveryCodeHashes: Object.freeze(hashes) })
+        })
+      },
+      async replaceRecoveryCodes(provider: string, userId: string | number, recoveryCodeHashes: readonly string[], updatedAt: Date, verification: AuthMultiFactorVerificationState) {
+        let query = DB.table('auth_multi_factor_credentials')
+          .where('provider', provider)
+          .where('user_id', String(userId))
+          .where('recovery_code_hashes', JSON.stringify(verification.recoveryCodeHashes))
+        query = verification.lastUsedCounter === null
+          ? query.whereNull('last_used_counter')
+          : query.where('last_used_counter', verification.lastUsedCounter)
+        const result = await query.update({
+          recovery_code_hashes: JSON.stringify(recoveryCodeHashes),
+          updated_at: updatedAt.toISOString(),
+        })
+        return (result.affectedRows ?? 0) > 0
       },
     }),
   })
@@ -2543,7 +2407,9 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
           return resolved ? markProviderUser(resolved, providerName) : null
         }
 
-        let query = model.where(entries[0]![0], entries[0]![1])
+        const firstEntry = entries[0]
+        if (!firstEntry) return null
+        let query = model.where(firstEntry[0], firstEntry[1])
         for (const [column, value] of entries.slice(1)) {
           if (typeof query.where !== 'function') {
             break
@@ -2672,7 +2538,7 @@ async function registerProjectQueueJobs(
       queueModule.registerQueueJob(job, {
         name: entry.name,
         sourcePath: entry.sourcePath,
-        replaceExisting: !!existing?.sourcePath,
+        replaceExisting: Boolean(existing?.sourcePath),
       })
       registeredJobNames.push(entry.name)
     }
@@ -2891,7 +2757,7 @@ async function registerProjectEventsAndListeners(
       eventsModule.registerEvent(event, {
         name: entry.name,
         sourcePath: entry.sourcePath,
-        replaceExisting: !!existing?.sourcePath,
+        replaceExisting: Boolean(existing?.sourcePath),
       })
       registeredEventNames.push(entry.name)
     }
@@ -2924,7 +2790,7 @@ async function registerProjectEventsAndListeners(
       }, {
         id: entry.id,
         sourcePath: entry.sourcePath,
-        replaceExisting: !!existing?.sourcePath,
+        replaceExisting: Boolean(existing?.sourcePath),
       })
       registeredListenerIds.push(entry.id)
     }
@@ -3050,7 +2916,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   }
 
   const storageConfigured = hasLoadedConfigFile(loadedConfig, 'storage')
-  const storageInstalled = !!await portableRuntimeModuleInternals.importOptionalModule<Record<string, unknown>>('@holo-js/storage')
+  const storageInstalled = Boolean(await portableRuntimeModuleInternals.importOptionalModule<Record<string, unknown>>('@holo-js/storage'))
   /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
   if (!storageInstalled && storageConfigured) {
     throw new Error('[@holo-js/core] Storage support requires @holo-js/storage to be installed.')
@@ -3139,13 +3005,14 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
   if (securityModule) {
     const existingSecurityBindings = securityModule.getSecurityRuntimeBindings()
-    const shouldReuseExistingSecurityStore = !!existingSecurityBindings?.rateLimitStore
+    const existingSecurityStore = existingSecurityBindings?.rateLimitStore
+    const shouldReuseExistingSecurityStore = Boolean(existingSecurityStore)
       && !existingManagedSecurityRedisAdapter
       && getRuntimeState().securityRateLimitStoreManaged !== true
     const shouldCloseExistingManagedSecurityStore = !shouldReuseExistingSecurityStore
-      && !!existingSecurityBindings?.rateLimitStore
+      && Boolean(existingSecurityStore)
       && (
-        !!existingManagedSecurityRedisAdapter
+        Boolean(existingManagedSecurityRedisAdapter)
         || getRuntimeState().securityRateLimitStoreManaged === true
       )
     let nextManagedSecurityRedisAdapter: SecurityRedisAdapter | undefined
@@ -3164,7 +3031,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       }
 
       rateLimitStore = shouldReuseExistingSecurityStore
-        ? existingSecurityBindings.rateLimitStore
+        ? existingSecurityStore
         : securityModule.createRateLimitStoreFromConfig(loadedConfig.security, {
           projectRoot,
           ...(nextManagedSecurityRedisAdapter ? { redisAdapter: nextManagedSecurityRedisAdapter } : {}),
@@ -3172,10 +3039,10 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
       if (
         shouldCloseExistingManagedSecurityStore
-        && existingSecurityBindings?.rateLimitStore
-        && existingSecurityBindings.rateLimitStore !== rateLimitStore
+        && existingSecurityStore
+        && existingSecurityStore !== rateLimitStore
       ) {
-        await existingSecurityBindings.rateLimitStore.close?.()
+        await existingSecurityStore.close?.()
       }
 
       if (
@@ -3319,6 +3186,8 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       tokens: authStores.tokens,
       emailVerificationTokens: authStores.emailVerificationTokens,
       passwordResetTokens: authStores.passwordResetTokens,
+      multiFactor: authStores.multiFactor,
+      multiFactorEncryptionKey: loadedConfig.app.key,
       ...(notificationsModule && (mailModule || notificationsRuntimeBindings?.mailer)
         ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule, loadedConfig.app.url, projectRoot) }
         : mailModule
@@ -3526,17 +3395,24 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     activeAuthContext = undefined
   }
 
-  const initializeRuntimeServices = async (): Promise<void> => {
-    if (!shouldBootRuntimeServices(options.processEnv)) return
+  const applyOptionalSubsystems = async (
+    subsystemOptions: HoloRuntimeReconfigureOptions,
+  ): Promise<Awaited<ReturnType<typeof reconfigureOptionalHoloSubsystems>>> => {
     const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
-      renderView: options.renderView,
-      authRequest: options.authRequest,
-      authorizationError: options.authorizationError,
+      renderView: subsystemOptions.renderView,
+      authRequest: subsystemOptions.authRequest,
+      authorizationError: subsystemOptions.authorizationError,
     })
     activeQueueModule = optionalSubsystems.queueModule
     activeSessionRuntime = optionalSubsystems.session
     activeAuthRuntime = optionalSubsystems.auth
     activeAuthContext = optionalSubsystems.authContext
+    return optionalSubsystems
+  }
+
+  const initializeRuntimeServices = async (): Promise<void> => {
+    if (!shouldBootRuntimeServices(options.processEnv)) return
+    await applyOptionalSubsystems(options)
     const optionalEventsModule = activeQueueModule ? await loadEventsModule() : undefined
     if (activeQueueModule && optionalEventsModule) {
       await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
@@ -3607,6 +3483,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   ])
 
   const runtime: MutableHoloRuntime<TCustom> & {
+    [reconfigureRuntime](options: HoloRuntimeReconfigureOptions): Promise<void>
     setAuthRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
   } = {
     projectRoot,
@@ -3633,6 +3510,9 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       const runner = activeAuthContext?.runWithRequestAccessors
       return runner ? runner(authRequest, callback) : callback()
     },
+    async [reconfigureRuntime](nextOptions) {
+      await applyOptionalSubsystems(nextOptions)
+    },
     async initialize() {
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')
       if (getRuntimeState().current) throw new Error('A Holo runtime is already initialized for this process.')
@@ -3648,6 +3528,16 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   }
 
   return runtime
+}
+
+export async function reconfigureHoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap>(
+  runtime: HoloRuntime<TCustom>,
+  options: HoloRuntimeReconfigureOptions,
+): Promise<void> {
+  const reconfigurable = runtime as HoloRuntime<TCustom> & {
+    [reconfigureRuntime](nextOptions: HoloRuntimeReconfigureOptions): Promise<void>
+  }
+  await reconfigurable[reconfigureRuntime](options)
 }
 
 export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigMap>(

@@ -16,6 +16,7 @@ import security, {
   createMemoryRateLimitStore,
   createMemoryRateLimitStoreConfig,
   createRateLimitStoreFromConfig,
+  createSignedToken,
   createRedisRateLimitStore,
   createRedisRateLimitStoreConfig,
   csrf,
@@ -44,6 +45,8 @@ import security, {
   securityStoreInternals,
   type SecurityRateLimitRedisDriverAdapter,
   type SecurityRateLimitStore,
+  type SecuritySignedTokenValue,
+  verifySignedToken,
 } from '../src'
 import { runRateLimitDriverContractSuite } from './support/driver-contract'
 
@@ -262,6 +265,93 @@ describe('@holo-js/security package surface', () => {
     expect(rateLimitError.snapshot?.limiter).toBe('login')
     expect('normalizeSecurityConfig' in securityExports).toBe(true)
     expect('createSecurityRedisAdapter' in securityExports).toBe(false)
+  })
+
+  it('creates purpose-bound expiring signed tokens with tamper detection', () => {
+    configureSecurityRuntime({
+      config: {},
+      csrfSigningKey: 'signed-token-test-key',
+    })
+    const expiresAt = new Date('2030-04-16T12:05:00.000Z')
+    const token = createSignedToken({
+      exportId: 'export-1',
+      nested: { allowed: true },
+    }, {
+      expiresAt,
+      purpose: 'panels-export-download',
+    })
+
+    expect(verifySignedToken<{ readonly exportId: string }>(token, {
+      now: new Date('2030-04-16T12:04:59.000Z'),
+      purpose: 'panels-export-download',
+    })).toMatchObject({ exportId: 'export-1' })
+    expect(verifySignedToken(token, {
+      now: new Date('2030-04-16T12:04:59.000Z'),
+      purpose: 'another-purpose',
+    })).toBeNull()
+    expect(verifySignedToken(`${token.slice(0, -1)}x`, {
+      now: new Date('2030-04-16T12:04:59.000Z'),
+      purpose: 'panels-export-download',
+    })).toBeNull()
+    expect(verifySignedToken(`${token}!`, {
+      now: new Date('2030-04-16T12:04:59.000Z'),
+      purpose: 'panels-export-download',
+    })).toBeNull()
+    expect(verifySignedToken(`${token}=`, {
+      now: new Date('2030-04-16T12:04:59.000Z'),
+      purpose: 'panels-export-download',
+    })).toBeNull()
+    const base64UrlAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    const signatureLastCharacterIndex = base64UrlAlphabet.indexOf(token.at(-1)!)
+    const nonCanonicalToken = `${token.slice(0, -1)}${base64UrlAlphabet[signatureLastCharacterIndex + 1]}`
+    expect(verifySignedToken(nonCanonicalToken, {
+      now: new Date('2030-04-16T12:04:59.000Z'),
+      purpose: 'panels-export-download',
+    })).toBeNull()
+    expect(verifySignedToken(token, {
+      now: expiresAt,
+      purpose: 'panels-export-download',
+    })).toBeNull()
+  })
+
+  it('rejects unsafe signed token inputs and missing signing configuration', () => {
+    configureSecurityRuntime({ config: {} })
+    expect(() => createSignedToken({ value: 'safe' }, {
+      expiresAt: new Date(Date.now() + 1000),
+      purpose: 'download',
+    })).toThrow('application signing key')
+
+    configureSecurityRuntime({ config: {}, csrfSigningKey: 'signed-token-test-key' })
+    expect(() => createSignedToken({ value: Number.NaN }, {
+      expiresAt: new Date(Date.now() + 1000),
+      purpose: 'download',
+    })).toThrow('JSON-safe values')
+    expect(() => createSignedToken({ value: 'safe' }, {
+      expiresAt: new Date(Date.now() - 1000),
+      purpose: 'download',
+    })).toThrow('valid future date')
+
+    const circular: Record<string, SecuritySignedTokenValue> = {}
+    circular.self = circular
+    expect(() => createSignedToken(circular, {
+      expiresAt: new Date(Date.now() + 1000),
+      purpose: 'download',
+    })).toThrow('JSON-safe values')
+
+    let nested: SecuritySignedTokenValue = 'value'
+    for (let depth = 0; depth < 33; depth += 1) nested = { nested }
+    expect(() => createSignedToken({ nested }, {
+      expiresAt: new Date(Date.now() + 1000),
+      purpose: 'download',
+    })).toThrow('JSON-safe values')
+
+    expect(() => createSignedToken({ value: 'x'.repeat(65_536) }, {
+      expiresAt: new Date(Date.now() + 1000),
+      purpose: 'download',
+    })).toThrow('exceeds 64 KiB')
+    expect(verifySignedToken(`${'x'.repeat(100_000)}.signature`, {
+      purpose: 'download',
+    })).toBeNull()
   })
 
   it('normalizes and validates feature-owned security configuration', () => {

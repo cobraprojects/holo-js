@@ -542,6 +542,9 @@ describe('type system contracts', () => {
       const query = RelatedUser.query()
 
       void RelatedUser.with('team')
+      expectTypeOf(RelatedUser.withoutGlobalScope('active')).toMatchTypeOf<ModelQueryBuilder<typeof users, RelatedUserRelations>>()
+      expectTypeOf(RelatedUser.withoutGlobalScopes()).toMatchTypeOf<ModelQueryBuilder<typeof users, RelatedUserRelations>>()
+      expectTypeOf(RelatedUser.withoutGlobalScopes(['active'])).toMatchTypeOf<ModelQueryBuilder<typeof users, RelatedUserRelations>>()
       void query.with('team')
       void query.with('team.members')
       expectTypeOf(entity.id).toEqualTypeOf<number>()

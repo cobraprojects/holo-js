@@ -15,5 +15,6 @@ export default defineConfig({
     '@holo-js/auth',
     '@holo-js/db',
     '@holo-js/validation',
+    'esbuild',
   ],
 })

@@ -249,6 +249,211 @@ describe('custom s3 storage driver', () => {
     expect(await readRequestBody(fetchMock.mock.calls[1]?.[0] as Request)).toBe('u8')
   })
 
+  it('reads objects as bounded non-empty chunks', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array(10_000).fill(7), { status: 200 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    const stream = await driver.getItemStream('reports:input.bin', { chunkBytes: 4096 })
+    const chunks: Uint8Array[] = []
+    for await (const chunk of stream ?? []) chunks.push(chunk)
+
+    expect(chunks.map(chunk => chunk.byteLength)).toEqual([4096, 4096, 1808])
+    expect(chunks.every(chunk => chunk.byteLength > 0 && chunk.byteLength <= 4096)).toBe(true)
+    expect((fetchMock.mock.calls[0]?.[0] as Request).method).toBe('HEAD')
+    expect((fetchMock.mock.calls[1]?.[0] as Request).method).toBe('GET')
+  })
+
+  it('does not start an object download until the stream is consumed', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    await expect(driver.getItemStream('reports:input.bin', {})).resolves.not.toBeNull()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect((fetchMock.mock.calls[0]?.[0] as Request).method).toBe('HEAD')
+  })
+
+  it('fails a deferred stream read when the object disappears after the existence check', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    const stream = await driver.getItemStream('reports:input.bin', {})
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of stream ?? []) {
+        throw new Error('A missing object must not produce stream chunks.')
+      }
+    }
+
+    await expect(consume()).rejects.toThrow('Stream read failed')
+  })
+
+  it('uses multipart upload and conditional completion for create-only streams', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response('<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>', { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { etag: '"part-1"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+    const source = async function* (): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode('bounded-upload')
+    }
+
+    await driver.setItemStream('reports:result.bin', source(), { overwrite: false })
+
+    const start = fetchMock.mock.calls[0]?.[0] as Request
+    const part = fetchMock.mock.calls[1]?.[0] as Request
+    const complete = fetchMock.mock.calls[2]?.[0] as Request
+    expect(start.method).toBe('POST')
+    expect(new URL(start.url).searchParams.has('uploads')).toBe(true)
+    expect(part.method).toBe('PUT')
+    expect(new URL(part.url).searchParams.get('partNumber')).toBe('1')
+    expect(complete.headers.get('if-none-match')).toBe('*')
+    expect(await readRequestBody(complete)).toContain('<ETag>"part-1"</ETag>')
+  })
+
+  it('preserves bytes from stream producers that reuse their Buffer chunk', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response('<InitiateMultipartUploadResult><UploadId>upload-reused-buffer</UploadId></InitiateMultipartUploadResult>', { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { etag: '"part-1"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+    const chunkBytes = 1024 * 1024
+    const source = async function* (): AsyncGenerator<Uint8Array> {
+      const chunk = Buffer.alloc(chunkBytes)
+      for (let value = 0; value < 5; value += 1) {
+        chunk.fill(value)
+        yield chunk
+      }
+    }
+
+    await driver.setItemStream('reports:reused-buffer.bin', source(), { overwrite: true })
+
+    const uploaded = new Uint8Array(await (fetchMock.mock.calls[1]?.[0] as Request).arrayBuffer())
+    expect(uploaded).toHaveLength(5 * chunkBytes)
+    for (let value = 0; value < 5; value += 1) {
+      expect(uploaded[value * chunkBytes]).toBe(value)
+    }
+  })
+
+  it('increases multipart sizes before a long stream can exhaust the S3 part limit', async () => {
+    fetchMock.mockImplementation(async (input: Request) => {
+      const url = new URL(input.url)
+      if (input.method === 'POST' && url.searchParams.has('uploads')) {
+        return new Response('<InitiateMultipartUploadResult><UploadId>upload-adaptive</UploadId></InitiateMultipartUploadResult>', { status: 200 })
+      }
+      if (input.method === 'PUT') {
+        return new Response(null, {
+          status: 200,
+          headers: { etag: `"part-${url.searchParams.get('partNumber')}"` },
+        })
+      }
+      return new Response(null, { status: 200 })
+    })
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+    const fiveMiB = new Uint8Array(5 * 1024 * 1024)
+    const source = async function* (): AsyncGenerator<Uint8Array> {
+      for (let index = 0; index < 12; index += 1) yield fiveMiB
+    }
+
+    await driver.setItemStream('reports:large-result.bin', source(), { overwrite: true })
+
+    const partRequests = fetchMock.mock.calls
+      .map(call => call[0] as Request)
+      .filter(request => request.method === 'PUT')
+    expect(partRequests).toHaveLength(11)
+    await expect(partRequests[10]!.arrayBuffer()).resolves.toHaveProperty('byteLength', 10 * 1024 * 1024)
+  })
+
+  it('aborts multipart state and reports a create-only destination race safely', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response('<InitiateMultipartUploadResult><UploadId>upload-2</UploadId></InitiateMultipartUploadResult>', { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { etag: '"part-1"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 412 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+    const source = async function* (): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode('bounded-upload')
+    }
+
+    await expect(driver.setItemStream('reports:result.bin', source(), { overwrite: false })).rejects.toMatchObject({
+      name: 'StorageDestinationExistsError',
+    })
+    expect((fetchMock.mock.calls[3]?.[0] as Request).method).toBe('DELETE')
+  })
+
+  it('rejects embedded multipart completion errors returned with HTTP 200', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response('<InitiateMultipartUploadResult><UploadId>upload-embedded-error</UploadId></InitiateMultipartUploadResult>', { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { etag: '"part-1"' } }))
+      .mockResolvedValueOnce(new Response('<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>InternalError</Code><Message>Completion failed</Message></Error>', { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+    const source = async function* (): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode('bounded-upload')
+    }
+
+    await expect(driver.setItemStream('reports:result.bin', source(), { overwrite: true })).rejects.toThrow('Stream write failed')
+    expect((fetchMock.mock.calls[3]?.[0] as Request).method).toBe('DELETE')
+  })
+
   it('preserves buffer-backed payloads on writes', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }))
 
@@ -411,6 +616,37 @@ describe('custom s3 storage driver', () => {
     expect(firstRequest.searchParams.get('list-type')).toBe('2')
     expect(firstRequest.searchParams.get('prefix')).toBe('reports')
     expect(secondRequest.searchParams.get('continuation-token')).toBe('token-2')
+  })
+
+  it('returns one bounded list page with the native continuation token', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(
+      '<?xml version="1.0"?><ListBucketResult>'
+      + '<Contents><Key>reports/one.txt</Key></Contents>'
+      + '<Contents><Key>reports/two.txt</Key></Contents>'
+      + '<NextContinuationToken>token&amp;2</NextContinuationToken>'
+      + '</ListBucketResult>',
+      { status: 200 },
+    ))
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    await expect(driver.getKeysPage('reports:', {
+      cursor: 'token-1',
+      limit: 2,
+    })).resolves.toEqual({
+      nextCursor: 'token&2',
+      paths: ['reports/one.txt', 'reports/two.txt'],
+    })
+    const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url)
+    expect(request.searchParams.get('prefix')).toBe('reports/')
+    expect(request.searchParams.get('continuation-token')).toBe('token-1')
+    expect(request.searchParams.get('max-keys')).toBe('2')
   })
 
   it('preserves directory boundaries for colon-scoped prefixes', async () => {

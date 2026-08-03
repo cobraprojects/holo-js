@@ -56,6 +56,18 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
       : `jsonb_extract_path(${root}, ${predicate.path.map(segment => this.createSqlStringLiteral(segment)).join(', ')})`
 
     if (predicate.jsonMode === 'value') {
+      if (predicate.value === null) {
+        const extractedType = `jsonb_typeof(${extractedJson})`
+        return predicate.operator === '='
+          ? `${extractedType} = 'null'`
+          : `${extractedType} IS NOT NULL AND ${extractedType} != 'null'`
+      }
+
+      if (predicate.operator === '=' || predicate.operator === '!=') {
+        bindings.push(JSON.stringify(predicate.value))
+        return `${extractedJson} ${predicate.operator} ${this.createPlaceholder(bindings.length)}::jsonb`
+      }
+
       bindings.push(predicate.value)
       return `${extractedText} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }

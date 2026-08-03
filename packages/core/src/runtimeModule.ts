@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, extname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -9,11 +10,7 @@ type EsbuildModule = {
 }
 
 async function importModule<TModule>(specifier: string): Promise<TModule> {
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
+  return import(/* @vite-ignore */ /* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 const runtimeModuleRequire = createRequire(import.meta.url)
@@ -28,7 +25,7 @@ function resolveRuntimeModuleSearchPaths(
     : [projectRoot]
 }
 
-function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string): string {
+function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string): string | undefined {
   if (!projectRoot) {
     return specifier
   }
@@ -38,9 +35,14 @@ function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string)
     const resolved = paths
       ? runtimeModuleRequire.resolve(specifier, { paths: [...paths] })
       : runtimeModuleRequire.resolve(specifier)
-    return pathToFileURL(resolved).href
-  } catch {
-    return specifier
+    return existsSync(resolved) ? pathToFileURL(resolved).href : undefined
+  } catch (error) {
+    const failedTarget = getMissingModuleTarget(getErrorMessage(error))
+    const packageRootSpecifier = resolvePackageRootSpecifier(specifier)
+    return matchesPackageImportTarget(failedTarget, specifier)
+      || (!packageRootSpecifier && isMissingOptionalModule(error, specifier, specifier))
+      ? undefined
+      : specifier
   }
 }
 
@@ -86,6 +88,12 @@ function matchesRelativeImportTarget(failedTarget: string | undefined, specifier
   return normalizeImportTarget(failedTarget).endsWith(`/${suffix}`)
 }
 
+function matchesPackageImportTarget(failedTarget: string | undefined, specifier: string): boolean {
+  const packageRootSpecifier = resolvePackageRootSpecifier(specifier)
+  if (!failedTarget || !packageRootSpecifier) return false
+  return normalizeImportTarget(failedTarget).includes(`/node_modules/${packageRootSpecifier}/`)
+}
+
 function isMissingOptionalModule(error: unknown, specifier: string, resolvedSpecifier: string): boolean {
   if (!error || typeof error !== 'object') {
     return false
@@ -105,7 +113,10 @@ function isMissingOptionalModule(error: unknown, specifier: string, resolvedSpec
   }
   const normalizedFailedTarget = typeof failedTarget === 'string' ? normalizeImportTarget(failedTarget) : undefined
   const matchesRequestedTarget = typeof normalizedFailedTarget === 'string'
-    && (expectedTargets.has(normalizedFailedTarget) || matchesRelativeImportTarget(normalizedFailedTarget, specifier))
+    && (
+      expectedTargets.has(normalizedFailedTarget)
+      || matchesRelativeImportTarget(normalizedFailedTarget, specifier)
+    )
 
   return (
     ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND' && matchesRequestedTarget)
@@ -123,6 +134,7 @@ export async function importOptionalRuntimeModule<TModule>(
   } = {},
 ): Promise<TModule | undefined> {
   const resolvedSpecifier = resolveOptionalImportSpecifier(specifier, options.projectRoot)
+  if (!resolvedSpecifier) return undefined
 
   try {
     return await importModule<TModule>(resolvedSpecifier)
@@ -269,6 +281,7 @@ export const runtimeModuleInternals = {
   loadEsbuild,
   pathExists,
   resolveRuntimeModuleSearchPaths,
+  resolveOptionalImportSpecifier,
   runEsbuild,
   writeLoaderTsconfig,
 }

@@ -616,6 +616,12 @@ function createStaticModelApi<
     sharedLock() {
       return this.query().sharedLock()
     },
+    withoutGlobalScope(name: string) {
+      return this.query().withoutGlobalScope(name)
+    },
+    withoutGlobalScopes(names?: readonly string[]) {
+      return this.query().withoutGlobalScopes(names)
+    },
     with(
       first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations> | readonly ModelRelationPath<TRelations>[],
       second?: ModelRelationPath<TRelations> | RelationConstraintCallback,

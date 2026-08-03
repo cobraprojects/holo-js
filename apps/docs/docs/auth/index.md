@@ -62,6 +62,8 @@ npx holo install auth --clerk
 When `auth` is installed, `session` and `security` are installed with it automatically because session-backed auth
 depends on cookies, CSRF/rate-limit defaults, and CORS support for separate frontend/API deployments.
 
+See [Multi-Factor Authentication](./multi-factor-authentication) to add TOTP and recovery-code challenges.
+
 ## Authentication Quickstart
 
 Start with the auth and session config files:

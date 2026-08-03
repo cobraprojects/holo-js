@@ -1,4 +1,4 @@
-export type { AuthGuardConfig, AuthProviderConfig, HoloAuthConfig, NormalizedHoloAuthConfig } from './config'
+export type { AuthGuardConfig, AuthMultiFactorConfiguration, AuthProviderConfig, HoloAuthConfig, NormalizedHoloAuthConfig } from './config'
 import type { HoloAuthConfig, NormalizedHoloAuthConfig } from './config'
 
 export const AUTH_ERROR_CODES = [
@@ -35,6 +35,17 @@ export const AUTH_ERROR_CODES = [
   'password_reset_token_invalid',
   'password_reset_token_expired',
   'password_reset_user_missing',
+  'multi_factor_runtime_unconfigured',
+  'multi_factor_encryption_key_missing',
+  'multi_factor_authentication_required',
+  'multi_factor_already_enabled',
+  'multi_factor_not_enabled',
+  'multi_factor_enrollment_missing',
+  'multi_factor_enrollment_expired',
+  'multi_factor_reauthentication_required',
+  'multi_factor_code_invalid',
+  'multi_factor_challenge_missing',
+  'multi_factor_challenge_expired',
 ] as const
 
 export type AuthErrorCode = typeof AUTH_ERROR_CODES[number]
@@ -279,6 +290,7 @@ export interface AuthBaseGuardFacade {
   check(): Promise<boolean>
   user(): Promise<AuthenticatedAuthUser | null>
   refreshUser(): Promise<AuthenticatedAuthUser | null>
+  findUserById(userId: string | number): Promise<AuthenticatedAuthUser | null>
   provider(): Promise<string | null>
   id(): Promise<string | number | null>
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
@@ -292,12 +304,48 @@ export interface AuthBaseGuardFacade {
 }
 
 export interface AuthSessionOnlyFacade {
+  readonly multiFactor: AuthMultiFactorFacade
+  flash(key: string, value: unknown): Promise<void>
+  take<TValue = unknown>(key: string): Promise<TValue | undefined>
   loginUsing(user: unknown, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   loginUsingId(userId: string | number, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   impersonate(user: unknown, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
   impersonateById(userId: string | number, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
   impersonation(): Promise<AuthImpersonationState | null>
   stopImpersonating(): Promise<AuthenticatedAuthUser | null>
+}
+
+export interface AuthMultiFactorStatus {
+  readonly enabled: boolean
+  readonly recoveryCodesRemaining: number
+}
+
+export interface AuthMultiFactorEnrollment {
+  readonly expiresAt: Date
+  readonly manualKey: string
+  readonly otpauthUri: string
+}
+
+export interface AuthMultiFactorRecoveryCodes {
+  readonly recoveryCodes: readonly string[]
+}
+
+export interface AuthMultiFactorCodeInput {
+  readonly code: string
+}
+
+export type AuthMultiFactorVerificationInput
+  = | { readonly method: 'totp', readonly code: string }
+    | { readonly method: 'recovery', readonly code: string }
+
+export interface AuthMultiFactorFacade {
+  status(): Promise<AuthMultiFactorStatus>
+  beginEnrollment(): Promise<AuthMultiFactorEnrollment>
+  confirmEnrollment(input: AuthMultiFactorCodeInput): Promise<AuthMultiFactorRecoveryCodes>
+  challenge(input: AuthMultiFactorCodeInput): Promise<AuthEstablishedSession>
+  recover(input: AuthMultiFactorCodeInput): Promise<AuthEstablishedSession>
+  disable(input: AuthMultiFactorVerificationInput): Promise<void>
+  regenerateRecoveryCodes(input: AuthMultiFactorVerificationInput): Promise<AuthMultiFactorRecoveryCodes>
 }
 
 export interface AuthGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFacade {}
@@ -539,6 +587,10 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<AuthSessionRecord | null>
+  rotate?(
+    sessionId: string,
+    options?: { readonly store?: string, readonly newId?: string },
+  ): Promise<AuthSessionRecord>
   touch(
     sessionId: string,
     options?: { readonly store?: string },
@@ -555,6 +607,8 @@ export interface AuthSessionRuntime {
     token: string,
     options?: { readonly store?: string },
   ): Promise<AuthSessionRecord | null>
+  flash?(sessionId: string, key: string, value: unknown, options?: { readonly store?: string }): Promise<void>
+  take?<TValue = unknown>(sessionId: string, key: string, options?: { readonly store?: string }): Promise<TValue | undefined>
   cookie?(
     name: string,
     value: string,
@@ -600,6 +654,8 @@ export interface AuthRuntimeBindings {
   readonly tokens?: AuthTokenStore
   readonly emailVerificationTokens?: EmailVerificationTokenStore
   readonly passwordResetTokens?: PasswordResetTokenStore
+  readonly multiFactor?: AuthMultiFactorStore
+  readonly multiFactorEncryptionKey?: string
   readonly delivery?: AuthDeliveryHook
   readonly context?: AuthRuntimeContext
   readonly passwordHasher?: AuthPasswordHasher
@@ -619,6 +675,37 @@ export interface AuthEstablishedSession {
   readonly cookies: readonly string[]
   readonly emailVerificationRequired?: boolean
   readonly emailVerificationRoute?: string
+  readonly multiFactorChallenge?: AuthMultiFactorChallenge
+}
+
+export interface AuthMultiFactorChallenge {
+  readonly expiresAt: Date
+  readonly recoveryAllowed: boolean
+  readonly route: string
+}
+
+export interface AuthMultiFactorCredentialRecord {
+  readonly provider: string
+  readonly userId: string | number
+  readonly encryptedSecret: string
+  readonly recoveryCodeHashes: readonly string[]
+  readonly lastUsedCounter: number | null
+  readonly enabledAt: Date
+  readonly updatedAt: Date
+}
+
+export interface AuthMultiFactorVerificationState {
+  readonly lastUsedCounter: number | null
+  readonly recoveryCodeHashes: readonly string[]
+}
+
+export interface AuthMultiFactorStore {
+  find(provider: string, userId: string | number): Promise<AuthMultiFactorCredentialRecord | null>
+  save(record: AuthMultiFactorCredentialRecord): Promise<void>
+  delete(provider: string, userId: string | number): Promise<void>
+  advanceCounter(provider: string, userId: string | number, counter: number): Promise<AuthMultiFactorVerificationState | null>
+  consumeRecoveryCode(provider: string, userId: string | number, recoveryCodeHash: string): Promise<AuthMultiFactorVerificationState | null>
+  replaceRecoveryCodes(provider: string, userId: string | number, recoveryCodeHashes: readonly string[], updatedAt: Date, verification: AuthMultiFactorVerificationState): Promise<boolean>
 }
 
 export interface CurrentAuthResponse {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { get } from 'node:http'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
@@ -12,6 +12,7 @@ import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.m
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
 import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
+import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate-limit.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
@@ -19,7 +20,6 @@ const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
 const configCachePath = join(cwd, '.holo-js/generated/config-cache.json')
 const databasePath = join(cwd, 'storage/database.sqlite')
-const rateLimitPath = join(cwd, 'storage/framework/rate-limits')
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
   server.once('error', reject)
@@ -195,16 +195,6 @@ function countCacheRows() {
   } finally {
     database.close()
   }
-}
-
-async function clearRateLimitBuckets() {
-  const entries = await readdir(rateLimitPath, { withFileTypes: true }).catch(() => [])
-  await Promise.all(entries
-    .filter(entry => entry.name !== '.gitignore')
-    .map(entry => rm(join(rateLimitPath, entry.name), {
-      recursive: entry.isDirectory(),
-      force: true,
-    })))
 }
 
 function getUploadedPostImage(title) {
@@ -576,7 +566,7 @@ try {
   await run('bun', ['run', 'prepare'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
-  await clearRateLimitBuckets()
+  await clearExampleAppRateLimitBuckets(cwd)
   await startBroadcastWorker(`http://localhost:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 

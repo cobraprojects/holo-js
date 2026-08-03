@@ -16,11 +16,11 @@ const featureConfigContributionSpecifiers = [
 type FeatureConfigContributionSpecifier = typeof featureConfigContributionSpecifiers[number]
 
 type FeatureConfigContributionLoaders = {
-  loadDirect(specifier: FeatureConfigContributionSpecifier): Promise<void>
+  loadDirect(specifier: FeatureConfigContributionSpecifier, projectRoot: string): Promise<void>
   loadOptional(specifier: FeatureConfigContributionSpecifier, projectRoot: string): Promise<unknown | undefined>
 }
 
-async function loadDirectFeatureConfigContribution(specifier: FeatureConfigContributionSpecifier): Promise<void> {
+async function loadDirectFeatureConfigContribution(specifier: FeatureConfigContributionSpecifier, projectRoot: string): Promise<void> {
   switch (specifier) {
     case '@holo-js/auth/config':
       await import('@holo-js/auth/config')
@@ -35,7 +35,7 @@ async function loadDirectFeatureConfigContribution(specifier: FeatureConfigContr
       await import('@holo-js/mail/config')
       break
     case '@holo-js/media/config':
-      await import('@holo-js/media/config')
+      await importOptionalRuntimeModule(specifier, { projectRoot })
       break
     case '@holo-js/notifications/config':
       await import('@holo-js/notifications/config')
@@ -68,7 +68,7 @@ export async function loadInstalledFeatureConfigContributions(
 ): Promise<void> {
   for (const specifier of featureConfigContributionSpecifiers) {
     try {
-      await loaders.loadDirect(specifier)
+      await loaders.loadDirect(specifier, projectRoot)
     } catch {
       const loaded = await loaders.loadOptional(specifier, projectRoot)
       if (!loaded) continue

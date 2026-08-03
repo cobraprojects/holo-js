@@ -25,6 +25,7 @@ import {
   type NotificationChannel,
   type NotificationBuildFactories,
   type NotificationDefinition,
+  type NotificationRecord,
 } from '../src'
 
 type InvoicePaidNotifiable = {
@@ -307,6 +308,105 @@ describe('@holo-js/notifications runtime', () => {
     }))
   })
 
+  it('deduplicates database delivery by a bounded server-side key', async () => {
+    const create = vi.fn(async () => {})
+    configureNotificationsRuntime({
+      store: {
+        create,
+        delete: vi.fn(),
+        list: vi.fn(),
+        markAsRead: vi.fn(),
+        markAsUnread: vi.fn(),
+        unread: vi.fn(),
+      },
+    })
+    const definition = defineNotification({
+      type: 'transfer-completed',
+      via(_user: { readonly id: string, readonly type: string }) {
+        return ['database']
+      },
+      build: {
+        database() {
+          return { data: { status: 'completed' } }
+        },
+      },
+    })
+
+    const pending = notify({ id: 'actor-1', type: 'admins' }, definition)
+      .deduplicate('transfer-outbox-1')
+
+    await expect(pending.dispatch()).resolves.toMatchObject({
+      channels: [{ channel: 'database', success: true }],
+    })
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      id: expect.stringMatching(/^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u),
+      notifiableId: 'actor-1',
+      notifiableType: 'admins',
+      type: 'transfer-completed',
+    }))
+  })
+
+  it('scopes database deduplication identities to each recipient', async () => {
+    const create = vi.fn(async (_record: NotificationRecord) => {})
+    configureNotificationsRuntime({
+      store: {
+        create,
+        delete: vi.fn(),
+        list: vi.fn(),
+        markAsRead: vi.fn(),
+        markAsUnread: vi.fn(),
+        unread: vi.fn(),
+      },
+    })
+    const definition = defineNotification({
+      type: 'transfer-completed',
+      via(_user: { readonly id: string, readonly type: string }) {
+        return ['database']
+      },
+      build: {
+        database() {
+          return { data: { status: 'completed' } }
+        },
+      },
+    })
+
+    await notifyMany([
+      { id: 'actor-1', type: 'admins' },
+      { id: 'actor-2', type: 'admins' },
+    ], definition).deduplicate('transfer-outbox-many').dispatch()
+
+    const ids = create.mock.calls.map(([record]) => record.id)
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids)).toHaveLength(2)
+  })
+
+  it('rejects unsafe deduplication keys and non-database delivery before sending', async () => {
+    const mailer = { send: vi.fn(async () => {}) }
+    const create = vi.fn(async () => {})
+    configureNotificationsRuntime({
+      mailer,
+      store: {
+        create,
+        delete: vi.fn(),
+        list: vi.fn(),
+        markAsRead: vi.fn(),
+        markAsUnread: vi.fn(),
+        unread: vi.fn(),
+      },
+    })
+
+    expect(() => notify({ email: 'ava@example.com' }, invoicePaid).deduplicate('line\nbreak'))
+      .toThrow('between 1 and 200 printable ASCII characters')
+    await expect(notify({
+      email: 'ava@example.com',
+      id: 'actor-1',
+      type: 'admins',
+    }, invoicePaid).deduplicate('transfer-outbox-2').dispatch())
+      .rejects.toThrow('every resolved channel to be the built-in database channel')
+    expect(mailer.send).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('evaluates notification channels once per target during dispatch', async () => {
     const mailer = {
       send: vi.fn(async () => {}),
@@ -394,6 +494,59 @@ describe('@holo-js/notifications runtime', () => {
       },
       anonymous: true,
     }))
+  })
+
+  it.each([
+    { id: '   ', type: 'users' },
+    { id: 'user-1', type: 'x'.repeat(201) },
+    { id: 'x'.repeat(201), type: 'users' },
+    { id: Number.POSITIVE_INFINITY, type: 'users' },
+  ])('rejects invalid anonymous database recipients before persistence', async (route) => {
+    const store = {
+      create: vi.fn(async () => {}),
+      list: vi.fn(),
+      unread: vi.fn(),
+      markAsRead: vi.fn(),
+      markAsUnread: vi.fn(),
+      delete: vi.fn(),
+    }
+    configureNotificationsRuntime({ store })
+
+    const result = await notifyUsing()
+      .channel('database', route)
+      .notify(asRuntimeNotification(invoicePaid))
+
+    expect(result.channels.find(channel => channel.channel === 'database')).toMatchObject({
+      channel: 'database',
+      success: false,
+      error: expect.any(Error),
+    })
+    expect(store.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid model-backed database recipients before persistence', async () => {
+    const store = {
+      create: vi.fn(async () => {}),
+      list: vi.fn(),
+      unread: vi.fn(),
+      markAsRead: vi.fn(),
+      markAsUnread: vi.fn(),
+      delete: vi.fn(),
+    }
+    configureNotificationsRuntime({ store })
+
+    const result = await notify({
+      id: '   ',
+      type: 'users',
+      email: 'ava@example.com',
+    }, invoicePaid)
+
+    expect(result.channels[1]).toMatchObject({
+      channel: 'database',
+      success: false,
+      error: expect.any(Error),
+    })
+    expect(store.create).not.toHaveBeenCalled()
   })
 
   it('dispatches registered channels when unrelated plugin channels are broken', async () => {
@@ -721,7 +874,7 @@ export default {
   })
 
   it('exposes typed database notification read and mutation helpers through the configured store', async () => {
-    const listed = [
+    const listedRecords = [
       {
         id: 'notif-1',
         type: 'invoice-paid',
@@ -733,7 +886,7 @@ export default {
         updatedAt: new Date('2026-01-01T00:00:00.000Z'),
       },
     ] as const
-    const unread = [
+    const unreadRecords = [
       {
         id: 'notif-2',
         type: 'invoice-paid',
@@ -747,8 +900,8 @@ export default {
     ] as const
     const store = {
       create: vi.fn(async () => {}),
-      list: vi.fn(async () => listed),
-      unread: vi.fn(async () => unread),
+      list: vi.fn(async () => ({ records: listedRecords, limit: 20, offset: 0, total: 1, unread: 1 })),
+      unread: vi.fn(async () => ({ records: unreadRecords, limit: 20, offset: 0, total: 1, unread: 1 })),
       markAsRead: vi.fn(async () => 2),
       markAsUnread: vi.fn(async () => 1),
       delete: vi.fn(async () => 3),
@@ -756,17 +909,53 @@ export default {
 
     configureNotificationsRuntime({ store })
 
-    await expect(listNotifications({ id: 'user-1', type: 'users' })).resolves.toEqual(listed)
-    await expect(unreadNotifications({ id: 'user-1', type: 'users' })).resolves.toEqual(unread)
-    await expect(markNotificationsAsRead([' notif-1 ', 'notif-2', 'notif-1'])).resolves.toBe(2)
-    await expect(markNotificationsAsUnread(['notif-3'])).resolves.toBe(1)
-    await expect(deleteNotifications(['notif-4', 'notif-5'])).resolves.toBe(3)
+    const query = {
+      recipient: { id: 'user-1', type: 'users' },
+      type: ' invoice-paid ',
+      dataMatches: [{ path: ['tenant', 'id'], value: 'tenant-1' }],
+    } as const
+    const normalizedQuery = {
+      recipient: { id: 'user-1', type: 'users' },
+      type: 'invoice-paid',
+      dataMatches: [{ path: ['tenant', 'id'], value: 'tenant-1' }],
+    }
+    const pagination = { limit: 20, offset: 0 }
 
-    expect(store.list).toHaveBeenCalledWith({ id: 'user-1', type: 'users' })
-    expect(store.unread).toHaveBeenCalledWith({ id: 'user-1', type: 'users' })
-    expect(store.markAsRead).toHaveBeenCalledWith(['notif-1', 'notif-2'])
-    expect(store.markAsUnread).toHaveBeenCalledWith(['notif-3'])
-    expect(store.delete).toHaveBeenCalledWith(['notif-4', 'notif-5'])
+    await expect(listNotifications(query, pagination)).resolves.toEqual({ records: listedRecords, limit: 20, offset: 0, total: 1, unread: 1 })
+    await expect(unreadNotifications(query, pagination)).resolves.toEqual({ records: unreadRecords, limit: 20, offset: 0, total: 1, unread: 1 })
+    await expect(markNotificationsAsRead(query, [' notif-1 ', 'notif-2', 'notif-1'])).resolves.toBe(2)
+    await expect(markNotificationsAsUnread(query, ['notif-3'])).resolves.toBe(1)
+    await expect(deleteNotifications(query, ['notif-4', 'notif-5'])).resolves.toBe(3)
+
+    expect(store.list).toHaveBeenCalledWith(normalizedQuery, pagination)
+    expect(store.unread).toHaveBeenCalledWith(normalizedQuery, pagination)
+    expect(store.markAsRead).toHaveBeenCalledWith(normalizedQuery, ['notif-1', 'notif-2'])
+    expect(store.markAsUnread).toHaveBeenCalledWith(normalizedQuery, ['notif-3'])
+    expect(store.delete).toHaveBeenCalledWith(normalizedQuery, ['notif-4', 'notif-5'])
+  })
+
+  it('rejects unsafe notification query paths, scalar matches, pagination, and mutation batches', async () => {
+    const store = {
+      create: vi.fn(async () => {}),
+      list: vi.fn(),
+      unread: vi.fn(),
+      markAsRead: vi.fn(),
+      markAsUnread: vi.fn(),
+      delete: vi.fn(),
+    }
+    configureNotificationsRuntime({ store })
+    const recipient = { id: 'user-1', type: 'users' }
+
+    await expect(listNotifications({ recipient, dataMatches: [{ path: ['__proto__'], value: 'unsafe' }] }, { limit: 20, offset: 0 })).rejects.toThrow('path segment')
+    await expect(listNotifications({ recipient, dataMatches: [{ path: ['tenant'], value: { id: 1 } as never }] }, { limit: 20, offset: 0 })).rejects.toThrow('JSON scalars')
+    await expect(listNotifications({ recipient, type: 42 } as never, { limit: 20, offset: 0 })).rejects.toThrow('must be strings')
+    await expect(listNotifications({ recipient: { id: ' ', type: 'users' } }, { limit: 20, offset: 0 })).rejects.toThrow('route ids')
+    await expect(listNotifications({ recipient: { id: 'user-1', type: 'x'.repeat(201) } }, { limit: 20, offset: 0 })).rejects.toThrow('route types')
+    await expect(listNotifications({ recipient }, { limit: 101, offset: 0 })).rejects.toThrow('limits')
+    await expect(listNotifications({ recipient }, { limit: 20, offset: -1 })).rejects.toThrow('offsets')
+    await expect(markNotificationsAsRead({ recipient }, Array.from({ length: 101 }, (_, index) => `notification-${index}`))).rejects.toThrow('at most 100')
+    expect(store.list).not.toHaveBeenCalled()
+    expect(store.markAsRead).not.toHaveBeenCalled()
   })
 
   it('rejects missing or invalid anonymous built-in routes', async () => {
@@ -833,7 +1022,7 @@ export default {
       .notify(asRuntimeNotification(invoicePaid))
 
     expect((invalidDatabaseRoute.channels[1] as { error: Error }).error.message)
-      .toContain('Database routes must include a string or numeric id and a non-empty type')
+      .toContain('Database route types must be between 1 and 200 characters')
   })
 
   it('returns partial failures instead of failing fast', async () => {
@@ -1690,7 +1879,7 @@ export default {
   it('exposes runtime internals for route normalization helpers', () => {
     expect(notificationsRuntimeInternals.normalizeEmailRouteFromValue(' ava@example.com ')).toBe('ava@example.com')
     expect(notificationsRuntimeInternals.normalizeDatabaseRouteFromValue({
-      id: 'user-1',
+      id: ' user-1 ',
       type: ' users ',
     })).toEqual({
       id: 'user-1',

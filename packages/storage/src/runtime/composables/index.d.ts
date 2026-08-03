@@ -23,9 +23,37 @@ export type StorageContent
     | Buffer
     | Blob
 
+export type StorageByteStream = AsyncIterable<Uint8Array>
+
+export interface StorageStreamReadOptions {
+  readonly chunkBytes?: number
+}
+
+export interface StorageStreamWriteOptions {
+  readonly overwrite?: boolean
+}
+
+export declare class StorageStreamingUnsupportedError extends Error {
+  constructor()
+}
+
 export interface TemporaryUrlOptions {
   expiresAt?: Date | number | string
   expiresIn?: number
+}
+
+export interface StorageFileListRequest {
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
+export interface StorageFileListPage {
+  readonly nextCursor: string | null
+  readonly paths: readonly string[]
+}
+
+export declare class StoragePaginationError extends Error {
+  constructor()
 }
 
 export interface StorageBackend {
@@ -36,6 +64,19 @@ export interface StorageBackend {
   hasItem(key: string): Promise<boolean>
   removeItem(key: string): Promise<void>
   getKeys(base?: string): Promise<string[]>
+  getKeysPage?(
+    base: string | undefined,
+    request: Required<StorageFileListRequest>,
+  ): Promise<StorageFileListPage>
+  getItemStream?(
+    key: string,
+    options: StorageStreamReadOptions,
+  ): Promise<StorageByteStream | null>
+  setItemStream?(
+    key: string,
+    source: StorageByteStream,
+    options: Required<StorageStreamWriteOptions>,
+  ): Promise<void>
   getMeta?<T = unknown>(key: string): Promise<T | null>
   setMeta?(key: string, value: unknown): Promise<void>
   removeMeta?(key: string): Promise<void>
@@ -51,13 +92,15 @@ export interface StorageDisk {
   putJson(path: string, value: unknown): Promise<boolean>
   get(path: string): Promise<string | null>
   getBytes(path: string): Promise<Uint8Array | null>
+  readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null>
+  writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean>
   json<T>(path: string): Promise<T | null>
   exists(path: string): Promise<boolean>
   missing(path: string): Promise<boolean>
   delete(path: string | string[]): Promise<boolean>
   copy(from: string, to: string): Promise<boolean>
   move(from: string, to: string): Promise<boolean>
-  files(directory?: string): Promise<string[]>
+  listFiles(directory?: string, request?: StorageFileListRequest): Promise<StorageFileListPage>
   path(path: string): string
   url(path: string): string
   temporaryUrl(path: string, options?: TemporaryUrlOptions): string
@@ -96,13 +139,15 @@ export declare const Storage: {
   putJson(path: string, value: unknown): Promise<boolean>
   get(path: string): Promise<string | null>
   getBytes(path: string): Promise<Uint8Array | null>
+  readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null>
+  writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean>
   json<T>(path: string): Promise<T | null>
   exists(path: string): Promise<boolean>
   missing(path: string): Promise<boolean>
   delete(path: string | string[]): Promise<boolean>
   copy(from: string, to: string): Promise<boolean>
   move(from: string, to: string): Promise<boolean>
-  files(directory?: string): Promise<string[]>
+  listFiles(directory?: string, request?: StorageFileListRequest): Promise<StorageFileListPage>
   path(path: string): string
   url(path: string): string
   temporaryUrl(path: string, options?: TemporaryUrlOptions): string

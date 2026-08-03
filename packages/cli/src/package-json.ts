@@ -1,6 +1,8 @@
 import { join } from 'node:path'
 import { HOLO_PACKAGE_VERSION } from './metadata'
 import { readTextFile, writeTextFile } from './project'
+import { resolveManagedHoloPackageVersion } from './project/dependency-versions'
+import { resolveWorkspacePackageNames } from './project/workspaces'
 
 type PackageJsonDependencyState = {
   readonly packageJsonPath: string
@@ -19,10 +21,6 @@ function normalizeDependencyMap(value: unknown): Record<string, string> {
       .filter(([, dependencyVersion]) => typeof dependencyVersion === 'string')
       .sort(([left], [right]) => left.localeCompare(right)),
   )
-}
-
-function isWorkspaceDependencyVersion(value: string | undefined): value is string {
-  return typeof value === 'string' && value.startsWith('workspace:')
 }
 
 function assertValidDependencyName(packageName: string): void {
@@ -62,23 +60,18 @@ async function resolvePackageVersion(
   packageName: string,
   dependencies: Record<string, string>,
   devDependencies: Record<string, string>,
+  workspacePackageNames: ReadonlySet<string>,
 ): Promise<string> {
   const currentPackageVersion = dependencies[packageName] ?? devDependencies[packageName]
-  if (typeof currentPackageVersion === 'string') {
-    return currentPackageVersion
-  }
-
-  const workspaceVersion = Object.entries({
-    ...dependencies,
-    ...devDependencies,
-  }).find(([dependencyName, dependencyVersion]) => (
-    dependencyName.startsWith('@holo-js/')
-    && isWorkspaceDependencyVersion(dependencyVersion)
-  ))?.[1]
-
   if (packageName.startsWith('@holo-js/')) {
-    return workspaceVersion ?? `^${HOLO_PACKAGE_VERSION}`
+    return resolveManagedHoloPackageVersion(
+      packageName,
+      currentPackageVersion,
+      HOLO_PACKAGE_VERSION,
+      workspacePackageNames,
+    )
   }
+  if (typeof currentPackageVersion === 'string') return currentPackageVersion
 
   return await resolveInstalledPackageVersion(projectRoot, packageName) ?? 'latest'
 }
@@ -147,7 +140,8 @@ export async function upsertProjectDependency(
 ): Promise<boolean> {
   assertValidDependencyName(packageName)
   const state = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = await resolvePackageVersion(projectRoot, packageName, state.dependencies, state.devDependencies)
+  const workspacePackageNames = await resolveWorkspacePackageNames(projectRoot)
+  const nextVersion = await resolvePackageVersion(projectRoot, packageName, state.dependencies, state.devDependencies, workspacePackageNames)
 
   if (state.dependencies[packageName] === nextVersion && typeof state.devDependencies[packageName] === 'undefined') {
     return false

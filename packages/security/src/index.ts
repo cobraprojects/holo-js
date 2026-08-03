@@ -56,6 +56,7 @@ import {
   SecurityRuntimeNotConfiguredError,
   securityRuntimeInternals,
 } from './runtime'
+import { createSignedToken, verifySignedToken } from './signed-tokens'
 
 export {
   defineCorsConfig,
@@ -101,6 +102,7 @@ export {
   createCsrfField,
   createCsrfInput,
   createCsrfToken,
+  createSignedToken,
   defineRateLimiter,
   defineSecurityRuntimeBindings,
   defaultRateLimitKey,
@@ -116,6 +118,7 @@ export {
   rateLimitInternals,
   redisRateLimitDriverInternals,
   verifyCsrfRequest,
+  verifySignedToken,
   csrfInternals,
   corsInternals,
   isSecureRequest,
@@ -138,6 +141,12 @@ export type {
   SecurityRuntimeBindings,
   SecurityRuntimeFacade,
 } from './contracts'
+export type {
+  SecuritySignedTokenOptions,
+  SecuritySignedTokenPayload,
+  SecuritySignedTokenPrimitive,
+  SecuritySignedTokenValue,
+} from './signed-tokens'
 export {
   SecurityCsrfError,
   SecurityRateLimitError,
@@ -164,6 +173,8 @@ const security = Object.freeze({
   clearRateLimit,
   limit,
   ip,
+  createSignedToken,
+  verifySignedToken,
 })
 
 export default security

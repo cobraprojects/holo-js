@@ -5,7 +5,7 @@ import {
   ensureHolo,
   resetHoloRuntime,
   peekHolo,
-  reconfigureOptionalHoloSubsystems,
+  reconfigureHoloRuntime,
   resetOptionalHoloSubsystems,
   type CreateHoloOptions,
   type HoloRuntime,
@@ -183,28 +183,39 @@ export function createHoloProjectAccessors<
   TCustom extends HoloConfigMap = HoloConfigMap,
 >(
   resolveProject: () => Promise<HoloAdapterProject<TCustom>>,
+  options: { readonly cache?: boolean } = {},
 ): HoloAdapterProjectAccessors<TCustom> {
+  let projectPromise: Promise<HoloAdapterProject<TCustom>> | undefined
+  const resolveCachedProject = (): Promise<HoloAdapterProject<TCustom>> => {
+    if (!options.cache) return resolveProject()
+    if (projectPromise) return projectPromise
+    projectPromise = resolveProject().catch((error: unknown) => {
+      projectPromise = undefined
+      throw error
+    })
+    return projectPromise
+  }
   const useConfig = (async (path: string) => {
-    const project = await resolveProject()
+    const project = await resolveCachedProject()
     return project.runtime.useConfig(path as never)
   }) as HoloAdapterProjectAccessors<TCustom>['useConfig']
 
   return {
-    getApp: resolveProject,
-    getProject: resolveProject,
+    getApp: resolveCachedProject,
+    getProject: resolveCachedProject,
     async getSession() {
-      const project = await resolveProject()
+      const project = await resolveCachedProject()
       return project.runtime.session
     },
     async getAuth() {
-      const project = await resolveProject()
+      const project = await resolveCachedProject()
       return project.runtime.auth
     },
     useConfig,
     async config<TPath extends DotPath<HoloConfigValues<TCustom>>>(
       path: TPath,
     ): Promise<ValueAtPath<HoloConfigValues<TCustom>, TPath>> {
-      const project = await resolveProject()
+      const project = await resolveCachedProject()
       return project.runtime.config(path)
     },
   }
@@ -257,7 +268,7 @@ async function initializeSingletonFrameworkProject<
 
       configureConfigRuntime(currentRuntime.loadedConfig.all)
       configureDB(currentRuntime.manager)
-      await reconfigureOptionalHoloSubsystems(state.project.projectRoot, currentRuntime.loadedConfig, {
+      await reconfigureHoloRuntime(currentRuntime, {
         renderView: resolved.runtime.renderView,
         authRequest: resolved.runtime.authRequest,
         authorizationError: resolved.runtime.authorizationError,
@@ -359,7 +370,11 @@ export function createHoloFrameworkAdapter<
   function createHelpers<TCustom extends HoloConfigMap = HoloConfigMap>(
     projectOptions: TOptions = {} as TOptions,
   ): HoloAdapterProjectAccessors<TCustom> {
-    return createHoloProjectAccessors<TCustom>(() => initializeProject(projectOptions))
+    const resolved = resolveHoloFrameworkOptions(projectOptions)
+    return createHoloProjectAccessors<TCustom>(
+      () => initializeProject(projectOptions),
+      { cache: resolved.runtime.preferCache },
+    )
   }
 
   return {
@@ -397,7 +412,7 @@ export async function initializeHoloAdapterProject<TCustom extends HoloConfigMap
 ): Promise<HoloAdapterProject<TCustom>> {
   const project = await createHoloAdapterProject<TCustom>(projectRoot, options)
   const runtime = await ensureHolo<TCustom>(project.projectRoot, options)
-  await reconfigureOptionalHoloSubsystems(project.projectRoot, runtime.loadedConfig, {
+  await reconfigureHoloRuntime(runtime, {
     renderView: options.renderView,
     authRequest: options.authRequest,
     authorizationError: options.authorizationError,

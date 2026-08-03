@@ -77,7 +77,7 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
     return undefined
   }
 
-  const { NextResponse } = await import('next/server') as NextServerModule
+  const { NextResponse } = await import('next/server.js') as NextServerModule
   const response = NextResponse.next()
   const cookieOptions = {
     httpOnly: false,

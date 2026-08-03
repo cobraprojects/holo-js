@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
+import { isAuthError } from './contracts'
 import type {
   AuthenticatedAuthUser,
   AuthCredentials,
@@ -13,6 +14,14 @@ import type {
   AuthGuardFacadeFor,
   AuthImpersonationOptions,
   AuthImpersonationState,
+  AuthMultiFactorCodeInput,
+  AuthMultiFactorCredentialRecord,
+  AuthMultiFactorEnrollment,
+  AuthMultiFactorFacade,
+  AuthMultiFactorRecoveryCodes,
+  AuthMultiFactorStore,
+  AuthMultiFactorVerificationInput,
+  AuthMultiFactorVerificationState,
   AuthLogoutResult,
   AuthPasswordResetInput,
   AuthPasswordResetRequestInput,
@@ -24,6 +33,7 @@ import type {
   AuthRegistrationInput,
   AuthSessionGuardFacade,
   AuthSessionLoginOptions,
+  AuthSessionRuntime,
   AuthTokenGuardFacade,
   AuthTokenFacade,
   AuthTokenStore,
@@ -111,8 +121,19 @@ import {
   type SessionAuthPayloadMap,
   type SessionImpersonationPayload,
 } from './runtime/sessionPayloads'
+import {
+  createMultiFactorRecoveryCodes,
+  createMultiFactorSecret,
+  decryptMultiFactorValue,
+  encryptMultiFactorValue,
+  hashMultiFactorRecoveryCode,
+  matchingTotpCounters,
+  multiFactorInternals,
+  multiFactorOtpAuthUri,
+} from './runtime/multiFactor'
 
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
+const MAX_MULTI_FACTOR_CHALLENGE_ATTEMPTS = 5
 
 export {
   createAsyncAuthContext,
@@ -139,6 +160,8 @@ type RuntimeBindings = {
   readonly tokens?: AuthTokenStore
   readonly emailVerificationTokens?: EmailVerificationTokenStore
   readonly passwordResetTokens?: PasswordResetTokenStore
+  readonly multiFactor?: AuthMultiFactorStore
+  readonly multiFactorEncryptionKey?: string
   readonly delivery: AuthDeliveryHook
   readonly context: AuthRuntimeContext
   readonly passwordHasher: AuthPasswordHasher
@@ -192,6 +215,8 @@ function getExposedRuntimeBindings(): {
   readonly tokens?: AuthTokenStore
   readonly emailVerificationTokens?: EmailVerificationTokenStore
   readonly passwordResetTokens?: PasswordResetTokenStore
+  readonly multiFactor?: AuthMultiFactorStore
+  readonly multiFactorEncryptionKey?: string
   readonly delivery: AuthDeliveryHook
   readonly context: AuthRuntimeContext
   readonly passwordHasher: AuthPasswordHasher
@@ -841,6 +866,11 @@ async function resolveUserFromGuard(
     return null
   }
 
+  if (payload.multiFactorChallengeExpiresAt) {
+    bindings.context.setCachedUser(guardName, null)
+    return null
+  }
+
   if (!options.fresh) {
     const cached = bindings.context.getCachedUser(guardName)
     if (typeof cached !== 'undefined') {
@@ -876,6 +906,107 @@ async function resolveUserFromGuard(
   return serialized
 }
 
+function ensureMultiFactorStore(): AuthMultiFactorStore {
+  const bindings = getRuntimeBindings()
+  if (!bindings.config.multiFactor.enabled || !bindings.multiFactor) {
+    throwAuthError('multi_factor_runtime_unconfigured', 'Multi-factor authentication is not configured.')
+  }
+  return bindings.multiFactor
+}
+
+function multiFactorEncryptionKey(): string {
+  const key = getRuntimeBindings().multiFactorEncryptionKey?.trim()
+  if (!key) throwAuthError('multi_factor_encryption_key_missing', 'Multi-factor authentication requires an encryption key.')
+  return key
+}
+
+function multiFactorChallengeLeaseKey(guardName: string): string {
+  return `auth.mfa.${createHash('sha256').update(guardName).digest('hex')}.lease`
+}
+
+function multiFactorChallengeSessionRuntime(): {
+  readonly flash: NonNullable<AuthSessionRuntime['flash']>
+  readonly take: NonNullable<AuthSessionRuntime['take']>
+} {
+  const { flash, take } = getRuntimeBindings().session
+  if (!flash || !take) {
+    throwAuthError('multi_factor_runtime_unconfigured', 'Multi-factor authentication requires atomic session flash operations.')
+  }
+  return Object.freeze({ flash, take })
+}
+
+type MultiFactorRateLimit = {
+  readonly key: string
+  hit(options: { readonly maxAttempts: number, readonly decaySeconds: number }): ReturnType<OptionalSecurityRateLimitStore['hit']>
+  clear(): Promise<boolean>
+}
+
+async function multiFactorRateLimit(provider: string, userId: string | number): Promise<MultiFactorRateLimit> {
+  const security = await loadOptionalSecurityModule()
+  const securityBindings = security?.getSecurityRuntimeBindings?.()
+  const signingKey = securityBindings?.csrfSigningKey?.trim()
+  const store = securityBindings?.rateLimitStore
+  const clear = store?.clear
+  if (!signingKey || !store || !clear) {
+    throwAuthError('multi_factor_runtime_unconfigured', 'Multi-factor authentication requires a configured security rate-limit store.')
+  }
+  const subject = JSON.stringify([provider, String(userId)])
+  const key = `auth:mfa:${createHmac('sha256', signingKey).update(subject).digest('hex')}`
+  return Object.freeze({
+    key,
+    hit: (options: { readonly maxAttempts: number, readonly decaySeconds: number }) => store.hit(key, options),
+    clear: () => clear.call(store, key),
+  })
+}
+
+async function invalidateMultiFactorChallenge(
+  guardName: string,
+  sessionId: string,
+  bindings: RuntimeBindings,
+): Promise<void> {
+  await bindings.session.invalidate(sessionId)
+  bindings.context.setSessionId(guardName)
+  bindings.context.setCachedUser(guardName, null)
+  bindings.context.setRememberToken?.(guardName)
+}
+
+async function establishLoginSessionForUser(
+  user: SerializedAuthUser,
+  options: {
+    readonly guard: string
+    readonly provider: string
+    readonly remember?: boolean
+  },
+): Promise<AuthEstablishedSession> {
+  const bindings = getRuntimeBindings()
+  const credential = bindings.config.multiFactor.enabled
+    ? await ensureMultiFactorStore().find(options.provider, user.id)
+    : null
+  if (!credential) return establishSessionForUser(user, options)
+  multiFactorEncryptionKey()
+  const challengeSession = multiFactorChallengeSessionRuntime()
+  await multiFactorRateLimit(options.provider, user.id)
+  const expiresAt = new Date(Date.now() + bindings.config.multiFactor.challengeTtl * 1000)
+  const established = await establishSessionForUser(user, {
+    ...options,
+    payload: toSessionPayload(options.guard, options.provider, user, undefined, expiresAt.toISOString()),
+  })
+  try {
+    await challengeSession.flash(established.sessionId, multiFactorChallengeLeaseKey(options.guard), true)
+  } catch (error) {
+    await invalidateMultiFactorChallenge(options.guard, established.sessionId, bindings)
+    throw error
+  }
+  return Object.freeze({
+    ...established,
+    multiFactorChallenge: Object.freeze({
+      expiresAt,
+      recoveryAllowed: credential.recoveryCodeHashes.length > 0,
+      route: bindings.config.multiFactor.challengeRoute,
+    }),
+  })
+}
+
 async function loginForSessionGuard(guardName: string, credentials: AuthCredentials): Promise<AuthEstablishedSession> {
   const { guard, adapter } = getGuardProviderAdapter(guardName)
   const user = await verifyCredentialsForProvider(guard.provider, adapter, credentials)
@@ -885,7 +1016,7 @@ async function loginForSessionGuard(guardName: string, credentials: AuthCredenti
 
   const serialized = serializeUser(adapter, user, guard.provider)
   await hydrateGuardContextFromRequest(guardName)
-  return establishSessionForUser(serialized, {
+  return establishLoginSessionForUser(serialized, {
     guard: guardName,
     provider: guard.provider,
     remember: credentials.remember === true,
@@ -1128,7 +1259,7 @@ async function loginUsingForGuard(
   const serialized = serializeUser(resolved.adapter, resolved.user, resolved.provider)
 
   await hydrateGuardContextFromRequest(guardName)
-  return establishSessionForUser(serialized, {
+  return establishLoginSessionForUser(serialized, {
     guard: guardName,
     provider: resolved.provider,
     remember: options.remember === true,
@@ -1184,6 +1315,7 @@ async function writeExistingSession(
   if (!bindings.session.write) {
     return bindings.session.create({
       id: record.id,
+      store: record.store,
       data,
     })
   }
@@ -1194,28 +1326,282 @@ async function writeExistingSession(
   }))
 }
 
-async function renewExistingSession(
-  bindings: RuntimeBindings,
-  record: AuthSessionRecord,
-  data: Readonly<Record<string, unknown>>,
-): Promise<AuthSessionRecord> {
-  const renewed = await bindings.session.create({
-    id: record.id,
-    data,
+type MultiFactorAuthenticatedState = NonNullable<Awaited<ReturnType<typeof readGuardSessionState>>>
+
+async function authenticatedMultiFactorState(guardName: string): Promise<MultiFactorAuthenticatedState> {
+  const guard = getGuardConfig(guardName)
+  if (guard.driver !== 'session') throwAuthError('multi_factor_authentication_required', 'Multi-factor authentication requires a session guard.')
+  if (!await resolveUserFromGuard(guardName)) throwAuthError('multi_factor_authentication_required', 'Authentication is required for this multi-factor operation.')
+  const state = await readGuardSessionState(guardName)
+  if (!state || state.payload.multiFactorChallengeExpiresAt) throwAuthError('multi_factor_authentication_required', 'Authentication is required for this multi-factor operation.')
+  return state
+}
+
+function enrollmentData(record: AuthSessionRecord): Readonly<Record<string, string>> {
+  const value = record.data.authMultiFactorEnrollments
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({})
+  return Object.freeze(Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string')))
+}
+
+async function writeEnrollment(state: MultiFactorAuthenticatedState, guardName: string, value?: string): Promise<void> {
+  const enrollments = { ...enrollmentData(state.record) }
+  if (value) enrollments[guardName] = value
+  else delete enrollments[guardName]
+  const data = { ...state.record.data } as Record<string, unknown>
+  if (Object.keys(enrollments).length > 0) data.authMultiFactorEnrollments = Object.freeze(enrollments)
+  else delete data.authMultiFactorEnrollments
+  await writeExistingSession(getRuntimeBindings(), state.record, Object.freeze(data))
+}
+
+async function verifyCredentialTotp(credential: AuthMultiFactorCredentialRecord, code: string): Promise<AuthMultiFactorVerificationState> {
+  const bindings = getRuntimeBindings()
+  const secret = decryptMultiFactorValue(credential.encryptedSecret, multiFactorEncryptionKey())
+  const counters = matchingTotpCounters(secret, code.trim(), bindings.config.multiFactor.allowedDriftSteps)
+  for (const counter of counters) {
+    const verification = await ensureMultiFactorStore().advanceCounter(credential.provider, credential.userId, counter)
+    if (verification) return verification
+  }
+  throwAuthError('multi_factor_code_invalid', 'The multi-factor authentication code is invalid.')
+}
+
+async function verifyCredentialRecovery(credential: AuthMultiFactorCredentialRecord, code: string): Promise<AuthMultiFactorVerificationState> {
+  const verification = await ensureMultiFactorStore().consumeRecoveryCode(
+    credential.provider,
+    credential.userId,
+    hashMultiFactorRecoveryCode(code),
+  )
+  if (!verification) throwAuthError('multi_factor_code_invalid', 'The multi-factor recovery code is invalid.')
+  return verification
+}
+
+async function verifyCredentialWithRateLimit(
+  credential: AuthMultiFactorCredentialRecord,
+  input: AuthMultiFactorVerificationInput,
+): Promise<AuthMultiFactorVerificationState> {
+  const rateLimit = await multiFactorRateLimit(credential.provider, credential.userId)
+  const result = await rateLimit.hit({
+    maxAttempts: MAX_MULTI_FACTOR_CHALLENGE_ATTEMPTS,
+    decaySeconds: getRuntimeBindings().config.multiFactor.challengeTtl,
   })
-
-  if (!record.rememberTokenHash) {
-    return renewed
+  const attempts = result.snapshot?.attempts
+  if (typeof attempts !== 'number' || !Number.isSafeInteger(attempts) || attempts < 1) {
+    throwAuthError('multi_factor_runtime_unconfigured', 'Multi-factor authentication requires an atomic security rate-limit store.')
+  }
+  if (result.limited) {
+    throwAuthError('multi_factor_code_invalid', 'The multi-factor authentication code is invalid.')
   }
 
-  if (!bindings.session.write) {
-    return renewed
-  }
+  const verification = input.method === 'totp'
+    ? await verifyCredentialTotp(credential, input.code)
+    : await verifyCredentialRecovery(credential, input.code)
 
-  return bindings.session.write(Object.freeze({
-    ...renewed,
-    rememberTokenHash: record.rememberTokenHash,
-  }))
+  try {
+    await rateLimit.clear()
+  } catch (error) {
+    console.warn('[@holo-js/auth] Failed to clear a multi-factor rate limit after successful verification.', error)
+  }
+  return verification
+}
+
+async function credentialForPayload(payload: SessionAuthPayload): Promise<AuthMultiFactorCredentialRecord> {
+  const credential = await ensureMultiFactorStore().find(payload.provider, payload.userId)
+  if (!credential) throwAuthError('multi_factor_not_enabled', 'Multi-factor authentication is not enabled.')
+  return credential
+}
+
+async function completeMultiFactorChallenge(
+  guardName: string,
+  method: 'recovery' | 'totp',
+  code: string,
+): Promise<AuthEstablishedSession> {
+  await hydrateGuardContextFromRequest(guardName)
+  const state = await readGuardSessionState(guardName)
+  const expiresAt = state?.payload.multiFactorChallengeExpiresAt
+  if (!state || !expiresAt) throwAuthError('multi_factor_challenge_missing', 'No multi-factor challenge is pending.')
+  if (new Date(expiresAt).getTime() <= Date.now()) throwAuthError('multi_factor_challenge_expired', 'The multi-factor challenge has expired.')
+  const credential = await credentialForPayload(state.payload)
+  const bindings = getRuntimeBindings()
+  const challengeSession = multiFactorChallengeSessionRuntime()
+  const leaseKey = multiFactorChallengeLeaseKey(guardName)
+  const lease = await challengeSession.take<boolean>(state.sessionId, leaseKey)
+  if (lease !== true) {
+    throwAuthError('multi_factor_challenge_missing', 'No multi-factor challenge is pending.')
+  }
+  let rateLimit: Awaited<ReturnType<typeof multiFactorRateLimit>>
+  let rateLimitResult: Awaited<ReturnType<typeof rateLimit.hit>>
+  try {
+    rateLimit = await multiFactorRateLimit(credential.provider, credential.userId)
+    rateLimitResult = await rateLimit.hit({
+      maxAttempts: MAX_MULTI_FACTOR_CHALLENGE_ATTEMPTS,
+      decaySeconds: bindings.config.multiFactor.challengeTtl,
+    })
+  } catch (error) {
+    await challengeSession.flash(state.sessionId, leaseKey, true)
+    throw error
+  }
+  const attempts = rateLimitResult.snapshot?.attempts
+  if (typeof attempts !== 'number' || !Number.isSafeInteger(attempts) || attempts < 1) {
+    await challengeSession.flash(state.sessionId, leaseKey, true)
+    throwAuthError('multi_factor_runtime_unconfigured', 'Multi-factor authentication requires an atomic security rate-limit store.')
+  }
+  if (rateLimitResult.limited) {
+    await invalidateMultiFactorChallenge(guardName, state.sessionId, bindings)
+    throwAuthError('multi_factor_code_invalid', 'The multi-factor authentication code is invalid.')
+  }
+  try {
+    if (method === 'totp') await verifyCredentialTotp(credential, code)
+    else await verifyCredentialRecovery(credential, code)
+  } catch (error) {
+    if (isAuthError(error) && error.code === 'multi_factor_code_invalid') {
+      if (attempts >= MAX_MULTI_FACTOR_CHALLENGE_ATTEMPTS) {
+        await invalidateMultiFactorChallenge(guardName, state.sessionId, bindings)
+      } else {
+        await challengeSession.flash(state.sessionId, leaseKey, true)
+      }
+    } else {
+      await challengeSession.flash(state.sessionId, leaseKey, true)
+    }
+    throw error
+  }
+  try {
+    await rateLimit.clear()
+  } catch (error) {
+    console.warn('[@holo-js/auth] Failed to clear a multi-factor rate limit after successful verification.', error)
+  }
+  try {
+    return await establishSessionForUser(state.payload.user, {
+      guard: guardName,
+      provider: state.payload.provider,
+      preserveRemember: true,
+      payload: toSessionPayload(guardName, state.payload.provider, state.payload.user),
+    })
+  } catch (error) {
+    try {
+      await challengeSession.flash(state.sessionId, leaseKey, true)
+    } catch (restoreError) {
+      const currentSessionId = bindings.context.getSessionId(guardName) ?? state.sessionId
+      try {
+        await invalidateMultiFactorChallenge(guardName, currentSessionId, bindings)
+      } catch (invalidationError) {
+        throw new AggregateError(
+          [error, restoreError, invalidationError],
+          'Failed to recover a multi-factor challenge after session establishment failed.',
+        )
+      }
+    }
+    throw error
+  }
+}
+
+function recoveryResult(codes: readonly string[]): AuthMultiFactorRecoveryCodes {
+  return Object.freeze({ recoveryCodes: Object.freeze([...codes]) })
+}
+
+function requireRecentMultiFactorAuthentication(state: MultiFactorAuthenticatedState): void {
+  const reauthenticationWindowMs = getRuntimeBindings().config.multiFactor.enrollmentTtl * 1000
+  if (!(Date.parse(state.payload.authenticatedAt) > Date.now() - reauthenticationWindowMs)) {
+    throwAuthError('multi_factor_reauthentication_required', 'Recent authentication is required to enroll multi-factor authentication.')
+  }
+}
+
+function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
+  return Object.freeze({
+    async status() {
+      const state = await authenticatedMultiFactorState(guardName)
+      const credential = await ensureMultiFactorStore().find(state.payload.provider, state.payload.userId)
+      return Object.freeze({
+        enabled: credential !== null,
+        recoveryCodesRemaining: credential?.recoveryCodeHashes.length ?? 0,
+      })
+    },
+    async beginEnrollment(): Promise<AuthMultiFactorEnrollment> {
+      const state = await authenticatedMultiFactorState(guardName)
+      requireRecentMultiFactorAuthentication(state)
+      const store = ensureMultiFactorStore()
+      if (await store.find(state.payload.provider, state.payload.userId)) throwAuthError('multi_factor_already_enabled', 'Multi-factor authentication is already enabled.')
+      const bindings = getRuntimeBindings()
+      const secret = createMultiFactorSecret()
+      const expiresAt = new Date(Date.now() + bindings.config.multiFactor.enrollmentTtl * 1000)
+      const encrypted = encryptMultiFactorValue(JSON.stringify({ expiresAt: expiresAt.toISOString(), secret }), multiFactorEncryptionKey())
+      await writeEnrollment(state, guardName, encrypted)
+      const account = typeof state.payload.user.email === 'string' ? state.payload.user.email : String(state.payload.userId)
+      return Object.freeze({
+        expiresAt,
+        manualKey: secret,
+        otpauthUri: multiFactorOtpAuthUri(bindings.config.multiFactor.issuer, account, secret),
+      })
+    },
+    async confirmEnrollment(input: AuthMultiFactorCodeInput) {
+      const state = await authenticatedMultiFactorState(guardName)
+      const encrypted = enrollmentData(state.record)[guardName]
+      if (!encrypted) throwAuthError('multi_factor_enrollment_missing', 'No multi-factor enrollment is pending.')
+      let pending: { readonly expiresAt: string, readonly secret: string }
+      try {
+        pending = JSON.parse(decryptMultiFactorValue(encrypted, multiFactorEncryptionKey())) as typeof pending
+      } catch {
+        throwAuthError('multi_factor_enrollment_missing', 'No multi-factor enrollment is pending.')
+      }
+      if (new Date(pending.expiresAt).getTime() <= Date.now()) {
+        await writeEnrollment(state, guardName)
+        throwAuthError('multi_factor_enrollment_expired', 'The multi-factor enrollment has expired.')
+      }
+      const counters = matchingTotpCounters(pending.secret, input.code.trim(), getRuntimeBindings().config.multiFactor.allowedDriftSteps)
+      const counter = counters[0]
+      if (typeof counter !== 'number') throwAuthError('multi_factor_code_invalid', 'The multi-factor authentication code is invalid.')
+      const recoveryCodes = createMultiFactorRecoveryCodes(getRuntimeBindings().config.multiFactor.recoveryCodes)
+      const now = new Date()
+      const store = ensureMultiFactorStore()
+      try {
+        await store.save(Object.freeze({
+          provider: state.payload.provider,
+          userId: state.payload.userId,
+          encryptedSecret: encryptMultiFactorValue(pending.secret, multiFactorEncryptionKey()),
+          recoveryCodeHashes: Object.freeze(recoveryCodes.map(hashMultiFactorRecoveryCode)),
+          lastUsedCounter: counter,
+          enabledAt: now,
+          updatedAt: now,
+        }))
+      } catch (error) {
+        if (await store.find(state.payload.provider, state.payload.userId)) {
+          throwAuthError('multi_factor_already_enabled', 'Multi-factor authentication is already enabled.', { cause: error })
+        }
+        throw error
+      }
+      try {
+        await writeEnrollment(state, guardName)
+      } catch (error) {
+        console.warn('[@holo-js/auth] Failed to clear a completed multi-factor enrollment from the session.', error)
+      }
+      return recoveryResult(recoveryCodes)
+    },
+    challenge(input: AuthMultiFactorCodeInput) {
+      return completeMultiFactorChallenge(guardName, 'totp', input.code)
+    },
+    recover(input: AuthMultiFactorCodeInput) {
+      return completeMultiFactorChallenge(guardName, 'recovery', input.code)
+    },
+    async disable(input: AuthMultiFactorVerificationInput) {
+      const state = await authenticatedMultiFactorState(guardName)
+      const credential = await credentialForPayload(state.payload)
+      await verifyCredentialWithRateLimit(credential, input)
+      await ensureMultiFactorStore().delete(credential.provider, credential.userId)
+    },
+    async regenerateRecoveryCodes(input: AuthMultiFactorVerificationInput) {
+      const state = await authenticatedMultiFactorState(guardName)
+      const credential = await credentialForPayload(state.payload)
+      const verification = await verifyCredentialWithRateLimit(credential, input)
+      const recoveryCodes = createMultiFactorRecoveryCodes(getRuntimeBindings().config.multiFactor.recoveryCodes)
+      const replaced = await ensureMultiFactorStore().replaceRecoveryCodes(
+        credential.provider,
+        credential.userId,
+        recoveryCodes.map(hashMultiFactorRecoveryCode),
+        new Date(),
+        verification,
+      )
+      if (!replaced) throwAuthError('multi_factor_code_invalid', 'The multi-factor authentication code is invalid.')
+      return recoveryResult(recoveryCodes)
+    },
+  })
 }
 
 async function impersonateForGuard(
@@ -1224,8 +1610,9 @@ async function impersonateForGuard(
   options: AuthImpersonationOptions = {},
 ): Promise<AuthEstablishedSession> {
   const actorGuard = options.actorGuard ?? guardName
+  const actor = await resolveUserFromGuard(actorGuard)
   const actorState = await readGuardSessionState(actorGuard)
-  if (!actorState) {
+  if (!actor || !actorState) {
     throwAuthError(
       'impersonation_actor_required',
       `Impersonation for guard "${guardName}" requires an authenticated actor on guard "${actorGuard}".`,
@@ -1505,6 +1892,22 @@ function findProviderNameForUser(user: unknown): string {
   )
 }
 
+async function rotateSessionWithData(
+  bindings: RuntimeBindings,
+  session: AuthSessionRecord,
+  data: Readonly<Record<string, unknown>>,
+): Promise<AuthSessionRecord> {
+  if (!bindings.session.rotate) {
+    throw new Error('[@holo-js/auth] Existing auth sessions require state-preserving session rotation.')
+  }
+  const rotated = await bindings.session.rotate(session.id, { store: session.store })
+  return bindings.session.create({
+    id: rotated.id,
+    store: rotated.store,
+    data,
+  })
+}
+
 async function establishSessionForUser(
   user: SerializedAuthUser,
   options: {
@@ -1520,9 +1923,6 @@ async function establishSessionForUser(
     .filter(([, guard]) => guard.driver === 'session')
     .map(([name]) => name)
   const currentGuardSessionId = bindings.context.getSessionId(options.guard)
-  const sharedGuardNames = currentGuardSessionId
-    ? sessionGuardNames.filter(name => bindings.context.getSessionId(name) === currentGuardSessionId)
-    : []
   const sharedSessionId = currentGuardSessionId
     ?? sessionGuardNames
       .filter(name => name !== options.guard)
@@ -1532,10 +1932,13 @@ async function establishSessionForUser(
     ? await bindings.session.read(sharedSessionId)
     : null
   const existingPayloads = readSessionPayloads(existingSession) ?? {}
-  const rotateCurrentGuardSession = !!(
-    currentGuardSessionId
-    && existingPayloads[options.guard]
-  )
+  const rotateExistingSession = existingSession !== null
+  const sharedGuardNames = existingSession
+    ? sessionGuardNames.filter(name => (
+        name in existingPayloads
+        || bindings.context.getSessionId(name) === existingSession.id
+      ))
+    : []
   const sessionPayload = options.payload
     ?? toSessionPayload(options.guard, options.provider, user)
   const sessionPayloads = {
@@ -1543,13 +1946,14 @@ async function establishSessionForUser(
     [options.guard]: sessionPayload,
   }
   const nextSessionData = writeSessionPayloads(existingSession?.data ?? {}, sessionPayloads)
-  const preserveRememberSession = !!(
-    rotateCurrentGuardSession
+  const preserveRememberSession = Boolean(
+    rotateExistingSession
+    && existingPayloads[options.guard]
     && existingSession?.rememberTokenHash
     && options.preserveRemember
     && !options.remember
   )
-  const shouldClearRememberCookie = !!(
+  const shouldClearRememberCookie = Boolean(
     !options.remember
     && !preserveRememberSession
     && (
@@ -1557,18 +1961,11 @@ async function establishSessionForUser(
       || bindings.context.getRememberToken?.(options.guard)
     )
   )
-  const session = rotateCurrentGuardSession
-    ? await bindings.session.create({
-      data: nextSessionData,
-    })
-    : existingSession
-      ? await renewExistingSession(bindings, existingSession, nextSessionData)
-      : await bindings.session.create({
-        data: nextSessionData,
-      })
+  const session = existingSession
+    ? await rotateSessionWithData(bindings, existingSession, nextSessionData)
+    : await bindings.session.create({ data: nextSessionData })
 
-  if (rotateCurrentGuardSession && currentGuardSessionId && currentGuardSessionId !== session.id) {
-    await bindings.session.invalidate(currentGuardSessionId)
+  if (existingSession) {
     for (const guardName of sharedGuardNames) {
       bindings.context.setSessionId(guardName, session.id)
     }
@@ -2011,6 +2408,39 @@ function createTokenFacade(): AuthTokenFacade {
   })
 }
 
+async function activeSessionIdForGuard(guardName: string): Promise<string | undefined> {
+  const bindings = getRuntimeBindings()
+  if (getGuardConfig(guardName).driver !== 'session') return undefined
+  if (!await resolveUserFromGuard(guardName)) return undefined
+  return bindings.context.getSessionId(guardName)
+}
+
+async function flashForGuard(guardName: string, key: string, value: unknown): Promise<void> {
+  const sessionId = await activeSessionIdForGuard(guardName)
+  if (!sessionId) return
+  const flash = getRuntimeBindings().session.flash
+  if (!flash) throw new Error('[@holo-js/auth] The configured session runtime does not support atomic flash operations.')
+  await flash(sessionId, key, value)
+}
+
+async function takeForGuard<TValue = unknown>(guardName: string, key: string): Promise<TValue | undefined> {
+  const sessionId = await activeSessionIdForGuard(guardName)
+  if (!sessionId) return undefined
+  const take = getRuntimeBindings().session.take
+  if (!take) throw new Error('[@holo-js/auth] The configured session runtime does not support atomic flash operations.')
+  return take<TValue>(sessionId, key)
+}
+
+async function findUserByIdForGuard(
+  guardName: string,
+  userId: string | number,
+): Promise<AuthenticatedAuthUser | null> {
+  const guard = getGuardConfig(guardName)
+  const { adapter } = getProviderAdapter(guard.provider)
+  const found = await adapter.findById(userId)
+  return found ? serializeUser(adapter, found, guard.provider) : null
+}
+
 function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthTokenGuardFacade {
   const guard = getGuardConfig(guardName)
   const base = {
@@ -2022,6 +2452,9 @@ function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthToke
     },
     refreshUser() {
       return refreshUserForGuard(guardName)
+    },
+    async findUserById(userId: string | number) {
+      return findUserByIdForGuard(guardName, userId)
     },
     provider() {
       return providerForGuard(guardName)
@@ -2059,6 +2492,13 @@ function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthToke
 
   return Object.freeze({
     ...base,
+    multiFactor: createMultiFactorFacade(guardName),
+    flash(key: string, value: unknown) {
+      return flashForGuard(guardName, key, value)
+    },
+    take<TValue = unknown>(key: string) {
+      return takeForGuard<TValue>(guardName, key)
+    },
     loginUsing(user: unknown, options?: AuthSessionLoginOptions) {
       return loginUsingForGuard(guardName, user, options)
     },
@@ -2102,6 +2542,8 @@ export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
     tokens: bindings.tokens,
     emailVerificationTokens: bindings.emailVerificationTokens,
     passwordResetTokens: bindings.passwordResetTokens,
+    multiFactor: bindings.multiFactor,
+    multiFactorEncryptionKey: bindings.multiFactorEncryptionKey,
     delivery: bindings.delivery ?? createDefaultDeliveryHook(),
     context: bindings.context ?? createMemoryAuthContext(),
     passwordHasher: bindings.passwordHasher ?? createDefaultPasswordHasher(),
@@ -2113,8 +2555,10 @@ export function getAuthRuntime(): AuthRuntimeFacade {
   const getDefaultGuardName = () => getRuntimeBindings().config.defaults.guard
   const tokens = createTokenFacade()
   const verification = createEmailVerificationFacade()
+  const multiFactor = createMultiFactorFacade(getDefaultGuardName())
 
   const facade: AuthFacade = {
+    multiFactor,
     check() {
       return checkForGuard(getDefaultGuardName())
     },
@@ -2124,6 +2568,9 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     refreshUser() {
       return refreshUserForGuard(getDefaultGuardName())
     },
+    findUserById(userId: string | number) {
+      return findUserByIdForGuard(getDefaultGuardName(), userId)
+    },
     provider() {
       return providerForGuard(getDefaultGuardName())
     },
@@ -2132,6 +2579,12 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     },
     currentAccessToken() {
       return resolveCurrentAccessTokenForGuard(getDefaultGuardName())
+    },
+    flash(key: string, value: unknown) {
+      return flashForGuard(getDefaultGuardName(), key, value)
+    },
+    take<TValue = unknown>(key: string) {
+      return takeForGuard<TValue>(getDefaultGuardName(), key)
     },
     async login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
       return unwrapExpectedAuthResult(await captureExpectedAuthResult(
@@ -2313,6 +2766,7 @@ export const authRuntimeInternals = {
   isResponseInterrupt: isAuthResponseInterrupt,
   jwt: authJwtInternals,
   normalizeRequestInput,
+  multiFactor: multiFactorInternals,
   parsePlainTextToken,
   parseSetCookieDefinition,
   readSessionPayload,

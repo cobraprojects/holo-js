@@ -1,5 +1,12 @@
-import { describe, it } from 'vitest'
-import type { HoloAdapterProjectAccessors, HoloQueueRuntimeBinding } from '../src'
+import { describe, expectTypeOf, it } from 'vitest'
+import {
+  createHoloProjectAccessors,
+  type HoloAdapterProject,
+  type HoloAdapterProjectAccessors,
+  type HoloAuthRuntimeBinding,
+  type HoloQueueRuntimeBinding,
+} from '../src'
+import type { getAuthRuntime } from '@holo-js/auth'
 
 type CustomConfig = {
   services: {
@@ -40,6 +47,26 @@ describe('@holo-js/core adapter typing', () => {
     void secret
   })
 
+  it('infers custom config paths from the project resolver', () => {
+    const resolveProject = async (): Promise<HoloAdapterProject<CustomConfig>> => ({
+      runtime: {},
+    } as HoloAdapterProject<CustomConfig>)
+    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
+
+    const readServices = (): Promise<CustomConfig['services']> => accessors.useConfig('services')
+    const readNestedSecret = (): Promise<string> => accessors.useConfig('services.mailgun.secret')
+    const readSecret = (): Promise<string> => accessors.config('services.mailgun.secret')
+    const readInvalidPath = () => {
+      // @ts-expect-error invalid config paths must be rejected without consumer type declarations
+      return accessors.config('services.invalid')
+    }
+
+    expectTypeOf(readServices).returns.toEqualTypeOf<Promise<CustomConfig['services']>>()
+    expectTypeOf(readNestedSecret).returns.toEqualTypeOf<Promise<string>>()
+    expectTypeOf(readSecret).returns.toEqualTypeOf<Promise<string>>()
+    void readInvalidPath
+  })
+
   it('preserves a typed queue driver surface on the public runtime binding', () => {
     type DriverValue = HoloQueueRuntimeBinding['drivers'] extends ReadonlyMap<string, infer TResult>
       ? TResult
@@ -54,5 +81,9 @@ describe('@holo-js/core adapter typing', () => {
     void asyncMode
     void name
     void driver
+  })
+
+  it('preserves the complete auth facade on the public runtime binding', () => {
+    expectTypeOf<HoloAuthRuntimeBinding>().toEqualTypeOf<ReturnType<typeof getAuthRuntime>>()
   })
 })

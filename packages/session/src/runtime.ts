@@ -12,6 +12,11 @@ import type {
   TouchSessionOptions,
 } from './contracts'
 
+const FLASH_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/
+const FLASH_VALUE_MAX_BYTES = 65_536
+const FLASH_VALUE_MAX_DEPTH = 32
+const UNSAFE_FLASH_KEYS = new Set(['constructor', 'prototype'])
+
 function getSessionRuntimeState(): {
   bindings?: SessionRuntimeBindings
 } {
@@ -73,6 +78,62 @@ function normalizeSessionData(input: CreateSessionInput): Readonly<Record<string
   return Object.freeze({
     ...(input.value ?? input.data ?? {}),
   })
+}
+
+function normalizeFlashKey(key: string): string {
+  if (!FLASH_KEY_PATTERN.test(key) || UNSAFE_FLASH_KEYS.has(key)) {
+    throw new Error('[@holo-js/session] Flash keys must be 1-128 safe alphanumeric, dot, colon, dash, or underscore characters and start with a letter.')
+  }
+  return key
+}
+
+function normalizeFlashValue(value: unknown): unknown {
+  const ancestors = new Set<object>()
+  const normalize = (candidate: unknown, depth = 0): unknown => {
+    if (candidate === null || typeof candidate === 'boolean' || typeof candidate === 'string') return candidate
+    if (typeof candidate === 'number') {
+      if (!Number.isFinite(candidate)) throw new Error('[@holo-js/session] Flash values require finite JSON numbers.')
+      return candidate
+    }
+    if (typeof candidate !== 'object') throw new Error('[@holo-js/session] Flash values must contain only JSON-safe values.')
+    if (ancestors.has(candidate)) throw new Error('[@holo-js/session] Flash values cannot contain circular references.')
+    if (depth >= FLASH_VALUE_MAX_DEPTH) throw new Error('[@holo-js/session] Flash values cannot exceed 32 levels of nesting.')
+    const prototype = Object.getPrototypeOf(candidate)
+    if (!Array.isArray(candidate) && prototype !== Object.prototype && prototype !== null) {
+      throw new Error('[@holo-js/session] Flash values cannot contain class instances.')
+    }
+    ancestors.add(candidate)
+    try {
+      if (Array.isArray(candidate)) {
+        const normalized: unknown[] = []
+        for (let index = 0; index < candidate.length; index += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index))
+          if (!descriptor) throw new Error('[@holo-js/session] Flash values cannot contain sparse arrays.')
+          if (!('value' in descriptor)) throw new Error('[@holo-js/session] Flash values cannot contain accessors.')
+          normalized.push(normalize(descriptor.value, depth + 1))
+        }
+        return normalized
+      }
+
+      const entries: Array<readonly [string, unknown]> = []
+      for (const key of Reflect.ownKeys(candidate)) {
+        if (typeof key !== 'string') throw new Error('[@holo-js/session] Flash values must contain only JSON-safe values.')
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, key)
+        if (!descriptor?.enumerable) continue
+        if (!('value' in descriptor)) throw new Error('[@holo-js/session] Flash values cannot contain accessors.')
+        entries.push([key, normalize(descriptor.value, depth + 1)])
+      }
+      return Object.fromEntries(entries)
+    } finally {
+      ancestors.delete(candidate)
+    }
+  }
+  const encoded = JSON.stringify(normalize(value))
+  if (encoded === undefined) throw new Error('[@holo-js/session] Flash values must contain only JSON-safe values.')
+  if (new TextEncoder().encode(encoded).byteLength > FLASH_VALUE_MAX_BYTES) {
+    throw new Error('[@holo-js/session] Flash values cannot exceed 64 KiB.')
+  }
+  return JSON.parse(encoded) as unknown
 }
 
 function createRememberSecret(): string {
@@ -228,7 +289,7 @@ export function parseCookieHeader(header: string | null | undefined): Readonly<R
 
       return [key, value] as const
     })
-    .filter((entry): entry is readonly [string, string] => !!entry)
+    .filter((entry): entry is readonly [string, string] => Boolean(entry))
 
   return Object.freeze(Object.fromEntries(entries))
 }
@@ -263,17 +324,15 @@ async function locateRecord(
   sessionId: string,
 ): Promise<{
   readonly record: SessionRecord
-  readonly storeName: string
   readonly store: SessionStore
 } | null> {
   const bindings = getSessionRuntimeBindings()
 
-  for (const [storeName, store] of Object.entries(bindings.stores)) {
+  for (const store of Object.values(bindings.stores)) {
     const record = await readRecordFromStore(sessionId, store)
     if (record) {
       return {
         record,
-        storeName,
         store,
       }
     }
@@ -349,16 +408,47 @@ export async function rotateSession(sessionId: string, options: RotateSessionOpt
     id: options.newId?.trim() || createSessionId(),
     store: name,
   })
-  await store.write(rotated)
-  if (located.storeName !== name || rotated.id !== sessionId) {
+  if (located.store !== store) {
+    if (located.store.flash || located.store.take) {
+      throw new Error('[@holo-js/session] Sessions with private flash state cannot be rotated between stores.')
+    }
+    await store.write(rotated)
     await located.store.delete(sessionId)
+    return rotated
   }
+  if (rotated.id !== sessionId) {
+    if (!store.rotate) {
+      if (store.flash || store.take) {
+        throw new Error(`[@holo-js/session] Session store "${name}" does not support private-state-preserving rotation.`)
+      }
+      await store.write(rotated)
+      await store.delete(sessionId)
+      return rotated
+    }
+    await store.rotate(sessionId, rotated)
+    return rotated
+  }
+  await store.write(rotated)
   return rotated
 }
 
 export async function invalidateSession(sessionId: string, options?: ReadSessionOptions): Promise<void> {
   const { store } = getStore(options?.store)
   await store.delete(sessionId)
+}
+
+export async function flashSession(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void> {
+  const { name, store } = getStore(options?.store)
+  if (!store.flash) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic flash operations.`)
+  await store.flash(sessionId, normalizeFlashKey(key), normalizeFlashValue(value))
+}
+
+export async function takeSession<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined> {
+  const { name, store } = getStore(options?.store)
+  if (!store.take) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic flash operations.`)
+  const result = await store.take(sessionId, normalizeFlashKey(key))
+  if (!result.found) return undefined
+  return normalizeFlashValue(result.value) as TValue
 }
 
 export async function issueRememberMeToken(sessionId: string, options?: RememberTokenOptions): Promise<string> {
@@ -453,6 +543,8 @@ export function getSessionRuntime(): SessionRuntimeFacade {
     touch: touchSession,
     issueRememberMeToken,
     consumeRememberMeToken,
+    flash: flashSession,
+    take: takeSession,
     cookie,
     sessionCookie,
     rememberMeCookie,
@@ -469,5 +561,7 @@ export const sessionRuntimeInternals = {
   getSessionRuntimeBindings,
   hashRememberToken,
   isExpired,
+  normalizeFlashKey,
+  normalizeFlashValue,
   normalizeCookieOptions,
 }

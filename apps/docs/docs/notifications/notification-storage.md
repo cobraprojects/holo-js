@@ -16,36 +16,60 @@ When using the database channel, notifications are automatically stored in a `no
 Holo-JS provides helper functions for working with stored notifications:
 
 ```ts
-import { 
+import {
   deleteNotifications,
-  listNotifications, 
+  listNotifications,
   markNotificationsAsRead,
   markNotificationsAsUnread,
   unreadNotifications,
 } from '@holo-js/notifications'
 
-// Get all notifications for a user
-const notifications = await listNotifications({ id: 'user-1', type: 'users' })
+const recipient = { id: 'user-1', type: 'users' }
 
-// Get only unread notifications
-const unread = await unreadNotifications({ id: 'user-1', type: 'users' })
+const notifications = await listNotifications(
+  { recipient },
+  { limit: 20, offset: 0 },
+)
 
-// Mark notifications as read
-await markNotificationsAsRead(['notif_1', 'notif_2', 'notif_3'])
+const unread = await unreadNotifications(
+  { recipient },
+  { limit: 20, offset: 0 },
+)
 
-// Mark notifications as unread
-await markNotificationsAsUnread(['notif_4', 'notif_5'])
-
-// Delete notifications
-await deleteNotifications(['notif_6', 'notif_7'])
+await markNotificationsAsRead({ recipient }, ['notif_1', 'notif_2', 'notif_3'])
+await markNotificationsAsUnread({ recipient }, ['notif_4', 'notif_5'])
+await deleteNotifications({ recipient }, ['notif_6', 'notif_7'])
 ```
+
+The first argument selects the recipient's notifications. The second argument controls pagination. Both list helpers
+return `records`, `total`, and `unread`.
+
+Add `type` or `dataMatches` only when the page needs narrower results:
+
+```ts
+const paidInvoices = await listNotifications(
+  {
+    recipient,
+    type: 'invoice-paid',
+    dataMatches: [{ path: ['accountId'], value: 'account-1' }],
+  },
+  { limit: 20, offset: 0 },
+)
+```
+
+Data-match paths must be defined by trusted server code. Never accept paths, recipient types, notification types, or
+scope values directly from a browser request.
 
 ## Marking as Read/Unread
 
 ```ts
-// Mark specific notifications as read
-await markNotificationsAsRead(['notif_1', 'notif_2', 'notif_3'])
+await markNotificationsAsRead(
+  { recipient },
+  ['notif_1', 'notif_2', 'notif_3'],
+)
 
-// Mark specific notifications as unread
-await markNotificationsAsUnread(['notif_4', 'notif_5'])
+await markNotificationsAsUnread(
+  { recipient },
+  ['notif_4', 'notif_5'],
+)
 ```

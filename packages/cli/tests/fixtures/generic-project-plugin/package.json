@@ -1,0 +1,13 @@
+{
+  "name": "holo-generic-project-fixture",
+  "version": "1.0.0",
+  "type": "module",
+  "files": [
+    "commands.mjs",
+    "plugin.mjs",
+    "prepare.mjs"
+  ],
+  "holo": {
+    "plugin": "./plugin.mjs"
+  }
+}

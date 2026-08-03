@@ -2,7 +2,10 @@ export type OptionalSecurityRateLimitStore = {
   hit(
     key: string,
     options: { readonly maxAttempts: number, readonly decaySeconds: number },
-  ): Promise<{ readonly limited: boolean }>
+  ): Promise<{
+    readonly limited: boolean
+    readonly snapshot?: { readonly attempts: number }
+  }>
   clear?(key: string): Promise<boolean>
 }
 

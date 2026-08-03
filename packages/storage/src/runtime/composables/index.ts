@@ -20,6 +20,19 @@ export interface StorageBackend {
   hasItem(key: string): Promise<boolean>
   removeItem(key: string): Promise<void>
   getKeys(base?: string): Promise<string[]>
+  getKeysPage?(
+    base: string | undefined,
+    request: Required<StorageFileListRequest>,
+  ): Promise<StorageFileListPage>
+  getItemStream?(
+    key: string,
+    options: StorageStreamReadOptions,
+  ): Promise<StorageByteStream | null>
+  setItemStream?(
+    key: string,
+    source: StorageByteStream,
+    options: Required<StorageStreamWriteOptions>,
+  ): Promise<void>
   getMeta?<T = unknown>(key: string): Promise<T | null>
   setMeta?(key: string, value: unknown): Promise<void>
   removeMeta?(key: string): Promise<void>
@@ -34,9 +47,50 @@ export type StorageContent
     | Buffer
     | Blob
 
+export type StorageByteStream = AsyncIterable<Uint8Array>
+
+export interface StorageStreamReadOptions {
+  readonly chunkBytes?: number
+}
+
+export interface StorageStreamWriteOptions {
+  readonly overwrite?: boolean
+}
+
+export class StorageStreamingUnsupportedError extends Error {
+  constructor() {
+    super('[Holo Storage] The configured storage backend does not support bounded streaming.')
+    this.name = 'StorageStreamingUnsupportedError'
+  }
+}
+
 export interface TemporaryUrlOptions {
   expiresAt?: Date | number | string
   expiresIn?: number
+}
+
+export interface StorageFileListRequest {
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
+export interface StorageFileListPage {
+  readonly nextCursor: string | null
+  readonly paths: readonly string[]
+}
+
+type StoragePaginationCursor = {
+  readonly continuation: string
+  readonly directory: string
+  readonly disk: string
+  readonly version: 1
+}
+
+export class StoragePaginationError extends Error {
+  constructor() {
+    super('[Holo Storage] File pagination failed.')
+    this.name = 'StoragePaginationError'
+  }
 }
 
 export interface StorageDisk {
@@ -47,13 +101,15 @@ export interface StorageDisk {
   putJson(path: string, value: unknown): Promise<boolean>
   get(path: string): Promise<string | null>
   getBytes(path: string): Promise<Uint8Array | null>
+  readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null>
+  writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean>
   json<T>(path: string): Promise<T | null>
   exists(path: string): Promise<boolean>
   missing(path: string): Promise<boolean>
   delete(path: string | string[]): Promise<boolean>
   copy(from: string, to: string): Promise<boolean>
   move(from: string, to: string): Promise<boolean>
-  files(directory?: string): Promise<string[]>
+  listFiles(directory?: string, request?: StorageFileListRequest): Promise<StorageFileListPage>
   path(path: string): string
   url(path: string): string
   temporaryUrl(path: string, options?: TemporaryUrlOptions): string
@@ -130,6 +186,69 @@ function normalizeKey(input: string): string {
 function normalizeDirectory(input = ''): string {
   const normalized = normalizeKey(input)
   return normalized ? `${normalized}:` : ''
+}
+
+function normalizeFileListRequest(request: StorageFileListRequest = {}): Required<StorageFileListRequest> {
+  const limit = request.limit ?? 100
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new StoragePaginationError()
+  const cursor = request.cursor ?? null
+  if (cursor !== null && (typeof cursor !== 'string' || !cursor || Buffer.byteLength(cursor, 'utf8') > 2048)) {
+    throw new StoragePaginationError()
+  }
+
+  return Object.freeze({ cursor, limit })
+}
+
+function encodePaginationCursor(cursor: StoragePaginationCursor): string {
+  const encoded = Buffer.from(JSON.stringify(cursor)).toString('base64url')
+  if (Buffer.byteLength(encoded, 'utf8') > 2048) throw new StoragePaginationError()
+  return encoded
+}
+
+function decodePaginationCursor(value: string | null, disk: string, directory: string): string | null {
+  if (value === null) return null
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<StoragePaginationCursor>
+    if (parsed.version !== 1 || parsed.disk !== disk || parsed.directory !== directory || typeof parsed.continuation !== 'string' || !parsed.continuation) {
+      throw new StoragePaginationError()
+    }
+    return parsed.continuation
+  } catch (error) {
+    if (error instanceof StoragePaginationError) throw error
+    throw new StoragePaginationError()
+  }
+}
+
+function normalizeBackendPage(
+  value: StorageFileListPage,
+  directory: string,
+  limit: number,
+  requestCursor: string | null,
+): StorageFileListPage {
+  if (!value || !Array.isArray(value.paths) || (value.nextCursor !== null && typeof value.nextCursor !== 'string')) {
+    throw new StoragePaginationError()
+  }
+  if (value.paths.length > limit || (value.nextCursor !== null && (!value.nextCursor || value.nextCursor === requestCursor))) {
+    throw new StoragePaginationError()
+  }
+
+  const normalizedDirectory = normalizeRelativePath(directory)
+  const prefix = normalizedDirectory ? `${normalizedDirectory}/` : ''
+  const paths = value.paths.filter(path => !path.endsWith('$')).map(keyToPath)
+  const seen = new Set<string>()
+  for (const path of paths) {
+    const hasControlCharacter = Array.from(path).some(character => {
+      const code = character.charCodeAt(0)
+      return code <= 31 || code === 127
+    })
+    if (!path || hasControlCharacter || path.split('/').includes('..') || (prefix && !path.startsWith(prefix)) || seen.has(path)) {
+      throw new StoragePaginationError()
+    }
+    seen.add(path)
+  }
+
+  return Object.freeze({ nextCursor: value.nextCursor, paths: Object.freeze(paths) })
 }
 
 function keyToPath(key: string): string {
@@ -303,6 +422,14 @@ function resolveDiskConfig(diskName?: string): RuntimeDiskConfig {
 
 function resolveBackend(diskName: string): StorageBackend {
   return resolveStorageRuntimeBindings().getStorage(`holo:${diskName}`)
+}
+
+function normalizeStreamChunkBytes(chunkBytes = 64 * 1024): number {
+  if (!Number.isInteger(chunkBytes) || chunkBytes < 4 * 1024 || chunkBytes > 1024 * 1024) {
+    throw new TypeError('[Holo Storage] Stream chunkBytes must be an integer from 4096 through 1048576.')
+  }
+
+  return chunkBytes
 }
 
 function resolvePublicLocalBaseUrl(
@@ -512,6 +639,34 @@ function createDisk(diskName?: string): StorageInstance {
       return toUint8Array(await backend.getItemRaw(normalizeKey(path)))
     },
 
+    async readStream(path, options = {}) {
+      if (!backend.getItemStream) {
+        throw new StorageStreamingUnsupportedError()
+      }
+
+      return backend.getItemStream(normalizeKey(path), {
+        chunkBytes: normalizeStreamChunkBytes(options.chunkBytes),
+      })
+    },
+
+    async writeStream(path, source, options = {}) {
+      if (!backend.setItemStream) {
+        throw new StorageStreamingUnsupportedError()
+      }
+
+      try {
+        await backend.setItemStream(normalizeKey(path), source, {
+          overwrite: options.overwrite ?? true,
+        })
+        return true
+      } catch (error) {
+        if (error instanceof Error && error.name === 'StorageDestinationExistsError') {
+          return false
+        }
+        throw error
+      }
+    },
+
     async json<T>(path: string) {
       const value = await this.get(path)
       return value ? JSON.parse(value) as T : null
@@ -557,11 +712,32 @@ function createDisk(diskName?: string): StorageInstance {
       return true
     },
 
-    async files(directory = '') {
-      const keys = await backend.getKeys(normalizeDirectory(directory))
-      return keys
-        .filter(key => !key.endsWith('$'))
-        .map(keyToPath)
+    async listFiles(directory = '', request = {}) {
+      const normalizedDirectory = normalizeRelativePath(directory)
+      normalizeDirectory(normalizedDirectory)
+      const normalizedRequest = normalizeFileListRequest(request)
+      const continuation = decodePaginationCursor(normalizedRequest.cursor, disk.name, normalizedDirectory)
+      const getKeysPage = backend.getKeysPage?.bind(backend)
+      if (!getKeysPage) throw new StoragePaginationError()
+      const backendPage = await getKeysPage(normalizeDirectory(normalizedDirectory) || undefined, {
+        cursor: continuation,
+        limit: normalizedRequest.limit,
+      }).catch(() => {
+        throw new StoragePaginationError()
+      })
+      const page = normalizeBackendPage(backendPage, normalizedDirectory, normalizedRequest.limit, continuation)
+
+      return Object.freeze({
+        nextCursor: page.nextCursor
+          ? encodePaginationCursor({
+              continuation: page.nextCursor,
+              directory: normalizedDirectory,
+              disk: disk.name,
+              version: 1,
+            })
+          : null,
+        paths: page.paths,
+      })
     },
 
     path(path) {
@@ -617,6 +793,12 @@ export const Storage = {
   getBytes(path: string): Promise<Uint8Array | null> {
     return createDisk().getBytes(path)
   },
+  readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null> {
+    return createDisk().readStream(path, options)
+  },
+  writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean> {
+    return createDisk().writeStream(path, source, options)
+  },
   json<T>(path: string): Promise<T | null> {
     return createDisk().json<T>(path)
   },
@@ -635,8 +817,8 @@ export const Storage = {
   move(from: string, to: string): Promise<boolean> {
     return createDisk().move(from, to)
   },
-  files(directory?: string): Promise<string[]> {
-    return createDisk().files(directory)
+  listFiles(directory?: string, request?: StorageFileListRequest): Promise<StorageFileListPage> {
+    return createDisk().listFiles(directory, request)
   },
   path(path: string): string {
     return createDisk().path(path)

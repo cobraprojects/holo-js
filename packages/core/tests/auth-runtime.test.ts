@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +6,7 @@ import { createSchemaService, DB } from '@holo-js/db'
 import { authRuntimeInternals } from '../../auth/src'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
-import { createHolo, holoRuntimeInternals, initializeHolo, resetHoloRuntime } from '../src'
+import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
@@ -77,6 +77,9 @@ async function createProject(options: {
 } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-auth-'))
   tempDirs.push(root)
+  await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../../auth-social-google'), join(root, 'node_modules/@holo-js/auth-social-google'))
+  await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'server/models'), { recursive: true })
   await writeFile(join(root, 'config/app.ts'), `
@@ -1336,6 +1339,39 @@ export default {
 
         return authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
       }),
+    ])
+
+    expect(await firstCookie).toBe('session-first')
+    expect(await secondCookie).toBe('session-second')
+  })
+
+  it('runs adapter requests against the currently configured auth context', async () => {
+    const root = await createProject({ auth: true })
+    const project = await initializeHoloAdapterProject(root, {
+      authRequest: {
+        getCookie(name) {
+          return `${name}-default`
+        },
+      },
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    const readCookie = () => authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
+    const [firstCookie, secondCookie] = await Promise.all([
+      project.runtime.runWithAuthRequestAccessors({
+        getCookie(name) {
+          return `${name}-first`
+        },
+      }, async () => {
+        await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+        return readCookie()
+      }),
+      project.runtime.runWithAuthRequestAccessors({
+        getCookie(name) {
+          return `${name}-second`
+        },
+      }, readCookie),
     ])
 
     expect(await firstCookie).toBe('session-first')
@@ -2932,6 +2968,7 @@ export default {
 
     const createdSession = await runtime.session?.create({
       data: {
+        __holo_session_flash_v1__: [['application-value', { preserved: true }]],
         guard: 'web',
       },
     }) as SessionRecordLike | undefined
@@ -2939,9 +2976,53 @@ export default {
     expect(await runtime.session?.read(String(createdSession?.id))).toMatchObject({
       id: createdSession?.id,
       data: {
+        __holo_session_flash_v1__: [['application-value', { preserved: true }]],
         guard: 'web',
       },
     })
+    const sessionId = String(createdSession?.id)
+    const beforeFlash = await DB.table('sessions').where('id', sessionId).first<Record<string, unknown>>()
+    await runtime.session?.flash(sessionId, 'panels.notice', { message: 'Saved' })
+    const afterFlash = await DB.table('sessions').where('id', sessionId).first<Record<string, unknown>>()
+    expect(afterFlash?.expires_at).toEqual(beforeFlash?.expires_at)
+    expect(afterFlash?.last_activity_at).toEqual(beforeFlash?.last_activity_at)
+    expect(await runtime.session?.read(sessionId)).toMatchObject({
+      data: {
+        __holo_session_flash_v1__: [['application-value', { preserved: true }]],
+        guard: 'web',
+      },
+    })
+    expect(Object.keys((await runtime.session?.read(sessionId) as { data: Record<string, unknown> }).data)).toEqual([
+      '__holo_session_flash_v1__',
+      'guard',
+    ])
+    await runtime.session?.touch(sessionId)
+    await expect(runtime.session?.take<{ message: string }>(sessionId, 'panels.notice')).resolves.toEqual({ message: 'Saved' })
+    await expect(runtime.session?.take(sessionId, 'panels.notice')).resolves.toBeUndefined()
+
+    await Promise.all(Array.from({ length: 16 }, (_, index) => runtime.session?.flash(sessionId, `panels.concurrent.${index}`, index)))
+    const flashedValues = await Promise.all(Array.from({ length: 16 }, (_, index) => runtime.session?.take<number>(sessionId, `panels.concurrent.${index}`)))
+    expect(flashedValues).toEqual(Array.from({ length: 16 }, (_, index) => index))
+
+    const rotationSession = await runtime.session?.create({ data: { guard: 'web' } }) as SessionRecordLike | undefined
+    const rotationSessionId = String(rotationSession?.id)
+    await runtime.session?.flash(rotationSessionId, 'panels.notice', { message: 'Preserved' })
+    const rotatedSession = await runtime.session?.rotate(rotationSessionId, { newId: 'rotated-database-session' }) as SessionRecordLike | undefined
+    expect(rotatedSession?.id).toBe('rotated-database-session')
+    await expect(runtime.session?.read(rotationSessionId)).resolves.toBeNull()
+    await expect(runtime.session?.take('rotated-database-session', 'panels.notice')).resolves.toEqual({ message: 'Preserved' })
+
+    const beforeInvalidFlash = await DB.table('sessions').where('id', sessionId).first<Record<string, unknown>>()
+    await expect(runtime.session?.flash(sessionId, '__proto__', true)).rejects.toThrow('Flash keys')
+    await expect(runtime.session?.flash(sessionId, 'panels.notice', Number.NaN)).rejects.toThrow('finite JSON numbers')
+    await expect(DB.table('sessions').where('id', sessionId).first<Record<string, unknown>>()).resolves.toEqual(beforeInvalidFlash)
+
+    const expiredSession = await runtime.session?.create({ data: { guard: 'web' } }) as SessionRecordLike | undefined
+    const expiredSessionId = String(expiredSession?.id)
+    await DB.table('sessions').where('id', expiredSessionId).update({ expires_at: new Date(Date.now() - 1).toISOString() })
+    await expect(runtime.session?.flash(expiredSessionId, 'panels.notice', true)).rejects.toThrow('was not found')
+    await expect(runtime.session?.take(expiredSessionId, 'panels.notice')).resolves.toBeUndefined()
+    await expect(DB.table('sessions').where('id', expiredSessionId).first()).resolves.toBeUndefined()
     await runtime.session?.issueRememberMeToken(String(createdSession?.id))
     expect(await runtime.session?.read(String(createdSession?.id))).toMatchObject({
       id: createdSession?.id,
@@ -3397,8 +3478,79 @@ export default {
       table.json('profile').default({})
       table.timestamps()
     })
+    await schema.createTable('auth_multi_factor_credentials', (table) => {
+      table.id()
+      table.string('provider')
+      table.string('user_id')
+      table.string('encrypted_secret')
+      table.json('recovery_code_hashes')
+      table.integer('last_used_counter').nullable()
+      table.timestamp('enabled_at')
+      table.timestamps()
+      table.unique(['provider', 'user_id'], 'auth_mfa_provider_user_unique')
+    })
 
     const stores = holoRuntimeInternals.createCoreAuthStores(runtime.loadedConfig)
+    await stores.multiFactor.save({
+      provider: 'users',
+      userId: 'user-mfa',
+      encryptedSecret: 'encrypted-secret',
+      recoveryCodeHashes: ['hash-1', 'hash-2'],
+      lastUsedCounter: null,
+      enabledAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+    await expect(stores.multiFactor.find('users', 'user-mfa')).resolves.toMatchObject({
+      recoveryCodeHashes: ['hash-1', 'hash-2'],
+      lastUsedCounter: null,
+    })
+    await expect(stores.multiFactor.replaceRecoveryCodes(
+      'users',
+      'user-mfa',
+      ['hash-1', 'hash-2'],
+      new Date('2026-01-01T12:00:00.000Z'),
+      { lastUsedCounter: null, recoveryCodeHashes: ['hash-1', 'hash-2'] },
+    )).resolves.toBe(true)
+    await expect(stores.multiFactor.advanceCounter('users', 'user-mfa', 10)).resolves.toEqual({ lastUsedCounter: 10, recoveryCodeHashes: ['hash-1', 'hash-2'] })
+    await expect(stores.multiFactor.advanceCounter('users', 'user-mfa', 10)).resolves.toBeNull()
+    await expect(stores.multiFactor.consumeRecoveryCode('users', 'user-mfa', 'hash-1')).resolves.toEqual({ lastUsedCounter: 10, recoveryCodeHashes: ['hash-2'] })
+    await expect(stores.multiFactor.consumeRecoveryCode('users', 'user-mfa', 'hash-1')).resolves.toBeNull()
+    await expect(stores.multiFactor.replaceRecoveryCodes(
+      'users',
+      'user-mfa',
+      ['hash-3'],
+      new Date('2026-01-02T00:00:00.000Z'),
+      { lastUsedCounter: 10, recoveryCodeHashes: ['hash-2'] },
+    )).resolves.toBe(true)
+    const nextVerification = await stores.multiFactor.advanceCounter('users', 'user-mfa', 11)
+    await expect(stores.multiFactor.replaceRecoveryCodes(
+      'users',
+      'user-mfa',
+      ['stale-hash'],
+      new Date('2026-01-03T00:00:00.000Z'),
+      { lastUsedCounter: 10, recoveryCodeHashes: ['hash-2'] },
+    )).resolves.toBe(false)
+    expect(nextVerification).toEqual({ lastUsedCounter: 11, recoveryCodeHashes: ['hash-3'] })
+    await expect(stores.multiFactor.replaceRecoveryCodes(
+      'users',
+      'user-mfa',
+      ['hash-4'],
+      new Date('2026-01-04T00:00:00.000Z'),
+      nextVerification!,
+    )).resolves.toBe(true)
+    await expect(stores.multiFactor.find('users', 'user-mfa')).resolves.toMatchObject({
+      recoveryCodeHashes: ['hash-4'],
+      lastUsedCounter: 11,
+    })
+    await stores.multiFactor.delete('users', 'user-mfa')
+    await expect(stores.multiFactor.find('users', 'user-mfa')).resolves.toBeNull()
+    await expect(stores.multiFactor.replaceRecoveryCodes(
+      'users',
+      'user-mfa',
+      ['missing-hash'],
+      new Date('2026-01-05T00:00:00.000Z'),
+      { lastUsedCounter: 11, recoveryCodeHashes: ['hash-4'] },
+    )).resolves.toBe(false)
     await stores.tokens.create({
       id: 'token-1',
       provider: 'users',

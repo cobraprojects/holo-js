@@ -16,12 +16,15 @@ import type * as RuntimeModule from './runtime'
 import type * as SecurityModule from './security'
 
 export type RuntimeExecutor = typeof RuntimeModule.withRuntimeEnvironment
-export type ProjectCommandExecutors = {
+type ProjectDevCommandExecutors = {
   runProjectPrepare?: typeof DevModule.runProjectPrepare
   runProjectDevServer?: typeof DevModule.runProjectDevServer
   runProjectBuild?: typeof DevModule.runProjectBuild
   runProjectStartServer?: typeof DevModule.runProjectStartServer
   runProjectDependencyInstall?: typeof DevModule.runProjectDependencyInstall
+}
+export type ProjectCommandExecutors = ProjectDevCommandExecutors & {
+  installSecurityIntoProject?: typeof ProjectScaffoldModule.installSecurityIntoProject
 }
 export type QueueCommandExecutors = {
   runQueueFailedCommand?: typeof QueueModule.runQueueFailedCommand
@@ -124,7 +127,7 @@ async function resolveExecutor<
   return existing ? existing as NonNullable<TExecutors[TKey]> : await loader()
 }
 
-export async function resolveProjectExecutor<TKey extends keyof ProjectCommandExecutors>(
+export async function resolveProjectExecutor<TKey extends keyof ProjectDevCommandExecutors>(
   executors: ProjectCommandExecutors,
   key: TKey,
 ): Promise<NonNullable<ProjectCommandExecutors[TKey]>> {

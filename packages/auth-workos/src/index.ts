@@ -97,6 +97,7 @@ type SerializedWorkosAuthUser<TUserAttributes extends WorkosUserAttributes = Wor
   WorkosAuthenticatedUser<TUserAttributes>
 
 type WorkosSessionPayload = {
+  readonly authenticatedAt: string
   readonly guard: string
   readonly provider: string
   readonly userId: string | number
@@ -646,6 +647,7 @@ function createWorkosSessionPayload<TUserAttributes extends WorkosUserAttributes
   const user = authenticated.user as SerializedWorkosAuthUser
 
   return Object.freeze({
+    authenticatedAt: new Date().toISOString(),
     guard: authenticated.guard,
     provider: authenticated.authProvider,
     userId: user.id,

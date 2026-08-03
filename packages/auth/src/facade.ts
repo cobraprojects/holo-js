@@ -5,6 +5,9 @@ import type {
   AuthEstablishedSession,
   AuthImpersonationOptions,
   AuthImpersonationState,
+  AuthMultiFactorFacade,
+  AuthMultiFactorCodeInput,
+  AuthMultiFactorVerificationInput,
   AuthLogoutResult,
   AuthPasswordResetInput,
   AuthPasswordResetRequestInput,
@@ -29,6 +32,10 @@ export async function refreshUser(): Promise<AuthenticatedAuthUser | null> {
   return getAuthRuntime().refreshUser()
 }
 
+export async function findUserById(userId: string | number): Promise<AuthenticatedAuthUser | null> {
+  return getAuthRuntime().findUserById(userId)
+}
+
 export async function provider(): Promise<string | null> {
   return getAuthRuntime().provider()
 }
@@ -40,6 +47,24 @@ export async function id(): Promise<string | number | null> {
 export async function currentAccessToken(): Promise<AuthCurrentAccessToken | null> {
   return getAuthRuntime().currentAccessToken()
 }
+
+export async function flash(key: string, value: unknown): Promise<void> {
+  return getAuthRuntime().flash(key, value)
+}
+
+export async function take<TValue = unknown>(key: string): Promise<TValue | undefined> {
+  return getAuthRuntime().take<TValue>(key)
+}
+
+export const multiFactor: AuthMultiFactorFacade = Object.freeze({
+  status: () => getAuthRuntime().multiFactor.status(),
+  beginEnrollment: () => getAuthRuntime().multiFactor.beginEnrollment(),
+  confirmEnrollment: (input: AuthMultiFactorCodeInput) => getAuthRuntime().multiFactor.confirmEnrollment(input),
+  challenge: (input: AuthMultiFactorCodeInput) => getAuthRuntime().multiFactor.challenge(input),
+  recover: (input: AuthMultiFactorCodeInput) => getAuthRuntime().multiFactor.recover(input),
+  disable: (input: AuthMultiFactorVerificationInput) => getAuthRuntime().multiFactor.disable(input),
+  regenerateRecoveryCodes: (input: AuthMultiFactorVerificationInput) => getAuthRuntime().multiFactor.regenerateRecoveryCodes(input),
+})
 
 export async function login<TCredentials extends AuthCredentials>(
   credentials: TCredentials,

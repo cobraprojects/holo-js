@@ -102,6 +102,7 @@ import {
   consumeRememberMeToken,
   cookies,
   createSession,
+  flashSession,
   invalidateSession,
   issueRememberMeToken,
   parseCookieHeader,
@@ -110,6 +111,7 @@ import {
   rotateSession,
   sessionCookie,
   touchSession,
+  takeSession,
 } from '@holo-js/session'
 ```
 
@@ -267,6 +269,39 @@ Use this when:
 ```ts
 const rotated = await rotateSession(sessionId)
 ```
+
+### `flashSession(...)` and `takeSession(...)`
+
+Use flash data for a value that should be available to the next request only, such as a success message after a
+redirect. `takeSession()` returns the value and removes it. It returns `undefined` when the key does not exist.
+
+```ts
+await flashSession(sessionId, 'checkout.completed', {
+  orderId: 'order_123',
+})
+
+const completed = await takeSession<{ orderId: string }>(
+  sessionId,
+  'checkout.completed',
+)
+```
+
+Session-capable auth guards provide the same operation without exposing the session id:
+
+```ts
+import auth from '@holo-js/auth'
+
+await auth.guard('web').flash('profile.updated', {
+  message: 'Profile saved',
+})
+
+const feedback = await auth.guard('web').take<{ message: string }>(
+  'profile.updated',
+)
+```
+
+Use keys of at most 128 characters. Values must be JSON-safe, use only finite numbers, and serialize to no more than
+64 KiB.
 
 ### `invalidateSession(...)`
 

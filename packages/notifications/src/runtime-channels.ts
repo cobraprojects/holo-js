@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   AnonymousNotificationTarget,
   NotificationBroadcastMessage,
@@ -9,6 +9,8 @@ import type {
   NotificationDatabaseRoute,
   NotificationEmailRoute,
   NotificationMailMessage,
+  NotificationPagination,
+  NotificationQuery,
   NotificationRecord,
   NotificationRuntimeBindings,
   NotificationSendContext,
@@ -18,10 +20,11 @@ export type RouteResolver = (notifiable: unknown) => unknown
 
 export type BuiltInChannelDefinition = NotificationChannel & {
   readonly resolveRoute?: RouteResolver
+  readonly sendDeduplicated?: (input: NotificationSendContext, key: string) => Promise<void>
 }
 
 export function isObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 export function isAnonymousTarget(value: unknown): value is AnonymousNotificationTarget {
@@ -84,18 +87,23 @@ export function resolveEmailRouteFromNotifiable(notifiable: unknown): Notificati
 export function normalizeDatabaseRouteFromValue(
   value: unknown,
 ): NotificationDatabaseRoute {
+  if (!isObject(value)) throw new Error('[@holo-js/notifications] Database routes must be objects.')
+
+  const id = typeof value.id === 'string' ? value.id.trim() : value.id
   if (
-    !isObject(value)
-    || (typeof value.id !== 'string' && typeof value.id !== 'number')
-    || typeof value.type !== 'string'
-    || !value.type.trim()
-  ) {
-    throw new Error('[@holo-js/notifications] Database routes must include a string or numeric id and a non-empty type.')
+    (typeof id === 'string' && (!id || id.length > 200))
+    || (typeof id === 'number' && !Number.isFinite(id))
+    || (typeof id !== 'string' && typeof id !== 'number')
+  ) throw new Error('[@holo-js/notifications] Database route ids must be non-empty strings of at most 200 characters or finite numbers.')
+
+  const type = typeof value.type === 'string' ? value.type.trim() : ''
+  if (!type || type.length > 200) {
+    throw new Error('[@holo-js/notifications] Database route types must be between 1 and 200 characters.')
   }
 
   return Object.freeze({
-    id: value.id,
-    type: value.type.trim(),
+    id,
+    type,
   })
 }
 
@@ -109,7 +117,7 @@ export function resolveDatabaseRouteFromNotifiable(notifiable: unknown): Notific
     : undefined
 
   if (explicitType) {
-    return Object.freeze({
+    return normalizeDatabaseRouteFromValue({
       id: notifiable.id,
       type: explicitType,
     })
@@ -128,7 +136,7 @@ export function resolveDatabaseRouteFromNotifiable(notifiable: unknown): Notific
     )
   }
 
-  return Object.freeze({
+  return normalizeDatabaseRouteFromValue({
     id: notifiable.id,
     type: constructorName,
   })
@@ -199,10 +207,11 @@ export function normalizeNotificationRecord(
   route: NotificationDatabaseRoute,
   payload: NotificationDatabaseMessage,
   notificationType: string | undefined,
+  id: string = randomUUID(),
 ): NotificationRecord {
   const now = new Date()
   return Object.freeze({
-    id: randomUUID(),
+    id,
     type: notificationType,
     notifiableType: route.type,
     notifiableId: route.id,
@@ -211,6 +220,18 @@ export function normalizeNotificationRecord(
     createdAt: now,
     updatedAt: now,
   })
+}
+
+function deduplicatedNotificationId(
+  key: string,
+  route: NotificationDatabaseRoute,
+  notificationType: string | undefined,
+): string {
+  const hash = createHash('sha256')
+    .update(JSON.stringify([key, route.type, String(route.id), notificationType ?? null]))
+    .digest('hex')
+  const variant = ((Number.parseInt(hash.charAt(16), 16) & 3) | 8).toString(16)
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`
 }
 
 function requireMailer(bindings: NotificationRuntimeBindings) {
@@ -238,6 +259,9 @@ export function requireStore(bindings: NotificationRuntimeBindings) {
 }
 
 export function normalizeNotificationRecordIds(ids: readonly string[]): readonly string[] {
+  if (ids.length > 100) {
+    throw new Error('[@holo-js/notifications] Notification mutations accept at most 100 ids.')
+  }
   const normalized = ids.map((value, index) => {
     if (typeof value !== 'string' || !value.trim()) {
       throw new Error(`[@holo-js/notifications] Notification id at index ${index} must be a non-empty string.`)
@@ -247,6 +271,70 @@ export function normalizeNotificationRecordIds(ids: readonly string[]): readonly
   })
 
   return Object.freeze([...new Set(normalized)])
+}
+
+const NOTIFICATION_DATA_PATH_SEGMENT = /^[A-Za-z0-9_-]{1,100}$/u
+
+export function normalizeNotificationQuery(query: NotificationQuery): NotificationQuery {
+  if (!isObject(query)) {
+    throw new Error('[@holo-js/notifications] Notification queries must be objects.')
+  }
+  const recipient = normalizeDatabaseRouteFromValue(query.recipient)
+  const rawType: unknown = query.type
+  if (typeof rawType !== 'undefined' && typeof rawType !== 'string') {
+    throw new Error('[@holo-js/notifications] Notification query types must be strings when provided.')
+  }
+  const type = typeof rawType === 'string' ? rawType.trim() : undefined
+  if (typeof rawType !== 'undefined' && (!type || type.length > 200)) {
+    throw new Error('[@holo-js/notifications] Notification query types must be between 1 and 200 characters.')
+  }
+  const matches = query.dataMatches ?? []
+  if (!Array.isArray(matches) || matches.length > 32) {
+    throw new Error('[@holo-js/notifications] Notification queries accept at most 32 data matches.')
+  }
+  const paths = new Set<string>()
+  const dataMatches = matches.map((match, matchIndex) => {
+    if (!isObject(match) || !Array.isArray(match.path) || match.path.length < 1 || match.path.length > 16) {
+      throw new Error(`[@holo-js/notifications] Notification data match ${matchIndex} requires between 1 and 16 path segments.`)
+    }
+    const path = match.path.map((segment, segmentIndex) => {
+      if (typeof segment !== 'string' || !NOTIFICATION_DATA_PATH_SEGMENT.test(segment) || segment === '__proto__' || segment === 'prototype' || segment === 'constructor') {
+        throw new Error(`[@holo-js/notifications] Notification data match ${matchIndex} path segment ${segmentIndex} is invalid.`)
+      }
+      return segment
+    })
+    const pathKey = JSON.stringify(path)
+    if (paths.has(pathKey)) {
+      throw new Error(`[@holo-js/notifications] Notification data match ${matchIndex} duplicates an existing path.`)
+    }
+    paths.add(pathKey)
+    const value = match.value
+    if (value !== null && typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      throw new Error(`[@holo-js/notifications] Notification data match ${matchIndex} values must be JSON scalars.`)
+    }
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new Error(`[@holo-js/notifications] Notification data match ${matchIndex} numeric values must be finite.`)
+    }
+    if (typeof value === 'string' && value.length > 4_096) {
+      throw new Error(`[@holo-js/notifications] Notification data match ${matchIndex} string values cannot exceed 4096 characters.`)
+    }
+    return Object.freeze({ path: Object.freeze(path), value })
+  })
+  return Object.freeze({
+    recipient,
+    ...(type ? { type } : {}),
+    ...(dataMatches.length > 0 ? { dataMatches: Object.freeze(dataMatches) } : {}),
+  })
+}
+
+export function normalizeNotificationPagination(pagination: NotificationPagination): NotificationPagination {
+  if (!isObject(pagination) || !Number.isSafeInteger(pagination.limit) || pagination.limit < 1 || pagination.limit > 100) {
+    throw new Error('[@holo-js/notifications] Notification pagination limits must be integers between 1 and 100.')
+  }
+  if (!Number.isSafeInteger(pagination.offset) || pagination.offset < 0 || pagination.offset > 1_000_000) {
+    throw new Error('[@holo-js/notifications] Notification pagination offsets must be integers between 0 and 1000000.')
+  }
+  return Object.freeze({ limit: pagination.limit, offset: pagination.offset })
 }
 
 export function createBuiltInChannels(
@@ -275,6 +363,21 @@ export function createBuiltInChannels(
             route,
             input.payload as NotificationDatabaseMessage,
             input.notificationType,
+          ),
+        )
+      },
+      async sendDeduplicated(input: NotificationSendContext, key: string) {
+        const route = input.route as NotificationDatabaseRoute | undefined
+        if (!route) {
+          throw new Error('[@holo-js/notifications] Database notifications require a resolved route.')
+        }
+
+        await requireStore(getBindings()).create(
+          normalizeNotificationRecord(
+            route,
+            input.payload as NotificationDatabaseMessage,
+            input.notificationType,
+            deduplicatedNotificationId(key, route, input.notificationType),
           ),
         )
       },

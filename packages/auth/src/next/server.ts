@@ -1,4 +1,4 @@
-import { connection } from 'next/server'
+import { connection } from 'next/server.js'
 import type { HoloAuthUser } from '../contracts'
 import type * as AuthRuntime from '../index'
 import {

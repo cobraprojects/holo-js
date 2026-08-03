@@ -42,6 +42,8 @@ export type PreparedInput = {
   readonly flags: Record<string, CommandFlagValue>
 }
 
+export type PreparedCommandExecutionContext = Omit<CommandExecutionContext, 'withRuntime'> & Partial<Pick<CommandExecutionContext, 'withRuntime'>>
+
 export type CommandDefinition = {
   readonly name: string
   readonly aliases?: readonly string[]
@@ -49,7 +51,7 @@ export type CommandDefinition = {
   readonly usage: string
   readonly source: 'internal' | 'app'
   prepare?(input: RawParsedInput, context: InternalCommandContext): Promise<PreparedInput>
-  run(context: CommandExecutionContext): Promise<void>
+  run(context: PreparedCommandExecutionContext): Promise<void>
 }
 
 export type InternalCommandContext = IoStreams & {

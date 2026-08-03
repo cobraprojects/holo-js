@@ -13,6 +13,7 @@ import auth, {
   configureAuthRuntime,
   currentAccessToken,
   defineAuthConfig,
+  findUserById,
   getAuthRuntime,
   hashPassword,
   id,
@@ -78,11 +79,35 @@ function mockOptionalSecurityModule(module: OptionalSecurityModule): void {
   vi.resetModules()
   vi.doMock('@holo-js/security', () => module)
 }
+
+function createMultiFactorSecurityModule(): OptionalSecurityModule {
+  const attempts = new Map<string, number>()
+  return {
+    getSecurityRuntimeBindings: () => ({
+      csrfSigningKey: 'test-security-signing-key',
+      rateLimitStore: {
+        async hit(key, options) {
+          const nextAttempts = (attempts.get(key) ?? 0) + 1
+          attempts.set(key, nextAttempts)
+          return {
+            limited: nextAttempts > options.maxAttempts,
+            snapshot: { attempts: nextAttempts },
+          }
+        },
+        async clear(key) {
+          return attempts.delete(key)
+        },
+      },
+    }),
+  }
+}
 import type {
   AuthenticatedAuthUser,
   AuthCredentials,
   AuthErrorCode,
   AuthDeliveryHook,
+  AuthMultiFactorCredentialRecord,
+  AuthMultiFactorStore,
   AuthProviderAdapter,
   AuthRegistrationInput,
   AuthResult,
@@ -163,6 +188,7 @@ type UserRecord = {
 
 class InMemorySessionStore implements SessionStore {
   readonly records = new Map<string, SessionRecord>()
+  readonly flashEntries = new Map<string, Map<string, unknown>>()
 
   async read(sessionId: string): Promise<SessionRecord | null> {
     return this.records.get(sessionId) ?? null
@@ -174,6 +200,83 @@ class InMemorySessionStore implements SessionStore {
 
   async delete(sessionId: string): Promise<void> {
     this.records.delete(sessionId)
+    this.flashEntries.delete(sessionId)
+  }
+
+  async rotate(previousSessionId: string, record: SessionRecord): Promise<void> {
+    if (!this.records.has(previousSessionId)) throw new Error(`Session "${previousSessionId}" was not found.`)
+    const entries = this.flashEntries.get(previousSessionId)
+    this.records.delete(previousSessionId)
+    this.flashEntries.delete(previousSessionId)
+    this.records.set(record.id, record)
+    if (entries) this.flashEntries.set(record.id, entries)
+  }
+
+  async flash(sessionId: string, key: string, value: unknown): Promise<void> {
+    if (!this.records.has(sessionId)) throw new Error(`Session "${sessionId}" was not found.`)
+    const entries = this.flashEntries.get(sessionId) ?? new Map<string, unknown>()
+    entries.set(key, value)
+    this.flashEntries.set(sessionId, entries)
+  }
+
+  async take(sessionId: string, key: string): Promise<{ readonly found: boolean, readonly value?: unknown }> {
+    const entries = this.flashEntries.get(sessionId)
+    if (!this.records.has(sessionId) || !entries?.has(key)) return { found: false }
+    const value = entries.get(key)
+    entries.delete(key)
+    if (entries.size === 0) this.flashEntries.delete(sessionId)
+    return { found: true, value }
+  }
+}
+
+class InMemoryMultiFactorStore implements AuthMultiFactorStore {
+  readonly records = new Map<string, AuthMultiFactorCredentialRecord>()
+
+  key(provider: string, userId: string | number): string {
+    return `${provider}:${String(userId)}`
+  }
+
+  async find(provider: string, userId: string | number): Promise<AuthMultiFactorCredentialRecord | null> {
+    return this.records.get(this.key(provider, userId)) ?? null
+  }
+
+  async save(record: AuthMultiFactorCredentialRecord): Promise<void> {
+    this.records.set(this.key(record.provider, record.userId), record)
+  }
+
+  async delete(provider: string, userId: string | number): Promise<void> {
+    this.records.delete(this.key(provider, userId))
+  }
+
+  async advanceCounter(provider: string, userId: string | number, counter: number): ReturnType<AuthMultiFactorStore['advanceCounter']> {
+    const key = this.key(provider, userId)
+    const record = this.records.get(key)
+    if (!record || record.lastUsedCounter !== null && counter <= record.lastUsedCounter) return null
+    this.records.set(key, Object.freeze({ ...record, lastUsedCounter: counter, updatedAt: new Date() }))
+    return Object.freeze({ lastUsedCounter: counter, recoveryCodeHashes: record.recoveryCodeHashes })
+  }
+
+  async consumeRecoveryCode(provider: string, userId: string | number, recoveryCodeHash: string): ReturnType<AuthMultiFactorStore['consumeRecoveryCode']> {
+    const key = this.key(provider, userId)
+    const record = this.records.get(key)
+    if (!record || !record.recoveryCodeHashes.includes(recoveryCodeHash)) return null
+    const recoveryCodeHashes = Object.freeze(record.recoveryCodeHashes.filter(hash => hash !== recoveryCodeHash))
+    this.records.set(key, Object.freeze({
+      ...record,
+      recoveryCodeHashes,
+      updatedAt: new Date(),
+    }))
+    return Object.freeze({ lastUsedCounter: record.lastUsedCounter, recoveryCodeHashes })
+  }
+
+  async replaceRecoveryCodes(provider: string, userId: string | number, recoveryCodeHashes: readonly string[], updatedAt: Date, verification: Parameters<AuthMultiFactorStore['replaceRecoveryCodes']>[4]): Promise<boolean> {
+    const key = this.key(provider, userId)
+    const record = this.records.get(key)
+    if (!record) return false
+    if (record.lastUsedCounter !== verification.lastUsedCounter) return false
+    if (JSON.stringify(record.recoveryCodeHashes) !== JSON.stringify(verification.recoveryCodeHashes)) return false
+    this.records.set(key, Object.freeze({ ...record, recoveryCodeHashes: Object.freeze([...recoveryCodeHashes]), updatedAt }))
+    return true
   }
 }
 
@@ -509,11 +612,21 @@ function configureRuntime(options: {
   delivery?: Partial<AuthDeliveryHook>
   passwordHasher?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['passwordHasher']
   authorization?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['authorization']
+  multiFactor?: boolean
+  multiFactorSecurity?: boolean
+  multiFactorSecurityModule?: OptionalSecurityModule
 } = {}) {
+  if (options.multiFactor === true) {
+    mockOptionalSecurityModule(options.multiFactorSecurityModule
+      ?? (options.multiFactorSecurity === false
+        ? { getSecurityRuntimeBindings: () => undefined }
+        : createMultiFactorSecurityModule()))
+  }
   const sessionStore = new InMemorySessionStore()
   const tokenStore = new InMemoryTokenStore()
   const emailVerificationTokenStore = new InMemoryEmailVerificationTokenStore()
   const passwordResetTokenStore = new InMemoryPasswordResetTokenStore()
+  const multiFactorStore = new InMemoryMultiFactorStore()
   const deliveries: Array<{ type: 'verification' | 'password-reset', email: string, tokenId: string, tokenValue: string }> = []
   const delivery: AuthDeliveryHook = {
     async sendEmailVerification(input) {
@@ -597,6 +710,7 @@ function configureRuntime(options: {
       emailVerification: {
         required: options.emailVerificationRequired === true,
       },
+      multiFactor: options.multiFactor === true,
     })
 
   configureAuthRuntime({
@@ -630,6 +744,8 @@ function configureRuntime(options: {
     tokens: tokenStore,
     emailVerificationTokens: emailVerificationTokenStore,
     passwordResetTokens: passwordResetTokenStore,
+    multiFactor: multiFactorStore,
+    multiFactorEncryptionKey: 'test-multi-factor-encryption-key',
     delivery,
     context,
     passwordHasher: options.passwordHasher,
@@ -641,6 +757,7 @@ function configureRuntime(options: {
     tokenStore,
     emailVerificationTokenStore,
     passwordResetTokenStore,
+    multiFactorStore,
     usersProvider,
     adminsProvider,
     context,
@@ -870,6 +987,554 @@ describe('@holo-js/auth package runtime', () => {
       ...established.cookies,
       ...loggedOut.cookies,
     ])
+  })
+
+  it('rotates a valid anonymous session during credential login', async () => {
+    const runtime = configureRuntime()
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    const anonymousSession = await getSessionRuntime().create({
+      data: { cart: ['sku-1'] },
+    })
+    await getSessionRuntime().flash(anonymousSession.id, 'login.notice', { message: 'Preserved' })
+    runtime.context.setSessionId('web', anonymousSession.id)
+
+    const established = await login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })
+
+    expect(established.sessionId).not.toBe(anonymousSession.id)
+    expect(runtime.sessionStore.records.has(anonymousSession.id)).toBe(false)
+    expect(runtime.context.getSessionId('web')).toBe(established.sessionId)
+    await expect(getSessionRuntime().read(established.sessionId)).resolves.toMatchObject({
+      data: {
+        cart: ['sku-1'],
+      },
+    })
+    await expect(getSessionRuntime().take(established.sessionId, 'login.notice')).resolves.toEqual({ message: 'Preserved' })
+    expect(established.cookies).toContainEqual(expect.stringContaining(`holo_session=${encodeURIComponent(established.sessionId)}`))
+  })
+
+  it('rotates trusted login sessions and keeps logout isolated between guards', async () => {
+    const runtime = configureRuntime()
+    const createdUser = await runtime.usersProvider.create({
+      name: 'User Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const createdAdmin = await runtime.adminsProvider.create({
+      name: 'Admin Mina',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const webSession = await auth.guard('web').loginUsing(createdUser)
+    runtime.context.setSessionId('admin', webSession.sessionId)
+
+    const adminSession = await auth.guard('admin').loginUsing(createdAdmin)
+
+    expect(adminSession.sessionId).not.toBe(webSession.sessionId)
+    expect(runtime.sessionStore.records.has(webSession.sessionId)).toBe(false)
+    expect(runtime.context.getSessionId('web')).toBe(adminSession.sessionId)
+    expect(runtime.context.getSessionId('admin')).toBe(adminSession.sessionId)
+    await expect(auth.guard('admin').logout()).resolves.toMatchObject({
+      guard: 'admin',
+      cookies: [],
+    })
+    await expect(auth.guard('admin').user()).resolves.toBeNull()
+    await expect(auth.guard('web').user()).resolves.toMatchObject({
+      id: createdUser.id,
+      email: createdUser.email,
+    })
+  })
+
+  it('enrolls, challenges, rejects TOTP replay, and consumes recovery codes atomically', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    const enrollmentCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1)
+    const recovery = await auth.multiFactor.confirmEnrollment({ code: enrollmentCode })
+
+    expect(recovery.recoveryCodes).toHaveLength(8)
+    await expect(auth.multiFactor.status()).resolves.toEqual({ enabled: true, recoveryCodesRemaining: 8 })
+    await logout()
+
+    const pending = await login({ email: 'ava@example.com', password: 'secret-secret', remember: true })
+    expect(pending.multiFactorChallenge).toMatchObject({ recoveryAllowed: true, route: '/mfa-challenge' })
+    await expect(user()).resolves.toBeNull()
+    const challengeCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter)
+    const established = await auth.multiFactor.challenge({ code: challengeCode })
+    expect(established.sessionId).not.toBe(pending.sessionId)
+    expect(established.rememberToken).toEqual(expect.any(String))
+    expect(established.cookies).toEqual(expect.arrayContaining([
+      expect.stringContaining('holo_session_remember='),
+    ]))
+    await expect(user()).resolves.toMatchObject({ email: 'ava@example.com' })
+
+    await logout()
+    const pendingRecovery = await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const recoveryBindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...recoveryBindings,
+      context: {
+        ...authRuntimeInternals.createMemoryAuthContext(),
+        getRequestCookie: name => name === 'holo_session' ? pendingRecovery.sessionId : undefined,
+      },
+    })
+    await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toMatchObject({
+      code: 'multi_factor_code_invalid',
+    })
+    const recovered = await auth.multiFactor.recover({ code: recovery.recoveryCodes[0]! })
+    await expect(user()).resolves.toMatchObject({ email: 'ava@example.com' })
+    expect(recovered.multiFactorChallenge).toBeUndefined()
+    await expect(auth.multiFactor.status()).resolves.toEqual({ enabled: true, recoveryCodesRemaining: 7 })
+
+    await logout()
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    await expect(auth.multiFactor.recover({ code: recovery.recoveryCodes[0]! })).rejects.toMatchObject({
+      code: 'multi_factor_code_invalid',
+    })
+  })
+
+  it('requires recent authentication before beginning multi-factor enrollment', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    const established = await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const record = runtime.sessionStore.records.get(established.sessionId)!
+    const payload = record.data.auth as Readonly<Record<string, unknown>>
+    runtime.sessionStore.records.set(established.sessionId, Object.freeze({
+      ...record,
+      data: Object.freeze({
+        ...record.data,
+        auth: Object.freeze({
+          ...payload,
+          authenticatedAt: new Date(Date.now() - 601_000).toISOString(),
+        }),
+      }),
+    }))
+
+    await expect(auth.multiFactor.beginEnrollment()).rejects.toMatchObject({
+      code: 'multi_factor_reauthentication_required',
+    })
+  })
+
+  it('rejects impersonation while the actor has a pending multi-factor challenge', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await auth.loginUsing(actor)
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(
+        enrollment.manualKey,
+        Math.floor(Date.now() / 30_000),
+      ),
+    })
+    await logout()
+
+    const pending = await login({ email: actor.email, password: 'secret-secret' })
+
+    await expect(impersonate(target)).rejects.toMatchObject({
+      code: 'impersonation_actor_required',
+    })
+    expect(runtime.context.getSessionId('web')).toBe(pending.sessionId)
+    await expect(user()).resolves.toBeNull()
+  })
+
+  it('returns recovery codes when enrollment session cleanup fails after persistence', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    const enrollmentCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter)
+    const cleanupFailure = new Error('session cleanup failed')
+    const writeSession = runtime.sessionStore.write.bind(runtime.sessionStore)
+    const write = vi.spyOn(runtime.sessionStore, 'write')
+      .mockImplementationOnce(writeSession)
+      .mockRejectedValueOnce(cleanupFailure)
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const recovery = await auth.multiFactor.confirmEnrollment({ code: enrollmentCode })
+
+    expect(recovery.recoveryCodes).toHaveLength(8)
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.toMatchObject({
+      recoveryCodeHashes: expect.arrayContaining([expect.any(String)]),
+    })
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(warning).toHaveBeenCalledWith(
+      '[@holo-js/auth] Failed to clear a completed multi-factor enrollment from the session.',
+      cleanupFailure,
+    )
+  })
+
+  it('invalidates a pending multi-factor challenge after five invalid attempts', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+    await logout()
+
+    const pending = await login({ email: 'ava@example.com', password: 'secret-secret' })
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(auth.multiFactor.challenge({ code: '000000' })).rejects.toMatchObject({
+        code: 'multi_factor_code_invalid',
+      })
+    }
+
+    expect(runtime.sessionStore.records.has(pending.sessionId)).toBe(false)
+    await expect(auth.multiFactor.challenge({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1),
+    })).rejects.toMatchObject({
+      code: 'multi_factor_challenge_missing',
+    })
+  })
+
+  it('applies the multi-factor attempt limit across newly created login challenges', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+    await logout()
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await login({ email: 'ava@example.com', password: 'secret-secret' })
+      await expect(auth.multiFactor.challenge({ code: '000000' })).rejects.toMatchObject({
+        code: 'multi_factor_code_invalid',
+      })
+    }
+
+    const pending = await login({ email: 'ava@example.com', password: 'secret-secret' })
+    await expect(auth.multiFactor.challenge({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1),
+    })).rejects.toMatchObject({
+      code: 'multi_factor_code_invalid',
+    })
+    expect(runtime.sessionStore.records.has(pending.sessionId)).toBe(false)
+  })
+
+  it('rate limits multi-factor disable and recovery-code regeneration verification', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(auth.multiFactor.disable({ method: 'totp', code: 'invalid' })).rejects.toMatchObject({
+        code: 'multi_factor_code_invalid',
+      })
+    }
+
+    await expect(auth.multiFactor.regenerateRecoveryCodes({
+      method: 'totp',
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1),
+    })).rejects.toMatchObject({
+      code: 'multi_factor_code_invalid',
+    })
+    await expect(auth.multiFactor.status()).resolves.toEqual({ enabled: true, recoveryCodesRemaining: 8 })
+  })
+
+  it('does not return recovery codes when the verified credential changes before replacement', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+    vi.spyOn(runtime.multiFactorStore, 'replaceRecoveryCodes').mockImplementation(async (provider, userId) => {
+      await runtime.multiFactorStore.delete(provider, userId)
+      return undefined as never
+    })
+
+    await expect(auth.multiFactor.regenerateRecoveryCodes({
+      method: 'totp',
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1),
+    })).rejects.toMatchObject({ code: 'multi_factor_code_invalid' })
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.toBeNull()
+  })
+
+  it('replaces every previous recovery code after successful regeneration', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    const initial = await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+
+    const replacement = await auth.multiFactor.regenerateRecoveryCodes({
+      method: 'recovery',
+      code: initial.recoveryCodes[0]!,
+    })
+
+    await expect(auth.multiFactor.disable({
+      method: 'recovery',
+      code: initial.recoveryCodes[1]!,
+    })).rejects.toMatchObject({ code: 'multi_factor_code_invalid' })
+    await expect(auth.multiFactor.status()).resolves.toEqual({ enabled: true, recoveryCodesRemaining: 8 })
+    await auth.multiFactor.disable({ method: 'recovery', code: replacement.recoveryCodes[0]! })
+    await expect(auth.multiFactor.status()).resolves.toEqual({ enabled: false, recoveryCodesRemaining: 0 })
+  })
+
+  it('requires a configured security rate-limit store before creating a multi-factor challenge', async () => {
+    const runtime = configureRuntime({ multiFactor: true, multiFactorSecurity: false })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+    })
+    await logout()
+
+    await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).rejects.toMatchObject({
+      code: 'multi_factor_runtime_unconfigured',
+    })
+    expect(runtime.sessionStore.records.size).toBe(0)
+  })
+
+  it('requires atomic session operations before creating a multi-factor challenge', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+    })
+    await logout()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      session: {
+        ...bindings.session,
+        flash: undefined,
+        take: undefined,
+      },
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).rejects.toMatchObject({
+      code: 'multi_factor_runtime_unconfigured',
+    })
+    expect(runtime.sessionStore.records.size).toBe(0)
+  })
+
+  it('removes an incomplete challenge session when attempt initialization fails', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+    })
+    await logout()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      session: {
+        ...bindings.session,
+        flash: async () => { throw new Error('flash unavailable') },
+      },
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).rejects.toThrow('flash unavailable')
+    expect(runtime.sessionStore.records.size).toBe(0)
+    expect(runtime.context.getSessionId('web')).toBeUndefined()
+  })
+
+  it('restores a multi-factor attempt after a transient credential-store failure', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+    await logout()
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const advanceCounter = vi.spyOn(runtime.multiFactorStore, 'advanceCounter')
+    advanceCounter.mockRejectedValueOnce(new Error('credential store unavailable'))
+    const challengeCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1)
+
+    await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toThrow('credential store unavailable')
+    const established = await auth.multiFactor.challenge({ code: challengeCode })
+    expect(established.multiFactorChallenge).toBeUndefined()
+  })
+
+  it('restores a multi-factor attempt after a transient rate-limit-store failure', async () => {
+    let hitAttempts = 0
+    const runtime = configureRuntime({
+      multiFactor: true,
+      multiFactorSecurityModule: {
+        getSecurityRuntimeBindings: () => ({
+          csrfSigningKey: 'test-security-signing-key',
+          rateLimitStore: {
+            async hit() {
+              hitAttempts += 1
+              if (hitAttempts === 1) throw new Error('rate-limit store unavailable')
+              return { limited: false, snapshot: { attempts: 1 } }
+            },
+            async clear() {
+              return true
+            },
+          },
+        }),
+      },
+    })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
+    })
+    await logout()
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const challengeCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1)
+
+    await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toThrow('rate-limit store unavailable')
+    const established = await auth.multiFactor.challenge({ code: challengeCode })
+    expect(established.multiFactorChallenge).toBeUndefined()
+  })
+
+  it('restores a multi-factor challenge after session establishment fails', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const enrolled = await auth.multiFactor.confirmEnrollment({
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+    })
+    await logout()
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    const rotate = vi.spyOn(runtime.sessionStore, 'rotate')
+    rotate.mockRejectedValueOnce(new Error('session rotation unavailable'))
+
+    await expect(auth.multiFactor.recover({ code: enrolled.recoveryCodes[0]! }))
+      .rejects.toThrow('session rotation unavailable')
+    const established = await auth.multiFactor.recover({ code: enrolled.recoveryCodes[1]! })
+
+    expect(established.multiFactorChallenge).toBeUndefined()
   })
 
   it('activates request-scoped contexts before exposing runtime bindings', () => {
@@ -3205,6 +3870,25 @@ describe('@holo-js/auth package runtime', () => {
     })
   })
 
+  it('loads a fresh user through the selected guard provider without a session', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'hashed',
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await expect(findUserById(created.id)).resolves.toMatchObject({
+      id: created.id,
+      name: 'Ava',
+    })
+    await expect(auth.guard('web').findUserById(created.id)).resolves.toMatchObject({
+      id: created.id,
+    })
+    await expect(auth.guard('web').findUserById(999)).resolves.toBeNull()
+  })
+
   it('releases shared password reset probes when an expired-token retry fails', async () => {
     const attempts = new Map<string, number>()
     const clear = vi.fn(async (key: string) => {
@@ -3553,7 +4237,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(workosCookie).not.toContain('Domain=app.test')
   })
 
-  it('keeps multiple session guards authenticated when they share the same browser session cookie', async () => {
+  it('rotates a shared browser session while keeping multiple session guards authenticated', async () => {
     const runtime = configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -3596,7 +4280,10 @@ describe('@holo-js/auth package runtime', () => {
       password: 'admin-secret',
     }))
 
-    expect(adminSession.sessionId).toBe(webSession.sessionId)
+    expect(adminSession.sessionId).not.toBe(webSession.sessionId)
+    expect(runtime.sessionStore.records.has(webSession.sessionId)).toBe(false)
+    expect(runtime.context.getSessionId('web')).toBe(adminSession.sessionId)
+    expect(runtime.context.getSessionId('admin')).toBe(adminSession.sessionId)
     expect(runtime.sessionStore.records).toHaveLength(1)
     const renewedRecord = runtime.sessionStore.records.get(adminSession.sessionId)
     expect(renewedRecord).toBeTruthy()
@@ -3609,8 +4296,8 @@ describe('@holo-js/auth package runtime', () => {
 
     resetAuthRuntime()
     const restartedContext = authRuntimeInternals.createMemoryAuthContext()
-    restartedContext.setSessionId('web', webSession.sessionId)
-    restartedContext.setSessionId('admin', webSession.sessionId)
+    restartedContext.setSessionId('web', adminSession.sessionId)
+    restartedContext.setSessionId('admin', adminSession.sessionId)
     configureAuthRuntime({
       config: defineAuthConfig({
         defaults: {
@@ -3739,7 +4426,8 @@ describe('@holo-js/auth package runtime', () => {
       password: 'admin-secret',
     }))
 
-    expect(adminSession.sessionId).toBe(webSession.sessionId)
+    expect(adminSession.sessionId).not.toBe(webSession.sessionId)
+    expect(runtime.sessionStore.records.has(webSession.sessionId)).toBe(false)
 
     await getAuthRuntime().logoutAll()
 
@@ -3747,8 +4435,8 @@ describe('@holo-js/auth package runtime', () => {
 
     resetAuthRuntime()
     const restartedContext = authRuntimeInternals.createMemoryAuthContext()
-    restartedContext.setSessionId('web', webSession.sessionId)
-    restartedContext.setSessionId('admin', webSession.sessionId)
+    restartedContext.setSessionId('web', adminSession.sessionId)
+    restartedContext.setSessionId('admin', adminSession.sessionId)
     configureAuthRuntime({
       config: defineAuthConfig({
         defaults: {
@@ -3797,12 +4485,13 @@ describe('@holo-js/auth package runtime', () => {
     await expect(auth.guard('admin').user()).resolves.toBeNull()
   })
 
-  it('supports shared-session logout with legacy session bindings that do not expose write()', async () => {
+  it('supports shared-session logout with session bindings that do not expose write()', async () => {
     const runtime = configureRuntime()
     const session = getSessionRuntime()
-    const legacySession = {
+    const sessionWithoutWrite = {
       create: session.create,
       read: session.read,
+      rotate: session.rotate,
       touch: session.touch,
       invalidate: session.invalidate,
       issueRememberMeToken: session.issueRememberMeToken,
@@ -3810,7 +4499,7 @@ describe('@holo-js/auth package runtime', () => {
       sessionCookie: session.sessionCookie,
       rememberMeCookie: session.rememberMeCookie,
     }
-    reconfigureAuthRuntimeWithSession(runtime, legacySession)
+    reconfigureAuthRuntimeWithSession(runtime, sessionWithoutWrite)
 
     const createdUser = await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4909,7 +5598,9 @@ describe('@holo-js/auth package runtime', () => {
       keep: true,
     }))
 
+    const authenticatedAt = new Date().toISOString()
     const payload = Object.freeze({
+      authenticatedAt,
       guard: 'web',
       provider: 'users',
       userId: 1,
@@ -4924,6 +5615,7 @@ describe('@holo-js/auth package runtime', () => {
       data: {
         auth: {
           admin: Object.freeze({
+            authenticatedAt,
             guard: 'admin',
             provider: 'admins',
             userId: 2,
@@ -5549,7 +6241,7 @@ describe('@holo-js/auth package runtime', () => {
     })
   })
 
-  it('covers session renewal without write support', async () => {
+  it('rotates existing sessions without write support', async () => {
     const runtime = configureRuntime()
     const context = authRuntimeInternals.createMemoryAuthContext()
     const existingRecord = Object.freeze({
@@ -5612,6 +6304,9 @@ describe('@holo-js/auth package runtime', () => {
         async read(sessionId) {
           return sessionId === existingRecord.id ? existingRecord : null
         },
+        async rotate() {
+          return Object.freeze({ ...existingRecord, id: 'session-1' })
+        },
         async touch(sessionId) {
           return sessionId === existingRecord.id ? existingRecord : null
         },
@@ -5643,13 +6338,13 @@ describe('@holo-js/auth package runtime', () => {
       guard: 'web',
       provider: 'users',
     })).resolves.toMatchObject({
-      sessionId: existingRecord.id,
+      sessionId: 'session-1',
       user: {
         id: 1,
         email: 'ava@example.com',
       },
     })
-    expect(createdSessions).toEqual([existingRecord.id])
+    expect(createdSessions).toEqual(['session-1'])
   })
 
   it('covers remaining token and shared-session edge branches', async () => {
@@ -5719,17 +6414,18 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date(),
     })
 
-    const adminSession = await auth.guard('admin').loginUsing(admin)
-    await loginUsing(ava)
+    await auth.guard('admin').loginUsing(admin)
+    const webSession = await loginUsing(ava)
 
     runtime.usersProvider.users.delete(ava.id)
     runtime.usersProvider.usersByEmail.delete(ava.email)
 
     await expect(auth.guard('web').refreshUser()).resolves.toBeNull()
 
-    const record = runtime.sessionStore.records.get(adminSession.sessionId)
+    const record = runtime.sessionStore.records.get(webSession.sessionId)
     expect(record).toBeTruthy()
     expect(record?.data.auth).toEqual({
+      authenticatedAt: expect.any(String),
       guard: 'admin',
       provider: 'admins',
       userId: admin.id,
@@ -5766,7 +6462,7 @@ describe('@holo-js/auth package runtime', () => {
     )
   })
 
-  it('preserves remember hashes when renewing shared sessions with write support', async () => {
+  it('clears stale remember state when rotating a shared session', async () => {
     const runtime = configureRuntime()
     const context = authRuntimeInternals.createMemoryAuthContext()
     const existingRecord = Object.freeze({
@@ -5788,7 +6484,7 @@ describe('@holo-js/auth package runtime', () => {
       expiresAt: new Date(Date.now() + 60_000),
       rememberTokenHash: 'remember-hash',
     })
-    const writtenRecords: Array<{ readonly id: string, readonly rememberTokenHash?: string }> = []
+    const rotatedSessions: string[] = []
 
     context.setSessionId('admin', existingRecord.id)
 
@@ -5824,15 +6520,12 @@ describe('@holo-js/auth package runtime', () => {
             expiresAt: new Date(Date.now() + 60_000),
           })
         },
-        async write(record) {
-          writtenRecords.push({
-            id: record.id,
-            rememberTokenHash: record.rememberTokenHash,
-          })
-          return record
-        },
         async read(sessionId) {
           return sessionId === existingRecord.id ? existingRecord : null
+        },
+        async rotate(sessionId) {
+          rotatedSessions.push(sessionId)
+          return Object.freeze({ ...existingRecord, id: 'new-session' })
         },
         async touch(sessionId) {
           return sessionId === existingRecord.id ? existingRecord : null
@@ -5855,7 +6548,7 @@ describe('@holo-js/auth package runtime', () => {
       context,
     })
 
-    await authRuntimeInternals.establishSessionForUser({
+    const established = await authRuntimeInternals.establishSessionForUser({
       id: 1,
       email: 'ava@example.com',
       name: 'Ava',
@@ -5866,10 +6559,10 @@ describe('@holo-js/auth package runtime', () => {
       provider: 'users',
     })
 
-    expect(writtenRecords).toEqual([{
-      id: existingRecord.id,
-      rememberTokenHash: 'remember-hash',
-    }])
+    expect(established.sessionId).toBe('new-session')
+    expect(established.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
+    expect(context.getSessionId('admin')).toBe('new-session')
+    expect(rotatedSessions).toEqual([existingRecord.id])
   })
 
   it('covers remaining branch-only auth paths', async () => {

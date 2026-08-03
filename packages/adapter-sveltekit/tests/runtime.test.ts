@@ -129,6 +129,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         value: 'response-value',
         options: {
           path: '/',
+          secure: false,
           httpOnly: true,
           sameSite: 'lax',
           partitioned: true,
@@ -139,6 +140,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         value: 'off',
         options: {
           path: '/metrics',
+          secure: false,
           partitioned: false,
         },
       },
@@ -147,6 +149,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         value: 'value',
         options: {
           path: '/',
+          secure: false,
         },
       },
       {
@@ -166,6 +169,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         value: 'ignored',
         options: {
           path: '/',
+          secure: false,
         },
       },
       {
@@ -173,6 +177,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         value: 'raw%zz',
         options: {
           path: '/',
+          secure: false,
         },
       },
     ])

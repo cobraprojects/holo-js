@@ -12,6 +12,7 @@ import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.m
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
 import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
+import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate-limit.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
@@ -697,6 +698,7 @@ try {
   await run('bun', ['run', 'prepare'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
+  await clearExampleAppRateLimitBuckets(cwd)
   await startBroadcastWorker(`http://localhost:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 

@@ -5,6 +5,34 @@ function createSqliteJsonExtractExpression(column: string, pathLiteral: string):
   return `json_extract(${column}, ${pathLiteral})`
 }
 
+function sqliteJsonType(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'number') return 'number'
+  return 'text'
+}
+
+function compileSqliteJsonEquality(
+  extracted: string,
+  extractedType: string,
+  operator: '=' | '!=',
+  value: unknown,
+  placeholder: string,
+): string {
+  const valueType = sqliteJsonType(value)
+  const matchingType = valueType === 'number'
+    ? `${extractedType} IN ('integer', 'real')`
+    : `${extractedType} = '${valueType}'`
+
+  if (operator === '=') {
+    return `${matchingType} AND ${extracted} = ${placeholder}`
+  }
+
+  const differingType = valueType === 'number'
+    ? `${extractedType} NOT IN ('integer', 'real')`
+    : `${extractedType} != '${valueType}'`
+  return `${extractedType} IS NOT NULL AND (${differingType} OR ${extracted} != ${placeholder})`
+}
+
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
@@ -18,6 +46,24 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     const extracted = createSqliteJsonExtractExpression(column, pathLiteral)
 
     if (predicate.jsonMode === 'value') {
+      if (predicate.value === null) {
+        const extractedType = `json_type(${column}, ${pathLiteral})`
+        return predicate.operator === '='
+          ? `${extractedType} = 'null'`
+          : `${extractedType} IS NOT NULL AND ${extractedType} != 'null'`
+      }
+
+      if (predicate.operator === '=' || predicate.operator === '!=') {
+        bindings.push(typeof predicate.value === 'boolean' ? Number(predicate.value) : predicate.value)
+        return compileSqliteJsonEquality(
+          extracted,
+          `json_type(${column}, ${pathLiteral})`,
+          predicate.operator,
+          predicate.value,
+          this.createPlaceholder(bindings.length),
+        )
+      }
+
       bindings.push(predicate.value)
       return `${extracted} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }

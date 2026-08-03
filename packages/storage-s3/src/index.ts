@@ -2,6 +2,10 @@ import { createHash, createHmac } from 'node:crypto'
 
 type DriverValue = string | Uint8Array | ArrayBuffer
 const storedValueMarker = '__holo_storage_s3_value_v1'
+const MINIMUM_MULTIPART_PART_BYTES = 5 * 1024 * 1024
+const MAXIMUM_MULTIPART_PART_BYTES = 512 * 1024 * 1024
+const MULTIPART_PARTS_PER_SIZE = 10
+const MAXIMUM_MULTIPART_PARTS = 10_000
 
 export interface S3DriverOptions {
   accessKeyId?: string
@@ -25,6 +29,13 @@ type ResolvedS3DriverOptions = {
 
 function createDriverError(message: string): Error {
   return new Error(`[unstorage] [s3] ${message}`)
+}
+
+function normalizeStreamChunkBytes(value = 64 * 1024): number {
+  if (!Number.isInteger(value) || value < 4 * 1024 || value > 1024 * 1024) {
+    throw createDriverError('Stream chunkBytes must be an integer from 4096 through 1048576.')
+  }
+  return value
 }
 
 function normalizeKey(key = ''): string {
@@ -175,6 +186,7 @@ function createSignedRequest(
   method: string,
   url: URL,
   body?: DriverValue,
+  additionalHeaders?: Headers | Readonly<Record<string, string>>,
 ): Request {
   const now = new Date()
   const amzDate = formatAmzDate(now)
@@ -182,7 +194,7 @@ function createSignedRequest(
   const payloadBytes = toBodyBytes(body)
   const payloadHash = sha256Hex(payloadBytes ?? '')
   const credentialScope = `${scopeDate}/${options.region}/s3/aws4_request`
-  const headers = new Headers()
+  const headers = new Headers(additionalHeaders)
 
   headers.set('host', url.host)
   headers.set('x-amz-content-sha256', payloadHash)
@@ -252,38 +264,35 @@ async function readErrorBody(response: Response): Promise<string> {
   }
 }
 
+function decodeXmlEntity(value: string): string {
+  const namedEntities = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&apos;': '\'',
+  } as const
+
+  return value.replace(/&(?:#(\d+)|#x([0-9a-fA-F]+)|amp|lt|gt|quot|apos);/g, (entity, decimal, hex) => {
+    if (decimal) return String.fromCodePoint(Number(decimal))
+    if (hex) return String.fromCodePoint(Number.parseInt(hex, 16))
+    return namedEntities[entity as keyof typeof namedEntities]
+  })
+}
+
 function parseListObjects(xml: string): string[] {
   const contents = xml.match(/<Contents[^>]*>([\s\S]*?)<\/Contents>/g)
-  if (!contents?.length) {
-    return []
-  }
-
-  const decodeXmlEntity = (value: string): string => {
-    const namedEntities = {
-      '&amp;': '&',
-      '&lt;': '<',
-      '&gt;': '>',
-      '&quot;': '"',
-      '&apos;': '\'',
-    } as const
-
-    return value.replace(/&(?:#(\d+)|#x([0-9a-fA-F]+)|amp|lt|gt|quot|apos);/g, (entity, decimal, hex) => {
-      if (decimal) {
-        return String.fromCodePoint(Number(decimal))
-      }
-
-      if (hex) {
-        return String.fromCodePoint(Number.parseInt(hex, 16))
-      }
-
-      return namedEntities[entity as keyof typeof namedEntities]
-    })
-  }
+  if (!contents?.length) return []
 
   return contents.map((content) => {
     const key = content.match(/<Key>([\s\S]+?)<\/Key>/)?.[1]
     return key ? decodeXmlEntity(key) : undefined
   }).filter((value): value is string => Boolean(value))
+}
+
+function parseContinuationToken(xml: string): string | null {
+  const token = xml.match(/<NextContinuationToken>([\s\S]+?)<\/NextContinuationToken>/)?.[1]
+  return token ? decodeXmlEntity(token) : null
 }
 
 function deserializeStoredValue<T>(value: string): T | string {
@@ -303,7 +312,7 @@ function deserializeStoredValue<T>(value: string): T | string {
 }
 
 function isStoredValueEnvelope(value: unknown): value is { readonly value?: unknown } {
-  return !!value
+  return Boolean(value)
     && typeof value === 'object'
     && !Array.isArray(value)
     && (value as Record<string, unknown>)[storedValueMarker] === true
@@ -353,8 +362,9 @@ async function s3Fetch(
   method: string,
   url: URL,
   body?: DriverValue,
+  headers?: Headers | Readonly<Record<string, string>>,
 ): Promise<Response | null> {
-  const request = createSignedRequest(options, method, url, body)
+  const request = createSignedRequest(options, method, url, body, headers)
   const response = await fetch(request)
 
   if (response.status === 404) {
@@ -367,6 +377,107 @@ async function s3Fetch(
   }
 
   return response
+}
+
+function parseUploadId(xml: string): string {
+  const uploadId = xml.match(/<UploadId>([\s\S]+?)<\/UploadId>/)?.[1]
+  if (!uploadId) throw createDriverError('Multipart upload initialization failed.')
+  return decodeXmlEntity(uploadId)
+}
+
+function multipartUrl(options: ResolvedS3DriverOptions, key: string, uploadId?: string): URL {
+  const url = resolveObjectUrl(options, key)
+  if (uploadId) url.searchParams.set('uploadId', uploadId)
+  else url.searchParams.set('uploads', '')
+  return url
+}
+
+function concatenateChunks(chunks: readonly Uint8Array[], size: number): Uint8Array {
+  const result = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return result
+}
+
+function multipartPartBytes(partNumber: number): number {
+  const sizeStep = Math.floor((partNumber - 1) / MULTIPART_PARTS_PER_SIZE)
+  return Math.min(MAXIMUM_MULTIPART_PART_BYTES, MINIMUM_MULTIPART_PART_BYTES * (2 ** sizeStep))
+}
+
+async function uploadMultipartPart(
+  options: ResolvedS3DriverOptions,
+  key: string,
+  uploadId: string,
+  partNumber: number,
+  body: Uint8Array,
+): Promise<string> {
+  const url = multipartUrl(options, key, uploadId)
+  url.searchParams.set('partNumber', String(partNumber))
+  const response = await s3Fetch(options, 'PUT', url, body)
+  const etag = response?.headers.get('etag')
+  if (!etag) throw createDriverError('Multipart part upload failed.')
+  return etag
+}
+
+async function abortMultipartUpload(
+  options: ResolvedS3DriverOptions,
+  key: string,
+  uploadId: string,
+): Promise<void> {
+  await s3Fetch(options, 'DELETE', multipartUrl(options, key, uploadId)).catch(() => undefined)
+}
+
+function completeMultipartBody(parts: readonly string[]): string {
+  return `<CompleteMultipartUpload>${parts.map((etag, index) => `<Part><PartNumber>${index + 1}</PartNumber><ETag>${etag}</ETag></Part>`).join('')}</CompleteMultipartUpload>`
+}
+
+function destinationExistsError(): Error {
+  const error = new Error('[Holo Storage] Stream destination already exists.')
+  error.name = 'StorageDestinationExistsError'
+  return error
+}
+
+async function conditionallyCompleteMultipartUpload(
+  options: ResolvedS3DriverOptions,
+  key: string,
+  uploadId: string,
+  parts: readonly string[],
+  overwrite: boolean,
+): Promise<void> {
+  const request = createSignedRequest(
+    options,
+    'POST',
+    multipartUrl(options, key, uploadId),
+    completeMultipartBody(parts),
+    overwrite ? undefined : { 'if-none-match': '*' },
+  )
+  const response = await fetch(request)
+  if (response.status === 409 || response.status === 412) throw destinationExistsError()
+  if (!response.ok) throw createDriverError('Multipart upload completion failed.')
+  const responseBody = await response.text()
+  if (/^\s*(?:<\?xml[^>]*>\s*)?<Error(?:\s|>)/u.test(responseBody)) {
+    throw createDriverError('Multipart upload completion failed.')
+  }
+}
+
+async function conditionallyPutEmptyObject(
+  options: ResolvedS3DriverOptions,
+  key: string,
+  overwrite: boolean,
+): Promise<void> {
+  const request = createSignedRequest(
+    options,
+    'PUT',
+    resolveObjectUrl(options, key),
+    new Uint8Array(),
+    overwrite ? undefined : { 'if-none-match': '*' },
+  )
+  const response = await fetch(request)
+  if (response.status === 409 || response.status === 412) throw destinationExistsError()
+  if (!response.ok) throw createDriverError('Stream upload failed.')
 }
 
 export default function createS3Driver(input: S3DriverOptions) {
@@ -387,11 +498,96 @@ export default function createS3Driver(input: S3DriverOptions) {
       const response = await s3Fetch(options, 'GET', resolveObjectUrl(options, key))
       return response ? response.arrayBuffer() : null
     },
+    async getItemStream(
+      key: string,
+      request: { readonly chunkBytes?: number },
+    ): Promise<AsyncIterable<Uint8Array> | null> {
+      const url = resolveObjectUrl(options, key)
+      const chunkBytes = normalizeStreamChunkBytes(request.chunkBytes)
+      try {
+        if (!await s3Fetch(options, 'HEAD', url)) return null
+      } catch {
+        throw createDriverError('Stream read failed.')
+      }
+
+      return (async function* (): AsyncGenerator<Uint8Array> {
+        const response = await s3Fetch(options, 'GET', url)
+        const reader = response?.body?.getReader()
+        if (!reader) throw createDriverError('Stream read failed.')
+        try {
+          while (true) {
+            const result = await reader.read()
+            if (result.done) return
+            for (let offset = 0; offset < result.value.byteLength; offset += chunkBytes) {
+              const chunk = result.value.subarray(offset, Math.min(offset + chunkBytes, result.value.byteLength))
+              if (chunk.byteLength > 0) yield chunk
+            }
+          }
+        } finally {
+          await reader.cancel().catch(() => undefined)
+          reader.releaseLock()
+        }
+      })()
+    },
     async setItem(key: string, value: unknown) {
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), serializeStoredValue(value))
     },
     async setItemRaw(key: string, value: DriverValue) {
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value)
+    },
+    async setItemStream(
+      key: string,
+      source: AsyncIterable<Uint8Array>,
+      request: { readonly overwrite: boolean },
+    ) {
+      let uploadId: string | undefined
+      try {
+        const start = await s3Fetch(options, 'POST', multipartUrl(options, key))
+        if (!start) throw createDriverError('Multipart upload initialization failed.')
+        uploadId = parseUploadId(await start.text())
+        const etags: string[] = []
+        let buffered: Uint8Array[] = []
+        let bufferedBytes = 0
+        let targetPartBytes = multipartPartBytes(1)
+
+        const flush = async (): Promise<void> => {
+          if (bufferedBytes === 0 || !uploadId) return
+          const partNumber = etags.length + 1
+          if (partNumber > MAXIMUM_MULTIPART_PARTS) throw createDriverError('Multipart upload exceeds the S3 part limit.')
+          const part = concatenateChunks(buffered, bufferedBytes)
+          etags.push(await uploadMultipartPart(options, key, uploadId, partNumber, part))
+          buffered = []
+          bufferedBytes = 0
+          targetPartBytes = multipartPartBytes(partNumber + 1)
+        }
+
+        for await (const sourceChunk of source) {
+          let offset = 0
+          while (offset < sourceChunk.byteLength) {
+            const available = targetPartBytes - bufferedBytes
+            const nextOffset = Math.min(offset + available, sourceChunk.byteLength)
+            buffered.push(new Uint8Array(sourceChunk.subarray(offset, nextOffset)))
+            bufferedBytes += nextOffset - offset
+            offset = nextOffset
+            if (bufferedBytes === targetPartBytes) await flush()
+          }
+        }
+
+        await flush()
+        if (etags.length === 0) {
+          await abortMultipartUpload(options, key, uploadId)
+          uploadId = undefined
+          await conditionallyPutEmptyObject(options, key, request.overwrite)
+          return
+        }
+
+        await conditionallyCompleteMultipartUpload(options, key, uploadId, etags, request.overwrite)
+        uploadId = undefined
+      } catch (error) {
+        if (uploadId) await abortMultipartUpload(options, key, uploadId)
+        if (error instanceof Error && error.name === 'StorageDestinationExistsError') throw error
+        throw createDriverError('Stream write failed.')
+      }
     },
     async getMeta(key: string) {
       const response = await s3Fetch(options, 'HEAD', resolveObjectUrl(options, key))
@@ -438,12 +634,31 @@ export default function createS3Driver(input: S3DriverOptions) {
         const xml = await response.text()
         keys.push(...parseListObjects(xml))
 
-        const nextToken = xml.match(/<NextContinuationToken>([\s\S]+?)<\/NextContinuationToken>/)?.[1]
+        const nextToken = parseContinuationToken(xml)
         if (!nextToken) {
           return keys
         }
 
         continuationToken = nextToken
+      }
+    },
+    async getKeysPage(
+      base: string | undefined,
+      request: { readonly cursor: string | null, readonly limit: number },
+    ) {
+      const url = resolveBucketUrl(options)
+      url.searchParams.set('list-type', '2')
+      url.searchParams.set('max-keys', String(request.limit))
+      const prefix = normalizeListPrefix(base)
+      if (prefix) url.searchParams.set('prefix', prefix)
+      if (request.cursor) url.searchParams.set('continuation-token', request.cursor)
+
+      const response = await s3Fetch(options, 'GET', url)
+      if (!response) return { nextCursor: null, paths: [] }
+      const xml = await response.text()
+      return {
+        nextCursor: parseContinuationToken(xml),
+        paths: parseListObjects(xml),
       }
     },
     async removeItem(key: string) {

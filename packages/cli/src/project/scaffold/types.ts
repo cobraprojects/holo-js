@@ -33,6 +33,7 @@ export const AUTH_MIGRATION_SLUGS = [
   'create_personal_access_tokens',
   'create_password_reset_tokens',
   'create_email_verification_tokens',
+  'create_auth_multi_factor_credentials',
 ] as const
 
 export type AuthMigrationSlug = typeof AUTH_MIGRATION_SLUGS[number]
