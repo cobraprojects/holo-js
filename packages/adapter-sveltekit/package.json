@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-sveltekit",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "Holo-JS Framework - SvelteKit adapter",
   "type": "module",
   "license": "MIT",
