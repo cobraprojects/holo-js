@@ -39,7 +39,7 @@ export async function listTrackedAppManifests(root = repoRoot) {
 
 export async function listTrackedPackageManifests(root = repoRoot) {
   try {
-    const { stdout } = await execFileAsync('git', ['ls-files', 'packages/*/package.json'], {
+    const { stdout } = await execFileAsync('git', ['ls-files', ':(glob)packages/*/package.json'], {
       cwd: root,
     })
 

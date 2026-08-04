@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, test } from 'node:test'
+import { promisify } from 'node:util'
 import {
   collectCatalogPackageCoverageFailures,
   collectPackageManifestFailures,
@@ -10,6 +12,7 @@ import {
   collectScaffoldSourceFailures,
 } from './validate-dependency-version-policy.mjs'
 
+const execFileAsync = promisify(execFile)
 const tempRoots = []
 
 afterEach(async () => {
@@ -32,6 +35,11 @@ async function createTestScaffold(files) {
   }
 
   return repoRoot
+}
+
+async function trackTestFiles(repoRoot) {
+  await execFileAsync('git', ['init'], { cwd: repoRoot })
+  await execFileAsync('git', ['add', '.'], { cwd: repoRoot })
 }
 
 const frameworkSource = [
@@ -160,6 +168,36 @@ test('dependency policy validator requires package manifests to use catalog rang
   assert.equal(failures.length, 1)
   assert.match(failures[0], /@holo-js\/core/)
   assert.match(failures[0], /catalog:/)
+})
+
+test('dependency policy validator ignores nested fixture manifests', async () => {
+  const repoRoot = await createTestScaffold({
+    'packages/example/package.json': [
+      '{',
+      '  "name": "@holo-js/example",',
+      '  "version": "0.1.4",',
+      '  "dependencies": {',
+      '    "typescript": "catalog:"',
+      '  }',
+      '}',
+      '',
+    ],
+    'packages/example/tests/fixtures/project/package.json': [
+      '{',
+      '  "name": "fixture-project",',
+      '  "version": "1.0.0",',
+      '  "dependencies": {',
+      '    "typescript": "^5.9.3"',
+      '  }',
+      '}',
+      '',
+    ],
+  })
+  await trackTestFiles(repoRoot)
+
+  const failures = await collectPackageManifestFailures(repoRoot)
+
+  assert.deepEqual(failures, [])
 })
 
 test('dependency policy validator requires root catalog dependencies to use catalog ranges', async () => {
