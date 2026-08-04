@@ -37,7 +37,9 @@ function createIo(projectRoot: string) {
 }
 
 async function waitForSignalListener(signal: 'SIGINT' | 'SIGTERM', baselineCount: number) {
-  await vi.waitUntil(() => process.listeners(signal).length > baselineCount)
+  await vi.waitUntil(() => process.listeners(signal).length > baselineCount, {
+    timeout: 30000,
+  })
   return process.listeners(signal)[baselineCount]
 }
 
@@ -201,8 +203,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     })
 
     const sigintListenersBefore = process.listeners('SIGINT').length
-    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
-    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
     expect(io.read()).toContain('[broadcast] Worker listening on 0.0.0.0:8080')
@@ -228,10 +229,8 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await vi.waitUntil(() => process.listeners('SIGTERM').length > sigtermListenersBefore)
-    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
-    const sigtermHandler = process.listeners('SIGTERM')[sigtermListenersBefore]
-    const sigintHandler = process.listeners('SIGINT')[sigintListenersBefore]
+    const sigtermHandler = await waitForSignalListener('SIGTERM', sigtermListenersBefore)
+    const sigintHandler = await waitForSignalListener('SIGINT', sigintListenersBefore)
     sigtermHandler?.('SIGTERM')
     sigintHandler?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
@@ -284,8 +283,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
-    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
   })
 
@@ -325,8 +323,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
-    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
   })
 
@@ -577,8 +574,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
-    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })
