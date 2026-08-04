@@ -102,6 +102,23 @@ describe('workspace dependency resolution', () => {
     expect(manifest.dependencies['@holo-js/security']).toMatch(/^\^\d/u)
   })
 
+  it('preserves independently versioned Holo plugins outside the framework catalog', async () => {
+    const { appRoot } = await createWorkspace()
+    const manifestPath = join(appRoot, 'package.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      readonly dependencies: Record<string, string>
+    }
+    manifest.dependencies['@holo-js/panels'] = '0.1.0-next.0'
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+
+    await expect(upsertProjectDependency(appRoot, '@holo-js/panels')).resolves.toBe(false)
+    await expect(readFile(manifestPath, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      dependencies: {
+        '@holo-js/panels': '0.1.0-next.0',
+      },
+    })
+  })
+
   it('uses workspace protocol only for a dependency that belongs to the workspace', async () => {
     const { appRoot } = await createWorkspace()
 

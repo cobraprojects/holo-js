@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { WORKSPACE_CATALOG } from './generated/workspaceCatalog'
 import { HOLO_PACKAGE_VERSION } from './metadata'
 import { readTextFile, writeTextFile } from './project'
 import { resolveManagedHoloPackageVersion } from './project/dependency-versions'
@@ -63,7 +64,7 @@ async function resolvePackageVersion(
   workspacePackageNames: ReadonlySet<string>,
 ): Promise<string> {
   const currentPackageVersion = dependencies[packageName] ?? devDependencies[packageName]
-  if (packageName.startsWith('@holo-js/')) {
+  if (Object.hasOwn(WORKSPACE_CATALOG, packageName)) {
     return resolveManagedHoloPackageVersion(
       packageName,
       currentPackageVersion,
