@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/session",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Holo-JS Framework - session contracts, cookie helpers, and session config helpers",
   "type": "module",
   "license": "MIT",

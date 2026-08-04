@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/validation",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Holo-JS Framework - schema contracts, typing, and validation surface",
   "type": "module",
   "license": "MIT",

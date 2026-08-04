@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db-postgres",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Holo-JS Framework - Postgres database adapter",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-shared",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Holo-JS Framework - shared framework adapter infrastructure",
   "type": "module",
   "license": "MIT",
