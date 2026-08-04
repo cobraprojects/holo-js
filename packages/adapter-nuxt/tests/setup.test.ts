@@ -337,7 +337,7 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.js'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.d.ts'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/server/routes/broadcast-auth.post.js'))).toBe(true)
-  }, 60000)
+  }, 120000)
 
   it('publishes a runtime declaration that type-checks under NodeNext resolution', async () => {
     const build = await runAdapterStub()

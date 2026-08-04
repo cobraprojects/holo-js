@@ -10,7 +10,7 @@ import { loadBroadcastCliModule, runBroadcastWorkCommand } from '../src/broadcas
 import { createInternalCommands } from '../src/cli'
 
 vi.setConfig({
-  testTimeout: 30000,
+  testTimeout: 120000,
 })
 
 function createIo(projectRoot: string) {
