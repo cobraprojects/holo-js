@@ -64,7 +64,7 @@ async function resolvePackageVersion(
   workspacePackageNames: ReadonlySet<string>,
 ): Promise<string> {
   const currentPackageVersion = dependencies[packageName] ?? devDependencies[packageName]
-  if (Object.hasOwn(WORKSPACE_CATALOG, packageName)) {
+  if (packageName.startsWith('@holo-js/') && Object.hasOwn(WORKSPACE_CATALOG, packageName)) {
     return resolveManagedHoloPackageVersion(
       packageName,
       currentPackageVersion,
