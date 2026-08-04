@@ -53,6 +53,7 @@ export default defineConfig({
     name: '@holo-js/adapter-sveltekit',
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    maxWorkers: 2,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

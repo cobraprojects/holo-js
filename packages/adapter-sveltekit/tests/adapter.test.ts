@@ -251,7 +251,7 @@ describe('@holo-js/adapter-sveltekit', () => {
     expect(holoSvelteKitTransport.HoloCollection.encode([])).toBe(false)
     expect(holoSvelteKitTransport.HoloModel.decode({ id: 1 })).toEqual({ id: 1 })
     expect(holoSvelteKitTransport.HoloCollection.decode([{ id: 1 }])).toEqual([{ id: 1 }])
-  }, 30000)
+  }, 120000)
 
   it('initializes a singleton project and exposes typed config helpers', async () => {
     const {

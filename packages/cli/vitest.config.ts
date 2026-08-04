@@ -53,6 +53,7 @@ export default defineConfig({
     name: '@holo-js/cli',
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    maxWorkers: 2,
     exclude: includeCliIntegration ? [] : ['tests/cli.test.ts'],
     coverage: {
       provider: 'v8',
