@@ -735,7 +735,7 @@ async function hydrateActionFormState<TData, TSuccess>(
       form.applyServerState(state)
     }
 
-    queueMicrotask(unsubscribe)
+    queueMicrotask(() => unsubscribe())
   })
 }
 
