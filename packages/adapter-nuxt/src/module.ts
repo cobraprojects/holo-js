@@ -262,6 +262,7 @@ interface NuxtOptionsWithNitro {
     [key: string]: unknown
   }
   build: { transpile: string[] }
+  css?: string[]
   vite?: NuxtViteOptions
   srcDir: string
   rootDir?: string
@@ -671,6 +672,12 @@ export default defineNuxtModule<ModuleOptions>({
       preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
     })
+    if (loaded.app.plugins.includes('@holo-js/panels')) {
+      opts.css = opts.css ?? []
+      if (!opts.css.includes('@holo-js/panels-vue/style.css')) {
+        opts.css.push('@holo-js/panels-vue/style.css')
+      }
+    }
     const storageSetup = resolveStorageSetup(storageModule, loaded)
     const s3Driver = resolver.resolve('./runtime/drivers/s3.js')
 

@@ -81,6 +81,53 @@ interface NextConfig {
   readonly [key: string]: unknown
 }
 
+interface HoloPanelsRouteManifest {
+  readonly routes: readonly {
+    readonly domain: string | null
+    readonly panelId: string
+    readonly source: string
+  }[]
+  readonly version: 1
+}
+
+interface NextRewrite {
+  readonly destination: string
+  readonly has?: readonly { readonly type: 'host', readonly value: string }[]
+  readonly source: string
+}
+
+const PANEL_ID = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u
+const PANEL_ROUTE = /^\/(?:[a-z0-9._~-]+|:[a-z][a-z0-9_]*)(?:\/(?:[a-z0-9._~-]+|:[a-z][a-z0-9_]*))*$/u
+const PANEL_DOMAIN = /^(?:[a-z0-9-]+|\{tenant(?::[a-z][a-z0-9_]*)?\})(?:\.(?:[a-z0-9-]+|\{tenant(?::[a-z][a-z0-9_]*)?\}))+$/u
+
+function panelDomainPattern(domain: string): string {
+  return domain.split('.').map(segment => segment.startsWith('{tenant') ? '(?<tenant>[^.]+)' : segment.replaceAll('-', '\\-')).join('\\.')
+}
+
+function holoPanelsRewrites(): readonly NextRewrite[] {
+  let value: unknown
+  try {
+    value = JSON.parse(readFileSync(join(process.cwd(), '.holo-js/generated/panels/panel-routes.json'), 'utf8'))
+  } catch {
+    return []
+  }
+  if (!value || typeof value !== 'object' || Reflect.get(value, 'version') !== 1 || !Array.isArray(Reflect.get(value, 'routes'))) return []
+  const manifest = value as HoloPanelsRouteManifest
+  if (manifest.routes.length > 1_000) throw new Error('[Holo] Holo Panels route manifests may contain at most 1000 routes.')
+  const rewrites = new Map<string, NextRewrite>()
+  for (const route of manifest.routes) {
+    if (!PANEL_ID.test(route.panelId) || !PANEL_ROUTE.test(route.source)) throw new Error('[Holo] Holo Panels generated an unsafe route manifest.')
+    if (route.domain !== null && !PANEL_DOMAIN.test(route.domain)) throw new Error('[Holo] Holo Panels generated an unsafe tenant domain.')
+    const rewrite: NextRewrite = {
+      destination: `/holo/panels/${route.panelId}/custom-route?panelRoute=${route.source}`,
+      ...(route.domain ? { has: [{ type: 'host', value: panelDomainPattern(route.domain) }] } : {}),
+      source: route.source,
+    }
+    rewrites.set(`${route.domain ?? ''}:${route.source}`, rewrite)
+  }
+  return Object.freeze([...rewrites.values()])
+}
+
 type WebpackConfig = {
   module?: {
     rules?: unknown[]
@@ -240,9 +287,27 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     },
     async rewrites() {
       const userResult = await userRewrites?.call(this)
+      const panelRewrites = holoPanelsRewrites()
 
       const raw = process.env.STORAGE_ROUTE_PREFIX?.trim() ?? '/storage'
       const needsRewrite = raw && raw !== '/' && raw !== '/storage'
+
+      if (panelRewrites.length > 0) {
+        const storageRewrites = needsRewrite
+          ? [{ source: `/${raw.replace(/^\/+|\/+$/g, '')}/:path*`, destination: '/storage/:path*' }]
+          : []
+        if (Array.isArray(userResult)) {
+          return { beforeFiles: [...panelRewrites, ...storageRewrites], afterFiles: userResult }
+        }
+        if (userResult && typeof userResult === 'object') {
+          const shaped = userResult as { beforeFiles?: unknown[], afterFiles?: unknown[], fallback?: unknown[] }
+          return {
+            ...shaped,
+            beforeFiles: [...panelRewrites, ...storageRewrites, ...(Array.isArray(shaped.beforeFiles) ? shaped.beforeFiles : [])],
+          }
+        }
+        return { beforeFiles: [...panelRewrites, ...storageRewrites] }
+      }
 
       if (!needsRewrite) {
         return userResult ?? []

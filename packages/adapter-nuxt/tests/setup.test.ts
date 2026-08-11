@@ -22,6 +22,7 @@ let adapterBuildPromise: Promise<{ adapterOutDir: string }> | null = null
 
 type RuntimeConfigShape = Record<string, unknown>
 type NuxtHarnessOptions = {
+  css?: string[]
   rootDir?: string
   srcDir: string
   runtimeConfig?: RuntimeConfigShape & {
@@ -326,6 +327,18 @@ afterAll(async () => {
 })
 
 describe('@holo-js/adapter-nuxt module setup', () => {
+  it('registers isolated panel styles when the Panels plugin is active', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/app.ts'), `export default { plugins: ['@holo-js/panels'] }\n`)
+    const { module } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+
+    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt as never)
+
+    expect(nuxt.options.css).toEqual(['@holo-js/panels-vue/style.css'])
+  })
+
   it('emits the exported runtime entrypoints in stub builds', async () => {
     const build = await runAdapterStub()
 

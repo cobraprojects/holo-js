@@ -14,7 +14,6 @@ import {
   type NormalizedHoloProjectConfig,
 } from '@holo-js/kernel'
 import { type LoadedHoloPlugin, loadProjectPluginPreparation, type LoadedProjectPreparer } from '../plugins'
-import { pathExists } from '../shared'
 import {
   assertManagedPathAllowed,
   assertNoSymbolicLinkParents,
@@ -610,10 +609,10 @@ async function assertSnapshotOwnership(snapshot: PreparedSnapshot, projectRoot: 
   const previousManaged = new Map(snapshot.previous?.managedArtifacts.map(artifact => [artifact.path, artifact]))
   for (const artifact of snapshot.managedArtifacts) {
     const previous = previousManaged.get(artifact.path)
-    if (!previous && await pathExists(artifact.absolutePath)) {
+    const actualDigest = await currentDigest(artifact.absolutePath)
+    if (!previous && actualDigest && actualDigest !== artifact.digest) {
       throw hostError('HOLO_PLUGIN_PREPARE_OWNERSHIP_CONFLICT', snapshot.plugin, `Managed artifact already exists and is unowned: ${artifact.path}.`)
     }
-    const actualDigest = await currentDigest(artifact.absolutePath)
     if (previous && actualDigest !== previous.digest && actualDigest !== artifact.digest) {
       throw hostError('HOLO_PLUGIN_PREPARE_MODIFIED_MANAGED_FILE', snapshot.plugin, `Managed artifact was modified by the application: ${artifact.path}.`)
     }

@@ -298,6 +298,29 @@ describe('plugin project preparation', () => {
     expect(await readFile(join(root, 'app/existing.ts'), 'utf8')).toBe('user')
   })
 
+  it('adopts an unowned managed file when its contents exactly match', async () => {
+    const root = await createProject()
+    await mkdir(join(root, 'app'), { recursive: true })
+    await writeFile(join(root, 'app/existing.ts'), 'plugin')
+    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+      apiVersion: 1,
+      prepare: () => ({
+        kind: 'prepared',
+        managedArtifacts: [{ path: 'app/existing.ts', contents: 'plugin' }],
+      }),
+    })])
+
+    await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
+      run: { kind: 'full', command: 'prepare', reason: 'explicit' },
+    })
+
+    expect(await readFile(join(root, 'app/existing.ts'), 'utf8')).toBe('plugin')
+    const ownership = JSON.parse(await readFile(join(root, '.holo-js/generated/.plugins/demo.json'), 'utf8')) as {
+      readonly managedArtifacts: readonly { readonly path: string }[]
+    }
+    expect(ownership.managedArtifacts).toEqual([expect.objectContaining({ path: 'app/existing.ts' })])
+  })
+
   it('rejects modified ownership, protected files, and duplicate artifacts without leaking contents', async () => {
     const root = await createProject()
     let mode: 'create' | 'update' | 'protected' | 'duplicate' = 'create'
