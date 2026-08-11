@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/kernel",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Holo-JS Framework - dependency-free contracts, plugins, and runtime lifecycle",
   "type": "module",
   "license": "MIT",

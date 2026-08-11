@@ -318,6 +318,42 @@ export default defineConfig({
     }
   })
 
+  it('mounts generated Holo Panels routes before App Router page catch-alls', async () => {
+    const root = await createProject()
+    await mkdir(join(root, '.holo-js/generated/panels'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/panels/panel-routes.json'), JSON.stringify({
+      routes: [
+        { domain: null, method: 'GET', panelId: 'admin', scope: 'public', source: '/admin/health' },
+        { domain: '{tenant}.example.com', method: 'POST', panelId: 'admin', scope: 'authenticated-tenant', source: '/admin/settings/:section' },
+      ],
+      version: 1,
+    }), 'utf8')
+    const previousCwd = process.cwd()
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    process.chdir(root)
+    delete process.env.STORAGE_ROUTE_PREFIX
+
+    try {
+      const config = withHolo({
+        rewrites: async () => [{ source: '/existing', destination: '/existing' }],
+      })
+      await expect(config.rewrites()).resolves.toEqual({
+        afterFiles: [{ source: '/existing', destination: '/existing' }],
+        beforeFiles: [
+          { destination: '/holo/panels/admin/custom-route?panelRoute=/admin/health', source: '/admin/health' },
+          {
+            destination: '/holo/panels/admin/custom-route?panelRoute=/admin/settings/:section',
+            has: [{ type: 'host', value: '(?<tenant>[^.]+)\\.example\\.com' }],
+            source: '/admin/settings/:section',
+          },
+        ],
+      })
+    } finally {
+      process.chdir(previousCwd)
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
   it('returns an empty rewrite list when no storage alias or user rewrites exist', async () => {
     const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
     delete process.env.STORAGE_ROUTE_PREFIX
