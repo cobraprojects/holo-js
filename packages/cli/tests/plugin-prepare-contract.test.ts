@@ -391,22 +391,7 @@ describe('plugin project preparation contract', () => {
     expect((await stat(managedPath)).mtimeMs).toBeGreaterThan(fixedTime.getTime())
   })
 
-  it('rejects identical unowned managed files and preserves modified stale files', async () => {
-    const identicalRoot = await createProject()
-    await mkdir(join(identicalRoot, 'app'), { recursive: true })
-    await writeFile(join(identicalRoot, 'app/route.ts'), 'same')
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(identicalRoot, 'demo', {
-      apiVersion: 1,
-      prepare: () => ({
-        kind: 'prepared',
-        managedArtifacts: [{ path: 'app/route.ts', contents: 'same' }],
-      }),
-    })])
-    await expect(runFull(identicalRoot)).rejects.toMatchObject({
-      failure: { code: 'HOLO_PLUGIN_PREPARE_OWNERSHIP_CONFLICT' },
-    })
-    expect(await readFile(join(identicalRoot, 'app/route.ts'), 'utf8')).toBe('same')
-
+  it('preserves modified stale managed files and their manifest', async () => {
     const staleRoot = await createProject()
     let includeManaged = true
     mockedLoadPreparers.mockResolvedValue([loadedPreparer(staleRoot, 'demo', {

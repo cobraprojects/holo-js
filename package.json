@@ -125,7 +125,7 @@
     "lint:fix": "node scripts/run-eslint.mjs --fix && node scripts/run-generated-eslint.mjs --fix",
     "lint:generated": "node scripts/run-generated-eslint.mjs",
     "typecheck": "bun run typecheck:libraries && bun run typecheck:tests",
-    "typecheck:libraries": "bun run --workspaces --if-present --sequential typecheck",
+    "typecheck:libraries": "node scripts/run-library-typecheck.mjs",
     "typecheck:tests": "node scripts/run-test-typecheck.mjs",
     "typecheck:db": "bun run --filter @holo-js/db typecheck",
     "test": "bun run test:dependency-policy && bun run --workspaces --if-present --sequential test && bun run test:acceptance",

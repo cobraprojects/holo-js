@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from 'node:fs'
-import { access, mkdir, readdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { basename, dirname, extname, relative, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path'
 import {
   addPlugin,
   addServerHandler,
@@ -200,6 +200,42 @@ function isModuleResolutionFailure(error: unknown): boolean {
       (error as { code?: unknown }).code === 'MODULE_NOT_FOUND'
       || (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
     )
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function safeGeneratedArtifactPath(value: string): boolean {
+  return !isAbsolute(value)
+    && value.length > 0
+    && value.split(/[\\/]/u).every(segment => segment.length > 0 && segment !== '.' && segment !== '..')
+}
+
+async function pluginGeneratedTypePaths(rootDir: string): Promise<readonly string[]> {
+  const generatedRoot = resolve(rootDir, '.holo-js/generated')
+  const manifestsRoot = resolve(generatedRoot, '.plugins')
+  const entries = await readdir(manifestsRoot, { withFileTypes: true }).catch((error: unknown) => {
+    if (isRecord(error) && error.code === 'ENOENT') return []
+    throw error
+  })
+  const paths: string[] = []
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+    const value = JSON.parse(await readFile(resolve(manifestsRoot, entry.name), 'utf8')) as unknown
+    if (!isRecord(value) || typeof value.pluginId !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value.pluginId) || !Array.isArray(value.generatedArtifacts)) {
+      throw new Error(`Invalid Holo plugin preparation manifest: ${entry.name}`)
+    }
+    for (const artifact of value.generatedArtifacts) {
+      if (!isRecord(artifact) || typeof artifact.path !== 'string' || !safeGeneratedArtifactPath(artifact.path)) {
+        throw new Error(`Invalid Holo plugin generated artifact in manifest: ${entry.name}`)
+      }
+      if (artifact.path.endsWith('.d.ts')) paths.push(resolve(generatedRoot, value.pluginId, artifact.path))
+    }
+  }
+
+  return Object.freeze([...new Set(paths)].sort())
 }
 
 interface NuxtHookContext {
@@ -666,13 +702,14 @@ export default defineNuxtModule<ModuleOptions>({
     const authTypesPath = resolve(rootDir, '.holo-js/generated/auth.d.ts')
     const authorizationTypesPath = resolve(rootDir, '.holo-js/generated/authorization/types.d.ts')
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
+    const pluginTypesPaths = await pluginGeneratedTypePaths(rootDir)
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
     const storageModule = await importOptionalStorageModule()
     const loaded = await loadConfigDirectory(rootDir, {
       preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
     })
-    if (loaded.app.plugins.includes('@holo-js/panels')) {
+    if ((loaded.app.plugins ?? []).includes('@holo-js/panels')) {
       opts.css = opts.css ?? []
       if (!opts.css.includes('@holo-js/panels-vue/style.css')) {
         opts.css.push('@holo-js/panels-vue/style.css')
@@ -810,6 +847,7 @@ export default defineNuxtModule<ModuleOptions>({
         references.push({ path: authTypesPath })
         references.push({ path: authorizationTypesPath })
         references.push({ path: modelRegistryTypesPath })
+        for (const path of pluginTypesPaths) references.push({ path })
       })
     }
   },

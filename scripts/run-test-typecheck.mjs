@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { removeStaleGeneratedConfigs } from './remove-stale-test-typecheck-configs.mjs'
+import { runTypecheckJobs } from './typecheck-runner.mjs'
 
 const packagesRoot = resolve('packages')
 const generatedConfigsRootPrefix = resolve('.holo-test-typecheck-')
@@ -15,12 +15,15 @@ async function main() {
     await removeStaleGeneratedConfigs(generatedConfigsRootPrefix)
     generatedConfigsRootDir = await mkdtemp(generatedConfigsRootPrefix)
 
+    const jobs = []
     for (const packageDir of packageDirs) {
       const configPaths = await resolveTestTsconfigs(packageDir, generatedConfigsRootDir)
       for (const configPath of configPaths) {
-        await runTypecheck(configPath, packageDir)
+        jobs.push({ name: testJobName(packageDir, configPath), configPath })
       }
     }
+
+    await runTypecheckJobs(jobs, 'Test typecheck')
   } finally {
     if (generatedConfigsRootDir) {
       await rm(generatedConfigsRootDir, {
@@ -143,25 +146,11 @@ async function pathExists(path) {
   }
 }
 
-function runTypecheck(configPath, packageDir) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const displayPath = relative(process.cwd(), packageDir) || packageDir
-    const child = spawn('bunx', ['tsc', '-p', configPath, '--noEmit'], {
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    })
-
-    child.on('exit', code => {
-      if (code === 0) {
-        resolvePromise()
-        return
-      }
-
-      rejectPromise(new Error(`Test typecheck failed for ${displayPath}`))
-    })
-
-    child.on('error', rejectPromise)
-  })
+function testJobName(packageDir, configPath) {
+  const packageName = relative(packagesRoot, packageDir)
+  return configPath.endsWith(join('type-tests', 'tsconfig.json'))
+    ? `${packageName} [type tests]`
+    : `${packageName} [tests]`
 }
 
 const entrypoint = process.argv[1]

@@ -217,7 +217,14 @@ describe('@holo-js/authorization feature flows', () => {
           throw new Error('Model "comments" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.')
         },
       },
-      query: () => ({ first: () => null, firstOrFail: () => null }),
+      query: () => ({
+        async first(): Promise<{ readonly id: string } | undefined> {
+          return undefined
+        },
+        async firstOrFail(): Promise<{ readonly id: string }> {
+          throw new Error('not implemented')
+        },
+      }),
     }
 
     expect(() => definePolicy('pending-schema-comments', pendingSchemaModel, {
@@ -237,7 +244,14 @@ describe('@holo-js/authorization feature flows', () => {
           throw new Error('Connection pool exhausted.')
         },
       },
-      query: () => ({ first: () => null, firstOrFail: () => null }),
+      query: () => ({
+        async first(): Promise<{ readonly id: string } | undefined> {
+          return undefined
+        },
+        async firstOrFail(): Promise<{ readonly id: string }> {
+          throw new Error('not implemented')
+        },
+      }),
     }
 
     expect(() => definePolicy('broken-target', brokenModel, {
