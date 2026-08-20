@@ -270,10 +270,39 @@ async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
   assert.ok(body.byteLength > 0, 'Expected the public image endpoint to return image bytes.')
 }
 
+function findRenderedImageSources(pageHtml) {
+  const sources = []
+  for (const [image] of pageHtml.matchAll(/<img\b[^>]*>/gi)) {
+    for (const attribute of ['src', 'srcSet']) {
+      const value = image.match(new RegExp(`\\b${attribute}=(["'])(.*?)\\1`, 'i'))?.[2]
+      if (!value) {
+        continue
+      }
+
+      for (const candidate of decodeHtmlAttribute(value).split(',')) {
+        sources.push(candidate.trim().split(/\s+/)[0])
+      }
+    }
+  }
+
+  return sources
+}
+
+function resolveRenderedImagePath(source, baseUrl) {
+  const resolved = new URL(source, baseUrl)
+  const optimized = resolved.searchParams.get('url')
+  return optimized ? new URL(optimized, baseUrl).pathname : resolved.pathname
+}
+
 async function assertAdminEditEndpointRendersImage({ baseUrl, fetchText, jar, postId, title, imageUrl }) {
   const editPage = await fetchText(`/admin/posts/${postId}/edit`, { jar })
   assert.ok(editPage.text.includes(title), 'Expected the edit endpoint to render the uploaded post.')
-  assert.ok(editPage.text.includes(imageUrl), 'Expected the edit endpoint to render the uploaded image URL.')
+  const renderedPaths = findRenderedImageSources(editPage.text)
+    .map(source => resolveRenderedImagePath(source, baseUrl))
+  assert.ok(
+    renderedPaths.includes(imageUrl),
+    `Expected the edit endpoint to render the uploaded image URL ${imageUrl}, received ${renderedPaths.join(', ') || 'no rendered images'}.`,
+  )
   await assertPublicImageUrlResponds(baseUrl, imageUrl)
 }
 

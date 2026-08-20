@@ -477,8 +477,20 @@ function getDefinitionKeyForTargetInstance(target: object): string | null {
     : null
 }
 
+function resolveDefinitionTableName(definition: AuthorizationTargetModelDefinition): string | undefined {
+  try {
+    return definition.table?.tableName?.trim() || undefined
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('is not present in the generated schema registry')) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 function buildDefinitionKey(definition: AuthorizationTargetModelDefinition): string {
-  const tableName = definition.table?.tableName?.trim()
+  const tableName = resolveDefinitionTableName(definition)
   const modelName = definition.name.trim()
   return tableName
     ? `${modelName}:${tableName}`
