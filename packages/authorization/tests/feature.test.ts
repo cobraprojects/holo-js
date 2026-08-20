@@ -208,4 +208,42 @@ describe('@holo-js/authorization feature flows', () => {
       includeDrafts: true,
     })).resolves.toBeUndefined()
   })
+
+  it('registers model policies before the generated schema registry resolves the target table', async () => {
+    const pendingSchemaModel = {
+      definition: {
+        name: 'Comment',
+        get table(): { readonly tableName: string } {
+          throw new Error('Model "comments" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.')
+        },
+      },
+      query: () => ({ first: () => null, firstOrFail: () => null }),
+    }
+
+    expect(() => definePolicy('pending-schema-comments', pendingSchemaModel, {
+      class: {
+        viewAny: () => true,
+      },
+    })).not.toThrow()
+
+    await expect(authorization.forUser({ id: 'user-1' }).can('viewAny', pendingSchemaModel)).resolves.toBe(true)
+  })
+
+  it('surfaces unexpected target definition failures during policy registration', () => {
+    const brokenModel = {
+      definition: {
+        name: 'Broken',
+        get table(): { readonly tableName: string } {
+          throw new Error('Connection pool exhausted.')
+        },
+      },
+      query: () => ({ first: () => null, firstOrFail: () => null }),
+    }
+
+    expect(() => definePolicy('broken-target', brokenModel, {
+      class: {
+        viewAny: () => true,
+      },
+    })).toThrow('Connection pool exhausted.')
+  })
 })
