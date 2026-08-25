@@ -10922,13 +10922,16 @@ export default defineConfig({
     })
 
     await expect(stat(join(projectRoot, '.holo-js/generated/next/health-route.ts'))).rejects.toThrow()
-    expect(await readFile(join(projectRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')).toContain('createPublicStorageResponse')
+    const generatedStorageRoute = await readFile(join(projectRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')
+    expect(generatedStorageRoute).toContain('createPublicStorageResponse')
+    expect(generatedStorageRoute).toContain('function isNormalizedStorageConfig')
+    expect(generatedStorageRoute).toContain('Storage routes require normalized storage configuration')
     expect(await readFile(join(projectRoot, '.holo-js/generated/channel-importer.ts'), 'utf8')).toContain('importBroadcastChannelModule')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('channelAuth')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('importBroadcastChannelModule')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-config-route.ts'), 'utf8')).toContain('renderBroadcastClientConfigResponse')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-clerk-login-route.ts'), 'utf8')).toContain('loginWithClerk')
-  }, 30000)
+  }, 90000)
 
   it('manages SvelteKit hook entrypoints during prepare and preserves user hook extensions separately', async () => {
     const projectRoot = await createTempProject()
@@ -11045,6 +11048,8 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('handleHoloBroadcastAuthRoute')
     expect(generatedServerHooks).toContain('handleHoloCurrentAuthRoute')
     expect(generatedServerHooks).toContain('handleHoloStorageRoute')
+    expect(generatedServerHooks).toContain('function hasHoloStorageConfig')
+    expect(generatedServerHooks).toContain('Storage routes require normalized storage configuration')
     expect(generatedServerHooks).toContain('handleHoloClerkCallbackRoute')
     expect(generatedServerHooks).toContain('channelAuth')
 

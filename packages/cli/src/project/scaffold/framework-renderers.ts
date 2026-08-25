@@ -434,12 +434,25 @@ function renderNextStorageRoute(): string {
 
 function renderNextGeneratedStorageRoute(): string {
   return [
-    'import { createPublicStorageResponse } from \'@holo-js/storage\'',
+    'import { createPublicStorageResponse, type NormalizedHoloStorageConfig } from \'@holo-js/storage\'',
     'import { holo } from \'./holo\'',
+    '',
+    'function isNormalizedStorageConfig(value: unknown): value is NormalizedHoloStorageConfig {',
+    '  return typeof value === \'object\'',
+    '    && value !== null',
+    '    && typeof Reflect.get(value, \'routePrefix\') === \'string\'',
+    '    && typeof Reflect.get(value, \'disks\') === \'object\'',
+    '    && Reflect.get(value, \'disks\') !== null',
+    '}',
     '',
     'export async function GET(request: Request) {',
     '  const app = await holo.getApp()',
-    '  return createPublicStorageResponse(app.projectRoot, app.config.storage, request)',
+    '  const storage = Reflect.get(app.config, \'storage\')',
+    '  if (!isNormalizedStorageConfig(storage)) {',
+    '    throw new Error(\'[Holo] Storage routes require normalized storage configuration.\')',
+    '  }',
+    '',
+    '  return createPublicStorageResponse(app.projectRoot, storage, request)',
     '}',
     '',
   ].join('\n')

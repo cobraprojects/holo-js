@@ -88,7 +88,7 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
         ]
       : []),
     ...(features.storageEnabled
-      ? ['import { createPublicStorageResponse } from \'@holo-js/storage\'']
+      ? ['import { createPublicStorageResponse, type NormalizedHoloStorageConfig } from \'@holo-js/storage\'']
       : []),
     ...(features.realtimeEnabled
       ? ['import { handleRealtimeMutationRequest, handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'']
@@ -138,6 +138,9 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     '}',
     '',
     'type HoloApp = Awaited<ReturnType<typeof holo.getApp>>',
+    ...(features.storageEnabled
+      ? ['type HoloStorageApp = HoloApp & { readonly config: HoloApp[\'config\'] & { readonly storage: NormalizedHoloStorageConfig } }']
+      : []),
     'type HoloRouteHandler = (event: RequestEvent, app: HoloApp) => Promise<Response | undefined>',
     ...(features.realtimeEnabled
       ? [
@@ -166,6 +169,19 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     '  return pathname === prefix || pathname.startsWith(`${prefix}/`)',
     '}',
     '',
+    ...(features.storageEnabled
+      ? [
+          'function hasHoloStorageConfig(app: HoloApp): app is HoloStorageApp {',
+          '  const storage = Reflect.get(app.config, \'storage\')',
+          '  return typeof storage === \'object\'',
+          '    && storage !== null',
+          '    && typeof Reflect.get(storage, \'routePrefix\') === \'string\'',
+          '    && typeof Reflect.get(storage, \'disks\') === \'object\'',
+          '    && Reflect.get(storage, \'disks\') !== null',
+          '}',
+          '',
+        ]
+      : []),
     ...(features.authEnabled
       ? [
           'async function handleHoloCurrentAuthRoute(event: RequestEvent): Promise<Response | undefined> {',
@@ -204,6 +220,10 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
           'async function handleHoloStorageRoute(event: RequestEvent, app: HoloApp): Promise<Response | undefined> {',
           '  if (event.request.method.toUpperCase() !== \'GET\') {',
           '    return undefined',
+          '  }',
+          '',
+          '  if (!hasHoloStorageConfig(app)) {',
+          '    throw new Error(\'[Holo] Storage routes require normalized storage configuration.\')',
           '  }',
           '',
           '  const prefix = normalizeRoutePrefix(app.config.storage.routePrefix, \'/storage\')',
