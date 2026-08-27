@@ -344,6 +344,7 @@ function closeSessionRedisAdapter(adapter: SessionRedisAdapter): Promise<void> |
 }
 
 type NotificationQuery = {
+  readonly id?: string
   readonly recipient: { readonly id: string | number, readonly type: string }
   readonly type?: string
   readonly dataMatches?: readonly {

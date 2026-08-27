@@ -280,6 +280,11 @@ export function normalizeNotificationQuery(query: NotificationQuery): Notificati
     throw new Error('[@holo-js/notifications] Notification queries must be objects.')
   }
   const recipient = normalizeDatabaseRouteFromValue(query.recipient)
+  const rawId: unknown = query.id
+  if (rawId !== undefined && (typeof rawId !== 'string' || !rawId.trim() || rawId.trim().length > 200)) {
+    throw new Error('[@holo-js/notifications] Notification query ids must be between 1 and 200 characters.')
+  }
+  const id = typeof rawId === 'string' ? rawId.trim() : undefined
   const rawType: unknown = query.type
   if (typeof rawType !== 'undefined' && typeof rawType !== 'string') {
     throw new Error('[@holo-js/notifications] Notification query types must be strings when provided.')
@@ -322,6 +327,7 @@ export function normalizeNotificationQuery(query: NotificationQuery): Notificati
   })
   return Object.freeze({
     recipient,
+    ...(id === undefined ? {} : { id }),
     ...(type ? { type } : {}),
     ...(dataMatches.length > 0 ? { dataMatches: Object.freeze(dataMatches) } : {}),
   })

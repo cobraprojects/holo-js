@@ -18,6 +18,7 @@ export interface CoreNotificationDataMatch {
 }
 
 export interface CoreNotificationQuery {
+  readonly id?: string
   readonly recipient: CoreNotificationDatabaseRoute
   readonly type?: string
   readonly dataMatches?: readonly CoreNotificationDataMatch[]
@@ -55,6 +56,9 @@ function applyNotificationScope(
 
   if (query.type !== undefined) {
     scoped = scoped.where('type', query.type)
+  }
+  if (query.id !== undefined) {
+    scoped = scoped.where('id', query.id)
   }
 
   for (const match of query.dataMatches ?? []) {

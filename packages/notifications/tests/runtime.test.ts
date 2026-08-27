@@ -910,11 +910,13 @@ export default {
     configureNotificationsRuntime({ store })
 
     const query = {
+      id: ' notif-1 ',
       recipient: { id: 'user-1', type: 'users' },
       type: ' invoice-paid ',
       dataMatches: [{ path: ['tenant', 'id'], value: 'tenant-1' }],
     } as const
     const normalizedQuery = {
+      id: 'notif-1',
       recipient: { id: 'user-1', type: 'users' },
       type: 'invoice-paid',
       dataMatches: [{ path: ['tenant', 'id'], value: 'tenant-1' }],
@@ -949,6 +951,8 @@ export default {
     await expect(listNotifications({ recipient, dataMatches: [{ path: ['__proto__'], value: 'unsafe' }] }, { limit: 20, offset: 0 })).rejects.toThrow('path segment')
     await expect(listNotifications({ recipient, dataMatches: [{ path: ['tenant'], value: { id: 1 } as never }] }, { limit: 20, offset: 0 })).rejects.toThrow('JSON scalars')
     await expect(listNotifications({ recipient, type: 42 } as never, { limit: 20, offset: 0 })).rejects.toThrow('must be strings')
+    await expect(listNotifications({ recipient, id: ' ' }, { limit: 20, offset: 0 })).rejects.toThrow('query ids')
+    await expect(listNotifications({ recipient, id: 'x'.repeat(201) }, { limit: 20, offset: 0 })).rejects.toThrow('query ids')
     await expect(listNotifications({ recipient: { id: ' ', type: 'users' } }, { limit: 20, offset: 0 })).rejects.toThrow('route ids')
     await expect(listNotifications({ recipient: { id: 'user-1', type: 'x'.repeat(201) } }, { limit: 20, offset: 0 })).rejects.toThrow('route types')
     await expect(listNotifications({ recipient }, { limit: 101, offset: 0 })).rejects.toThrow('limits')

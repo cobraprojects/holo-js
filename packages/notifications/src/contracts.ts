@@ -318,6 +318,7 @@ export interface NotificationPagination {
 }
 
 export interface NotificationQuery {
+  readonly id?: string
   readonly recipient: NotificationDatabaseRoute
   readonly type?: string
   readonly dataMatches?: readonly NotificationDataMatch[]

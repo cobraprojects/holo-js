@@ -5442,6 +5442,10 @@ export default defineBroadcastConfig({
       unread: 1,
     })
 
+    await expect(store.list({ ...query, id: 'notif-1' }, { limit: 1, offset: 0 })).resolves.toMatchObject({ records: [{ id: 'notif-1' }], total: 1, unread: 1 })
+    for (const id of ['notif-other-recipient', 'notif-other-tenant', 'missing']) {
+      await expect(store.list({ ...query, id }, { limit: 1, offset: 0 })).resolves.toMatchObject({ records: [], total: 0, unread: 0 })
+    }
     const allIds = notificationRecords.map(record => record.id)
     await expect(store.markAsRead(query, allIds)).resolves.toBe(2)
     await expect(store.unread(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
