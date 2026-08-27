@@ -2,6 +2,7 @@ import { spawnSync, spawn } from 'node:child_process'
 import { watch } from 'node:fs'
 import { readdir, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import {
   readTextFile,
@@ -214,6 +215,7 @@ export async function runProjectDependencyInstall(
 }
 
 type ProjectPrepareOptions = {
+  readonly prepareSchema?: boolean
   readonly syncFramework?: boolean
   readonly command?: HoloProjectPrepareCommand
   readonly reason?: Extract<HoloProjectPrepareRun, { kind: 'full' }>['reason']
@@ -232,9 +234,9 @@ export async function runProjectPrepare(
   io?: IoStreams,
   options: ProjectPrepareOptions = {},
 ): Promise<void> {
-  const project = await ensureProjectConfig(projectRoot)
-  await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
-  await prepareProjectDiscovery(projectRoot, project.config)
+  const project = options.prepareSchema === false
+    ? await ensureProjectConfig(projectRoot)
+    : await prepareProjectSchema(projectRoot)
   const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
   const framework = await resolveProjectFramework(projectRoot, frameworkProjectPath)
   const command = options.command ?? 'prepare'
@@ -297,6 +299,38 @@ export async function runProjectPrepare(
       }
     }
   }
+}
+
+export async function prepareProjectSchema(projectRoot: string): Promise<Awaited<ReturnType<typeof ensureProjectConfig>>> {
+  const project = await ensureProjectConfig(projectRoot)
+  await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
+  await prepareProjectDiscovery(projectRoot, project.config)
+  return project
+}
+
+export async function runProjectBuildPrepare(
+  io: IoStreams,
+  projectRoot: string,
+  spawnProcess: typeof spawn = spawn,
+): Promise<void> {
+  const workerPath = resolve(dirname(fileURLToPath(import.meta.url)), 'project-prepare-worker.mjs')
+  const child = spawnProcess(process.execPath, [workerPath], {
+    cwd: projectRoot,
+    env: { ...process.env, HOLO_PROJECT_PREPARE_ROOT: projectRoot },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }) as SpawnProcessLike
+  let stderr = ''
+  child.stdout?.on('data', chunk => io.stdout.write(chunk))
+  child.stderr?.on('data', (chunk) => {
+    stderr += String(chunk)
+    io.stderr.write(chunk)
+  })
+  const result = await new Promise<{ readonly code: number | null } | { readonly error: Error }>((resolvePromise) => {
+    child.on('error', error => resolvePromise({ error }))
+    child.on('close', code => resolvePromise({ code }))
+  })
+  if ('error' in result) throw result.error
+  if (result.code !== 0) throw new Error(stderr.trim() || 'Project preparation failed after generated schema hydration.')
 }
 
 async function runProjectHotPrepare(

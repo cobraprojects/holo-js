@@ -9755,6 +9755,8 @@ export default defineConfig({
       packageManager: 'bun@1.3.9',
     }, null, 2))
     const lifecycleCommandIo = createIo(projectRoot)
+    const prepareSchema = vi.fn(async () => ({ config: defaultProjectConfig() }))
+    const prepareBuild = vi.fn(async () => undefined)
     const runPrepare = vi.fn(async () => {})
     const runDevServer = vi.fn(async () => {})
     const runBuild = vi.fn(async () => {})
@@ -9771,6 +9773,8 @@ export default defineConfig({
       hydrateSchema,
       {},
       {
+        prepareProjectSchema: prepareSchema,
+        runProjectBuildPrepare: prepareBuild,
         runProjectPrepare: runPrepare,
         runProjectDevServer: runDevServer,
         runProjectBuild: runBuild,
@@ -9814,7 +9818,11 @@ export default defineConfig({
     } as never)
     const lifecycleOutput = lifecycleCommandIo.read().stdout
     expect(lifecycleOutput).toContain('Prepared Holo discovery artifacts.')
-    expect(runPrepare).toHaveBeenCalledTimes(2)
+    expect(runPrepare).toHaveBeenCalledOnce()
+    expect(prepareSchema).toHaveBeenCalledOnce()
+    expect(prepareSchema.mock.invocationCallOrder[0]).toBeLessThan(hydrateSchema.mock.invocationCallOrder[0]!)
+    expect(hydrateSchema.mock.invocationCallOrder[0]).toBeLessThan(prepareBuild.mock.invocationCallOrder[0]!)
+    expect(prepareBuild.mock.invocationCallOrder[0]).toBeLessThan(runBuild.mock.invocationCallOrder[0]!)
     expect(hydrateSchema).toHaveBeenCalledWith(projectRoot, 'hydrate-schema', {}, expect.any(Function))
     expect(runDevServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
     expect(runBuild).toHaveBeenCalledWith(lifecycleContext, projectRoot, undefined, ['artifact', '--webpack'])

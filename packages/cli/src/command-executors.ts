@@ -17,6 +17,8 @@ import type * as SecurityModule from './security'
 
 export type RuntimeExecutor = typeof RuntimeModule.withRuntimeEnvironment
 type ProjectDevCommandExecutors = {
+  prepareProjectSchema?: typeof DevModule.prepareProjectSchema
+  runProjectBuildPrepare?: typeof DevModule.runProjectBuildPrepare
   runProjectPrepare?: typeof DevModule.runProjectPrepare
   runProjectDevServer?: typeof DevModule.runProjectDevServer
   runProjectBuild?: typeof DevModule.runProjectBuild

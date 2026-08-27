@@ -16,6 +16,7 @@ export default defineConfig([
     ...sharedOptions,
     entry: {
       'index': 'src/index.ts',
+      'project-prepare-worker': 'src/project-prepare-worker.ts',
       'runtime-worker': 'src/runtime-worker.ts',
     },
     dts: true,
