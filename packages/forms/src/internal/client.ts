@@ -27,6 +27,8 @@ import {
 } from '@holo-js/validation'
 import { getClientCsrfField } from '../client-security'
 import { validationExceptionToFailure } from './validation-exception'
+import { FormClientState } from './state'
+export { FormClientState, collectFormDirtyPaths } from './state'
 import {
   areFormValuesEqual as areEqual,
   buildFormData,
@@ -175,17 +177,7 @@ export interface UseFormResult<TData, TSuccess = unknown, TFields = FormFieldTre
   applyServerState(result: ClientSubmitResult<TData, TSuccess>): ClientSubmitResult<TData, TSuccess>
 }
 
-type MutableState<TData, TSuccess> = {
-  values: TData
-  initialValues: TData
-  flattenedErrors: Record<string, readonly string[]>
-  touched: Set<string>
-  dirty: Set<string>
-  submitting: boolean
-  lastSubmission?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | FormSuccessPayload<TSuccess>
-  listeners: Set<() => void>
-  validationSequence: number
-}
+type MutableState<TData, TSuccess> = FormClientState<TData, TSuccess>
 
 const transportFailureMessage = 'Unable to submit the form right now. Please try again.'
 
@@ -353,10 +345,6 @@ export async function runWithBrowserFormElement<TData, TSuccess>(
   }
 
   return await formClient.submit()
-}
-
-function createTypedErrorBag<TData>(flattenedErrors: Record<string, readonly string[]>): ValidationErrorBag<TData> {
-  return createErrorBag<TData>(flattenedErrors)
 }
 
 function notifyListeners<TData, TSuccess>(state: MutableState<TData, TSuccess>): void {
@@ -721,17 +709,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
     normalizeObject<TData>(initialState?.values),
   )
 
-  const state: MutableState<TData, TSuccess> = {
-    values: cloneValue(initialValues),
-    initialValues: cloneValue(initialValues),
-    flattenedErrors: { ...(initialState?.errors ?? {}) },
-    touched: new Set<string>(),
-    dirty: new Set<string>(),
-    submitting: false,
-    lastSubmission: initialState,
-    listeners: new Set(),
-    validationSequence: 0,
-  }
+  const state = new FormClientState<TData, TSuccess>(initialValues, initialState)
 
   const validateOn = options.validateOn ?? 'submit'
   const fieldPaths = flattenLeafPaths(schemaDefinition.fields)
@@ -801,7 +779,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
   }
 
   async function submit(browserForm?: BrowserFormElement): Promise<ClientSubmitResult<TData, TSuccess>> {
-    state.submitting = true
+    const finishSubmission = state.startSubmission()
     notifyListeners(state)
     try {
       const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
@@ -850,7 +828,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
         data: undefined,
       } as FormSuccessPayload<TSuccess>)
     } finally {
-      state.submitting = false
+      finishSubmission()
       notifyListeners(state)
     }
   }
@@ -861,7 +839,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
       return state.values
     },
     get errors() {
-      return createTypedErrorBag<TData>(state.flattenedErrors)
+      return state.errors
     },
     get submitting() {
       return state.submitting

@@ -524,6 +524,19 @@ describe('@holo-js/validation contracts', () => {
     }
   })
 
+  it('validates collection constraints when item validation is unspecified', async () => {
+    const collectionSchema = schema({ values: { kind: 'field', definition: {
+      kind: 'array',
+      rules: [{ name: 'required', args: [] }, { name: 'min', args: [2] }],
+    } } })
+    const values = ['tag', 1, true, { title: 'Section' }]
+    expect(await collectionSchema['~standard'].validate({ values })).toEqual({ value: { values } })
+    const invalid = await collectionSchema['~standard'].validate({ values: ['tag'] })
+    expect(invalid.issues?.[0]?.message).toContain('at least 2')
+    const missing = await collectionSchema['~standard'].validate({ values: [] })
+    expect(missing.issues?.map(issue => issue.message)).toContain('This field is required.')
+  })
+
   it('applies post-validation rules to array elements', async () => {
     const memberSchema = schema({
       tags: field.array(

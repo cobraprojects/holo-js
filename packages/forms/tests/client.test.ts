@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema, ValidationException, type WebFileLike } from '../src'
-import { createFormClient as useForm, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
+import { createFormClient as useForm, FormClientState, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
 import { validationExceptionToFailure } from '../src/internal/validation-exception'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
@@ -8,6 +8,34 @@ const browserGlobal = globalThis as typeof globalThis & { document?: Document }
 const originalFetch = globalThis.fetch
 const originalFormData = globalThis.FormData
 const originalDocument = browserGlobal.document
+
+describe('shared client state', () => {
+  it('preserves nested values and typed errors while comparing edits with their baseline', () => {
+    const initial = { contacts: [{ email: 'before@example.com' }], title: 'Before' }
+    const state = new FormClientState(initial)
+    const values = { contacts: [{ email: 'after@example.com' }], title: 'Before' }
+    state.replace(values, initial, { 'contacts.0.email': ['Already registered'] }, new Set(['contacts.0.email']))
+    expect(state.values).toBe(values)
+    expect(state.initialValues).toBe(initial)
+    expect(state.errors.get('contacts.0.email')).toEqual(['Already registered'])
+    expect(state.dirtyPaths).toEqual(['contacts.0.email'])
+    state.replace(values, values, {}, new Set())
+    expect(state.dirtyPaths).toEqual([])
+    expect(state.errors.flatten()).toEqual({})
+  })
+
+  it('keeps a newer submission pending when an older one finishes or is cancelled', () => {
+    const state = new FormClientState({ title: '' })
+    const controller = new AbortController()
+    const finishFirst = state.startSubmission(controller.signal)
+    const finishSecond = state.startSubmission()
+    controller.abort()
+    finishFirst()
+    expect(state.submitting).toBe(true)
+    finishSecond()
+    expect(state.submitting).toBe(false)
+  })
+})
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
 type TestFormDataEntryValue = NonNullable<ReturnType<FormData['get']>>
 type TestBrowserFormControl = {
