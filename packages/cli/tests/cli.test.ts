@@ -44,6 +44,7 @@ import {
   printCommandList,
   resolvePackageManagerDevCommand,
   resolvePackageManagerInstallCommand,
+  runCli,
 } from '../src/cli'
 import {
   generateProjectAppKey,
@@ -1240,6 +1241,18 @@ afterAll(async () => {
 })
 
 describe('Holo CLI', () => {
+  it.each(['--version', '-v'])('prints the installed CLI version for %s outside a project', async (flag) => {
+    const workingDirectory = await mkdtemp(join(tmpdir(), 'holo-cli-version-'))
+    tempDirs.push(workingDirectory)
+    const versionIo = createIo(workingDirectory)
+
+    await expect(runCli([flag], versionIo.io)).resolves.toBe(0)
+    expect(versionIo.read()).toEqual({
+      stdout: `${HOLO_PACKAGE_VERSION}\n`,
+      stderr: '',
+    })
+  })
+
   it('lists internal commands and auto-discovers nested app commands', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

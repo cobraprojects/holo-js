@@ -23,6 +23,7 @@ import {
 import { generateProjectAppKey } from './app-key'
 import { ensureEmptyDirectory, fileExists } from './fs-utils'
 import { runWithSpinner, writeLine } from './io'
+import { HOLO_PACKAGE_VERSION } from './metadata'
 import { hasProjectDependency, pinProjectDependencyVersions, removeProjectDependency, upsertProjectDependency } from './package-json'
 import type * as ProjectPluginsModule from './project/plugins'
 import type * as ProjectScaffoldModule from './project/scaffold'
@@ -2146,6 +2147,11 @@ export function findCommand(
 export async function runCli(argv: readonly string[], io: IoStreams): Promise<number> {
   try {
     const requestedCommandName = argv[0]
+    if (requestedCommandName === '--version' || requestedCommandName === '-v') {
+      writeLine(io.stdout, HOLO_PACKAGE_VERSION)
+      return 0
+    }
+
     const usesCurrentDirectoryAsProjectRoot = requestedCommandName === 'new'
       || requestedCommandName === 'agents:install'
       || requestedCommandName === 'agent:install'

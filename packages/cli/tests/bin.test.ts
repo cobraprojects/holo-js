@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { HOLO_PACKAGE_VERSION } from '../src/metadata'
 
 type CliBinName = 'holo' | 'holo-js'
 
@@ -247,6 +248,14 @@ describe('holo bin', () => {
 
       expect(output).toContain('Internal commands:')
       expect(output).toContain('  list')
+
+      const version = execFileSync(linkedBinPath, ['--version'], {
+        cwd: packageRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      })
+
+      expect(version).toBe(`${HOLO_PACKAGE_VERSION}\n`)
     }
   }, 60000)
 })
