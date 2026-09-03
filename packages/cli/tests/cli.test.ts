@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { pathToFileURL } from 'node:url'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
 import { DB, createSchemaService } from '@holo-js/db'
@@ -1226,6 +1226,10 @@ async function withFakeBun<T>(callback: () => Promise<T>): Promise<T> {
 }
 
 const tempDirs: string[] = []
+
+beforeAll(() => {
+  ensureBuiltWorkspacePackagesSync()
+}, 300_000)
 
 afterEach(async () => {
   projectInternals.resetProjectModuleBundlerForTesting()

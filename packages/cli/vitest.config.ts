@@ -54,6 +54,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     maxWorkers: 2,
+    testTimeout: includeCliIntegration ? 30_000 : 5_000,
     exclude: includeCliIntegration ? [] : ['tests/cli.test.ts'],
     coverage: {
       provider: 'v8',

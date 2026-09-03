@@ -14,8 +14,18 @@ import { symlinkPackageDependency } from '../../../tests/support/published-packa
 const execFileAsync = promisify(execFile)
 const fixtureRoot = resolve(import.meta.dirname, 'fixtures/generic-project-plugin')
 const repositoryRoot = resolve(import.meta.dirname, '../../..')
-const publicCliEntrypoint = join(repositoryRoot, 'packages/cli/src/bin/holo.ts')
 const temporaryDirectories: string[] = []
+
+async function buildPublicCli(): Promise<string> {
+  const packageRoot = join(repositoryRoot, 'packages/cli')
+  const outDir = await mkdtemp(join(packageRoot, '.test-build-'))
+  temporaryDirectories.push(outDir)
+  await execFileAsync('bun', ['run', 'build'], {
+    cwd: packageRoot,
+    env: { ...process.env, HOLO_BUILD_OUT_DIR: outDir },
+  })
+  return join(outDir, 'bin/holo.mjs')
+}
 
 function createIo(projectRoot: string): IoStreams {
   const stdin = new PassThrough() as unknown as NodeJS.ReadStream
@@ -75,6 +85,7 @@ async function createProjectWithPackedPlugin(tarballPath: string): Promise<strin
   const projectRoot = await mkdtemp(join(tmpdir(), 'holo-packed-plugin-project-'))
   temporaryDirectories.push(projectRoot)
   await mkdir(join(projectRoot, 'config'), { recursive: true })
+  await mkdir(join(projectRoot, 'data'), { recursive: true })
   await writeFile(join(projectRoot, 'package.json'), `${JSON.stringify({
     name: 'packed-plugin-project',
     private: true,
@@ -142,9 +153,10 @@ async function readLifecycle(projectRoot: string): Promise<{
 
 async function runPublicHoloLifecycle(
   projectRoot: string,
+  publicCliEntrypoint: string,
   command: 'dev' | 'build',
 ): Promise<void> {
-  const child = spawn('bun', [publicCliEntrypoint, command], {
+  const child = spawn('node', [publicCliEntrypoint, command], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -176,6 +188,9 @@ async function runPublicHoloLifecycle(
     if (!observed) {
       throw new Error(`Public holo ${command} did not prepare the plugin.\nstdout:\n${stdout}\nstderr:\n${stderr}`)
     }
+    if (command === 'build') {
+      expect(await closed, `stdout:\n${stdout}\nstderr:\n${stderr}`).toEqual({ code: 0, signal: null })
+    }
   } finally {
     if (child.exitCode === null) {
       child.kill('SIGTERM')
@@ -199,6 +214,7 @@ afterEach(async () => {
 
 describe('packed external project plugin', () => {
   it('loads its command and prepares owned artifacts for prepare, dev, and build lifecycles', async () => {
+    const publicCliEntrypoint = await buildPublicCli()
     const tarballPath = await createPackedPlugin()
     const projectRoot = await createProjectWithPackedPlugin(tarballPath)
     const io = createIo(projectRoot)
@@ -244,7 +260,7 @@ describe('packed external project plugin', () => {
       'generated/generic-project-fixture.mjs',
     ), 'utf8')).resolves.toBe("export const genericProjectFixture = 'ready'\n")
 
-    await runPublicHoloLifecycle(projectRoot, 'dev')
+    await runPublicHoloLifecycle(projectRoot, publicCliEntrypoint, 'dev')
     expect(await readLifecycle(projectRoot)).toEqual({
       command: 'dev',
       kind: 'full',
@@ -263,7 +279,7 @@ describe('packed external project plugin', () => {
       plugin: 'generic-project-fixture',
     })
 
-    await runPublicHoloLifecycle(projectRoot, 'build')
+    await runPublicHoloLifecycle(projectRoot, publicCliEntrypoint, 'build')
     expect(await readLifecycle(projectRoot)).toEqual({
       command: 'build',
       kind: 'full',

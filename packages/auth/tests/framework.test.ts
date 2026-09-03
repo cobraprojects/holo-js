@@ -415,7 +415,7 @@ describe('@holo-js/auth framework helpers', () => {
     } finally {
       await rm(tempDir, { force: true, recursive: true })
     }
-  })
+  }, 30_000)
 
   it('keeps the current Next request available while route protection resolves auth state', async () => {
     const connection = vi.fn(async () => {})

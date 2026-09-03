@@ -87,6 +87,7 @@ describe('@holo-js/notifications root export typing', () => {
     type QueryAssertion = Expect<Equal<
       NotificationQuery,
       {
+        readonly id?: string
         readonly recipient: { readonly id: string | number, readonly type: string }
         readonly type?: string
         readonly dataMatches?: readonly {
