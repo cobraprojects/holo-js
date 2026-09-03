@@ -249,6 +249,9 @@ export default defineConfig({
   title: 'Holo',
   description: 'Framework documentation for Holo, a configurable backend runtime for Nuxt, Next.js, and SvelteKit.',
   cleanUrls: true,
+  sitemap: {
+    hostname: 'https://docs.holo-js.com',
+  },
   lang: 'en-US',
   lastUpdated: true,
   vite: {
