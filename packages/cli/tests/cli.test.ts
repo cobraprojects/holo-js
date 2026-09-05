@@ -6656,7 +6656,7 @@ export default defineMigration({
       .resolves.toContain('export const rooms = defineGeneratedTable("rooms", {')
   }, 120000)
 
-  it('rebuilds generated schema artifacts from already-ran migrations', async () => {
+  it('rebuilds generated schema artifacts when an already-ran migration reads database state', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
@@ -6693,7 +6693,7 @@ export default defineDatabaseConfig({
 `)
 
     await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
-import { defineMigration } from '@holo-js/db'
+import { DB, defineMigration } from '@holo-js/db'
 
 export default defineMigration({
   async up({ schema }) {
@@ -6701,8 +6701,18 @@ export default defineMigration({
       table.id()
       table.string('name')
     })
+
+    await DB.table('users').insert({ name: 'Ada' })
+    const users = await DB.table('users').get()
+    if (users.length > 0) {
+      await schema.createTable('profiles', (table) => {
+        table.id()
+        table.integer('user_id')
+      })
+    }
   },
   async down({ schema }) {
+    await schema.dropTable('profiles')
     await schema.dropTable('users')
   },
 })
@@ -6741,8 +6751,10 @@ registerGeneratedTables(tables)
     const generatedTypeScript = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
     const generatedRuntime = await readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')
     expect(generatedTypeScript).toContain('"name": column.string()')
+    expect(generatedTypeScript).toContain('export const profiles = defineGeneratedTable("profiles", {')
     expect(generatedTypeScript).not.toContain('stale_name')
     expect(generatedRuntime).toContain('"name": column.string()')
+    expect(generatedRuntime).toContain('export const profiles = defineGeneratedTable("profiles", {')
     expect(generatedRuntime).not.toContain('stale_name')
   }, 90000)
 

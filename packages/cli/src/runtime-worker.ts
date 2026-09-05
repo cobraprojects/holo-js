@@ -76,6 +76,7 @@ type DryRunSchemaConnection = {
   getCapabilities(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getCapabilities'] extends () => infer TCapabilities ? TCapabilities : never
   getSchemaName(): string | undefined
   getSchemaRegistry(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getSchemaRegistry'] extends () => infer TRegistry ? TRegistry : never
+  queryCompiled: ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['queryCompiled']
   executeCompiled(): Promise<{ affectedRows: 0 }>
   introspectCompiled(): Promise<{ rows: never[], rowCount: 0 }>
   transaction<TResult>(callback: (connection: DryRunSchemaConnection) => TResult | Promise<TResult>): Promise<TResult>
@@ -293,6 +294,7 @@ async function hydrateGeneratedSchemaFromRanMigrations(
     getCapabilities: () => realConnection.getCapabilities(),
     getSchemaName: () => realConnection.getSchemaName(),
     getSchemaRegistry: () => replayRegistry as never,
+    queryCompiled: realConnection.queryCompiled.bind(realConnection),
     executeCompiled: async () => ({ affectedRows: 0 }),
     introspectCompiled: async () => ({ rows: [], rowCount: 0 }),
     transaction: async <TResult>(callback: (connection: typeof dryRunConnection) => TResult | Promise<TResult>) => callback(dryRunConnection),
