@@ -2,6 +2,7 @@ import { DatabaseError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import { areModelEventsMuted } from './eventState'
+import { listModelObservers } from './modelObservers'
 import type { ModelDefinition, ModelLifecycleEventName } from './types'
 
 export class ModelEventDispatcher<TTable extends TableDefinition> {
@@ -43,7 +44,7 @@ export class ModelEventDispatcher<TTable extends TableDefinition> {
   }
 
   private resolveHandlers(eventName: ModelLifecycleEventName): readonly ((...args: unknown[]) => unknown)[] {
-    const observers = this.definition.observers.map((observer) => {
+    const observers = listModelObservers(this.definition).map((observer) => {
       return typeof observer === 'function' ? new (observer as new () => unknown)() : observer
     })
     const observerHandlers = observers

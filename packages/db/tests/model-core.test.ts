@@ -3914,6 +3914,41 @@ describe('model core slice', () => {
     await expect(Cancelled.create({ name: 'Blocked' })).rejects.toThrow('creating event cancelled')
   })
 
+  it('preserves duplicate configured observers', async () => {
+    const adapter = new InMemoryAdapter({
+      users: [{ id: 1, name: 'Mohamed' }],
+    }, { users: 1 })
+    const calls: string[] = []
+    const observer = {
+      retrieved() {
+        calls.push('retrieved')
+      },
+    }
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect('sqlite'),
+        }),
+      },
+    }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const User = defineModelFromTable(users, {
+      observers: [observer, observer],
+    })
+
+    await User.find(1)
+
+    expect(calls).toEqual(['retrieved', 'retrieved'])
+  })
+
   it('supports muting events and quiet create helpers', async () => {
     const adapter = new InMemoryAdapter({
       users: [{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }] }, { users: 1 })

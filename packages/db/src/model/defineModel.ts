@@ -1,5 +1,6 @@
 import { registerDynamicRelation } from './dynamicRelations'
 import { withoutModelEvents, withoutModelGuards } from './eventState'
+import { registerModelObserver } from './modelObservers'
 import { ModelRepository } from './ModelRepository'
 import { registerGlobalModel } from './ModelRegistry'
 import { registerMorphModel } from './morphRegistry'
@@ -56,6 +57,7 @@ type RelationConstraintMap<TRelations extends RelationMap> = Readonly<
   Partial<Record<ModelRelationPath<TRelations>, RelationConstraintCallback>>
 >
 const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
+const HOLO_MODEL_OBSERVER_REGISTRAR = Symbol.for('holo-js.db.model-observer-registrar')
 type MorphEntityTarget = {
   exists(): boolean
   getRepository(): {
@@ -895,6 +897,12 @@ function createStaticModelApi<
     const scoped = scope as (query: ModelQueryBuilder<TTable, TRelations>, ...args: readonly unknown[]) => ModelQueryBuilder<TTable, TRelations>
     ;(model as Record<string, unknown>)[name] = (...args: readonly unknown[]) => scoped(model.query(), ...args)
   }
+
+  Object.defineProperty(model, HOLO_MODEL_OBSERVER_REGISTRAR, {
+    value(observer: unknown) {
+      registerModelObserver(definition, observer)
+    },
+  })
 
   registerGlobalModel(model)
   registerMorphModel(definition.morphClass, model)

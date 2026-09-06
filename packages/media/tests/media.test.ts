@@ -917,6 +917,185 @@ describe('@holo-js/media', () => {
     expect(items.map(item => item.fileName)).toEqual(['first.txt', 'second.txt'])
   })
 
+  it('deletes attached media when its model is deleted', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+    const Post = defineMediaModel(BasePost, {})
+    const post = await Post.create({ title: 'Disposable' })
+    const first = await expectMediaAdded(post.addMedia({
+      contents: Buffer.from('first'),
+      fileName: 'first.txt',
+    }).toMediaCollection())
+    const second = await expectMediaAdded(post.addMedia({
+      contents: Buffer.from('second'),
+      fileName: 'second.txt',
+    }).toMediaCollection())
+
+    await post.delete()
+
+    expect(await Media.query().count()).toBe(0)
+    await expect(Storage.disk(first.record.disk).missing(first.record.path)).resolves.toBe(true)
+    await expect(Storage.disk(second.record.disk).missing(second.record.path)).resolves.toBe(true)
+  })
+
+  it('runs every defineModel observer lifecycle on media models', async () => {
+    const calls: string[] = []
+    const observedPostsTable = defineGeneratedTable('observed_posts', {
+      id: column.id(),
+      title: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    const schema = createSchemaService(DB.connection())
+    await schema.createTable('observed_posts', (table) => {
+      table.id()
+      table.string('title')
+      table.softDeletes()
+    })
+    const BasePost = defineModel(observedPostsTable, {
+      name: 'ObservedPost',
+      fillable: ['title'],
+      softDeletes: true,
+      observers: [{
+        retrieved() {
+          calls.push('retrieved')
+        },
+        creating() {
+          calls.push('creating')
+        },
+        created() {
+          calls.push('created')
+        },
+        updating() {
+          calls.push('updating')
+        },
+        updated() {
+          calls.push('updated')
+        },
+        saving() {
+          calls.push('saving')
+        },
+        saved() {
+          calls.push('saved')
+        },
+        deleting() {
+          calls.push('deleting')
+        },
+        trashed() {
+          calls.push('trashed')
+        },
+        forceDeleting() {
+          calls.push('forceDeleting')
+        },
+        forceDeleted() {
+          calls.push('forceDeleted')
+        },
+        restoring() {
+          calls.push('restoring')
+        },
+        restored() {
+          calls.push('restored')
+        },
+        deleted() {
+          calls.push('deleted')
+        },
+        replicating() {
+          calls.push('replicating')
+        },
+      }],
+    })
+    const Post = defineMediaModel(BasePost, {})
+    const created = await Post.create({ title: 'Observed' })
+    const post = await Post.findOrFail(created.id)
+
+    post.set('title', 'Updated')
+    await post.save()
+    post.replicate()
+    await post.delete()
+    await post.restore()
+    await post.forceDelete()
+
+    expect(calls).toEqual([
+      'saving',
+      'creating',
+      'created',
+      'saved',
+      'retrieved',
+      'saving',
+      'updating',
+      'updated',
+      'saved',
+      'replicating',
+      'deleting',
+      'trashed',
+      'deleted',
+      'restoring',
+      'restored',
+      'deleting',
+      'forceDeleting',
+      'forceDeleted',
+      'deleted',
+    ])
+  })
+
+  it('keeps media on soft delete and removes it on force delete', async () => {
+    const softPostsTable = defineGeneratedTable('soft_posts', {
+      id: column.id(),
+      title: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    const schema = createSchemaService(DB.connection())
+    await schema.createTable('soft_posts', (table) => {
+      table.id()
+      table.string('title')
+      table.softDeletes()
+    })
+    const SoftPost = defineMediaModel(defineModel(softPostsTable, {
+      name: 'SoftPost',
+      fillable: ['title'],
+      softDeletes: true,
+    }), {})
+    const post = await SoftPost.create({ title: 'Recoverable' })
+    const media = await expectMediaAdded(post.addMedia({
+      contents: Buffer.from('keep until force delete'),
+      fileName: 'recoverable.txt',
+    }).toMediaCollection())
+
+    await post.delete()
+
+    expect(await Media.query().count()).toBe(1)
+    await expect(Storage.disk(media.record.disk).exists(media.record.path)).resolves.toBe(true)
+
+    await post.forceDelete()
+
+    expect(await Media.query().count()).toBe(0)
+    await expect(Storage.disk(media.record.disk).missing(media.record.path)).resolves.toBe(true)
+  })
+
+  it('keeps the model and its media when attachment cleanup fails', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+    const Post = defineMediaModel(BasePost, {})
+    const post = await Post.create({ title: 'Atomic deletion' })
+    const first = await expectMediaAdded(post.addMedia({
+      contents: Buffer.from('first'),
+      fileName: 'first.txt',
+    }).toMediaCollection())
+    const second = await expectMediaAdded(post.addMedia({
+      contents: Buffer.from('second'),
+      fileName: 'second.txt',
+    }).toMediaCollection())
+    storageState.failDelete(second.record.disk, second.record.path)
+
+    await expect(post.delete()).rejects.toThrow(`delete failed for ${second.record.disk}`)
+
+    await expect(Post.find(post.id)).resolves.not.toBeUndefined()
+    expect(await Media.query().count()).toBe(2)
+    await expect(Storage.disk(first.record.disk).exists(first.record.path)).resolves.toBe(true)
+    await expect(Storage.disk(second.record.disk).exists(second.record.path)).resolves.toBe(true)
+  })
+
   it('prefers the public disk for implicit attachments when the storage default is private', async () => {
     storageState.setDefaultDisk('local')
 

@@ -9,6 +9,7 @@ import {
 } from './definitions/config'
 import { Media } from './model/Media'
 import { installEntityMediaMethods } from './model/entity'
+import { observeMediaModelDeletion } from './model/observer'
 import { registerMediaDefinition } from './registry'
 import type {
   CursorPaginatedResult,
@@ -182,6 +183,7 @@ type MediaEnabledResult<
 type MediaModelStatic = {
   readonly definition: {
     readonly name: string
+    readonly softDeletes: boolean
     readonly table: TableDefinition
   }
   readonly resolveRelationUsing: (name: string, resolver: DynamicRelationResolver) => unknown
@@ -293,6 +295,7 @@ export function defineMediaModel<
     resolveMediaDefinition(definition),
   )
   registerMediaDefinition(model, resolvedDefinition)
+  observeMediaModelDeletion(model)
 
   model.resolveRelationUsing('media', () => morphMany(
     () => Media,

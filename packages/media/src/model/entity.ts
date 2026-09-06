@@ -25,6 +25,21 @@ type MediaEntityPrototype = Entity<TableDefinition> & {
   __holoMediaInstalled__?: true
 }
 
+export async function clearEntityMedia(
+  entity: Entity<TableDefinition>,
+  collectionName?: string,
+): Promise<void> {
+  const query = createQuery(entity, collectionName)
+  if (!query) {
+    return
+  }
+
+  const rows = await query.get()
+  for (const row of rows) {
+    await new MediaItem(row, entity).delete()
+  }
+}
+
 function getOwnerKey(entity: Entity<TableDefinition>): string | null {
   const ownerDefinition = entity.getRepository().definition
   const ownerId = entity.get(ownerDefinition.primaryKey as never)
@@ -154,10 +169,7 @@ export function installEntityMediaMethods(): void {
   }
 
   prototype.clearMediaCollection = async function clearMediaCollection(collectionName?: string) {
-    const items = await this.getMedia(collectionName)
-    for (const item of items) {
-      await item.delete()
-    }
+    await clearEntityMedia(this, collectionName)
   }
 
   prototype.regenerateMedia = async function regenerateMedia(
