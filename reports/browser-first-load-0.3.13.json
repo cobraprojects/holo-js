@@ -1,0 +1,91 @@
+{
+  "withoutForms": {
+    "bytes": 425260,
+    "compressedBytes": 126454,
+    "resources": [
+      {
+        "path": "/_next/static/chunks/webpack-70c336f9a46f13b1.js",
+        "encodedBodySize": 1622,
+        "decodedBodySize": 3232,
+        "transferSize": 1922
+      },
+      {
+        "path": "/_next/static/chunks/d769f2f9-1ad06a1f5cc1e26d.js",
+        "encodedBodySize": 62877,
+        "decodedBodySize": 199863,
+        "transferSize": 63177
+      },
+      {
+        "path": "/_next/static/chunks/696-26f928a693e219b4.js",
+        "encodedBodySize": 61140,
+        "decodedBodySize": 221350,
+        "transferSize": 61440
+      },
+      {
+        "path": "/_next/static/chunks/main-app-33c8e701d7b32b2e.js",
+        "encodedBodySize": 512,
+        "decodedBodySize": 512,
+        "transferSize": 812
+      },
+      {
+        "path": "/_next/static/chunks/app/page-b5ca1ecde57150d5.js",
+        "encodedBodySize": 303,
+        "decodedBodySize": 303,
+        "transferSize": 603
+      }
+    ]
+  },
+  "withHoloForms": {
+    "bytes": 474150,
+    "compressedBytes": 141072,
+    "resources": [
+      {
+        "path": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+        "encodedBodySize": 1657,
+        "decodedBodySize": 3271,
+        "transferSize": 1957
+      },
+      {
+        "path": "/_next/static/chunks/main-app-ed7070235f26aae7.js",
+        "encodedBodySize": 513,
+        "decodedBodySize": 513,
+        "transferSize": 813
+      },
+      {
+        "path": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+        "encodedBodySize": 2373,
+        "decodedBodySize": 8152,
+        "transferSize": 2673
+      },
+      {
+        "path": "/_next/static/chunks/794-2e9f20eba326fbe9.js",
+        "encodedBodySize": 60562,
+        "decodedBodySize": 221390,
+        "transferSize": 60862
+      },
+      {
+        "path": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+        "encodedBodySize": 62876,
+        "decodedBodySize": 199864,
+        "transferSize": 63176
+      },
+      {
+        "path": "/_next/static/chunks/app/page-275fa6f8169a5fc5.js",
+        "encodedBodySize": 682,
+        "decodedBodySize": 1096,
+        "transferSize": 982
+      },
+      {
+        "path": "/_next/static/chunks/953-7e84cb14335a586d.js",
+        "encodedBodySize": 12409,
+        "decodedBodySize": 39864,
+        "transferSize": 12709
+      }
+    ]
+  },
+  "method": "Chromium cold browser contexts, production Next 16.2.4 servers, homepage only, Resource Timing encodedBodySize and decodedBodySize for fetched JavaScript after network idle. Same installed dependencies, layout, and redirect route; baseline page is a client component with no form imports. Excludes HTML, RSC payloads, headers, other routes not fetched, and user interaction.",
+  "difference": {
+    "bytes": 48890,
+    "compressedBytes": 14618
+  }
+}

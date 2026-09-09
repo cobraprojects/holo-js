@@ -4,6 +4,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/adapter-shared/client': resolve(__dirname, '../adapter-shared/src/client.ts'),
+      '@holo-js/adapter-shared/build': resolve(__dirname, '../adapter-shared/src/build.ts'),
       '@holo-js/adapter-shared': resolve(__dirname, '../adapter-shared/src/index.ts'),
       '@holo-js/auth/config': resolve(__dirname, '../auth/src/config.ts'),
       '@holo-js/broadcast/config': resolve(__dirname, '../broadcast/src/config.ts'),

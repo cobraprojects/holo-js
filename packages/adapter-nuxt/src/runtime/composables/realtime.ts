@@ -1,5 +1,5 @@
 import { onScopeDispose, reactive } from 'vue'
-import { normalizeHoloHttpError } from '@holo-js/adapter-shared'
+import { normalizeHoloHttpError } from '@holo-js/adapter-shared/client'
 import {
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,

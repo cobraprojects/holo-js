@@ -3,7 +3,7 @@ import {
   createRealtimeClientDefinitionTransform as createSharedRealtimeClientDefinitionTransform,
   type RealtimeDefinitionTransformResult,
   stripRealtimeServerHandlers,
-} from '@holo-js/adapter-shared'
+} from '@holo-js/adapter-shared/build'
 
 export { stripRealtimeServerHandlers }
 

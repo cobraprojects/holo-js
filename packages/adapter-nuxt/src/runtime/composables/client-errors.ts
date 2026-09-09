@@ -1,4 +1,4 @@
-import type { NormalizedHoloHttpError } from '@holo-js/adapter-shared'
+import type { NormalizedHoloHttpError } from '@holo-js/adapter-shared/client'
 
 type BrowserStyle = {
   cssText: string

@@ -1,11 +1,10 @@
 import { createSubscriber } from 'svelte/reactivity'
-import {
-  DEFAULT_VALIDATION_BAG,
-  createErrorBag,
-  type FormFailurePayload,
-  type FormSchema,
-  type InferFormData,
-  type ValidationErrorBag,
+import { DEFAULT_VALIDATION_BAG, createErrorBag } from '@holo-js/forms/schema'
+import type {
+  FormFailurePayload,
+  FormSchema,
+  InferFormData,
+  ValidationErrorBag,
 } from '@holo-js/forms'
 import {
   type ClientSubmitContext,

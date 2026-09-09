@@ -75,6 +75,12 @@
       ],
       "@holo-js/media/config": [
         "../media/src/projectConfig.ts"
+      ],
+      "@holo-js/adapter-shared/client": [
+        "../adapter-shared/src/client.ts"
+      ],
+      "@holo-js/adapter-shared/build": [
+        "../adapter-shared/src/build.ts"
       ]
     }
   },

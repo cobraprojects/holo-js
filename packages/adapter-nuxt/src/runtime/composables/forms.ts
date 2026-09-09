@@ -1,6 +1,6 @@
 import { onScopeDispose, reactive, shallowRef, watchEffect } from 'vue'
 import { useCookie } from '#app'
-import { normalizeHoloHttpError } from '@holo-js/adapter-shared'
+import { normalizeHoloHttpError } from '@holo-js/adapter-shared/client'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
 import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
 import {

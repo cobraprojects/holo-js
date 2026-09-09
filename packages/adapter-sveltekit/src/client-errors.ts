@@ -2,7 +2,7 @@ import {
   normalizeHoloHttpError,
   renderClientHttpErrorPage,
   type NormalizedHoloHttpError,
-} from '@holo-js/adapter-shared'
+} from '@holo-js/adapter-shared/client'
 
 export function normalizeSvelteKitClientHttpError(error: unknown): NormalizedHoloHttpError | undefined {
   return normalizeHoloHttpError(error)

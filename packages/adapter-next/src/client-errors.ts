@@ -2,7 +2,7 @@ import {
   normalizeHoloHttpError,
   renderClientHttpErrorPage,
   type NormalizedHoloHttpError,
-} from '@holo-js/adapter-shared'
+} from '@holo-js/adapter-shared/client'
 
 type NextHttpError = Error & { digest: `NEXT_HTTP_ERROR_FALLBACK;${number}` }
 const nextHttpAccessFallbackStatuses = new Set<number>([401, 403, 404])
