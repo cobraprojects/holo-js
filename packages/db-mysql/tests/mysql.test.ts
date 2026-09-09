@@ -4,7 +4,10 @@ import {
   createDatabase,
   createDialect,
   createMigrationService,
+  createSchemaService,
+  column,
   defineMigration,
+  MySQLSchemaCompiler,
   type DriverAdapter,
 } from '@holo-js/db'
 import { createMySQLAdapter } from '../src'
@@ -12,6 +15,64 @@ import { createMySQLAdapter } from '../src'
 const runLiveMySql = process.env.HOLO_MYSQL_INTEGRATION === '1' ? it : it.skip
 
 describe('@holo-js/db-mysql', () => {
+  runLiveMySql.each(['create', 'add', 'compiled-add'] as const)('enforces constrained foreign keys when using %s columns', async (operation) => {
+    const databaseName = `holo_foreign_keys_${randomUUID().replaceAll('-', '_')}`
+    const admin = createMySQLAdapter({
+      config: { host: '127.0.0.1', port: 3306, user: 'root', database: 'mysql' },
+    })
+    const adapter = createMySQLAdapter({
+      config: { host: '127.0.0.1', port: 3306, user: 'root', database: databaseName },
+    })
+    const schema = createSchemaService(createDatabase({ adapter, dialect: createDialect('mysql') }))
+
+    try {
+      await adapter.ensureDatabaseExists()
+      await schema.createTable('categories', (table) => {
+        table.id()
+      })
+      await schema.createTable('products', (table) => {
+        table.id()
+        if (operation === 'create') {
+          table.foreignId('category_id').nullable().constrained('categories').nullOnDelete().cascadeOnUpdate()
+        }
+      })
+      if (operation === 'add') {
+        await schema.table('products', (table) => {
+          table.foreignId('category_id').nullable().constrained('categories').nullOnDelete().cascadeOnUpdate()
+        })
+      }
+      if (operation === 'compiled-add') {
+        const compiler = new MySQLSchemaCompiler(identifier => `\`${identifier}\``)
+        const definition = column.foreignId().nullable().constrained('categories').nullOnDelete().cascadeOnUpdate()
+          .toDefinition({ name: 'category_id' })
+        await adapter.execute(compiler.compileAddColumn('products', definition).sql)
+      }
+
+      await expect(adapter.execute('insert into products (category_id) values (?)', [999]))
+        .rejects.toMatchObject({ code: 'ER_NO_REFERENCED_ROW_2' })
+
+      await adapter.execute('insert into categories (id) values (?)', [1])
+      await adapter.execute('insert into products (id, category_id) values (?, ?)', [1, 1])
+      await adapter.execute('update categories set id = ? where id = ?', [2, 1])
+      expect((await adapter.query<{ category_id: number }>('select category_id from products')).rows)
+        .toEqual([{ category_id: 2 }])
+
+      await adapter.execute('delete from categories where id = ?', [2])
+      expect((await adapter.query<{ category_id: number | null }>('select category_id from products')).rows)
+        .toEqual([{ category_id: null }])
+
+      await schema.table('products', (table) => {
+        table.dropForeign('products_category_id_foreign')
+      })
+      await expect(adapter.execute('insert into products (category_id) values (?)', [999]))
+        .resolves.toMatchObject({ affectedRows: 1 })
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`drop database if exists \`${databaseName}\``)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
   it('creates the configured database when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => [
       sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },

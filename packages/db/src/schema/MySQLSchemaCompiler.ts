@@ -2,9 +2,36 @@ import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { assertValidIndexName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
-import type { ColumnDefinition, TableIndexDefinition } from './types'
+import type { AnyColumnDefinition, ColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
 
 export class MySQLSchemaCompiler extends SQLSchemaCompiler {
+  protected override compileTableDefinitions(table: TableDefinition): string[] {
+    const columns = Object.values(table.columns)
+    const definitions = columns.map(column => this.compileColumn({ ...column, references: undefined }))
+
+    for (const column of columns) {
+      if (column.references) {
+        const constraintName = this.resolveForeignKeyName(table.tableName, column.name, column.references.constraintName)
+        definitions.push(this.compileForeignKeyConstraint(column.name, column.references, constraintName))
+      }
+    }
+
+    return definitions
+  }
+
+  override compileAddColumn(tableName: string, column: AnyColumnDefinition): { sql: string, source: string } {
+    const statement = super.compileAddColumn(tableName, { ...column, references: undefined })
+    if (!column.references) {
+      return statement
+    }
+
+    const constraintName = this.resolveForeignKeyName(tableName, column.name, column.references.constraintName)
+    return {
+      ...statement,
+      sql: `${statement.sql}, ADD ${this.compileForeignKeyConstraint(column.name, column.references, constraintName)}`,
+    }
+  }
+
   protected override getDialectLabel(): string {
     return 'MySQL'
   }

@@ -69,7 +69,7 @@ export abstract class SQLSchemaCompiler {
   compileCreateTable(table: TableDefinition): DDLStatement[] {
     assertValidIdentifierPath(table.tableName, 'Table name')
     assertUniqueResolvedIndexNames(table.tableName, table.indexes)
-    const columnSql = Object.values(table.columns).map(column => this.compileColumn(column))
+    const columnSql = this.compileTableDefinitions(table)
     const sql = `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`
     const statements: DDLStatement[] = [{
       sql,
@@ -126,17 +126,29 @@ export abstract class SQLSchemaCompiler {
     constraintName?: string,
   ): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
+    const resolvedConstraintName = this.resolveForeignKeyName(tableName, columnName, constraintName)
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compileForeignKeyConstraint(columnName, reference, resolvedConstraintName)}`,
+      source: `schema:createForeignKey:${tableName}:${resolvedConstraintName}`,
+    }
+  }
+
+  protected compileForeignKeyConstraint(
+    columnName: string,
+    reference: NonNullable<AnyColumnDefinition['references']>,
+    constraintName: string,
+  ): string {
     assertValidIdentifierSegment(columnName, 'Column name')
+    assertValidIdentifierSegment(reference.column, 'Referenced column name')
+    assertValidIdentifierSegment(constraintName, 'Foreign key name')
     if (!reference.table) {
       throw new SchemaError(
         `Foreign key column "${columnName}" must include a referenced table for ${this.getDialectLabel()} compilation.`,
       )
     }
 
-    const resolvedConstraintName = this.resolveForeignKeyName(tableName, columnName, constraintName)
     const parts = [
-      `ALTER TABLE ${this.compileIdentifierPath(tableName)}`,
-      `ADD CONSTRAINT ${this.quoteIdentifier(resolvedConstraintName)}`,
+      `CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
       `FOREIGN KEY (${this.quoteIdentifier(columnName)})`,
       `REFERENCES ${this.compileIdentifierPath(reference.table)} (${this.quoteIdentifier(reference.column)})`,
     ]
@@ -149,10 +161,7 @@ export abstract class SQLSchemaCompiler {
       parts.push(`ON UPDATE ${reference.onUpdate.toUpperCase()}`)
     }
 
-    return {
-      sql: parts.join(' '),
-      source: `schema:createForeignKey:${tableName}:${resolvedConstraintName}`,
-    }
+    return parts.join(' ')
   }
 
   compileDropForeignKey(tableName: string, constraintName: string): DDLStatement {
@@ -207,6 +216,10 @@ export abstract class SQLSchemaCompiler {
       sql: `ALTER INDEX ${this.quoteIdentifier(fromIndexName)} RENAME TO ${this.quoteIdentifier(toIndexName)}`,
       source: `schema:renameIndex:${tableName}:${fromIndexName}:${toIndexName}`,
     }
+  }
+
+  protected compileTableDefinitions(table: TableDefinition): string[] {
+    return Object.values(table.columns).map(column => this.compileColumn(column))
   }
 
   protected compileColumn(column: AnyColumnDefinition): string {
