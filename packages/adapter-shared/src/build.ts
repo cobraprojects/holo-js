@@ -223,3 +223,5 @@ export function createRealtimeClientDefinitionTransform(
     map: createSourceMap(source, sourceLines),
   })
 }
+
+export { compileBrowserValidation } from './validation-transform'

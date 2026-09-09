@@ -11,6 +11,9 @@
       ],
       "@holo-js/validation": [
         "../validation/src/index.ts"
+      ],
+      "@holo-js/validation/internal/compiled": [
+        "../validation/src/internal/compiled.ts"
       ]
     }
   },

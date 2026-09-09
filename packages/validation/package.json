@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./internal/compiled": {
+      "types": "./dist/internal/compiled.d.ts",
+      "import": "./dist/internal/compiled.mjs",
+      "default": "./dist/internal/compiled.mjs"
     }
   },
   "main": "./dist/index.mjs",

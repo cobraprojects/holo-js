@@ -24,13 +24,13 @@ import {
   isFieldDefinition,
   isPlainObject,
   issuesToFlat,
-  makeCompiledFieldSchema,
   normalizeFieldBuilder,
   normalizeFormData,
   normalizeRequestInput,
   parseByteSize,
-  resolveCompiledSchema,
 } from './contracts-support'
+
+type CompiledSchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>>
 
 type RuntimePostValidationContext = PostValidationContext & {
   readonly inputParent?: unknown
@@ -427,9 +427,10 @@ async function applyPostValidation(
 async function runSchemaValidation(
   fields: SchemaInputShape,
   rawInput: unknown,
+  compile: () => CompiledSchema,
 ): Promise<{ success: boolean; output: unknown; issues: Record<string, string[]> }> {
   const coerced = coerceShapeInput(fields, rawInput)
-  const compiled = resolveCompiledSchema(fields)
+  const compiled = compile()
   const result = await v.safeParseAsync(compiled, coerced)
   const issues: Record<string, string[]> = {}
   const requiredMissingPaths = collectRequiredMissingPaths(fields, coerced)
@@ -466,9 +467,10 @@ export function flatToStandardIssues(flat: Record<string, string[]>): StandardSc
 
 export function createSchemaStandardValidate<TShape extends SchemaInputShape>(
   fields: TShape,
+  compile: () => CompiledSchema,
 ): (value: unknown) => Promise<StandardSchemaV1Result<InferSchemaData<TShape>>> {
   return async (value: unknown) => {
-    const result = await runSchemaValidation(fields, value)
+    const result = await runSchemaValidation(fields, value, compile)
     if (!result.success) {
       return { issues: flatToStandardIssues(result.issues) }
     }
@@ -479,9 +481,10 @@ export function createSchemaStandardValidate<TShape extends SchemaInputShape>(
 async function runFieldValidation(
   definition: FieldDefinition,
   rawInput: unknown,
+  compile: () => CompiledSchema,
 ): Promise<{ success: boolean; output: unknown; issues: Record<string, string[]> }> {
   const coerced = coerceFieldValue(definition, rawInput)
-  const compiled = makeCompiledFieldSchema(definition)
+  const compiled = compile()
   const result = await v.safeParseAsync(compiled, coerced)
   const issues: Record<string, string[]> = {}
 
@@ -520,9 +523,10 @@ async function applyStandaloneFieldPostRules(
 
 export function createFieldStandardValidate<TOutput>(
   definition: FieldDefinition,
+  compile: () => CompiledSchema,
 ): (value: unknown) => Promise<StandardSchemaV1Result<TOutput>> {
   return async (value: unknown) => {
-    const result = await runFieldValidation(definition, value)
+    const result = await runFieldValidation(definition, value, compile)
     if (!result.success) {
       return { issues: flatToStandardIssues(result.issues) }
     }

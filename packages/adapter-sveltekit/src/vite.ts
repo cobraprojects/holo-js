@@ -1,3 +1,4 @@
+import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
 import { extname } from 'node:path'
 import { createRealtimeClientDefinitionTransform } from './realtime-definition-transform'
 
@@ -6,7 +7,7 @@ type VitePlugin = {
   readonly enforce: 'pre'
   transform(code: string, id: string, options?: { readonly ssr?: boolean }): null | {
     readonly code: string
-    readonly map: object
+    readonly map: object | null
   }
 }
 
@@ -24,6 +25,10 @@ export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
     name: 'holo-sveltekit-realtime-client-definitions',
     enforce: 'pre',
     transform(code, id, options) {
+      if (!options?.ssr && !id.includes('node_modules') && /\.[cm]?[jt]sx?$/.test(id)) {
+        const compiled = compileBrowserValidation(code, id)
+        if (compiled) return { code: compiled, map: null }
+      }
       if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id)) {
         return null
       }

@@ -39,9 +39,10 @@ import {
   normalizeSchemaShape,
   markDefinitionSensitive,
   parseByteSize,
-  resolveCompiledSchema,
 } from './contracts-support'
 import { createFieldStandardValidate, createSchemaStandardValidate, flatToStandardIssues, summarizeErrors, validateInternal } from './contracts-runtime'
+
+import { makeCompiledFieldSchema, resolveCompiledSchema } from './contracts-compiler'
 
 export * from './contracts-types'
 
@@ -54,7 +55,7 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     this['~standard'] = {
       version: 1,
       vendor: 'holo-js',
-      validate: createFieldStandardValidate<TOutput>(field.definition),
+      validate: createFieldStandardValidate<TOutput>(field.definition, () => makeCompiledFieldSchema(field.definition)),
       types: undefined as unknown as StandardSchemaV1Types<unknown, TOutput>,
     }
   }
@@ -282,7 +283,7 @@ export function defineSchema<TShape extends SchemaInputShape>(
     '~standard': {
       version: 1 as const,
       vendor: 'holo-js',
-      validate: createSchemaStandardValidate(fields),
+      validate: createSchemaStandardValidate(fields, () => resolveCompiledSchema(fields)),
       types: undefined as unknown as StandardSchemaV1Types<unknown, InferSchemaData<TShape>>,
     },
   }) as ValidationSchema<TShape>
@@ -472,7 +473,7 @@ function createValidationExceptionDigest<TData>(
   return `${VALIDATION_EXCEPTION_DIGEST_PREFIX}${encodeURIComponent(JSON.stringify(payload))}`
 }
 
-function parseValidationExceptionDigest<TData = Record<string, unknown>>(
+export function parseValidationExceptionDigest<TData = Record<string, unknown>>(
   value: unknown,
 ): ValidationExceptionDigestPayload<TData> | undefined {
   const digest = value

@@ -232,11 +232,16 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const existingTurbopack = nextConfig.turbopack ?? {}
   const existingIgnoreIssue = existingTurbopack.ignoreIssue ?? []
   const hasRealtime = isOptionalServerExternalPackageInstalled('@holo-js/realtime', packageManifest)
+  const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
   const mergedTurbopack: TurbopackConfig = {
     ...existingTurbopack,
     rules: {
       ...(existingTurbopack.rules ?? {}),
+      '*': [
+        ...(existingTurbopack.rules?.['*'] ? [existingTurbopack.rules['*']].flat() : []),
+        { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
+      ],
       ...(hasRealtime
         ? {
             '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
@@ -274,14 +279,11 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     turbopack: mergedTurbopack,
     webpack(config, context) {
       const nextWebpackConfig = userWebpack?.(config, context) ?? config
-      if (!hasRealtime) {
-        return nextWebpackConfig
-      }
-
       nextWebpackConfig.module = nextWebpackConfig.module ?? {}
       nextWebpackConfig.module.rules = [
         ...(nextWebpackConfig.module.rules ?? []),
-        createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer),
+        ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer)] : []),
+        ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
       ]
       return nextWebpackConfig
     },

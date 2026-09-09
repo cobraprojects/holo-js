@@ -50,6 +50,7 @@ export default defineConfig({
       '@holo-js/session': resolve(__dirname, '../session/src/index.ts'),
       '@holo-js/storage': resolve(__dirname, '../storage/src/index.ts'),
       '@holo-js/storage-s3': resolve(__dirname, '../storage-s3/src/index.ts'),
+      '@holo-js/validation/internal/compiled': resolve(__dirname, '../validation/src/internal/compiled.ts'),
       '@holo-js/validation': resolve(__dirname, '../validation/src/index.ts'),
       '#app': resolve(__dirname, 'tests/fixtures/nuxt-app.ts'),
     },

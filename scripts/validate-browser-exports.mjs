@@ -1,3 +1,4 @@
+import { verifyCompiledValidation } from './validate-compiled-validation.mjs'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdir, readFile } from 'node:fs/promises'
@@ -57,5 +58,6 @@ export async function verifyBrowserExports(staging, consumer) {
   assert.match(buildEntry.createRealtimeClientDefinitionTransform(source, '@holo-js/adapter-next/realtime', { preserveServerHandlers: true }).code, /server-secret/)
   assert.throws(() => buildEntry.createRealtimeClientDefinitionTransform('export const =', 'client'), SyntaxError)
   assert.equal(clientEntry.normalizeHoloHttpError({ status: 403, message: 'Forbidden' }).status, 403)
+  await verifyCompiledValidation({ build, directory, nodePaths: [join(root, 'node_modules'), join(root, 'node_modules/.bun/node_modules')], compile: buildEntry.compileBrowserValidation })
   console.log('Packaged root compatibility and compiler transformations passed')
 }

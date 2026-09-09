@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs'
+import { withHolo } from '@holo-js/adapter-next/config'
 
-export default {
+export default withHolo({
   webpack(config, { isServer }) {
     if (!isServer) {
       config.plugins.push({
@@ -13,4 +14,4 @@ export default {
     }
     return config
   },
-}
+})

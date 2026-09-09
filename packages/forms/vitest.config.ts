@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/validation/internal/compiled': fileURLToPath(new URL('../validation/src/internal/compiled.ts', import.meta.url)),
       '@holo-js/validation': fileURLToPath(new URL('../validation/src/index.ts', import.meta.url)),
     },
   },

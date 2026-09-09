@@ -66,7 +66,7 @@ async function verifyForm() {
     await page.getByRole('textbox', { name: 'Name' }).fill('forbidden')
     await page.getByRole('button', { name: 'Submit' }).click()
     await page.locator('#__holo_next_client_http_error__').filter({ hasText: '403' }).waitFor()
-    assert.equal(await page.title(), '403: Forbidden')
+    assert.equal(await page.title(), '403: This page could not be accessed.')
   } finally {
     await browser?.close()
     server.kill('SIGTERM')

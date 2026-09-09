@@ -1,0 +1,692 @@
+{
+  "settings": {
+    "runs": 5,
+    "cpuSlowdown": 4,
+    "downloadBitsPerSecond": 1600000,
+    "latencyMs": 150,
+    "coldBrowserContexts": true
+  },
+  "runs": [
+    {
+      "name": "baseline",
+      "round": 0,
+      "scriptExecutionMs": 92.286,
+      "taskMs": 146.417,
+      "fcp": 204,
+      "lcp": 204,
+      "cls": 0,
+      "observedBlockingMs": 27,
+      "longTasks": [
+        {
+          "start": 1061.5,
+          "duration": 77
+        }
+      ],
+      "jsBytes": 474012,
+      "compressedJsBytes": 140967,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-ed7070235f26aae7.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/953-7e84cb14335a586d.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-275fa6f8169a5fc5.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "compiled",
+      "round": 0,
+      "scriptExecutionMs": 87.431,
+      "taskMs": 140.181,
+      "fcp": 196,
+      "lcp": 196,
+      "cls": 0,
+      "observedBlockingMs": 23,
+      "longTasks": [
+        {
+          "start": 1056.2000000029802,
+          "duration": 73
+        }
+      ],
+      "jsBytes": 465852,
+      "compressedJsBytes": 138987,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-e725c7ce83c9fa52.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/285-5bb5eec099df3def.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-bcb013eb45c04cee.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "compiled",
+      "round": 1,
+      "scriptExecutionMs": 85.58200000000001,
+      "taskMs": 135.784,
+      "fcp": 188,
+      "lcp": 188,
+      "cls": 0,
+      "observedBlockingMs": 22,
+      "longTasks": [
+        {
+          "start": 1056.7000000029802,
+          "duration": 72
+        }
+      ],
+      "jsBytes": 465852,
+      "compressedJsBytes": 138987,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-e725c7ce83c9fa52.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/285-5bb5eec099df3def.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-bcb013eb45c04cee.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "baseline",
+      "round": 1,
+      "scriptExecutionMs": 90.119,
+      "taskMs": 143.018,
+      "fcp": 196,
+      "lcp": 196,
+      "cls": 0,
+      "observedBlockingMs": 27,
+      "longTasks": [
+        {
+          "start": 1063.800000011921,
+          "duration": 77
+        }
+      ],
+      "jsBytes": 474012,
+      "compressedJsBytes": 140967,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-ed7070235f26aae7.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/953-7e84cb14335a586d.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-275fa6f8169a5fc5.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "baseline",
+      "round": 2,
+      "scriptExecutionMs": 82.371,
+      "taskMs": 132.184,
+      "fcp": 196,
+      "lcp": 196,
+      "cls": 0,
+      "observedBlockingMs": 21,
+      "longTasks": [
+        {
+          "start": 1070.4000000059605,
+          "duration": 71
+        }
+      ],
+      "jsBytes": 474012,
+      "compressedJsBytes": 140967,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-ed7070235f26aae7.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/953-7e84cb14335a586d.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-275fa6f8169a5fc5.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "compiled",
+      "round": 2,
+      "scriptExecutionMs": 89.075,
+      "taskMs": 140.63500000000002,
+      "fcp": 196,
+      "lcp": 196,
+      "cls": 0,
+      "observedBlockingMs": 23,
+      "longTasks": [
+        {
+          "start": 1056.2999999970198,
+          "duration": 73
+        }
+      ],
+      "jsBytes": 465852,
+      "compressedJsBytes": 138987,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-e725c7ce83c9fa52.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/285-5bb5eec099df3def.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-bcb013eb45c04cee.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "compiled",
+      "round": 3,
+      "scriptExecutionMs": 93.002,
+      "taskMs": 140.606,
+      "fcp": 196,
+      "lcp": 196,
+      "cls": 0,
+      "observedBlockingMs": 26,
+      "longTasks": [
+        {
+          "start": 1055.7999999970198,
+          "duration": 76
+        }
+      ],
+      "jsBytes": 465852,
+      "compressedJsBytes": 138987,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-e725c7ce83c9fa52.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/285-5bb5eec099df3def.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-bcb013eb45c04cee.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "baseline",
+      "round": 3,
+      "scriptExecutionMs": 89.268,
+      "taskMs": 138.873,
+      "fcp": 192,
+      "lcp": 192,
+      "cls": 0,
+      "observedBlockingMs": 22,
+      "longTasks": [
+        {
+          "start": 1071.1000000089407,
+          "duration": 72
+        }
+      ],
+      "jsBytes": 474012,
+      "compressedJsBytes": 140967,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-ed7070235f26aae7.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/953-7e84cb14335a586d.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-275fa6f8169a5fc5.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "baseline",
+      "round": 4,
+      "scriptExecutionMs": 92.936,
+      "taskMs": 147.164,
+      "fcp": 188,
+      "lcp": 188,
+      "cls": 0,
+      "observedBlockingMs": 27,
+      "longTasks": [
+        {
+          "start": 1055.7000000029802,
+          "duration": 77
+        }
+      ],
+      "jsBytes": 474012,
+      "compressedJsBytes": 140967,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-ed7070235f26aae7.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/953-7e84cb14335a586d.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-275fa6f8169a5fc5.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    },
+    {
+      "name": "compiled",
+      "round": 4,
+      "scriptExecutionMs": 86.223,
+      "taskMs": 137.964,
+      "fcp": 188,
+      "lcp": 188,
+      "cls": 0,
+      "observedBlockingMs": 23,
+      "longTasks": [
+        {
+          "start": 1048.9000000059605,
+          "duration": 73
+        }
+      ],
+      "jsBytes": 465852,
+      "compressedJsBytes": 138987,
+      "scriptAttributes": [
+        {
+          "src": "/_next/static/chunks/4bd1b696-215e5051988c3dde.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/794-cede6662fa7bf8f3.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/main-app-e725c7ce83c9fa52.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/06f0e697-3196c154f94cf417.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/285-5bb5eec099df3def.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/app/page-bcb013eb45c04cee.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/polyfills-42372ed130431b0a.js",
+          "async": false,
+          "defer": false,
+          "type": ""
+        },
+        {
+          "src": "/_next/static/chunks/webpack-4e013256697d3c8e.js",
+          "async": true,
+          "defer": false,
+          "type": ""
+        }
+      ]
+    }
+  ],
+  "initialCoverage": []
+}

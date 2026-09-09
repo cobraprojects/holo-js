@@ -1,8 +1,8 @@
 import {
   type SerializedValidationException,
   isValidationException,
-  validationInternals,
 } from '@holo-js/validation'
+import { parseValidationExceptionDigest } from '@holo-js/validation/internal/compiled'
 import type { FormFailurePayload } from '../contracts'
 
 type SubmittedFormFailurePayload<TData> = FormFailurePayload<TData> & {
@@ -58,7 +58,7 @@ export function validationExceptionToFailure<TData>(
 ): SubmittedFormFailurePayload<TData> | undefined {
   const payload = isValidationException(error)
     ? error.toJSON() as SerializedValidationException<TData>
-    : validationInternals.parseValidationExceptionDigest<TData>(error)
+    : parseValidationExceptionDigest<TData>(error)
 
   if (payload) {
     return {

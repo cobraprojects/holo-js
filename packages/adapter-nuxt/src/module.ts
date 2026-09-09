@@ -1,3 +1,4 @@
+import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
 import { lstatSync, readFileSync } from 'node:fs'
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -307,6 +308,7 @@ interface NuxtOptionsWithNitro {
   _holoStorageRuntimeRegistered?: boolean
   _holoBroadcastAuthRouteRegistered?: boolean
   _holoRealtimeRouteRegistered?: boolean
+  _holoClientTransformsRegistered?: boolean
   _holoCoreRuntimeRegistered?: boolean
   _holoTypesRegistered?: boolean
 }
@@ -491,6 +493,10 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
       return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'))
     },
     transform(code: string, id: string, options?: { readonly ssr?: boolean }) {
+      if (!options?.ssr && !id.includes('node_modules') && /\.[cm]?[jt]sx?$/.test(id)) {
+        const compiled = compileBrowserValidation(code, id)
+        if (compiled) return { code: compiled, map: null }
+      }
       if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id)) {
         return null
       }
@@ -789,7 +795,7 @@ export default defineNuxtModule<ModuleOptions>({
       opts._holoBroadcastAuthRouteRegistered = true
     }
 
-    if (hasProjectPackage(rootDir, '@holo-js/realtime') && !opts._holoRealtimeRouteRegistered) {
+    if (!opts._holoClientTransformsRegistered) {
       const realtimeDefinitionPlugin = createRealtimeDefinitionVitePlugin(rootDir)
       opts.vite = opts.vite || {}
       addVitePlugin(opts.vite, realtimeDefinitionPlugin)
@@ -800,6 +806,10 @@ export default defineNuxtModule<ModuleOptions>({
 
         addVitePlugin(config, realtimeDefinitionPlugin)
       })
+      opts._holoClientTransformsRegistered = true
+    }
+
+    if (hasProjectPackage(rootDir, '@holo-js/realtime') && !opts._holoRealtimeRouteRegistered) {
       addPlugin({
         src: resolver.resolve('./runtime/plugins/realtime'),
         mode: 'all',

@@ -102,6 +102,9 @@
       ],
       "@holo-js/adapter-shared/build": [
         "../adapter-shared/src/build.ts"
+      ],
+      "@holo-js/validation/internal/compiled": [
+        "../validation/src/internal/compiled.ts"
       ]
     }
   },

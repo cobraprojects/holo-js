@@ -563,7 +563,7 @@ export default defineConfig({
         module: { rules: Array<{ test: RegExp, use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
       }
       expect(client.transformed).toBe(true)
-      expect(client.module.rules).toHaveLength(1)
+      expect(client.module.rules[1]?.use[0]?.loader).toContain('validation-loader')
       expect(client.module.rules[0]?.test.test('server/realtime/posts.ts')).toBe(true)
       expect(client.module.rules[0]?.use[0]).toMatchObject({
         loader: expect.stringContaining('realtime-definition-loader'),
