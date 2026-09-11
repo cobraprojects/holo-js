@@ -11367,9 +11367,10 @@ export default defineConfig({
     expect(prepare).toHaveBeenCalledTimes(3)
   })
 
-  it('restarts the holo dev child after a successful discovery refresh when the child is killable', async () => {
+  it.each([false, true])('restarts the holo dev child after an env change with explicit port %s', async (explicitPort) => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', 'PORT=4334\n')
     await writeProjectFile(projectRoot, 'server/commands/hello.mjs', `
 export default {
   description: 'Hello command.',
@@ -11416,14 +11417,15 @@ export default {
         return { close() {} } as unknown as FSWatcher
       }) as never,
       prepare,
-      ['--port=4334'],
+      explicitPort ? ['--port=6334'] : [],
     ))
 
     while (!watchCallback || (spawnedChildren.at(0)?.listenerCount('close') ?? 0) === 0) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
 
-    watchCallback('change', 'server/commands/hello.mjs')
+    await writeProjectFile(projectRoot, '.env', 'PORT=5334\n')
+    watchCallback('change', '.env')
     while (spawnedChildren.length < 2) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
@@ -11436,8 +11438,8 @@ export default {
     await expect(devPromise).resolves.toBeUndefined()
     expect(prepare).toHaveBeenCalledTimes(2)
     expect(invocations).toEqual([
-      [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', '--port=4334'],
-      [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', '--port=4334'],
+      [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', ...explicitPort ? ['--port=6334'] : ['--port', '4334']],
+      [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', ...explicitPort ? ['--port=6334'] : ['--port', '5334']],
     ])
   })
 

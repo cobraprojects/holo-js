@@ -1,3 +1,4 @@
+import { loadEnvironment } from '@holo-js/config'
 import { spawnSync, spawn } from 'node:child_process'
 import { watch } from 'node:fs'
 import { readdir, realpath, stat } from 'node:fs/promises'
@@ -136,6 +137,23 @@ export async function runProjectBuild(
   }
 }
 
+async function resolveServerArguments(projectRoot: string, args: readonly string[]): Promise<readonly string[]> {
+  if (args.some(arg => arg === '--port' || arg.startsWith('--port=') || arg === '-p')) {
+    return args
+  }
+
+  const environment = await loadEnvironment({ cwd: projectRoot, processEnv: process.env })
+  const port = environment.values.PORT
+  if (!port) {
+    return args
+  }
+  if (!/^\d+$/.test(port) || Number(port) > 65535) {
+    throw new Error('PORT must be an integer between 0 and 65535.')
+  }
+
+  return [...args, '--port', port]
+}
+
 export async function runProjectStartServer(
   io: IoStreams,
   projectRoot: string,
@@ -143,7 +161,8 @@ export async function runProjectStartServer(
   passthroughArgs: readonly string[] = [],
 ): Promise<void> {
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'start')
-  const child = spawnProcess(invocation.command, [...invocation.args, ...passthroughArgs], {
+  const serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
+  const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -803,6 +822,7 @@ export async function runProjectDevServer(
   prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
   passthroughArgs: readonly string[] = [],
 ): Promise<void> {
+  let serverArgs: readonly string[] = []
   let project = await ensureProjectConfig(projectRoot)
   let pluginWatches: readonly PluginPrepareWatch[] = []
   let watchedPathSnapshots = new Map<string, WatchedPathSnapshot>()
@@ -869,6 +889,7 @@ export async function runProjectDevServer(
     if (syncFramework || watchRootsChanged) {
       watchedPathSnapshots = await collectWatchedPathSnapshots(projectRoot, project, pluginWatches)
     }
+    serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
     await refreshNonRecursiveWatchers?.()
   }
 
@@ -986,7 +1007,7 @@ export async function runProjectDevServer(
 
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
   while (!shuttingDown) {
-    const child = spawnProcess(invocation.command, [...invocation.args, ...passthroughArgs], {
+    const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
       cwd: projectRoot,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
