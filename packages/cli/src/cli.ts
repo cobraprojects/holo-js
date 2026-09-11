@@ -1237,13 +1237,19 @@ export function createInternalCommands(
     {
       name: 'dev',
       description: 'Prepare Holo discovery artifacts and run the project dev script.',
-      usage: 'holo dev',
+      usage: 'holo dev [...frameworkArgs]',
       source: 'internal',
-      async prepare() {
-        return { args: [], flags: {} }
+      async prepare(input) {
+        return { args: input.args, flags: input.flags }
       },
-      async run() {
+      async run(input) {
         const runProjectDevServer = await resolveProjectExecutor(projectExecutors, 'runProjectDevServer')
+        const passthroughArgs = serializePassthroughInput(input)
+        if (passthroughArgs.length > 0) {
+          await runProjectDevServer(context, context.projectRoot, undefined, undefined, undefined, passthroughArgs)
+          return
+        }
+
         await runProjectDevServer(context, context.projectRoot)
       },
     },

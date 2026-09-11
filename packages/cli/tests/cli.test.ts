@@ -11386,11 +11386,13 @@ export default {
     }> = []
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
+    const invocations: Array<readonly string[]> = []
 
     const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
-      (() => {
+      ((_command: string, args: readonly string[]) => {
+        invocations.push(args)
         const child = new EventEmitter() as EventEmitter & {
           stdout: PassThrough
           stderr: PassThrough
@@ -11414,6 +11416,7 @@ export default {
         return { close() {} } as unknown as FSWatcher
       }) as never,
       prepare,
+      ['--port=4334'],
     ))
 
     while (!watchCallback || (spawnedChildren.at(0)?.listenerCount('close') ?? 0) === 0) {
@@ -11432,6 +11435,10 @@ export default {
     restartedChild.emit('close', 0)
     await expect(devPromise).resolves.toBeUndefined()
     expect(prepare).toHaveBeenCalledTimes(2)
+    expect(invocations).toEqual([
+      [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', '--port=4334'],
+      [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', '--port=4334'],
+    ])
   })
 
   it('treats child errors during a requested restart as a normal dev-server reload', async () => {

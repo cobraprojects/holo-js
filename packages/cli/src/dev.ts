@@ -801,6 +801,7 @@ export async function runProjectDevServer(
   spawnProcess: typeof spawn = spawn,
   createWatcher: WatchFactory = watch,
   prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
+  passthroughArgs: readonly string[] = [],
 ): Promise<void> {
   let project = await ensureProjectConfig(projectRoot)
   let pluginWatches: readonly PluginPrepareWatch[] = []
@@ -985,7 +986,7 @@ export async function runProjectDevServer(
 
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
   while (!shuttingDown) {
-    const child = spawnProcess(invocation.command, [...invocation.args], {
+    const child = spawnProcess(invocation.command, [...invocation.args, ...passthroughArgs], {
       cwd: projectRoot,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],

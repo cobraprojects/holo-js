@@ -3,6 +3,7 @@ import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { createInternalCommands } from '../src/cli'
 import { runProjectStartServer } from '../src/dev'
+import { parseTokens } from '../src/parsing'
 import type { InternalCommandContext, IoStreams } from '../src/cli-types'
 
 function createIo(projectRoot: string): IoStreams {
@@ -52,7 +53,12 @@ describe('start command', () => {
     )
   })
 
-  it('serializes holo start arguments and flags for the project start executor', async () => {
+  it.each([
+    { commandName: 'dev', tokens: ['--', '--port=4334'], forwarded: ['--port=4334'] },
+    { commandName: 'start', tokens: ['--', '--port=4334'], forwarded: ['--port=4334'] },
+    { commandName: 'dev', tokens: ['--port', '4334'], forwarded: ['--port', '4334'] },
+    { commandName: 'start', tokens: ['--port', '4334'], forwarded: ['--port', '4334'] },
+  ])('forwards $commandName $tokens through command preparation', async ({ commandName, tokens, forwarded }) => {
     const projectRoot = '/tmp/holo-start'
     const context: InternalCommandContext = {
       ...createIo(projectRoot),
@@ -67,19 +73,13 @@ describe('start command', () => {
       context,
       undefined,
       {},
-      { runProjectStartServer: runProjectStartServer as never },
+      { runProjectStartServer, runProjectDevServer: runProjectStartServer },
     )
-    const start = commands.find(command => command.name === 'start')
+    const start = commands.find(command => command.name === commandName)
 
-    const prepared = await start?.prepare?.({
-      args: ['standalone'],
-      flags: { hostname: '0.0.0.0', port: '3072', turbo: true },
-    }, context)
+    const prepared = await start?.prepare?.(parseTokens(tokens), context)
 
-    expect(prepared).toEqual({
-      args: ['standalone'],
-      flags: { hostname: '0.0.0.0', port: '3072', turbo: true },
-    })
+    expect(prepared).toEqual(parseTokens(tokens))
 
     await start?.run({
       projectRoot,
@@ -89,13 +89,11 @@ describe('start command', () => {
       loadProject: context.loadProject,
     })
 
-    expect(runProjectStartServer).toHaveBeenCalledWith(context, projectRoot, undefined, [
-      'standalone',
-      '--hostname',
-      '0.0.0.0',
-      '--port',
-      '3072',
-      '--turbo',
-    ])
+    expect(runProjectStartServer).toHaveBeenCalledWith(
+      context,
+      projectRoot,
+      ...commandName === 'dev' ? [undefined, undefined, undefined] : [undefined],
+      forwarded,
+    )
   })
 })
