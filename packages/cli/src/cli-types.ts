@@ -155,6 +155,7 @@ export type PackageManagerCommand = {
 }
 
 export type SpawnProcessLike = {
+  pid?: number
   stdout?: NodeJS.ReadableStream | null
   stderr?: NodeJS.ReadableStream | null
   stdin?: NodeJS.WritableStream | null

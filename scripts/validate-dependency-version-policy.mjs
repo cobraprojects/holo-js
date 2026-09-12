@@ -123,6 +123,27 @@ export async function collectPackageManifestFailures(root = repoRoot) {
   return failures
 }
 
+export async function collectNodeEngineFailures(root = repoRoot) {
+  const rootManifestPath = join(root, 'package.json')
+  const rootManifest = JSON.parse(await readFile(rootManifestPath, 'utf8'))
+  const supportedNodeVersions = rootManifest.engines?.node
+  const manifestPaths = await listTrackedPackageManifests(root)
+  const failures = []
+
+  if (typeof supportedNodeVersions !== 'string') {
+    return [`${rootManifestPath}: engines.node must define the supported Node.js versions.`]
+  }
+
+  for (const manifestPath of manifestPaths) {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    if (manifest.engines?.node !== supportedNodeVersions) {
+      failures.push(`${manifestPath}: engines.node must match the root range "${supportedNodeVersions}".`)
+    }
+  }
+
+  return failures
+}
+
 export async function collectCatalogPackageCoverageFailures(root = repoRoot) {
   const catalogPackages = await readWorkspaceCatalog(root)
   const manifestPaths = await listTrackedPackageManifests(root)
@@ -431,6 +452,7 @@ export async function runDependencyVersionPolicyValidation(root = repoRoot) {
     ...(await collectRootManifestFailures(root)),
     ...(await collectAppManifestFailures(root)),
     ...(await collectPackageManifestFailures(root)),
+    ...(await collectNodeEngineFailures(root)),
     ...(await collectCatalogPackageCoverageFailures(root)),
     ...(await collectScaffoldSourceFailures(root)),
   ]

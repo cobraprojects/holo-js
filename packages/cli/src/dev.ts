@@ -158,6 +158,21 @@ type ManagedChildProcessResult =
   | { kind: 'close', code: number | null, shutdownSignal?: NodeJS.Signals }
   | { kind: 'error', error: Error, shutdownSignal?: NodeJS.Signals }
 
+function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
+  if (process.platform !== 'win32' || child.pid === undefined) {
+    child.kill?.(signal)
+    return
+  }
+
+  const result = spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  if (result.status !== 0) {
+    child.kill?.(signal)
+  }
+}
+
 async function waitForManagedChildProcess(
   child: SpawnProcessLike,
   onShutdownSignal?: (signal: NodeJS.Signals) => void,
@@ -182,7 +197,7 @@ async function waitForManagedChildProcess(
 
       shutdownSignal = signal
       onShutdownSignal?.(signal)
-      child.kill?.(signal)
+      terminateChildProcess(child, signal)
     }
     function onSigint() {
       forwardSignal('SIGINT')

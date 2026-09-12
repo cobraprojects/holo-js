@@ -1,0 +1,36 @@
+name: Node platform compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  cli-server-lifecycle:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+        node:
+          - 22.12.0
+          - 24
+          - 26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd packages/cli build
+      - name: Test ports and server lifecycle
+        working-directory: packages/cli
+        run: node ../../node_modules/vitest/vitest.mjs --run tests/framework-port.test.ts --reporter=json

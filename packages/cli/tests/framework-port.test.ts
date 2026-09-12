@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { watch } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -16,6 +17,33 @@ const frameworks = [
   { framework: 'sveltekit', binary: 'vite', entry: 'build/index.js' },
 ] as const
 
+async function writeFrameworkProgram(
+  root: string,
+  framework: typeof frameworks[number],
+  mode: 'dev' | 'start',
+  source: readonly string[],
+): Promise<void> {
+  const usesFrameworkBinary = mode === 'dev' || framework.framework === 'next'
+  if (process.platform === 'win32' && usesFrameworkBinary) {
+    const packageName = framework.framework === 'sveltekit' ? 'vite' : framework.framework
+    const packageRoot = join(root, 'node_modules', packageName)
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'test-framework.mjs'), source.join('\n'))
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: packageName,
+      bin: { [framework.binary]: 'test-framework.mjs' },
+    }))
+    return
+  }
+
+  const entry = usesFrameworkBinary
+    ? join(root, 'node_modules/.bin', framework.binary)
+    : join(root, framework.entry)
+  await mkdir(dirname(entry), { recursive: true })
+  await writeFile(entry, ['#!/usr/bin/env node', ...source].join('\n'))
+  await chmod(entry, 0o755)
+}
+
 async function createRunner(framework: typeof frameworks[number], mode: 'dev' | 'start'): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-port-'))
   tempDirs.push(root)
@@ -23,14 +51,35 @@ async function createRunner(framework: typeof frameworks[number], mode: 'dev' | 
   await mkdir(dirname(runner), { recursive: true })
   await writeFile(runner, renderFrameworkRunner(framework))
   await writeFile(join(dirname(runner), 'project.json'), JSON.stringify(framework))
-  const entry = join(root, mode === 'dev' ? `node_modules/.bin/${framework.binary}` : framework.entry)
-  await mkdir(dirname(entry), { recursive: true })
-  await writeFile(entry, [
-    '#!/usr/bin/env node',
+  await writeFrameworkProgram(root, framework, mode, [
     'console.log(JSON.stringify({ args: process.argv.slice(2), port: process.env.PORT, nitroPort: process.env.NITRO_PORT }))',
-  ].join('\n'))
-  await chmod(entry, 0o755)
+  ])
   return runner
+}
+
+async function getAvailablePort(): Promise<number> {
+  const server = createServer()
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolvePromise)
+  })
+  const address = server.address()
+  await new Promise<void>((resolvePromise, reject) => {
+    server.close(error => error ? reject(error) : resolvePromise())
+  })
+  if (!address || typeof address === 'string') throw new Error('Could not allocate a test port.')
+  return address.port
+}
+
+async function assertPortIsReleased(port: number): Promise<void> {
+  const server = createServer()
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', resolvePromise)
+  })
+  await new Promise<void>((resolvePromise, reject) => {
+    server.close(error => error ? reject(error) : resolvePromise())
+  })
 }
 
 function killProcessIfRunning(pid: number): void {
@@ -103,24 +152,21 @@ it.each([
   const framework = frameworks[2]
   const runner = await createRunner(framework, mode)
   const root = resolve(dirname(runner), '../..')
+  const port = await getAvailablePort()
   const pidPath = join(root, 'framework.pid')
-  const stoppedPath = join(root, 'framework.stopped')
-  const entry = join(root, mode === 'dev' ? `node_modules/.bin/${framework.binary}` : framework.entry)
-  await writeFile(entry, [
-    '#!/usr/bin/env node',
+  await writeFrameworkProgram(root, framework, mode, [
     'import { writeFileSync } from \'node:fs\'',
+    'import { createServer } from \'node:http\'',
     `const pidPath = ${JSON.stringify(pidPath)}`,
-    `const stoppedPath = ${JSON.stringify(stoppedPath)}`,
+    `const port = ${port}`,
+    'const server = createServer((_request, response) => response.end(\'ready\'))',
     'for (const signal of [\'SIGINT\', \'SIGTERM\']) {',
     '  process.on(signal, () => {',
-    '    writeFileSync(stoppedPath, signal)',
-    '    process.exit(0)',
+    '    server.close(() => process.exit(0))',
     '  })',
     '}',
-    'writeFileSync(pidPath, String(process.pid))',
-    'setInterval(() => {}, 1000)',
-  ].join('\n'))
-  await chmod(entry, 0o755)
+    'server.listen(port, \'127.0.0.1\', () => writeFileSync(pidPath, String(process.pid)))',
+  ])
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'shutdown-fixture', type: 'module' }))
   await mkdir(join(root, 'config'), { recursive: true })
   await writeFile(join(root, 'config/app.ts'), 'export default { name: \'Shutdown fixture\' }')
@@ -137,13 +183,17 @@ it.each([
   const previousSignalListeners = new Set(process.listeners(signal))
   let frameworkPid: number | undefined
   const commandPromise = mode === 'dev'
-    ? runProjectDevServer(io, root, undefined, () => watch(root, () => {}), async () => {})
-    : runProjectStartServer(io, root)
+    ? runProjectDevServer(io, root, undefined, () => watch(root, () => {}), async () => {}, ['--port', String(port)])
+    : runProjectStartServer(io, root, undefined, ['--port', String(port)])
 
   try {
     await vi.waitFor(async () => {
       frameworkPid = Number(await readFile(pidPath, 'utf8'))
       expect(frameworkPid).toBeGreaterThan(0)
+    })
+    await vi.waitFor(async () => {
+      const response = await fetch(`http://127.0.0.1:${port}`)
+      await expect(response.text()).resolves.toBe('ready')
     })
     const signalListener = process.listeners(signal)
       .find(listener => !previousSignalListeners.has(listener))
@@ -151,7 +201,7 @@ it.each([
     signalListener?.(signal)
 
     await expect(commandPromise).resolves.toBeUndefined()
-    await expect(readFile(stoppedPath, 'utf8')).resolves.toBe(signal)
+    await assertPortIsReleased(port)
     expect(process.listeners(signal).every(listener => previousSignalListeners.has(listener))).toBe(true)
   } finally {
     if (frameworkPid) {
@@ -161,7 +211,7 @@ it.each([
   }
 })
 
- describe.each(frameworks)('$framework environment port', (framework) => {
+describe.each(frameworks)('$framework environment port', (framework) => {
   describe.each(['dev', 'start'] as const)('%s', (mode) => {
     it.each([
       { source: '.env', shell: undefined, args: [], expected: '1500' },

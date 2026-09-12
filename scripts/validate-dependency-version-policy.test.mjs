@@ -7,6 +7,7 @@ import { afterEach, test } from 'node:test'
 import { promisify } from 'node:util'
 import {
   collectCatalogPackageCoverageFailures,
+  collectNodeEngineFailures,
   collectPackageManifestFailures,
   collectRootManifestFailures,
   collectScaffoldSourceFailures,
@@ -252,4 +253,32 @@ test('dependency policy validator requires the catalog to include every package'
 
   assert.equal(failures.length, 1)
   assert.match(failures[0], /@holo-js\/example/)
+})
+
+test('dependency policy validator keeps package Node.js support aligned with the root', async () => {
+  const repoRoot = await createTestScaffold({
+    'package.json': [
+      '{',
+      '  "engines": {',
+      '    "node": "^22.12.0 || ^24.0.0 || ^26.0.0"',
+      '  }',
+      '}',
+      '',
+    ],
+    'packages/example/package.json': [
+      '{',
+      '  "name": "@holo-js/example",',
+      '  "version": "0.1.4",',
+      '  "engines": {',
+      '    "node": ">=22.12.0"',
+      '  }',
+      '}',
+      '',
+    ],
+  })
+
+  const failures = await collectNodeEngineFailures(repoRoot)
+
+  assert.equal(failures.length, 1)
+  assert.match(failures[0], /engines\.node must match the root range/)
 })

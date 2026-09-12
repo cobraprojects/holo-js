@@ -6,14 +6,29 @@ import { join } from 'node:path'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const { chromium } = createRequire(join(root, 'package.json'))('playwright')
+const cliPath = join(root, 'packages/cli/dist/bin/holo.mjs')
 const browser = await chromium.launch({ headless: true })
 const apps = process.argv.slice(2)
+
+async function stopServer(server) {
+  if (server.exitCode !== null || server.signalCode !== null) return
+
+  server.kill('SIGTERM')
+  await Promise.race([
+    new Promise(resolvePromise => server.once('exit', resolvePromise)),
+    new Promise(resolvePromise => setTimeout(resolvePromise, 5000)),
+  ])
+  if (server.exitCode === null && server.signalCode === null) {
+    server.kill('SIGKILL')
+  }
+}
+
 try {
   for (const [index, app] of (apps.length ? apps : ['blog-next', 'blog-nuxt', 'blog-sveltekit']).entries()) {
     const port = 3520 + index
     const origin = `http://localhost:${port}`
     let output = ''
-    const server = spawn('bun', ['run', 'start'], { cwd: join(root, 'apps', app), detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PORT: String(port), NITRO_PORT: String(port), APP_URL: origin, ORIGIN: origin } })
+    const server = spawn(process.execPath, [cliPath, 'start'], { cwd: join(root, 'apps', app), stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PORT: String(port), NITRO_PORT: String(port), APP_URL: origin, ORIGIN: origin } })
     server.stdout.on('data', data => { output += data })
     server.stderr.on('data', data => { output += data })
     const context = await browser.newContext()
@@ -62,7 +77,7 @@ try {
       process.stdout.write(`${app}: production login/register blur validation passed; no validation requests or browser exceptions\n`)
     } finally {
       await context.close()
-      if (server.exitCode === null) process.kill(-server.pid, 'SIGTERM')
+      await stopServer(server)
     }
   }
 } finally {
