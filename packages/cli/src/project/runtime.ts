@@ -194,7 +194,7 @@ export async function bundleProjectModule(
       logLevel: 'silent',
       packages: options.bundleDependencies ? 'bundle' : 'external',
       platform: 'node',
-      target: 'node20',
+      target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: false,
       plugins: options.bundleDependencies ? [createHoloPackageBundlerPlugin(projectRoot)] : [],

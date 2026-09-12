@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-next",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - Next.js adapter",
   "type": "module",
   "license": "MIT",
@@ -68,5 +68,8 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

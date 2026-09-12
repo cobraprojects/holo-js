@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/queue-redis",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - Redis queue driver",
   "type": "module",
   "license": "MIT",
@@ -36,5 +36,8 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

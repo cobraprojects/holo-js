@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/security",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - CSRF and rate-limit contracts, config, and runtime seams",
   "type": "module",
   "license": "MIT",
@@ -85,5 +85,8 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

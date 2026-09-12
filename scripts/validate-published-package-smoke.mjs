@@ -60,16 +60,30 @@ async function getAvailablePort() {
 }
 
 async function stopServer(server) {
-  if (server.exitCode !== null) return
+  if (server.exitCode !== null || server.signalCode !== null) return
 
-  server.kill('SIGTERM')
+  signalServer(server, 'SIGTERM')
   await Promise.race([
     new Promise(resolvePromise => server.once('exit', resolvePromise)),
     new Promise(resolvePromise => setTimeout(resolvePromise, 5000)),
   ])
-  if (server.exitCode === null) {
-    server.kill('SIGKILL')
+  if (server.exitCode === null && server.signalCode === null) {
+    signalServer(server, 'SIGKILL')
   }
+}
+
+function signalServer(server, signal) {
+  if (process.platform !== 'win32' && server.pid) {
+    try {
+      process.kill(-server.pid, signal)
+      return
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
+      throw error
+    }
+  }
+
+  server.kill(signal)
 }
 
 async function assertProductionApp(appRoot, app) {
@@ -77,6 +91,7 @@ async function assertProductionApp(appRoot, app) {
   const output = []
   const server = spawn('bun', ['run', 'start'], {
     cwd: appRoot,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       APP_URL: `http://127.0.0.1:${port}`,

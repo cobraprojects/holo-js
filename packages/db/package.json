@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - portable database, ORM, migrations, factories, and seeders",
   "type": "module",
   "license": "MIT",
@@ -40,5 +40,8 @@
     "@holo-js/db-sqlite": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

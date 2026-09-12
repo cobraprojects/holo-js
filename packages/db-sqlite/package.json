@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db-sqlite",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - SQLite database adapter",
   "type": "module",
   "license": "MIT",
@@ -21,6 +21,9 @@
     "stub": "tsup --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   },
   "peerDependencies": {
     "@holo-js/db": "catalog:"

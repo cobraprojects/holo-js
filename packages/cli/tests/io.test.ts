@@ -58,7 +58,7 @@ describe('CLI IO', () => {
 
     expect(supportsSpinner(io)).toBe(false)
     expect(spinnerMock.spinner).not.toHaveBeenCalled()
-    expect(io.stdout.read()?.toString()).toBe('Loading...\nLoaded.\n')
+    expect(io.stdout.read(io.stdout.readableLength)?.toString()).toBe('Loading...\nLoaded.\n')
   })
 
   it('starts and stops the spinner for real terminal streams', async () => {

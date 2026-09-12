@@ -6,7 +6,7 @@ files plus Holo-JS-owned server directories.
 
 ## Requirements
 
-- Node 20 or newer
+- Node 22.12 or newer
 - a modern package manager (npm, pnpm, yarn, or bun)
 - one of: Nuxt, Next.js, or SvelteKit
 - SQLite, Postgres, or MySQL

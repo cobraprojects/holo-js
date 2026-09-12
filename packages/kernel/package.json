@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/kernel",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - dependency-free contracts, plugins, and runtime lifecycle",
   "type": "module",
   "license": "MIT",
@@ -32,5 +32,8 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

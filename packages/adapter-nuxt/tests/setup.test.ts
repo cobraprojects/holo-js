@@ -476,29 +476,32 @@ describe('@holo-js/adapter-nuxt module setup', () => {
   }, 60000)
 
   it('resolves installed Holo client optimizer dependencies from the project root', async () => {
-    const root = await createProject()
     const { moduleInternals } = await loadAdapterModule()
+    const emptyRoot = await createProject()
 
-    expect(moduleInternals.resolveClientOptimizeDeps(root)).toEqual([])
+    expect(moduleInternals.resolveClientOptimizeDeps(emptyRoot)).toEqual([])
     expect(moduleInternals.isModuleResolutionFailure(null)).toBe(false)
     expect(moduleInternals.isModuleResolutionFailure({ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' })).toBe(false)
     expect(moduleInternals.isModuleResolutionFailure({ code: 'MODULE_NOT_FOUND' })).toBe(true)
     expect(moduleInternals.isModuleResolutionFailure({ code: 'ERR_MODULE_NOT_FOUND' })).toBe(true)
 
-    const nuxt = createNuxtHarness(root)
+    const nuxt = createNuxtHarness(emptyRoot)
     moduleInternals.addViteOptimizeDeps(nuxt.options as never, [])
     expect(nuxt.options.vite).toBeUndefined()
 
     moduleInternals.addViteOptimizeDeps(nuxt.options as never, ['@holo-js/validation > valibot'])
     expect(getOptimizeDepsInclude(nuxt)).toEqual(['@holo-js/validation > valibot'])
 
-    await linkHoloPackage(root, 'validation')
-    expect(moduleInternals.resolveClientOptimizeDeps(root)).toEqual([
+    const validationRoot = await createProject()
+    await linkHoloPackage(validationRoot, 'validation')
+    expect(moduleInternals.resolveClientOptimizeDeps(validationRoot)).toEqual([
       '@holo-js/validation > valibot',
     ])
 
-    await linkHoloPackage(root, 'forms')
-    expect(moduleInternals.resolveClientOptimizeDeps(root)).toEqual([
+    const formsRoot = await createProject()
+    await linkHoloPackage(formsRoot, 'forms')
+    await linkHoloPackage(formsRoot, 'validation')
+    expect(moduleInternals.resolveClientOptimizeDeps(formsRoot)).toEqual([
       '@holo-js/forms > @holo-js/validation > valibot',
       '@holo-js/validation > valibot',
     ])

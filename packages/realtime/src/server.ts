@@ -253,7 +253,7 @@ async function bundleRealtimeModule(
       outfile: outputPath,
       packages: 'external',
       platform: 'node',
-      target: 'node20',
+      target: 'node22',
     })
     const inputPaths = [...new Set(Object.keys(result.metafile.inputs).map(path => resolve(projectRoot, path)))].sort()
     const fingerprints = await Promise.all(inputPaths.map(async (path) => {

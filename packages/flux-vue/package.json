@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/flux-vue",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - Vue and Nuxt composable skeletons for Flux",
   "type": "module",
   "license": "MIT",
@@ -35,5 +35,8 @@
     "typescript": "catalog:",
     "vue": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

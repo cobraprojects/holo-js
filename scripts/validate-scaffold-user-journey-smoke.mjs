@@ -465,6 +465,7 @@ export default defineSessionConfig({
   })
   const devServer = spawn(realNpm, ['run', 'dev'], {
     cwd: projectRoot,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       ...localPackageEnv,
@@ -537,17 +538,31 @@ async function waitForRenderedApp(journey, server) {
 }
 
 async function stopServer(server) {
-  if (server.exitCode !== null) return
+  if (server.exitCode !== null || server.signalCode !== null) return
 
-  server.kill('SIGTERM')
+  signalServer(server, 'SIGTERM')
   await Promise.race([
     new Promise(resolvePromise => server.once('exit', resolvePromise)),
     new Promise(resolvePromise => setTimeout(resolvePromise, 5_000)),
   ])
 
-  if (server.exitCode === null) {
-    server.kill('SIGKILL')
+  if (server.exitCode === null && server.signalCode === null) {
+    signalServer(server, 'SIGKILL')
   }
+}
+
+function signalServer(server, signal) {
+  if (process.platform !== 'win32' && server.pid) {
+    try {
+      process.kill(-server.pid, signal)
+      return
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
+      throw error
+    }
+  }
+
+  server.kill(signal)
 }
 
 async function runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPackageEnv) {
@@ -610,6 +625,7 @@ export default defineMigration({
 
   const server = spawn(realNpm, ['run', 'start'], {
     cwd: projectRoot,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       ...localPackageEnv,
@@ -619,13 +635,19 @@ export default defineMigration({
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  let serverStdout = ''
+  let serverStderr = ''
+  server.stdout?.on('data', chunk => serverStdout += String(chunk))
+  server.stderr?.on('data', chunk => serverStderr += String(chunk))
 
   try {
     await waitForRenderedApp(journey, server)
   } catch (error) {
-    const stdout = server.stdout?.read()?.toString() ?? ''
-    const stderr = server.stderr?.read()?.toString() ?? ''
-    throw new Error([error instanceof Error ? error.message : String(error), stdout, stderr].filter(Boolean).join('\n'))
+    throw new Error([
+      error instanceof Error ? error.message : String(error),
+      serverStdout,
+      serverStderr,
+    ].filter(Boolean).join('\n'))
   } finally {
     await stopServer(server)
   }

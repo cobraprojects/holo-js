@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/broadcast",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Holo-JS Framework - broadcast contracts, channel definitions, and driver registration seams",
   "type": "module",
   "license": "MIT",
@@ -69,5 +69,8 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }
