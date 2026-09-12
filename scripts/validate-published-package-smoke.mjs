@@ -62,36 +62,22 @@ async function getAvailablePort() {
 async function stopServer(server) {
   if (server.exitCode !== null || server.signalCode !== null) return
 
-  signalServer(server, 'SIGTERM')
+  server.kill('SIGTERM')
   await Promise.race([
     new Promise(resolvePromise => server.once('exit', resolvePromise)),
     new Promise(resolvePromise => setTimeout(resolvePromise, 5000)),
   ])
   if (server.exitCode === null && server.signalCode === null) {
-    signalServer(server, 'SIGKILL')
+    server.kill('SIGKILL')
   }
-}
-
-function signalServer(server, signal) {
-  if (process.platform !== 'win32' && server.pid) {
-    try {
-      process.kill(-server.pid, signal)
-      return
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
-      throw error
-    }
-  }
-
-  server.kill(signal)
 }
 
 async function assertProductionApp(appRoot, app) {
   const port = await getAvailablePort()
   const output = []
-  const server = spawn('bun', ['run', 'start'], {
+  const cliPath = join(appRoot, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
+  const server = spawn(process.execPath, [cliPath, 'start'], {
     cwd: appRoot,
-    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       APP_URL: `http://127.0.0.1:${port}`,

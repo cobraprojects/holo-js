@@ -354,7 +354,7 @@ async function restoreProjectFiles(files) {
   }
 }
 
-async function runConfiguredDriverUserJourney(projectRoot, framework, realNpm, localPackageEnv) {
+async function runConfiguredDriverUserJourney(projectRoot, framework, cliPath, localPackageEnv) {
   const configPaths = ['database', 'queue', 'cache', 'storage', 'session', 'redis']
     .map(name => join(projectRoot, 'config', `${name}.ts`))
   const originalFiles = new Map()
@@ -463,9 +463,8 @@ export default defineSessionConfig({
       server.close(error => error ? reject(error) : resolvePromise(address.port))
     })
   })
-  const devServer = spawn(realNpm, ['run', 'dev'], {
+  const devServer = spawn(process.execPath, [cliPath, 'dev'], {
     cwd: projectRoot,
-    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       ...localPackageEnv,
@@ -540,29 +539,15 @@ async function waitForRenderedApp(journey, server) {
 async function stopServer(server) {
   if (server.exitCode !== null || server.signalCode !== null) return
 
-  signalServer(server, 'SIGTERM')
+  server.kill('SIGTERM')
   await Promise.race([
     new Promise(resolvePromise => server.once('exit', resolvePromise)),
     new Promise(resolvePromise => setTimeout(resolvePromise, 5_000)),
   ])
 
   if (server.exitCode === null && server.signalCode === null) {
-    signalServer(server, 'SIGKILL')
+    server.kill('SIGKILL')
   }
-}
-
-function signalServer(server, signal) {
-  if (process.platform !== 'win32' && server.pid) {
-    try {
-      process.kill(-server.pid, signal)
-      return
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
-      throw error
-    }
-  }
-
-  server.kill(signal)
 }
 
 async function runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPackageEnv) {
@@ -616,16 +601,15 @@ export default defineMigration({
   await overlayLocalPackages(projectRoot)
   await assertGeneratedSchema(projectRoot, tableName)
   if (journey.framework === 'nuxt') {
-    await runConfiguredDriverUserJourney(projectRoot, journey.framework, realNpm, localPackageEnv)
+    await runConfiguredDriverUserJourney(projectRoot, journey.framework, cliPath, localPackageEnv)
   }
   run(journey.framework, realNpm, ['run', 'lint'], { cwd: projectRoot, env: localPackageEnv })
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'typecheck'], { cwd: projectRoot, env: localPackageEnv })
   run(journey.framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: localPackageEnv })
 
-  const server = spawn(realNpm, ['run', 'start'], {
+  const server = spawn(process.execPath, [cliPath, 'start'], {
     cwd: projectRoot,
-    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       ...localPackageEnv,

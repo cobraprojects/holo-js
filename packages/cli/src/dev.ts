@@ -154,6 +154,50 @@ async function resolveServerArguments(projectRoot: string, args: readonly string
   return [...args, '--port', port]
 }
 
+type ManagedChildProcessResult =
+  | { kind: 'close', code: number | null, shutdownSignal?: NodeJS.Signals }
+  | { kind: 'error', error: Error, shutdownSignal?: NodeJS.Signals }
+
+async function waitForManagedChildProcess(
+  child: SpawnProcessLike,
+  onShutdownSignal?: (signal: NodeJS.Signals) => void,
+): Promise<ManagedChildProcessResult> {
+  return await new Promise(resolvePromise => {
+    let settled = false
+    let shutdownSignal: NodeJS.Signals | undefined
+
+    const detachSignalHandlers = () => {
+      process.off('SIGINT', onSigint)
+      process.off('SIGTERM', onSigterm)
+    }
+    const settle = (result: ManagedChildProcessResult) => {
+      if (settled) return
+
+      settled = true
+      detachSignalHandlers()
+      resolvePromise({ ...result, shutdownSignal })
+    }
+    const forwardSignal = (signal: NodeJS.Signals) => {
+      if (shutdownSignal) return
+
+      shutdownSignal = signal
+      onShutdownSignal?.(signal)
+      child.kill?.(signal)
+    }
+    function onSigint() {
+      forwardSignal('SIGINT')
+    }
+    function onSigterm() {
+      forwardSignal('SIGTERM')
+    }
+
+    child.on('error', error => settle({ kind: 'error', error }))
+    child.on('close', code => settle({ kind: 'close', code }))
+    process.on('SIGINT', onSigint)
+    process.on('SIGTERM', onSigterm)
+  })
+}
+
 export async function runProjectStartServer(
   io: IoStreams,
   projectRoot: string,
@@ -174,13 +218,14 @@ export async function runProjectStartServer(
     io.stdin.pipe(child.stdin)
   }
 
-  const result = await new Promise<
-    | { kind: 'close', code: number | null }
-    | { kind: 'error', error: Error }
-  >((resolvePromise) => {
-    child.on('error', (error: Error) => resolvePromise({ kind: 'error', error }))
-    child.on('close', (code: number | null) => resolvePromise({ kind: 'close', code }))
-  })
+  const result = await waitForManagedChildProcess(child)
+  if (child.stdin) {
+    io.stdin.unpipe(child.stdin)
+  }
+
+  if (result.shutdownSignal) {
+    return
+  }
 
   if (result.kind === 'error') {
     throw result.error
@@ -1005,6 +1050,14 @@ export async function runProjectDevServer(
 
   await refreshNonRecursiveWatchers?.()
 
+  const beginShutdown = () => {
+    if (shuttingDown) return
+
+    shuttingDown = true
+    shutdownController.abort()
+    closeWatchers()
+  }
+
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
   while (!shuttingDown) {
     const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
@@ -1019,55 +1072,32 @@ export async function runProjectDevServer(
       io.stdin.pipe(child.stdin)
     }
 
-    const result = await new Promise<
-      { kind: 'restart' }
-      | { kind: 'close', code: number | null }
-      | { kind: 'error', error: Error }
-    >((resolvePromise) => {
-      let restartRequested = false
-
-      requestChildRestart = () => {
-        if (restartRequested || shuttingDown || typeof child.kill !== 'function') {
-          return
-        }
-
-        restartRequested = true
-        child.kill('SIGTERM')
+    let restartRequested = false
+    requestChildRestart = () => {
+      if (restartRequested || shuttingDown || typeof child.kill !== 'function') {
+        return
       }
 
-      child.on('error', (error) => {
-        if (child.stdin) {
-          io.stdin.unpipe(child.stdin)
-        }
-        requestChildRestart = undefined
-        if (restartRequested) {
-          resolvePromise({ kind: 'restart' })
-          return
-        }
+      restartRequested = true
+      child.kill('SIGTERM')
+    }
 
-        resolvePromise({ kind: 'error', error })
-      })
-      child.on('close', (code) => {
-        if (child.stdin) {
-          io.stdin.unpipe(child.stdin)
-        }
-        requestChildRestart = undefined
-        if (restartRequested) {
-          resolvePromise({ kind: 'restart' })
-          return
-        }
+    const result = await waitForManagedChildProcess(child, beginShutdown)
+    if (child.stdin) {
+      io.stdin.unpipe(child.stdin)
+    }
+    requestChildRestart = undefined
 
-        resolvePromise({ kind: 'close', code })
-      })
-    })
+    if (result.shutdownSignal) {
+      await Promise.resolve(pendingPrepare)
+      return
+    }
 
-    if (result.kind === 'restart') {
+    if (restartRequested) {
       continue
     }
 
-    shuttingDown = true
-    shutdownController.abort()
-    closeWatchers()
+    beginShutdown()
     await Promise.resolve(pendingPrepare)
 
     if (result.kind === 'error') {

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { watch } from 'node:fs'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -31,6 +31,14 @@ async function createRunner(framework: typeof frameworks[number], mode: 'dev' | 
   ].join('\n'))
   await chmod(entry, 0o755)
   return runner
+}
+
+function killProcessIfRunning(pid: number): void {
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error
+  }
 }
 
 afterEach(async () => {
@@ -84,6 +92,73 @@ describe.each(frameworks)('$framework port configuration', (framework) => {
       expect(output.nitroPort).toBe('4334')
     }
   })
+})
+
+it.each([
+  { mode: 'dev', signal: 'SIGINT' },
+  { mode: 'dev', signal: 'SIGTERM' },
+  { mode: 'start', signal: 'SIGINT' },
+  { mode: 'start', signal: 'SIGTERM' },
+] as const)('stops the framework process when holo $mode receives $signal', async ({ mode, signal }) => {
+  const framework = frameworks[2]
+  const runner = await createRunner(framework, mode)
+  const root = resolve(dirname(runner), '../..')
+  const pidPath = join(root, 'framework.pid')
+  const stoppedPath = join(root, 'framework.stopped')
+  const entry = join(root, mode === 'dev' ? `node_modules/.bin/${framework.binary}` : framework.entry)
+  await writeFile(entry, [
+    '#!/usr/bin/env node',
+    'import { writeFileSync } from \'node:fs\'',
+    `const pidPath = ${JSON.stringify(pidPath)}`,
+    `const stoppedPath = ${JSON.stringify(stoppedPath)}`,
+    'for (const signal of [\'SIGINT\', \'SIGTERM\']) {',
+    '  process.on(signal, () => {',
+    '    writeFileSync(stoppedPath, signal)',
+    '    process.exit(0)',
+    '  })',
+    '}',
+    'writeFileSync(pidPath, String(process.pid))',
+    'setInterval(() => {}, 1000)',
+  ].join('\n'))
+  await chmod(entry, 0o755)
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'shutdown-fixture', type: 'module' }))
+  await mkdir(join(root, 'config'), { recursive: true })
+  await writeFile(join(root, 'config/app.ts'), 'export default { name: \'Shutdown fixture\' }')
+  await writeFile(join(root, 'config/database.ts'), 'export default {}')
+
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  const io: IoStreams = {
+    cwd: root,
+    stdin: new PassThrough() as unknown as NodeJS.ReadStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    stderr: stderr as unknown as NodeJS.WriteStream,
+  }
+  const previousSignalListeners = new Set(process.listeners(signal))
+  let frameworkPid: number | undefined
+  const commandPromise = mode === 'dev'
+    ? runProjectDevServer(io, root, undefined, () => watch(root, () => {}), async () => {})
+    : runProjectStartServer(io, root)
+
+  try {
+    await vi.waitFor(async () => {
+      frameworkPid = Number(await readFile(pidPath, 'utf8'))
+      expect(frameworkPid).toBeGreaterThan(0)
+    })
+    const signalListener = process.listeners(signal)
+      .find(listener => !previousSignalListeners.has(listener))
+    expect(signalListener).toBeDefined()
+    signalListener?.(signal)
+
+    await expect(commandPromise).resolves.toBeUndefined()
+    await expect(readFile(stoppedPath, 'utf8')).resolves.toBe(signal)
+    expect(process.listeners(signal).every(listener => previousSignalListeners.has(listener))).toBe(true)
+  } finally {
+    if (frameworkPid) {
+      killProcessIfRunning(frameworkPid)
+    }
+    await commandPromise.catch(() => undefined)
+  }
 })
 
  describe.each(frameworks)('$framework environment port', (framework) => {
