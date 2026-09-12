@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { watch } from 'node:fs'
+import type { watch } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -11,6 +11,7 @@ import type { IoStreams } from '../src/cli-types'
 import { renderFrameworkRunner } from '../src/project/scaffold/framework-renderers'
 
 const tempDirs: string[] = []
+const createInertWatcher = (() => ({ close() {} })) as unknown as typeof watch
 const frameworks = [
   { framework: 'next', binary: 'next', entry: 'node_modules/.bin/next' },
   { framework: 'nuxt', binary: 'nuxt', entry: '.output/server/index.mjs' },
@@ -183,7 +184,7 @@ it.each([
   const previousSignalListeners = new Set(process.listeners(signal))
   let frameworkPid: number | undefined
   const commandPromise = mode === 'dev'
-    ? runProjectDevServer(io, root, undefined, () => watch(root, () => {}), async () => {}, ['--port', String(port)])
+    ? runProjectDevServer(io, root, undefined, createInertWatcher, async () => {}, ['--port', String(port)])
     : runProjectStartServer(io, root, undefined, ['--port', String(port)])
 
   try {
@@ -242,7 +243,7 @@ describe.each(frameworks)('$framework environment port', (framework) => {
         stderr: stderr as unknown as NodeJS.WriteStream,
       }
       if (mode === 'dev') {
-        await runProjectDevServer(io, root, undefined, () => watch(root, () => {}), async () => {}, args)
+        await runProjectDevServer(io, root, undefined, createInertWatcher, async () => {}, args)
       } else {
         await runProjectStartServer(io, root, undefined, args)
       }
