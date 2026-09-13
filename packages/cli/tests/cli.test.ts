@@ -3269,8 +3269,8 @@ export default defineAppConfig({
     await expect(projectInternals.installQueueIntoProject(projectRoot, { driver: 'database' })).resolves.toEqual({
       createdQueueConfig: true,
       updatedPackageJson: true,
-      updatedEnv: false,
-      updatedEnvExample: false,
+      updatedEnv: true,
+      updatedEnvExample: true,
       createdJobsDirectory: true,
     })
     await expect(projectInternals.installAuthIntoProject(projectRoot, { social: true })).resolves.toMatchObject({
@@ -3434,8 +3434,8 @@ export default defineRedisConfig({
     await expect(projectInternals.installQueueIntoProject(implicitFailedStoreRoot)).resolves.toEqual({
       createdQueueConfig: false,
       updatedPackageJson: true,
-      updatedEnv: false,
-      updatedEnvExample: false,
+      updatedEnv: true,
+      updatedEnvExample: true,
       createdJobsDirectory: true,
     })
     expect(JSON.parse(await readFile(join(implicitFailedStoreRoot, 'package.json'), 'utf8'))).toMatchObject({

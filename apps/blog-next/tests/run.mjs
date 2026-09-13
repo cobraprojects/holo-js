@@ -460,7 +460,7 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
     allowFailure: true,
   })
   assert.notEqual(createdWithoutImage.response.status, 500, createdWithoutImage.text)
-  assert.equal(createdWithoutImage.response.status, 303, createdWithoutImage.text)
+  assert.equal(createdWithoutImage.response.status, 200, createdWithoutImage.text)
   assert.match(createdWithoutImage.response.headers.get('x-action-redirect') ?? '', /^\/admin\/posts;/)
 
   const postWithoutImage = getPostByTitle(noImageTitle)
@@ -519,7 +519,7 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
   })
 
   assert.notEqual(created.response.status, 500, created.text)
-  assert.equal(created.response.status, 303, created.text)
+  assert.equal(created.response.status, 200, created.text)
   assert.match(created.response.headers.get('x-action-redirect') ?? '', /^\/admin\/posts;/)
   assert.doesNotMatch(created.text, /database is locked|Runtime DatabaseError/i)
 
@@ -569,7 +569,7 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
     allowFailure: true,
   })
   assert.notEqual(updatedWithoutImage.response.status, 500, updatedWithoutImage.text)
-  assert.equal(updatedWithoutImage.response.status, 303, updatedWithoutImage.text)
+  assert.equal(updatedWithoutImage.response.status, 200, updatedWithoutImage.text)
   assert.match(updatedWithoutImage.response.headers.get('x-action-redirect') ?? '', /^\/admin\/posts;/)
   assert.equal(countPostImages(uploaded.id), 1, 'Expected updating without a replacement image to keep the existing image.')
 }

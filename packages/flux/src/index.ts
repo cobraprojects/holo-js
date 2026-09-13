@@ -803,41 +803,41 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       return
     }
 
-    resolvedOptions = canDiscoverHoloWebSocketConnectorOptions(globals)
-      ? await resolveHoloWebSocketConnectorOptions(options, globals)
-      : options
-    const scheme = resolveWebSocketScheme(resolvedOptions.scheme, globals)
-    const host = resolveBrowserHost(resolvedOptions.host, globals)
-    const port = resolvedOptions.port ?? 8080
-    const path = resolvedOptions.path?.trim() || '/app'
-    const key = resolvedOptions.key?.trim() || 'app-key'
-    const normalizedPath = `/${path.replace(/^\/+|\/+$/g, '')}`
-    const url = `${scheme}://${host}:${port}${normalizedPath}/${encodeURIComponent(key)}`
-
     setStatus('connecting')
-    connecting = new Promise<void>((resolve, reject) => {
-      const nextSocket = new WebSocketConstructor(url)
-      socket = nextSocket
-      nextSocket.addEventListener('open', () => {
-        setStatus('connected')
-        flushSubscriptions()
-        resolve()
+    connecting = (async () => {
+      resolvedOptions = canDiscoverHoloWebSocketConnectorOptions(globals)
+        ? await resolveHoloWebSocketConnectorOptions(options, globals)
+        : options
+      const scheme = resolveWebSocketScheme(resolvedOptions.scheme, globals)
+      const host = resolveBrowserHost(resolvedOptions.host, globals)
+      const port = resolvedOptions.port ?? 8080
+      const path = resolvedOptions.path?.trim() || '/app'
+      const key = resolvedOptions.key?.trim() || 'app-key'
+      const normalizedPath = `/${path.replace(/^\/+|\/+$/g, '')}`
+      const url = `${scheme}://${host}:${port}${normalizedPath}/${encodeURIComponent(key)}`
+
+      await new Promise<void>((resolve, reject) => {
+        const nextSocket = new WebSocketConstructor(url)
+        socket = nextSocket
+        nextSocket.addEventListener('open', () => {
+          setStatus('connected')
+          flushSubscriptions()
+          resolve()
+        })
+        nextSocket.addEventListener('message', handleMessage)
+        nextSocket.addEventListener('close', () => {
+          socket = undefined
+          for (const state of channels.values()) {
+            state.subscribed = false
+          }
+          setStatus('disconnected')
+        })
+        nextSocket.addEventListener('error', () => {
+          setStatus('disconnected')
+          reject(new Error('[@holo-js/flux] WebSocket connection failed.'))
+        })
       })
-      nextSocket.addEventListener('message', handleMessage)
-      nextSocket.addEventListener('close', () => {
-        socket = undefined
-        connecting = undefined
-        for (const state of channels.values()) {
-          state.subscribed = false
-        }
-        setStatus('disconnected')
-      })
-      nextSocket.addEventListener('error', () => {
-        connecting = undefined
-        setStatus('disconnected')
-        reject(new Error('[@holo-js/flux] WebSocket connection failed.'))
-      })
-    }).finally(() => {
+    })().finally(() => {
       connecting = undefined
     })
 

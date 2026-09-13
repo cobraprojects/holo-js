@@ -604,11 +604,13 @@ describe('@holo-js/flux package surface', () => {
         },
       })
       const authorized = fluxInternals.createHoloWebSocketConnector({ configEndpoint: '/config' })
+      const socketCountBeforeSubscriptions = sockets.length
       authorized.subscribe('allowed', 'private')
       authorized.subscribe('denied', 'private')
       authorized.subscribe('invalid', 'private')
       authorized.subscribe('room', 'presence')
       const authorizedSocket = await open(authorized, 'authorized')
+      expect(sockets).toHaveLength(socketCountBeforeSubscriptions + 1)
       authorizedSocket.emit('message', {
         data: JSON.stringify({
           event: 'pusher:connection_established',

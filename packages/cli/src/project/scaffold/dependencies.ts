@@ -577,15 +577,12 @@ async function upsertQueuePackageDependency(
 ): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies, workspacePackageNames } = await readPackageJsonDependencyState(projectRoot)
   const queueConfigPath = await resolveFirstExistingPath(projectRoot, ['config/queue.ts', 'config/queue.mts', 'config/queue.js', 'config/queue.mjs', 'config/queue.cts', 'config/queue.cjs'])
-  const loadedQueueConfig = queueConfigPath
-    ? loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
-    : Promise.resolve(undefined)
   const nextVersion = resolveManagedPackageVersion('@holo-js/queue', dependencies, devDependencies, workspacePackageNames)
   const nextQueueDbVersion = resolveManagedPackageVersion('@holo-js/queue-db', dependencies, devDependencies, workspacePackageNames)
   const nextQueueRedisVersion = resolveManagedPackageVersion('@holo-js/queue-redis', dependencies, devDependencies, workspacePackageNames)
   const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
-  const queueConfig = typeof driver === 'undefined'
-    ? await loadedQueueConfig
+  const queueConfig = typeof driver === 'undefined' && queueConfigPath
+    ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
     : undefined
   const queueConnections = Object.values(queueConfig?.connections ?? {})
   const configuredDefaultQueueDriver = queueConfig?.default
