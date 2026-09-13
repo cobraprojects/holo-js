@@ -1,7 +1,8 @@
 import { error, redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
 import { broadcast } from '@holo-js/broadcast'
-import { ValidationException, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { ValidationException } from '@holo-js/validation'
 import { DB, uniqueSlug } from '@holo-js/db'
 import { csrf } from '@holo-js/security'
 

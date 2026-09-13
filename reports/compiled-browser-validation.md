@@ -6,7 +6,7 @@ The generated browser schema preserves field metadata and uses Holo's existing c
 
 ## Current scope
 
-Compilation covers top-level constant schemas imported through `@holo-js/forms/schema` or `@holo-js/validation`, including aliased imports and nested field shapes. Supported chains include string/password, number, boolean and date fields, required/optional/nullable/default, min/max/size, email/URL/UUID/integer, confirmation and the no-argument date rules.
+Compilation covers top-level constant schemas imported through `@holo-js/validation`, including aliased imports and nested field shapes. Supported chains include string/password, number, boolean and date fields, required/optional/nullable/default, min/max/size, email/URL/UUID/integer, confirmation and the no-argument date rules.
 
 The compiler leaves a schema unchanged when it encounters dynamic arguments, shared builder expressions, callbacks, arrays/files, regex rules or other unsupported syntax. Shared exported schema modules, including the example apps' authentication schemas, compile normally. A shared builder assembled through a function currently uses the runtime path. Applications mixing these paths may still need the full builder runtime. No validator is replaced with a stub or deferred download.
 

@@ -1,4 +1,4 @@
-import { field, schema } from '@holo-js/forms/schema'
+import { field, schema } from '@holo-js/validation'
 
 export const postForm = schema({
   title: field.string().required('Title is required.').min(3),

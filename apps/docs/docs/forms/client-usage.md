@@ -19,7 +19,7 @@ Put the schema in a shared module and import it on both server and client:
 
 ```ts
 // lib/schemas/register.ts
-import { field, schema } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 export const registerUser = schema({
   name: field.string().required('Name is required.').min(3, 'Name must be at least 3 characters.'),

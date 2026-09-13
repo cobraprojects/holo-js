@@ -10,11 +10,6 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
-    "./schema": {
-      "types": "./dist/schema.d.ts",
-      "import": "./dist/schema.mjs",
-      "default": "./dist/schema.mjs"
-    },
     "./internal/client": {
       "types": "./dist/internal/client.d.ts",
       "import": "./dist/internal/client.mjs",

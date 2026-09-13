@@ -244,10 +244,14 @@ async function verifyPackageImports(tempRoot, packages) {
     .map(item => item.manifest.name)
   const smokePath = join(tempRoot, 'package-import-smoke.mjs')
   await writeFile(smokePath, [
+    `import assert from 'node:assert/strict'`,
     `const packages = ${JSON.stringify(importablePackages)}`,
     'for (const packageName of packages) {',
     '  await import(packageName)',
     '}',
+    `const forms = await import('@holo-js/forms')`,
+    `for (const name of ['defineSchema', 'field', 'schema']) assert.equal(name in forms, false)`,
+    `await assert.rejects(import('@holo-js/forms/schema'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' })`,
     `process.stdout.write(JSON.stringify({ imported: packages.length }))`,
     '',
   ].join('\n'))

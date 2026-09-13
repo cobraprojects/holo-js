@@ -192,7 +192,7 @@ const cases: readonly PublishedPackageCase[] = [
   },
   {
     packageName: 'forms',
-    imports: ['@holo-js/forms', '@holo-js/forms/schema', '@holo-js/forms/internal/client'],
+    imports: ['@holo-js/forms', '@holo-js/forms/internal/client'],
   },
   {
     packageName: 'mail',

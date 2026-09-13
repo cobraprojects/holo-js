@@ -129,7 +129,8 @@ by the form schema before they are sent back to the client:
 
 ```ts
 import { login, logout, refreshUser, register, user } from '@holo-js/auth'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const registerForm = schema({
   name: field.string().required(),

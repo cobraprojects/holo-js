@@ -160,7 +160,8 @@ Validation failures, CSRF failures, and auth failures stay separate:
 ### Login
 
 ```ts
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 import { login } from '@holo-js/auth'
 
 const loginForm = schema({
@@ -185,7 +186,8 @@ export async function POST(request: Request) {
 ### Register
 
 ```ts
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 import { register } from '@holo-js/auth'
 
 const registerUser = schema({
@@ -506,7 +508,8 @@ event directly when you want request-based limiter keys:
 
 ```ts
 import { defineEventHandler } from 'h3'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required().email(),

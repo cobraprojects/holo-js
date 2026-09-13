@@ -39,7 +39,6 @@ export default defineConfig({
       '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),
       '@holo-js/db-sqlite': resolve(__dirname, '../db-sqlite/src/index.ts'),
       '@holo-js/forms/internal/client': resolve(__dirname, '../forms/src/internal/client.ts'),
-      '@holo-js/forms/schema': resolve(__dirname, '../forms/src/schema.ts'),
       '@holo-js/forms': resolve(__dirname, '../forms/src/index.ts'),
       '@holo-js/realtime/client': resolve(__dirname, '../realtime/src/client.ts'),
       '@holo-js/realtime': resolve(__dirname, '../realtime/src/index.ts'),

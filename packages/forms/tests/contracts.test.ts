@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   FormContractError,
-  ValidationException,
   createFailedSubmission,
   createSuccessfulSubmission,
-  defineSchema,
-  field,
   formsInternals,
-  isFormSchema,
-  schema,
   safeParse,
   validate,
   type FormFailureErrors,
 } from '../src'
+import {
+  ValidationException,
+  field,
+  schema,
+} from '@holo-js/validation'
 
 type FormsTestGlobal = typeof globalThis & {
   __holoFormsSecurityModule__?: unknown
@@ -129,25 +129,6 @@ describe('@holo-js/forms contracts', () => {
         password: '',
       })
     }
-  })
-
-  it('creates form schemas from shapes and validation schemas', () => {
-    const direct = schema({
-      email: field.string().required().email(),
-      password: field.password().required().min(8),
-    })
-    const nested = schema(defineSchema({
-      profile: {
-        city: field.string().required(),
-      },
-    }))
-
-    expect(direct.mode).toBe('form')
-    expect(direct.fields.email.definition.rules.map((rule: { name: string }) => rule.name)).toEqual(['required', 'email'])
-    expect(nested.fields.profile.city.definition.kind).toBe('string')
-    expect(isFormSchema(direct)).toBe(true)
-    expect(isFormSchema(defineSchema({ email: field.string() }))).toBe(false)
-    expect(isFormSchema(schema({ email: field.string() }))).toBe(true)
   })
 
   it('creates successful and failed submission payload contracts', () => {
@@ -1534,10 +1515,16 @@ describe('@holo-js/forms contracts', () => {
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-nuxt')
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-sveltekit')
     expect(packageJson.exports).not.toHaveProperty('./client')
+    expect(packageJson.exports).not.toHaveProperty('./schema')
     expect(packageJson.exports).toHaveProperty('./internal/client')
     expect(Object.keys(packageJson.devDependencies ?? {})).not.toContain('next')
     expect(Object.keys(packageJson.devDependencies ?? {})).not.toContain('nuxt')
     expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('catalog:')
     expect(packageJson.peerDependenciesMeta?.['@holo-js/security']?.optional).toBe(true)
+
+    const forms = await import('../src')
+    expect(forms).not.toHaveProperty('defineSchema')
+    expect(forms).not.toHaveProperty('field')
+    expect(forms).not.toHaveProperty('schema')
   })
 })

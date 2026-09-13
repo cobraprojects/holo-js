@@ -1,10 +1,8 @@
 import { createSubscriber } from 'svelte/reactivity'
-import { DEFAULT_VALIDATION_BAG, createErrorBag } from '@holo-js/forms/schema'
+import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag, type ValidationSchema } from '@holo-js/validation'
 import type {
   FormFailurePayload,
-  FormSchema,
   InferFormData,
-  ValidationErrorBag,
 } from '@holo-js/forms'
 import {
   type ClientSubmitContext,
@@ -249,7 +247,7 @@ function isFormState<TData>(value: unknown): value is NonNullable<InitialFormSta
     && isPlainObject(value.errors)
 }
 
-function stateMatchesSchema<TData>(schemaDefinition: FormSchema, state: NonNullable<InitialFormState<TData>>): boolean {
+function stateMatchesSchema<TData>(schemaDefinition: ValidationSchema, state: NonNullable<InitialFormState<TData>>): boolean {
   const schemaPaths = collectSchemaPaths(schemaDefinition.fields)
   const statePaths = [
     ...Object.keys(state.errors),
@@ -368,7 +366,7 @@ function getSvelteKitRequestEvent(): SvelteKitRequestEvent | undefined {
 }
 
 function takeFlashedValidationState<TData>(
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
 ): FormFailurePayload<TData> | undefined {
   if (typeof (globalThis as { readonly window?: unknown }).window !== 'undefined') {
     return undefined
@@ -557,7 +555,7 @@ function ensureSubmitListener(): void {
 }
 
 function registerForm<TData, TSuccess>(
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
   form: Pick<UseFormResult<TData, TSuccess>, 'submit'>,
 ): () => void {
   if (typeof (globalThis as { readonly window?: unknown }).window === 'undefined') {
@@ -716,7 +714,7 @@ async function submitSvelteKitAction<TData, TSuccess>(
 
 async function hydrateActionFormState<TData, TSuccess>(
   form: Pick<UseFormResult<TData, TSuccess>, 'applyServerState'>,
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
 ): Promise<void> {
   if (typeof (globalThis as { readonly window?: unknown }).window === 'undefined') {
     return
@@ -794,7 +792,7 @@ function createHttpHandledForm<TData, TSuccess, TFields>(
   return wrappedForm
 }
 
-export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
+export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {

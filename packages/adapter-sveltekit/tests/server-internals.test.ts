@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { adapterSvelteKitInternals } from '../src'
-import { ValidationException, validationInternals } from '@holo-js/forms/schema'
+import { ValidationException, validationInternals } from '@holo-js/validation'
 
 const payload = {
   ok: false as const,

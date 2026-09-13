@@ -120,23 +120,23 @@ function compileShape(node: ts.ObjectLiteralExpression, fieldName: string, runti
 }
 
 export function compileBrowserValidation(source: string, fileName = 'schema.tsx'): string | undefined {
-  if (!source.includes('@holo-js/forms/schema') && !source.includes('@holo-js/validation')) return undefined
+  if (!source.includes('@holo-js/validation')) return undefined
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true)
   const diagnostics = ts.transpileModule(source, { fileName, reportDiagnostics: true, compilerOptions: { jsx: ts.JsxEmit.Preserve } }).diagnostics
   if (diagnostics?.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined
   let fieldName: string | undefined
-  const schemaNames = new Map<string, boolean>()
+  const schemaNames = new Set<string>()
   for (const statement of file.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
     const packageName = statement.moduleSpecifier.text
-    if (packageName !== '@holo-js/forms/schema' && packageName !== '@holo-js/validation') continue
+    if (packageName !== '@holo-js/validation') continue
     const bindings = statement.importClause?.namedBindings
     if (!bindings || !ts.isNamedImports(bindings) || statement.importClause?.isTypeOnly) continue
     for (const binding of bindings.elements) {
       if (binding.isTypeOnly) continue
       const name = binding.propertyName?.text ?? binding.name.text
       if (name === 'field') fieldName = binding.name.text
-      if (name === 'schema' || name === 'defineSchema') schemaNames.set(binding.name.text, packageName === '@holo-js/forms/schema' && name === 'schema')
+      if (name === 'schema' || name === 'defineSchema') schemaNames.add(binding.name.text)
     }
   }
   if (!fieldName || schemaNames.size === 0) return undefined
@@ -152,8 +152,7 @@ export function compileBrowserValidation(source: string, fileName = 'schema.tsx'
       if (!shape || !ts.isObjectLiteralExpression(shape)) continue
       const compiled = compileShape(shape, fieldName, runtime)
       if (!compiled) continue
-      const mode = schemaNames.get(call.expression.text) ? "mode: 'form'," : ''
-      const code = `(() => { const fields = ${compiled.fields}; const compiled = ${compiled.code}; return Object.freeze({kind: 'schema', ${mode} fields, '~standard': {version: 1, vendor: 'holo-js', validate: ${runtime}.createSchemaStandardValidate(fields, () => compiled), types: undefined}}) })()`
+      const code = `(() => { const fields = ${compiled.fields}; const compiled = ${compiled.code}; return Object.freeze({kind: 'schema', fields, '~standard': {version: 1, vendor: 'holo-js', validate: ${runtime}.createSchemaStandardValidate(fields, () => compiled), types: undefined}}) })()`
       replacements.push({ start: call.getStart(file), end: call.end, code })
     }
   }

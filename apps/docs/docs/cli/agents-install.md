@@ -1,9 +1,9 @@
 # Agentic Coding
 
-`holo agents:install` installs Holo-JS documentation-search skills for coding agents.
+`holo agents:install` installs versioned Holo-JS coding skills for coding agents.
 
-Use it when you want an AI coding assistant to answer Holo-JS questions by searching the current docs
-instead of relying on stale framework knowledge.
+The installed skill set includes a routing skill, focused guides for each framework area, worked examples,
+conversion guidance, and a package catalog with a direct documentation link for every package.
 
 ## Install agent skills
 
@@ -67,7 +67,7 @@ bunx holo agents:install --agent codex,cursor
 
 ## Project-local install
 
-By default, the command writes project-local skills under the current directory:
+By default, the command writes a project-local skill tree under the current directory:
 
 ```text
 .codex/skills/holo-js/SKILL.md
@@ -78,6 +78,10 @@ By default, the command writes project-local skills under the current directory:
 .gemini/skills/holo-js/SKILL.md
 .kiro/skills/holo-js/SKILL.md
 ```
+
+Each `holo-js` directory also contains focused skills such as `database-orm`, `forms-validation`,
+`queues-events`, and `storage-media`. Agents load the root routing skill first and then read only the
+focused guidance required for the task.
 
 Commit these files when you want every contributor's agent to use the same Holo-JS guidance in the project.
 
@@ -109,10 +113,10 @@ Use global install when you want Holo-JS guidance available across all local pro
 
 ## Overwrite protection
 
-If a target skill file already exists and does not match Holo-JS's generated content, the command refuses
-to overwrite it.
+If any file in a target skill tree differs from the packaged Holo-JS version, or the tree contains an
+extra file, the command refuses to overwrite it.
 
-Use `--force` when you intentionally want to replace the existing file:
+Use `--force` when you intentionally want to replace the existing tree:
 
 ::: code-group
 

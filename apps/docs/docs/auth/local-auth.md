@@ -425,7 +425,8 @@ Your framework route owns parsing and response formatting. The auth package only
 
 ```ts
 import { login } from '@holo-js/auth'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required().email(),

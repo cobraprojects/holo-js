@@ -112,7 +112,7 @@ describe('@holo-js/adapter-next typing', () => {
         [
           `import { AuthProvider, useAuth, type HoloAuthUser, type UseAuthResult } from '@holo-js/auth/next/client'`,
           `import { auth } from '@holo-js/auth/next/server'`,
-          `import { field, schema } from '@holo-js/forms'`,
+          `import { field, schema } from '@holo-js/validation'`,
           `import { useForm } from '@holo-js/adapter-next/client'`,
           `const loginForm = schema({ email: field.string().required().email() })`,
           `useForm(loginForm, {`,

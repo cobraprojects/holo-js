@@ -5,10 +5,9 @@ import {
   type FormRequestLikeInput,
   createFailedSubmission,
   createSuccessfulSubmission,
-  field,
-  schema,
   safeParse,
 } from '../src'
+import { field, schema } from '@holo-js/validation'
 
 describe('@holo-js/forms typing', () => {
   it('preserves schema-owned type handles and submission result inference', () => {

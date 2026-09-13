@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { gzipSync } from 'node:zlib'
 
 export async function verifyCompiledValidation({ build, directory, nodePaths, compile }) {
-  const source = `import { field as f, schema as form } from '@holo-js/forms/schema'
+  const source = `import { field as f, schema as form } from '@holo-js/validation'
 export const schema = form({
   email: f.string().required('Email required').email(),
   password: f.password().min(8).confirmed(),
@@ -31,14 +31,14 @@ export const schema = form({
     assert.deepEqual(await variants.compiled.schema['~standard'].validate(input), await variants.original.schema['~standard'].validate(input), JSON.stringify(input))
   }
   assert.ok(Object.isFrozen(variants.compiled.schema.fields.email.definition.rules[0].args))
-  const dynamic = `import {field,schema} from '@holo-js/forms/schema'; const minimum = Number(globalThis.minimum); export const form = schema({name:field.string().min(minimum).custom(value => value !== 'reserved')})`
+  const dynamic = `import {field,schema} from '@holo-js/validation'; const minimum = Number(globalThis.minimum); export const form = schema({name:field.string().min(minimum).custom(value => value !== 'reserved')})`
   assert.equal(compile(dynamic), undefined)
-  assert.equal(compile(`import {field,schema} from '@holo-js/forms/schema'; export const form = schema({})`), undefined)
-  assert.equal(compile(`import {field,schema} from '@holo-js/forms/schema'; export const form = schema({name:field.string(,)})`), undefined)
+  assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({})`), undefined)
+  assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({name:field.string(,)})`), undefined)
   for (const value of ['1e999', '-1e999', '-0']) {
-    assert.equal(compile(`import {field,schema} from '@holo-js/forms/schema'; export const form = schema({count:field.number().default(${value})})`), undefined)
+    assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({count:field.number().default(${value})})`), undefined)
   }
-  const simple = `import {field,schema} from '@holo-js/forms/schema'; export const form = schema({email:field.string().required().email()})`
+  const simple = `import {field,schema} from '@holo-js/validation'; export const form = schema({email:field.string().required().email()})`
   const bundled = await build({ stdin: { contents: compile(simple), resolveDir: directory }, bundle: true, platform: 'browser', format: 'esm', minify: true, write: false, nodePaths })
   assert.doesNotMatch(bundled.outputFiles[0].text, /type:"(?:url|uuid|regex)"/)
   assert.doesNotMatch(bundled.outputFiles[0].text, /maxSize must not be empty/)

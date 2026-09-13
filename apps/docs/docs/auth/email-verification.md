@@ -49,7 +49,7 @@ The application owns the page and API routes. The framework owns token storage, 
 Use form schemas for request payloads so route handlers receive typed, validated data before calling auth:
 
 ```ts
-import { field, schema } from '@holo-js/forms/schema'
+import { field, schema } from '@holo-js/validation'
 
 export const verifyEmailForm = schema({
   token: field.string().required('Verification token is required.'),

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Make `@holo-js/validation` the only public schema-builder package. Remove schema builders from `@holo-js/forms` and remove the `@holo-js/forms/schema` entry.
+- Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
+- Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.
+
 ## 0.3.13
 
 Prepared, not yet published.

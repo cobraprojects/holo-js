@@ -1,8 +1,8 @@
 import { onScopeDispose, reactive, shallowRef, watchEffect } from 'vue'
 import { useCookie } from '#app'
 import { normalizeHoloHttpError } from '@holo-js/adapter-shared/client'
-import type { FormSchema, InferFormData } from '@holo-js/forms'
-import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
+import type { InferFormData } from '@holo-js/forms'
+import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag, type ValidationSchema } from '@holo-js/validation'
 import {
   type InferFormFieldTree,
   type UseFormOptions,
@@ -342,7 +342,7 @@ function syncValuesView(
   }
 }
 
-export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
+export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {

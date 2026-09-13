@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { field, schema } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 afterEach(() => {
   vi.doUnmock('$app/stores')

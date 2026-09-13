@@ -3009,7 +3009,7 @@ export default defineAppConfig({
     const codexSkill = await readFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8')
     const cursorSkill = await readFile(join(projectRoot, '.cursor/skills/holo-js/SKILL.md'), 'utf8')
 
-    expect(codexSkill).toContain('Primary documentation URL: https://docs.holo-js.com/')
+    expect(codexSkill).toContain('[framework integration](https://docs.holo-js.com/forms/framework-integration)')
     expect(cursorSkill).toBe(codexSkill)
     expect(commandIo.read().stdout).toContain('Installed Holo-JS agent skills.')
 
@@ -3046,7 +3046,7 @@ export default defineAppConfig({
       loadProject: async () => ({ config: defaultProjectConfig() }),
     } as never)).resolves.toBeUndefined()
     await expect(readFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8'))
-      .resolves.toContain('Use the docs as the source of truth, then act.')
+      .resolves.toContain('Treat Holo-JS like Laravel.')
 
     const plainRoot = await createTempDirectory()
     tempDirs.push(plainRoot)

@@ -10,6 +10,7 @@ const root = new URL('../', import.meta.url).pathname
 const require = createRequire(join(root, 'packages/cli/package.json'))
 const { build } = require('esbuild')
 const entries = [
+  '@holo-js/validation',
   '@holo-js/adapter-shared/client',
   ...['next', 'nuxt', 'sveltekit'].flatMap(adapter => ['client', 'realtime'].map(entry => `@holo-js/adapter-${adapter}/${entry}`)),
 ]

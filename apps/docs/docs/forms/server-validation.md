@@ -18,7 +18,8 @@ automatically.
 ::: code-group
 
 ```ts [Next.js — app/api/login/route.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
@@ -41,7 +42,8 @@ export async function POST(request: Request) {
 
 ```ts [Nuxt — server/api/login.post.ts]
 import { defineEventHandler } from 'h3'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
@@ -63,7 +65,8 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit — src/routes/login/+page.server.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
@@ -476,7 +479,8 @@ submission.data.email
 ::: code-group
 
 ```ts [Next.js — app/api/register/route.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 export const registerUser = schema({
   name: field.string().required().min(3).max(255),
@@ -498,7 +502,8 @@ export async function POST(request: Request) {
 
 ```ts [Nuxt — server/api/register.post.ts]
 import { defineEventHandler } from 'h3'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const registerUser = schema({
   name: field.string().required().min(3).max(255),
@@ -520,7 +525,8 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit — src/routes/register/+page.server.ts]
 import { redirect } from '@sveltejs/kit'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const registerUser = schema({
   name: field.string().required().min(3).max(255),
@@ -569,7 +575,8 @@ export const register = form(registerUser, async (data, invalid) => {
 ::: code-group
 
 ```ts [Next.js — app/api/avatar/route.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const uploadAvatar = schema({
   avatar: field.file().required().image().maxSize('2mb'),
@@ -586,7 +593,8 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/avatar.post.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const uploadAvatar = schema({
   avatar: field.file().required().image().maxSize('2mb'),
@@ -604,7 +612,8 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit — src/routes/avatar/+page.server.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const uploadAvatar = schema({
   avatar: field.file().required().image().maxSize('2mb'),

@@ -1,4 +1,4 @@
-import { field, schema } from '@holo-js/forms/schema'
+import { field, schema } from '@holo-js/validation'
 
 export const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),

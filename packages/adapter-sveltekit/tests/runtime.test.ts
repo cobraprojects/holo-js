@@ -251,7 +251,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     vi.doMock('@sveltejs/kit', () => ({ error: svelteKitError }))
 
     const { runWithSvelteKitRequestEvent } = await import('../src')
-    const { ValidationException, validationInternals } = await import('@holo-js/forms/schema')
+    const { ValidationException, validationInternals } = await import('@holo-js/validation')
 
     await expect(runWithSvelteKitRequestEvent({
       url: new URL('https://app.test/api/reset-password'),
@@ -289,7 +289,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     vi.doMock('@sveltejs/kit', () => ({ error: svelteKitError }))
 
     const { runWithSvelteKitRequestEvent } = await import('../src')
-    const { ValidationException, validationInternals } = await import('@holo-js/forms/schema')
+    const { ValidationException, validationInternals } = await import('@holo-js/validation')
 
     await expect(runWithSvelteKitRequestEvent({
       url: new URL('https://app.test/admin/posts/new?/create'),

@@ -121,7 +121,8 @@ Collection rules protect the media collection. Put upload rules in the form sche
 files become normal field validation errors before the media write runs:
 
 ```ts
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const postForm = schema({
   title: field.string().required().min(3),

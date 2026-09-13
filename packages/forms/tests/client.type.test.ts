@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest'
-import { field, schema } from '../src'
+import { field, schema } from '@holo-js/validation'
 import { type ClientSubmitResult, createFormClient as useForm, type FormFieldState, type UseFormResult } from '../src/internal/client'
 
 describe('@holo-js/forms client typing', () => {

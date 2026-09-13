@@ -7,7 +7,7 @@ import authorization, { AuthorizationError, authorizationInternals } from '@holo
 import cache, { configureCacheRuntime, getCacheRuntimeBindings } from '@holo-js/cache'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { DB } from '@holo-js/db'
-import { isValidationException } from '@holo-js/forms'
+import { isValidationException } from '@holo-js/validation'
 
 import Category from '../server/models/Category.ts'
 import Admin from '../server/models/Admin.ts'

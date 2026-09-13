@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { field, schema } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 import type { RealtimeSubscriptionSnapshot } from '@holo-js/realtime'
 
 vi.mock('$app/stores', async () => await import('./stubs/app-stores'))

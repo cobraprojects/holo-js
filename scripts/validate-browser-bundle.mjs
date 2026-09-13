@@ -79,7 +79,7 @@ if (!process.argv.includes('--reuse')) {
   if (!process.argv.includes('--skip-build') && !registryVersion) run('node', ['scripts/build-libraries.mjs'], root)
   const staging = registryVersion ? undefined : await stageLocalWorkspacePackages(root, consumer)
   const packages = staging ? JSON.parse(await readFile(join(staging, 'workspace-packages.json'), 'utf8')) : {}
-  const dependencies = Object.fromEntries(['@holo-js/adapter-next', '@holo-js/forms', '@holo-js/security'].map(name => [name, registryVersion ?? `file:${packages[name]}`]))
+  const dependencies = Object.fromEntries(['@holo-js/adapter-next', '@holo-js/forms', '@holo-js/security', '@holo-js/validation'].map(name => [name, registryVersion ?? `file:${packages[name]}`]))
   for (const name of ['next', 'react', 'react-dom', 'typescript', '@types/react', '@types/node']) {
     dependencies[name] = require(`${name}/package.json`).version
   }

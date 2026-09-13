@@ -2,7 +2,6 @@ import type {
   FormFailureInput,
   FormFailurePayload,
   InferFormData,
-  FormSchema,
   FormSubmissionResult,
   FormSuccessPayload,
   SerializedFormSubmission as SerializedSubmissionState,
@@ -156,8 +155,8 @@ type FormFieldTreeFromShape<TShape extends SchemaInputShape> = {
         : never
 }
 
-export type InferFormFieldTree<TSchema extends FormSchema>
-  = TSchema extends FormSchema<infer TShape>
+export type InferFormFieldTree<TSchema extends ValidationSchema>
+  = TSchema extends ValidationSchema<infer TShape>
     ? FormFieldTreeFromShape<TShape>
     : never
 
@@ -185,7 +184,7 @@ function serializeSubmissionState<TData>(
   valid: boolean,
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
-  schemaDefinition?: FormSchema,
+  schemaDefinition?: ValidationSchema,
 ): SerializedFormSubmission<TData> {
   return Object.freeze({
     valid,
@@ -200,7 +199,7 @@ function createSubmission<TData>(
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
   failureStatus = 422,
-  schemaDefinition?: FormSchema,
+  schemaDefinition?: ValidationSchema,
 ): FormSubmissionResult<TData> {
   const normalizedFailureStatus = normalizeStatus(failureStatus, 422)
   const serialize = () => serializeSubmissionState(valid, values, errors, schemaDefinition)
@@ -254,14 +253,14 @@ function createSubmission<TData>(
 }
 
 function createSuccessfulSubmission<TData>(
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
   data: TData,
 ): FormSubmissionResult<TData> {
   return createSubmission<TData>(true, data, createErrorBag(), 422, schemaDefinition)
 }
 
 function createFailedSubmission<TData>(
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
   values: Partial<TData>,
   flattenedErrors: Record<string, readonly string[]>,
   status = 422,
@@ -294,7 +293,7 @@ function createTransportFailure<TData>(
 
 async function validateClientValues<TData>(
   values: TData | FormLikeValidationInput,
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
 ): Promise<FormSubmissionResult<TData>> {
   const result = await safeParse(
     values as FormLikeValidationInput,
@@ -401,7 +400,7 @@ function replaceErrorsForPath(
 
 function buildFieldsTree<TData>(
   state: MutableState<TData, unknown>,
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
   source: unknown,
   validateOn: ValidateOnMode,
   prefix = '',
@@ -556,7 +555,7 @@ function normalizeSvelteKitActionResult<TData>(
 }
 
 function normalizeSubmissionLike<TData, TSuccess>(
-  schemaDefinition: FormSchema,
+  schemaDefinition: ValidationSchema,
   values: TData,
   result: ClientSubmitResult<TData, TSuccess>,
 ): NormalizedClientSubmitResult<TData, TSuccess> {
@@ -697,7 +696,7 @@ function isSafeMethod(method: string): boolean {
 /**
  * @internal Shared headless form runtime for framework adapters.
  */
-export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>(
+export function createFormClient<TSchema extends ValidationSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {

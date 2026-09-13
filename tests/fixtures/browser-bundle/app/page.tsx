@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useForm } from '@holo-js/adapter-next/client'
-import { field, schema } from '@holo-js/forms/schema'
+import { field, schema } from '@holo-js/validation'
 import { submitQuote } from './actions'
 
 const quote = schema({ name: field.string().required('Name is required') })

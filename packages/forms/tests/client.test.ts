@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createFailedSubmission, createSuccessfulSubmission, field, schema, ValidationException, type WebFileLike } from '../src'
+import { createFailedSubmission, createSuccessfulSubmission } from '../src'
+import { field, schema, ValidationException, type WebFileLike } from '@holo-js/validation'
 import { createFormClient as useForm, FormClientState, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
 import { validationExceptionToFailure } from '../src/internal/validation-exception'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'

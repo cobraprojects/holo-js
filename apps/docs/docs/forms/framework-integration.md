@@ -20,7 +20,8 @@ everywhere, or pass schemas directly to framework-native tools that accept Stand
 ::: code-group
 
 ```ts [Next.js — app/api/login/route.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required().email(),
@@ -38,7 +39,8 @@ export async function POST(request: Request) {
 
 ```ts [Nuxt — server/api/login.post.ts]
 import { defineEventHandler } from 'h3'
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required().email(),
@@ -55,7 +57,8 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit actions — src/routes/login/+page.server.ts]
-import { field, schema, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 const loginForm = schema({
   email: field.string().required().email(),

@@ -27,6 +27,7 @@ export type {
   FormLikeValidationInput,
   InferFieldOutput,
   InferSchemaData,
+  InferValidationSchemaData,
   PrimitiveFieldKind,
   SchemaInputShape,
   SchemaSourceInput,

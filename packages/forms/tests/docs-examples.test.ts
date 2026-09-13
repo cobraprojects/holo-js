@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { field, safeParse, schema } from '../src'
+import { safeParse } from '../src'
+import { field, schema } from '@holo-js/validation'
 import { createFormClient as useForm } from '../src/internal/client'
 
 describe('@holo-js/forms documented examples', () => {

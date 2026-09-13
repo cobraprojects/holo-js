@@ -1,5 +1,5 @@
-import type { FormSchema, InferFormData } from '@holo-js/forms'
-import type { ValidationErrorBag } from '@holo-js/forms'
+import type { InferFormData } from '@holo-js/forms'
+import type { ValidationErrorBag, ValidationSchema } from '@holo-js/validation'
 import type {
   InferFormFieldTree,
   UseFormOptions,
@@ -17,7 +17,7 @@ export type {
   ValidateOnMode,
 } from '@holo-js/forms/internal/client'
 
-export declare function useForm<TSchema extends FormSchema, TSuccess = unknown>(
+export declare function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options?: UseFormOptions<InferFormData<TSchema>, TSuccess>,
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>>

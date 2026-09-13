@@ -1,6 +1,7 @@
 import {
   type FormLikeValidationInput,
   type InferSchemaData,
+  type InferValidationSchemaData,
   type SchemaInputShape,
   type ValidationErrorBag,
   type ValidationSchema,
@@ -17,7 +18,6 @@ import {
   type FormFailureInput,
   type FormFailureOptions,
 } from './failure'
-import type { FormSchema } from './schema'
 import { sanitizeFlashedInput } from './sensitiveInput'
 
 export { FormContractError } from './errors'
@@ -30,8 +30,9 @@ export type {
   FormFailureInput,
   FormFailureOptions,
 } from './failure'
-export { type FormSchema, type InferFormData, isFormSchema, schema } from './schema'
 export { sanitizeFlashedInput } from './sensitiveInput'
+
+export type InferFormData<TSchema extends ValidationSchema> = InferValidationSchemaData<TSchema>
 
 export interface FormFailurePayload<TData> {
   readonly ok: false
@@ -169,7 +170,7 @@ function serializeSubmissionState<TData>(
   valid: boolean,
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
-  schemaDefinition?: FormSchema,
+  schemaDefinition?: ValidationSchema,
 ): SerializedFormSubmission<TData> {
   return Object.freeze({
     valid,
@@ -184,7 +185,7 @@ function createSubmission<TData>(
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
   failureStatus = 422,
-  schemaDefinition?: FormSchema,
+  schemaDefinition?: ValidationSchema,
   failureMetadata: FormFailureMetadata = {},
 ): FormSubmissionResult<TData> {
   const normalizedFailureStatus = normalizeStatus(failureStatus, 422)
@@ -240,7 +241,7 @@ function createSubmission<TData>(
 }
 
 export function createSuccessfulSubmission<TShape extends SchemaInputShape>(
-  schemaDefinition: FormSchema<TShape>,
+  schemaDefinition: ValidationSchema<TShape>,
   data: InferSchemaData<TShape>,
 ): FormSubmissionSuccess<InferSchemaData<TShape>> {
   void schemaDefinition
@@ -254,7 +255,7 @@ export function createSuccessfulSubmission<TShape extends SchemaInputShape>(
 }
 
 export function createFailedSubmission<TShape extends SchemaInputShape>(
-  schemaDefinition: FormSchema<TShape>,
+  schemaDefinition: ValidationSchema<TShape>,
   values: Partial<InferSchemaData<TShape>>,
   flattenedErrors: Record<string, readonly string[]>,
   status = 422,
@@ -721,14 +722,14 @@ function createSecurityFailureMetadata(error: Error & { readonly status: number 
 
 async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   input: Request,
-  schemaDefinition: FormSchema<TShape>,
+  schemaDefinition: ValidationSchema<TShape>,
   error: Error & { readonly status: number },
 ): Promise<FormSubmissionFailure<InferSchemaData<TShape>>> {
   let values = {} as Partial<InferSchemaData<TShape>>
   let flattenedErrors: Record<string, readonly string[]> = {}
 
   try {
-    const inspection = await safeParseInput(input.clone(), schemaDefinition as ValidationSchema<TShape>)
+    const inspection = await safeParseInput(input.clone(), schemaDefinition)
 
     if (inspection.valid) {
       values = inspection.data
@@ -758,7 +759,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
 
 export async function safeParse<TShape extends SchemaInputShape>(
   input: FormLikeValidationInput | FormRequestLikeInput,
-  schemaDefinition: FormSchema<TShape>,
+  schemaDefinition: ValidationSchema<TShape>,
   options: FormSecurityOptions = {},
 ): Promise<FormSubmissionResult<InferSchemaData<TShape>>> {
   let validatedSubmission:
@@ -782,7 +783,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
     try {
       const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
-      const inspection = await safeParseInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
+      const inspection = await safeParseInput(request.clone(), schemaDefinition)
       const throttleValues = inspection.valid ? inspection.data : inspection.values
       validatedSubmission = inspection.valid
         ? createSuccessfulSubmission(schemaDefinition, inspection.data)
@@ -827,7 +828,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
     return validatedSubmission
   }
 
-  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition as ValidationSchema<TShape>)
+  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition)
 
   if (result.valid) {
     return createSuccessfulSubmission(schemaDefinition, result.data)
@@ -838,7 +839,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
 
 export async function validate<TShape extends SchemaInputShape>(
   input: FormLikeValidationInput | FormRequestLikeInput,
-  schemaDefinition: FormSchema<TShape>,
+  schemaDefinition: ValidationSchema<TShape>,
   options: FormSecurityOptions = {},
 ): Promise<InferSchemaData<TShape>> {
   const result = await safeParse(input, schemaDefinition, options)

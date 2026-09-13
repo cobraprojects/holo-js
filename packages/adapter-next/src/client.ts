@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { FormSchema, InferFormData } from '@holo-js/forms'
+import type { InferFormData } from '@holo-js/forms'
+import type { ValidationSchema } from '@holo-js/validation'
 import {
   type ClientSubmitContext,
   type ClientSubmitResult,
@@ -107,7 +108,7 @@ function createSubmitterBridge<TData, TSuccess>(
   }
 }
 
-export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
+export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {

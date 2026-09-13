@@ -1,7 +1,7 @@
 import { hashPassword } from '@holo-js/auth'
 import { broadcast } from '@holo-js/broadcast'
 import { DB, uniqueSlug } from '@holo-js/db'
-import { ValidationException } from '@holo-js/forms'
+import { ValidationException } from '@holo-js/validation'
 
 import { blogPostChanged } from '../broadcast/blog-post-changed'
 import BlogPostSaved from '../events/blog/post-saved'

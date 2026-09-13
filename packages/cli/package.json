@@ -17,7 +17,8 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "scripts": {
     "build": "node ../../scripts/generate-cli-workspace-catalog.mjs && tsup",

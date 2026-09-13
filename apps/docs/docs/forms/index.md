@@ -22,7 +22,7 @@ form workflow.
 
 ```ts
 // lib/schemas/register.ts
-import { field, schema } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
 
 export const registerUser = schema({
   name: field.string().required().min(3).max(255),
@@ -37,7 +37,7 @@ export const registerUser = schema({
 
 ## Standard Schema compatibility
 
-Every schema produced by `@holo-js/forms` implements [Standard Schema V1](https://standardschema.dev).
+Every schema produced by `@holo-js/validation` implements [Standard Schema V1](https://standardschema.dev).
 This means the same schema you use with `useForm(...)` and `validate(...)` also works natively with
 SvelteKit remote functions (`form()`, `query()`, `command()`), tRPC, TanStack Form, and any other tool
 that accepts Standard Schema. No wrappers or adapters needed.
@@ -58,6 +58,7 @@ profile updates.
 
 - `@holo-js/validation` owns schema parsing, coercion, error normalization, and Standard Schema conformance.
 - `@holo-js/forms` owns the submission contract (`safeParse(...)`, `fail()`, `success()`, `serialize()`) and client form state.
+- Define schemas with `@holo-js/validation`; `@holo-js/forms` does not export schema builders.
 - All frameworks use the same `validate(...)` function from `@holo-js/forms`; invalid input throws
   `ValidationException` and adapters serialize it for the host framework.
 - Use `safeParse(...)` from `@holo-js/forms` when you explicitly need a non-throwing submission object.
