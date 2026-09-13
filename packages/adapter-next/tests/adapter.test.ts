@@ -294,6 +294,10 @@ export default defineConfig({
         path: /next\.config\.(ts|mjs|js)$/,
         title: /Encountered unexpected file in NFT list/,
       },
+      {
+        path: /(?:packages|node_modules[\\/]@holo-js)[\\/](?:core|kernel|media)[\\/]dist[\\/].+\.mjs$/,
+        title: /Dynamic filesystem access causes tracing of the whole project/,
+      },
     ])
   })
 

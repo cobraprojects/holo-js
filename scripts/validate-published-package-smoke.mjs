@@ -34,6 +34,8 @@ function run(cwd, command, args) {
       result.stderr,
     ].filter(Boolean).join('\n'))
   }
+
+  return result
 }
 
 async function getAvailablePort() {
@@ -432,7 +434,13 @@ async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework) {
       await createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     }
     run(appRoot, 'bun', ['run', 'prepare'])
-    run(appRoot, 'bun', ['run', 'build'])
+    const build = run(appRoot, 'bun', ['run', 'build'])
+    if (app.name === 'next') {
+      assert.doesNotMatch(
+        `${build.stdout}\n${build.stderr}`,
+        /Dynamic filesystem access causes tracing of the whole project/,
+      )
+    }
     await assertProductionApp(appRoot, app)
     await rm(appRoot, { recursive: true, force: true })
   }

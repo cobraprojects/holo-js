@@ -47,6 +47,8 @@ const HOLO_TRANSPILED_PACKAGE_SET = new Set<string>(HOLO_TRANSPILED_PACKAGES)
 const NEXT_AUTH_INTERRUPTS_ENV = '__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS'
 const CORE_RUNTIME_CHUNK_PATH = /packages[\\/]core[\\/]dist[\\/].+\.mjs$/
 const OPTIONAL_RUNTIME_IMPORT_ISSUE = /Module not found: Can't resolve (?:'@holo-js\/storage-s3'|<dynamic>)/
+const HOLO_RUNTIME_FILESYSTEM_PATH = /(?:packages|node_modules[\\/]@holo-js)[\\/](?:core|kernel|media)[\\/]dist[\\/].+\.mjs$/
+const DYNAMIC_FILESYSTEM_ACCESS_ISSUE = /Dynamic filesystem access causes tracing of the whole project/
 
 type PackageDependencyField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies'
 type PackageDependencyMap = Readonly<Record<string, string>>
@@ -260,6 +262,10 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       {
         path: /next\.config\.(ts|mjs|js)$/,
         title: /Encountered unexpected file in NFT list/,
+      },
+      {
+        path: HOLO_RUNTIME_FILESYSTEM_PATH,
+        title: DYNAMIC_FILESYSTEM_ACCESS_ISSUE,
       },
     ],
   }
