@@ -29,10 +29,16 @@ export function renderAuthEnvFiles(
       ? ['google']
       : []
   const env = [
+    'AUTH_GUARD=web',
+    'AUTH_PASSWORD_BROKER=users',
     'AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email',
     'AUTH_PASSWORD_RESET_ROUTE=/reset-password',
+    '',
+    'RATE_LIMIT_DRIVER=file',
+    '',
     'FRONTEND_URL=',
     'FRONTEND_DOMAIN=',
+    '',
     'SESSION_DRIVER=file',
     `SESSION_CONNECTION=${defaultDatabaseConnection}`,
     'SESSION_COOKIE=holo_session',
@@ -48,6 +54,7 @@ export function renderAuthEnvFiles(
   for (const provider of socialProviders) {
     const upper = provider.toUpperCase()
     env.push(
+      '',
       `AUTH_${upper}_CLIENT_ID=`,
       `AUTH_${upper}_CLIENT_SECRET=`,
       `AUTH_${upper}_REDIRECT_URI=`,
@@ -56,6 +63,7 @@ export function renderAuthEnvFiles(
 
   if (features.workos) {
     env.push(
+      '',
       'AUTH_WORKOS_PROVIDER=dashboard',
       'WORKOS_CLIENT_ID=',
       'WORKOS_API_KEY=',
@@ -65,6 +73,7 @@ export function renderAuthEnvFiles(
 
   if (features.clerk) {
     env.push(
+      '',
       'CLERK_PUBLISHABLE_KEY=',
       'CLERK_SECRET_KEY=',
       'CLERK_API_URL=',
@@ -76,7 +85,7 @@ export function renderAuthEnvFiles(
 
   return {
     env,
-    example: env.map(line => `${line.split('=')[0]}=`),
+    example: env.map(renderEnvExampleLine),
   }
 }
 
@@ -462,10 +471,10 @@ export function renderScaffoldDatabaseConfig(
       'import { env } from \'@holo-js/config\'',
       '',
       'export default defineDatabaseConfig({',
-      '  defaultConnection: \'main\',',
+      "  defaultConnection: env('DB_CONNECTION', 'main'),",
       '  connections: {',
       '    main: {',
-      '      driver: \'sqlite\',',
+      "      driver: env('DB_DRIVER', 'sqlite'),",
       '      url: env(\'DB_URL\', \'./storage/database.sqlite\'),',
       '    },',
       '  },',
@@ -485,10 +494,10 @@ export function renderScaffoldDatabaseConfig(
     'import { env } from \'@holo-js/config\'',
     '',
     'export default defineDatabaseConfig({',
-    '  defaultConnection: \'main\',',
+    "  defaultConnection: env('DB_CONNECTION', 'main'),",
     '  connections: {',
     '    main: {',
-    `      driver: '${options.databaseDriver}',`,
+    `      driver: env('DB_DRIVER', '${options.databaseDriver}'),`,
     '      host: env(\'DB_HOST\', \'127.0.0.1\'),',
     `      port: env('DB_PORT', '${port}'),`,
     `      username: env('DB_USERNAME', '${username}'),`,
@@ -524,7 +533,6 @@ export function renderScaffoldEnvFiles(
     `APP_URL=${defaultUrl}`,
     'APP_ENV=development',
     'APP_DEBUG=true',
-    `DB_DRIVER=${options.databaseDriver}`,
   ]
   const driverLines = options.databaseDriver === 'sqlite'
     ? [
@@ -538,6 +546,8 @@ export function renderScaffoldEnvFiles(
         `DB_DATABASE=${sanitizePackageName(options.projectName) || 'holo_app'}`,
         ...(options.databaseDriver === 'postgres' ? ['DB_SCHEMA=public'] : []),
       ]
+  const databaseLines = ['DB_CONNECTION=main', `DB_DRIVER=${options.databaseDriver}`, ...driverLines]
+  const redisLines = ['REDIS_CONNECTION=default']
   const storageLines = optionalPackageNames.includes('storage')
     ? [
         `STORAGE_DEFAULT_DISK=${options.storageDefaultDisk}`,
@@ -546,6 +556,12 @@ export function renderScaffoldEnvFiles(
     : []
   const authLines = optionalPackageNames.includes('auth')
     ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
+    : []
+  const queueLines = optionalPackageNames.includes('queue')
+    ? [...renderQueueEnvFiles('sync').env]
+    : []
+  const securityLines = optionalPackageNames.includes('security') && !optionalPackageNames.includes('auth')
+    ? ['RATE_LIMIT_DRIVER=file']
     : []
   const cacheLines = optionalPackageNames.includes('cache')
     ? [...renderCacheEnvFiles('file').env]
@@ -558,17 +574,23 @@ export function renderScaffoldEnvFiles(
     : []
   const envGroups = [
     baseLines,
-    driverLines,
+    databaseLines,
+    redisLines,
     storageLines,
     authLines,
+    queueLines,
+    securityLines,
     cacheLines,
     mailLines,
   ]
   const exampleGroups = [
     baseLines.map(renderEnvExampleLine),
-    driverLines.map(renderEnvExampleLine),
+    databaseLines.map(renderEnvExampleLine),
+    redisLines.map(renderEnvExampleLine),
     storageLines.map(renderEnvExampleLine),
     authLines.map(renderEnvExampleLine),
+    queueLines.map(renderEnvExampleLine),
+    securityLines.map(renderEnvExampleLine),
     cacheLines.map(renderEnvExampleLine),
     mailExampleLines.map(renderEnvExampleLine),
   ]
@@ -591,6 +613,9 @@ function renderEnvGroups(groups: readonly (readonly string[])[]): string {
 }
 
 function renderEnvExampleLine(line: string): string {
+  if (!line.trim()) {
+    return ''
+  }
   const [key] = line.split('=')
   return `${key ?? line}=`
 }
@@ -625,6 +650,7 @@ export function renderMailEnvFiles(): { env: readonly string[], example: readonl
 function renderRedisConnectionEnvFiles(): { env: readonly string[], example: readonly string[] } {
   return {
     env: [
+      'REDIS_CONNECTION=',
       'REDIS_URL=',
       'REDIS_HOST=127.0.0.1',
       'REDIS_PORT=6379',
@@ -633,6 +659,7 @@ function renderRedisConnectionEnvFiles(): { env: readonly string[], example: rea
       'REDIS_DB=0',
     ],
     example: [
+      'REDIS_CONNECTION=',
       'REDIS_URL=',
       'REDIS_HOST=',
       'REDIS_PORT=',
@@ -646,14 +673,11 @@ function renderRedisConnectionEnvFiles(): { env: readonly string[], example: rea
 export function renderQueueEnvFiles(
   driver: SupportedQueueInstallerDriver,
 ): { env: readonly string[], example: readonly string[] } {
-  if (driver !== 'redis') {
-    return {
-      env: [],
-      example: [],
-    }
+  const redis = driver === 'redis' ? renderRedisConnectionEnvFiles() : { env: [], example: [] }
+  return {
+    env: [`QUEUE_CONNECTION=${driver}`, ...(redis.env.length > 0 ? ['', ...redis.env] : [])],
+    example: ['QUEUE_CONNECTION=', ...(redis.example.length > 0 ? ['', ...redis.example] : [])],
   }
-
-  return renderRedisConnectionEnvFiles()
 }
 
 export function renderCacheEnvFiles(
@@ -665,11 +689,13 @@ export function renderCacheEnvFiles(
       env: [
         `CACHE_DRIVER=${driver}`,
         'CACHE_PREFIX=',
+        '',
         ...redis.env,
       ],
       example: [
         `CACHE_DRIVER=${driver}`,
         'CACHE_PREFIX=',
+        '',
         ...redis.example,
       ],
     }
@@ -737,36 +763,40 @@ export function upsertEnvContents(
     : []
   const existingKeys = new Set(nextLines.map(parseEnvKey).filter((value): value is string => typeof value === 'string'))
   const additionKeys = new Set<string>()
-  const missingLines = additions.flatMap(line => {
+  const missingGroups: string[][] = []
+  let missingLines: string[] = []
+  for (const line of additions) {
     const normalizedLine = line.trim()
-    if (normalizedLine.length === 0 || normalizedLine.startsWith('#')) {
-      return []
+    if (!normalizedLine) {
+      if (missingLines.length > 0) {
+        missingGroups.push(missingLines)
+        missingLines = []
+      }
+      continue
     }
 
     const key = parseEnvKey(normalizedLine)
     if (!key || additionKeys.has(key) || existingKeys.has(key)) {
-      return []
+      continue
     }
 
     additionKeys.add(key)
-    return [normalizedLine]
-  })
+    missingLines.push(normalizedLine)
+  }
+  if (missingLines.length > 0) {
+    missingGroups.push(missingLines)
+  }
 
-  if (missingLines.length === 0) {
+  if (missingGroups.length === 0) {
     return {
       contents: existingContents,
       changed: false,
     }
   }
 
-  if (nextLines.length > 0 && nextLines[nextLines.length - 1]?.trim() !== '') {
-    nextLines.push('')
-  }
-
-  nextLines.push(...missingLines)
-
+  const existing = nextLines.join('\n').replace(/\n*$/, '')
   return {
-    contents: `${nextLines.join('\n').replace(/\n*$/, '')}\n`,
+    contents: `${existing ? `${existing}\n\n` : ''}${renderEnvGroups(missingGroups)}`,
     changed: true,
   }
 }

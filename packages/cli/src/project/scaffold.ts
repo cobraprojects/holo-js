@@ -819,6 +819,14 @@ export async function installSecurityIntoProject(
   }
   const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
 
+  for (const fileName of ['.env', '.env.example']) {
+    const envPath = resolve(projectRoot, fileName)
+    const nextEnv = upsertEnvContents(await readTextFile(envPath), ['RATE_LIMIT_DRIVER=file'])
+    if (nextEnv.changed && typeof nextEnv.contents === 'string') {
+      await writeTextFile(envPath, nextEnv.contents)
+    }
+  }
+
   return {
     updatedPackageJson: await upsertSecurityPackageDependency(projectRoot),
     createdSecurityConfig: !securityConfigPath,
@@ -844,7 +852,6 @@ export async function installCacheIntoProject(
     processEnv: process.env,
   }) as LoadedConfigWithCache
   const defaultDatabaseConnection = project.config.database?.defaultConnection ?? 'default'
-  const defaultRedisConnection = loadedConfig.redis.default
   const loadedCacheConfig = cacheConfigPath
     ? loadedConfig.cache
     : undefined
@@ -864,7 +871,7 @@ export async function installCacheIntoProject(
   if (!cacheConfigPath) {
     await writeTextFile(
       resolve(projectRoot, 'config/cache.ts'),
-      renderCacheConfig(driver, defaultDatabaseConnection, defaultRedisConnection),
+      renderCacheConfig(driver, defaultDatabaseConnection),
     )
   }
 

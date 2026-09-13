@@ -17,8 +17,8 @@ describe('@holo-js/cli mail scaffold', () => {
     expect(rendered.example).not.toContain('MAIL_MAILER=')
     expect(rendered.example).not.toContain('MAIL_FROM_ADDRESS=')
     expect(rendered.example).not.toContain('MAIL_PASSWORD=')
-    expect(rendered.env).toContain('DB_DRIVER=sqlite\n\nDB_URL=./storage/database.sqlite')
-    expect(rendered.example).toContain('DB_DRIVER=\n\nDB_URL=')
+    expect(rendered.env).toContain('DB_DRIVER=sqlite\nDB_URL=./storage/database.sqlite')
+    expect(rendered.example).toContain('DB_DRIVER=\nDB_URL=')
   })
 
   it('includes mail env defaults when mail is requested during scaffold', () => {
@@ -37,8 +37,8 @@ describe('@holo-js/cli mail scaffold', () => {
     expect(rendered.example).toContain('MAIL_MAILER=')
     expect(rendered.example).toContain('MAIL_FROM_ADDRESS=')
     expect(rendered.example).toContain('MAIL_PASSWORD=')
-    expect(rendered.env).toContain('DB_URL=./storage/database.sqlite\n\nMAIL_MAILER=preview')
-    expect(rendered.example).toContain('DB_URL=\n\nMAIL_MAILER=')
+    expect(rendered.env).toContain('REDIS_CONNECTION=default\n\nMAIL_MAILER=preview')
+    expect(rendered.example).toContain('REDIS_CONNECTION=\n\nMAIL_MAILER=')
   })
 
   it('exposes a complete mail env block and matching config references', () => {

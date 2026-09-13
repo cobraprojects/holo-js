@@ -2289,10 +2289,10 @@ APP_ENV=development
     expect(packageJson.dependencies?.['@holo-js/queue']).toBe(expectedHoloPackageRange)
     expect(packageJson.dependencies?.['@holo-js/queue-db']).toBeUndefined()
     expect(packageJson.dependencies?.esbuild).toBe(ESBUILD_PACKAGE_VERSION)
-    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('default: \'sync\'')
+    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain("default: env('QUEUE_CONNECTION', 'sync')")
     expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('failed: false')
-    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('APP_NAME=Fixture\n')
-    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe('APP_NAME=\n')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('APP_NAME=Fixture\n\nQUEUE_CONNECTION=sync\n')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe('APP_NAME=\n\nQUEUE_CONNECTION=\n')
     await expect(stat(join(projectRoot, 'server/jobs'))).resolves.toBeDefined()
 
     const rerun = runCliProcess(projectRoot, ['install', 'queue'])
@@ -2517,7 +2517,7 @@ export default defineSessionConfig({
     })
 
     expect(await readFile(join(projectRoot, 'config/session.ts'), 'utf8')).toBe(existingSessionConfig)
-    expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('guard: \'web\'')
+    expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('guard: env(\'AUTH_GUARD\', "web")')
   })
 
   it('installs auth provider packages without overwriting existing auth files and rejects collisions', async () => {
@@ -3608,7 +3608,7 @@ export default defineRedisConfig({
       },
     })
     expect(JSON.parse(await readFile(join(interactiveEventsRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
-    await expect(readFile(join(interactiveEventsRoot, 'config/queue.ts'), 'utf8')).resolves.toContain('default: \'sync\'')
+    await expect(readFile(join(interactiveEventsRoot, 'config/queue.ts'), 'utf8')).resolves.toContain("default: env('QUEUE_CONNECTION', 'sync')")
 
     const queueOnlyEventsRoot = await createTempProject()
     tempDirs.push(queueOnlyEventsRoot)
@@ -5150,7 +5150,7 @@ export default defineRedisConfig({
 
     const result = runCliProcess(projectRoot, ['install', 'cache', '--driver', 'redis'])
     expect(result.status).toBe(0)
-    expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('connection: \'cache\'')
+    expect((await loadConfigDirectory(projectRoot, { preferCache: false })).cache.drivers.redis).toMatchObject({ connection: 'cache' })
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_HOST=')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_HOST=')
   }, 30_000)

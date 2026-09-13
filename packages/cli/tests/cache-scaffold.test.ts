@@ -16,7 +16,7 @@ describe('cache scaffold', () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-cache-scaffold-'))
     tempDirs.push(root)
     await mkdir(join(root, 'config'))
-    const config = renderCacheConfig(driver, 'main', 'shared')
+    const config = renderCacheConfig(driver, 'main')
       .replace("'@holo-js/cache'", JSON.stringify(resolve(import.meta.dirname, '../../cache/src/index.ts')))
       .replace("'@holo-js/config'", JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts')))
     await writeFile(join(root, 'config/cache.ts'), config)

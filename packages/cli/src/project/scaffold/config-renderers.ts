@@ -80,12 +80,11 @@ export function renderQueueConfig(
       'import { env } from \'@holo-js/config\'',
       '',
       'export default defineQueueConfig({',
-      '  default: \'redis\',',
+      "  default: env('QUEUE_CONNECTION', 'redis'),",
       '  failed: false,',
       '  connections: {',
       '    redis: {',
       '      driver: \'redis\',',
-      '      connection: \'default\',',
       '      queue: \'default\',',
       '      retryAfter: 90,',
       '      blockFor: 5,',
@@ -99,9 +98,10 @@ export function renderQueueConfig(
   if (driver === 'database') {
     return [
       'import { defineQueueConfig } from \'@holo-js/queue\'',
+      'import { env } from \'@holo-js/config\'',
       '',
       'export default defineQueueConfig({',
-      '  default: \'database\',',
+      "  default: env('QUEUE_CONNECTION', 'database'),",
       '  failed: {',
       '    driver: \'database\',',
       `    connection: '${defaultDatabaseConnection}',`,
@@ -124,9 +124,10 @@ export function renderQueueConfig(
 
   return [
     'import { defineQueueConfig } from \'@holo-js/queue\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     'export default defineQueueConfig({',
-    '  default: \'sync\',',
+    "  default: env('QUEUE_CONNECTION', 'sync'),",
     '  failed: false,',
     '  connections: {',
     '    sync: {',
@@ -142,7 +143,6 @@ export function renderQueueConfig(
 export function renderCacheConfig(
   driver: SupportedCacheInstallerDriver = 'file',
   defaultDatabaseConnection = 'default',
-  defaultRedisConnection = 'default',
 ): string {
   const lines = [
     'import { defineCacheConfig } from \'@holo-js/cache\'',
@@ -162,7 +162,6 @@ export function renderCacheConfig(
     '    },',
     '    redis: {',
     '      driver: \'redis\',',
-    `      connection: '${defaultRedisConnection}',`,
     '    },',
   ]
 
@@ -192,7 +191,7 @@ export function renderRedisConfig(): string {
     'import { defineRedisConfig } from \'@holo-js/kernel\'',
     '',
     'export default defineRedisConfig({',
-    '  default: \'default\',',
+    "  default: env('REDIS_CONNECTION', 'default'),",
     '  connections: {',
     '    default: {',
     '      url: env(\'REDIS_URL\') || undefined,',
@@ -275,6 +274,7 @@ export function renderMailConfig(): string {
 export function renderSecurityConfig(): string {
   return [
     `import { defineSecurityConfig, limit } from '@holo-js/security'`,
+    "import { env } from '@holo-js/config'",
     '',
     'export default defineSecurityConfig({',
     '  csrf: {',
@@ -285,12 +285,11 @@ export function renderSecurityConfig(): string {
     '    except: [],',
     '  },',
     '  rateLimit: {',
-    '    driver: \'file\',',
+    "    driver: env('RATE_LIMIT_DRIVER', 'file'),",
     '    file: {',
     '      path: \'./storage/framework/rate-limits\',',
     '    },',
     '    redis: {',
-    '      connection: \'default\',',
     '      prefix: \'holo:rate-limit:\',',
     '    },',
     '    limiters: {',
@@ -681,7 +680,6 @@ export function renderAuthConfig(
     : socialEnabled
       ? ['google']
       : []
-  const envRequired = socialProviders.length > 0 || features.workos === true || features.clerk === true
   const lines = moduleFormat === 'cjs'
     ? [
         'module.exports = {',
@@ -689,15 +687,15 @@ export function renderAuthConfig(
       ]
     : [
         'import { defineAuthConfig } from \'@holo-js/auth\'',
-        ...(envRequired ? ['import { env } from \'@holo-js/config\''] : []),
+        'import { env } from \'@holo-js/config\'',
         '',
         'export default defineAuthConfig({',
       ]
 
   lines.push(
     '  defaults: {',
-    '    guard: \'web\',',
-    '    passwords: \'users\',',
+    `    guard: ${envValue('AUTH_GUARD', 'web')},`,
+    `    passwords: ${envValue('AUTH_PASSWORD_BROKER', 'users')},`,
     '  },',
     '  guards: {',
     '    web: {',
