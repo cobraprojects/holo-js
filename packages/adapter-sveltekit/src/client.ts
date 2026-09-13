@@ -124,10 +124,12 @@ const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let submitListenerTarget: BrowserEventTarget | undefined
 
 export {
+  type ClientCsrfOptions,
   type ClientSubmitContext,
   type ClientSubmitResult,
   type FormFieldState,
   type FormFieldTree,
+  type FormRequestCredentials,
   type UseFormOptions,
   type UseFormResult,
   type ValidateOnMode,
@@ -801,7 +803,8 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
     ...options,
     action: options.action ?? currentLocationHref(),
     initialState: options.initialState ?? takeFlashedValidationState<TData>(schemaDefinition),
-    submitter: options.submitter ?? submitSvelteKitAction,
+    submitter: options.submitter
+      ?? (options.credentials || options.csrf ? undefined : submitSvelteKitAction),
   }
 
   const form = createHttpHandledForm(createFormClient(schemaDefinition, formOptions))

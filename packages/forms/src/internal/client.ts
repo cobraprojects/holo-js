@@ -44,6 +44,11 @@ import {
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
 
 export type ValidateOnMode = 'submit' | 'blur' | 'change'
+export type FormRequestCredentials = 'omit' | 'same-origin' | 'include'
+
+export interface ClientCsrfOptions {
+  readonly endpoint: string
+}
 
 export interface ClientSubmitContext<TData> {
   readonly action?: string
@@ -104,6 +109,8 @@ function isBrowserFormSubmitter<TData, TSuccess>(
 export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly action?: string
   readonly method?: string
+  readonly credentials?: FormRequestCredentials
+  readonly csrf?: ClientCsrfOptions
   readonly validateOn?: ValidateOnMode
   readonly initialValues?: Partial<TData>
   readonly initialState?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | null
@@ -576,7 +583,9 @@ function normalizeSubmissionLike<TData, TSuccess>(
       valid: false,
       values: result.values,
       errors: result.errors,
-      ...(result.status === 429 && 'retryAfter' in result ? { retryAfter: result.retryAfter } : {}),
+      ...(result.status === 429 && 'retryAfterSeconds' in result
+        ? { retryAfterSeconds: result.retryAfterSeconds }
+        : {}),
       ...(result.status === 429 && 'retryAt' in result ? { retryAt: result.retryAt } : {}),
     }
   }
@@ -652,6 +661,7 @@ async function normalizeFetchResponse<TData, TSuccess>(
 
 async function defaultSubmitter<TData, TSuccess>(
   context: ClientSubmitContext<TData>,
+  options: Pick<UseFormOptions<TData, TSuccess>, 'credentials' | 'csrf'>,
 ): Promise<ClientSubmitResult<TData, TSuccess>> {
   if (typeof fetch !== 'function' || !context.action) {
     return {
@@ -662,9 +672,13 @@ async function defaultSubmitter<TData, TSuccess>(
   }
 
   const method = context.method.toUpperCase()
+  const credentials = options.credentials
+    ? { credentials: options.credentials }
+    : {}
   if (method === 'GET' || method === 'HEAD') {
     const response = await fetch(appendQueryString(context.action, context.formData), {
       method,
+      ...credentials,
     })
     if (method === 'HEAD' || response.status === 204 || response.status === 205) {
       return {
@@ -677,8 +691,33 @@ async function defaultSubmitter<TData, TSuccess>(
     return await normalizeFetchResponse<TData, TSuccess>(response, context.values)
   }
 
+  const headers = new Headers()
+  if (options.csrf) {
+    const csrfResponse = await fetch(options.csrf.endpoint, {
+      ...credentials,
+    })
+    if (!csrfResponse.ok) {
+      return createTransportFailure(context.values, csrfResponse.status)
+    }
+
+    const csrfPayload = await csrfResponse.json() as unknown
+    if (
+      !csrfPayload
+      || typeof csrfPayload !== 'object'
+      || !('token' in csrfPayload)
+      || typeof csrfPayload.token !== 'string'
+      || !csrfPayload.token
+    ) {
+      return createTransportFailure(context.values)
+    }
+
+    headers.set('X-CSRF-TOKEN', csrfPayload.token)
+  }
+
   const response = await fetch(context.action, {
     method,
+    ...credentials,
+    ...(options.csrf ? { headers } : {}),
     body: context.formData,
   })
 
@@ -781,7 +820,8 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
     const finishSubmission = state.startSubmission()
     notifyListeners(state)
     try {
-      const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
+      const submitter = options.submitter
+        ?? ((context: ClientSubmitContext<TData>) => defaultSubmitter<TData, TSuccess>(context, options))
       const liveForm = browserForm ?? getActiveElementBrowserForm()
       const method = options.method ?? liveForm?.method ?? 'POST'
       const action = options.action ?? liveForm?.action

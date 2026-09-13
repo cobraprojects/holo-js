@@ -15,10 +15,12 @@ import {
 import { createNextRenderableError, normalizeNextClientHttpError, renderNextClientHttpErrorPage } from './client-errors'
 
 export {
+  type ClientCsrfOptions,
   type ClientSubmitContext,
   type ClientSubmitResult,
   type FormFieldState,
   type FormFieldTree,
+  type FormRequestCredentials,
   type UseFormOptions,
   type UseFormResult,
   type ValidateOnMode,
@@ -62,6 +64,8 @@ function areOptionsEqual<TData, TSuccess>(
 ): boolean {
   return left.action === right.action
     && left.method === right.method
+    && left.credentials === right.credentials
+    && left.csrf?.endpoint === right.csrf?.endpoint
     && left.validateOn === right.validateOn
     && Boolean(left.submitter) === Boolean(right.submitter)
     && areEqual(left.initialValues, right.initialValues)

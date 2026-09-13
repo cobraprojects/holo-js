@@ -13,10 +13,12 @@ import { renderNuxtClientHttpErrorPage } from './client-errors'
 import { isPlainObject } from './object'
 
 export {
+  type ClientCsrfOptions,
   type ClientSubmitContext,
   type ClientSubmitResult,
   type FormFieldState,
   type FormFieldTree,
+  type FormRequestCredentials,
   type UseFormOptions,
   type UseFormResult,
   type ValidateOnMode,

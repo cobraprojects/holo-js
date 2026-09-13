@@ -223,6 +223,34 @@ export default defineEventHandler(async (event) => {
 
 Do not also add a native `action` to this form. `useValidationErrors(...)` is not part of this path.
 
+## Separate frontend and API origins
+
+When the frontend and API use different origins, configure the built-in submitter with the API action,
+credential mode, and CSRF token endpoint:
+
+```ts
+const form = useForm(contactForm, {
+  action: 'https://api.example.com/api/v1/enquiries/contact',
+  method: 'POST',
+  credentials: 'include',
+  csrf: {
+    endpoint: 'https://api.example.com/api/v1/csrf',
+  },
+})
+```
+
+Before an unsafe request, `useForm(...)` fetches the CSRF endpoint with the configured credentials. The
+endpoint must return `{ token: string }` and set the matching CSRF cookie. The form submitter sends that
+token in `X-CSRF-TOKEN`. The endpoint response must set `Cache-Control: no-store`. Safe methods do not
+request a CSRF token.
+
+The API must allow the frontend origin through CORS. Cookie-backed requests also require
+`cors.credentials: true`, a matching stateful domain, and cookies configured for the deployment's domain
+and SameSite requirements.
+
+These transport options apply to the built-in submitter. A custom `submitter` owns its own request and CSRF
+handling.
+
 ## Native form submits
 
 Use this path when the browser owns the form submission. The form has a native `action` and `method`, the

@@ -228,6 +228,22 @@ Pick the one that fits your app. They are not mutually exclusive.
 When `@holo-js/security` is installed, `useForm(...)` automatically forwards the CSRF token for unsafe
 submissions. It does not expose `throttle`; throttling is always enforced on the server.
 
+For a frontend and API on different origins, the frontend cannot read the API origin's CSRF cookie. Point
+the built-in submitter at an endpoint that returns the token while setting its matching cookie:
+
+```ts
+const form = useForm(loginForm, {
+  action: 'https://api.example.com/api/v1/login',
+  credentials: 'include',
+  csrf: {
+    endpoint: 'https://api.example.com/api/v1/csrf',
+  },
+})
+```
+
+Holo fetches the endpoint before unsafe submissions and sends the returned token in `X-CSRF-TOKEN`.
+Configure credentialed CORS and stateful domains on the API as described in the security guide.
+
 For native SvelteKit form actions, render the CSRF field from server data as a hidden input:
 
 ```svelte

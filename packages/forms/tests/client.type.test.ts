@@ -24,6 +24,11 @@ describe('@holo-js/forms client typing', () => {
     })
 
     const client = useForm(registerUser, {
+      action: 'https://api.example.com/register',
+      credentials: 'include',
+      csrf: {
+        endpoint: 'https://api.example.com/csrf',
+      },
       initialValues: {
         email: 'ava@example.com',
         age: undefined,

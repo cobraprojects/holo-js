@@ -586,6 +586,66 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
     expect(assign).not.toHaveBeenCalled()
   })
 
+  it('uses the shared cross-origin transport when csrf options are configured', async () => {
+    vi.stubGlobal('FormData', TestFormData)
+    vi.stubGlobal('window', {
+      location: {
+        href: 'https://app.test/contact',
+      },
+    })
+
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: 'cross-origin-token' }), {
+        headers: {
+          'content-type': 'application/json',
+        },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        status: 201,
+        data: {
+          submitted: true,
+        },
+      }), {
+        status: 201,
+        headers: {
+          'content-type': 'application/json',
+        },
+      }))
+    vi.stubGlobal('fetch', fetch)
+
+    const contactForm = schema({
+      email: field.string().required().email(),
+    })
+    const contact = useForm(contactForm, {
+      action: 'https://api.test/contact',
+      credentials: 'include',
+      csrf: {
+        endpoint: 'https://api.test/csrf',
+      },
+      initialValues: {
+        email: 'ava@app.test',
+      },
+    })
+
+    await expect(contact.submit()).resolves.toMatchObject({
+      ok: true,
+      status: 201,
+    })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenNthCalledWith(1, 'https://api.test/csrf', {
+      credentials: 'include',
+    })
+
+    const submitRequest = fetch.mock.calls[1]
+    expect(submitRequest?.[0]).toBe('https://api.test/contact')
+    expect(submitRequest?.[1]).toMatchObject({
+      method: 'POST',
+      credentials: 'include',
+    })
+    expect((submitRequest?.[1]?.headers as Headers).get('X-CSRF-TOKEN')).toBe('cross-origin-token')
+  })
+
   it('returns a form failure when SvelteKit action failure data is invalid JSON', async () => {
     vi.stubGlobal('FormData', TestFormData)
     vi.stubGlobal('window', {

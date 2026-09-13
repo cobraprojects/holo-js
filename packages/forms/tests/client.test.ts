@@ -141,6 +141,82 @@ function createSensitiveSchemaFixture(fields: Record<string, unknown>): Sensitiv
 }
 
 describe('@holo-js/forms client', () => {
+  it('bootstraps csrf before cross-origin unsafe submissions', async () => {
+    const contactForm = schema({
+      email: field.string().required().email(),
+    })
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(createJsonResponse({ token: 'cross-origin-token' }))
+      .mockResolvedValueOnce(createJsonResponse({
+        ok: true,
+        status: 201,
+        data: {
+          submitted: true,
+        },
+      }, {
+        status: 201,
+      }))
+    globalThis.fetch = fetchMock
+
+    const client = useForm(contactForm, {
+      action: 'https://api.example.com/enquiries',
+      credentials: 'include',
+      csrf: {
+        endpoint: 'https://api.example.com/csrf',
+      },
+      initialValues: {
+        email: 'ava@example.com',
+      },
+    })
+
+    await expect(client.submit()).resolves.toMatchObject({
+      ok: true,
+      status: 201,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://api.example.com/csrf', {
+      credentials: 'include',
+    })
+
+    const submitRequest = fetchMock.mock.calls[1]
+    expect(submitRequest?.[0]).toBe('https://api.example.com/enquiries')
+    expect(submitRequest?.[1]).toMatchObject({
+      method: 'POST',
+      credentials: 'include',
+    })
+    expect(submitRequest?.[1]?.headers).toBeInstanceOf(Headers)
+    expect((submitRequest?.[1]?.headers as Headers).get('X-CSRF-TOKEN')).toBe('cross-origin-token')
+  })
+
+  it('returns a form failure when csrf bootstrap fails', async () => {
+    const contactForm = schema({
+      email: field.string().required().email(),
+    })
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(createTextResponse('Unavailable', { status: 503 }))
+    globalThis.fetch = fetchMock
+
+    const client = useForm(contactForm, {
+      action: 'https://api.example.com/enquiries',
+      credentials: 'include',
+      csrf: {
+        endpoint: 'https://api.example.com/csrf',
+      },
+      initialValues: {
+        email: 'ava@example.com',
+      },
+    })
+
+    await expect(client.submit()).resolves.toMatchObject({
+      ok: false,
+      status: 503,
+      errors: {
+        _root: ['Unable to submit the form right now. Please try again.'],
+      },
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('attaches the configured csrf token to unsafe outgoing form data when the cookie exists', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
@@ -1666,12 +1742,12 @@ describe('@holo-js/forms client', () => {
         valid: false,
         values: { email: 'ava@example.com' },
         errors: { _root: ['Try later.'] },
-        retryAfter: 30,
+        retryAfterSeconds: 30,
         retryAt: '2026-07-12T12:00:00.000Z',
       }),
     })
     await expect(rateLimitedClient.submit()).resolves.toMatchObject({
-      retryAfter: 30,
+      retryAfterSeconds: 30,
       retryAt: '2026-07-12T12:00:00.000Z',
     })
 
