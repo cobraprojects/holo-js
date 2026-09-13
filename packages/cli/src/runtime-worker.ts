@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { initializeHolo } from '@holo-js/core'
 import {
   configureDB,
   createMigrationService,
@@ -415,15 +416,23 @@ function writeOutput(message: string): void {
 }
 
 const resolvedRuntimeConfig = resolveRuntimeConfig(payload.runtimeConfig)
-await loadProjectDatabaseDrivers(payload.projectRoot ?? process.cwd(), resolvedRuntimeConfig.db)
-const manager = resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
-configureDB(manager)
+const projectRoot = payload.projectRoot ?? process.cwd()
+const applicationRuntime = payload.kind === 'seed'
+  ? await initializeHolo(projectRoot)
+  : undefined
+const manager = applicationRuntime?.manager ?? resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
+if (!applicationRuntime) {
+  await loadProjectDatabaseDrivers(projectRoot, resolvedRuntimeConfig.db)
+  configureDB(manager)
+}
 const migrations = payload.kind === 'migrate' || payload.kind === 'hydrate-schema' || payload.kind === 'fresh' || payload.kind === 'rollback'
   ? await loadAllMigrations()
   : []
 
 try {
-  await manager.initializeAll()
+  if (!applicationRuntime) {
+    await manager.initializeAll()
+  }
 
   if (payload.kind === 'migrate') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
@@ -506,6 +515,10 @@ try {
     throw new Error(`Unknown runtime command "${payload.kind}".`)
   }
 } finally {
-  await manager.disconnectAll()
-  resetDB()
+  if (applicationRuntime) {
+    await applicationRuntime.shutdown()
+  } else {
+    await manager.disconnectAll()
+    resetDB()
+  }
 }

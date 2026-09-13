@@ -6887,6 +6887,158 @@ export default defineMigration({
     expect(generated).toContain('export const admins = defineGeneratedTable("admins", {')
   }, 30000)
 
+  it('boots configured application services before migrate:fresh runs seeders', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkWorkspaceFakeInstalledPackagesSync(projectRoot)
+    const cachePath = join(projectRoot, 'storage/framework/cache')
+
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    observers: 'server/db/observers',
+    factories: 'server/db/factories',
+    commands: 'server/commands',
+  },
+  models: ['server/models/User.mjs'],
+  migrations: ['server/db/migrations/2026_01_01_000001_create_users.mjs'],
+  seeders: ['server/db/seeders/UserSeeder.mjs'],
+}
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/cache'
+
+export default defineCacheConfig({
+  default: 'file',
+  drivers: {
+    file: {
+      driver: 'file',
+      path: ${JSON.stringify(cachePath)},
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+
+export const users = defineGeneratedTable('users', {
+  id: column.id(),
+  name: column.string(),
+})
+
+export const tables = { users } as const
+registerGeneratedTables(tables)
+`)
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.mjs', `
+import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+
+export const users = defineGeneratedTable('users', {
+  id: column.id(),
+  name: column.string(),
+})
+
+export const tables = Object.freeze({ users })
+registerGeneratedTables(tables)
+`)
+    await writeProjectFile(projectRoot, 'server/db/observers/UserObserver.mjs', `
+import cache from '@holo-js/cache'
+import { DB } from '@holo-js/db'
+
+export class UserObserver {
+  created() {
+    DB.afterCommit(async () => {
+      await cache.forget('users.index')
+    })
+  }
+}
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.mjs', `
+import '../../.holo-js/generated/schema.mjs'
+import { defineModel } from '@holo-js/db'
+import { UserObserver } from '../db/observers/UserObserver.mjs'
+
+export default defineModel('users', {
+  fillable: ['name'],
+  observers: [UserObserver],
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.mjs', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/seeders/UserSeeder.mjs', `
+import User from '../../models/User.mjs'
+import { defineSeeder } from '@holo-js/db'
+
+export default defineSeeder({
+  name: 'UserSeeder',
+  async run() {
+    await User.create({ name: 'Amina' })
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'cache-fixture.mjs', `
+import cache from '@holo-js/cache'
+import { initializeHolo } from '@holo-js/core'
+import User from './server/models/User.mjs'
+
+const runtime = await initializeHolo(process.cwd())
+
+try {
+  if (process.argv[2] === 'prime') {
+    await cache.put('users.index', 'stale', 300)
+  } else {
+    const user = await User.find(1)
+    process.stdout.write(JSON.stringify({
+      cached: await cache.get('users.index'),
+      userName: user?.get('name'),
+    }))
+  }
+} finally {
+  await runtime.shutdown()
+}
+`)
+
+    const primed = runNodeScript(projectRoot, join(projectRoot, 'cache-fixture.mjs'), ['prime'])
+    expect(primed.status, primed.stderr || primed.stdout).toBe(0)
+
+    const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'])
+    const verified = runNodeScript(projectRoot, join(projectRoot, 'cache-fixture.mjs'), ['verify'])
+
+    expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
+    expect(verified.status, verified.stderr || verified.stdout).toBe(0)
+    expect(JSON.parse(verified.stdout)).toEqual({
+      cached: null,
+      userName: 'Amina',
+    })
+  }, 30000)
+
   it('runs runtime commands without requiring the app to install @holo-js/db directly', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
