@@ -663,10 +663,12 @@ export function renderCacheEnvFiles(
     const redis = renderRedisConnectionEnvFiles()
     return {
       env: [
+        `CACHE_DRIVER=${driver}`,
         'CACHE_PREFIX=',
         ...redis.env,
       ],
       example: [
+        `CACHE_DRIVER=${driver}`,
         'CACHE_PREFIX=',
         ...redis.example,
       ],
@@ -675,9 +677,11 @@ export function renderCacheEnvFiles(
 
   return {
     env: [
+      `CACHE_DRIVER=${driver}`,
       'CACHE_PREFIX=',
     ],
     example: [
+      `CACHE_DRIVER=${driver}`,
       'CACHE_PREFIX=',
     ],
   }

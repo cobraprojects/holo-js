@@ -149,7 +149,7 @@ export function renderCacheConfig(
     'import { env } from \'@holo-js/config\'',
     '',
     'export default defineCacheConfig({',
-    `  default: '${driver}',`,
+    `  default: env('CACHE_DRIVER', '${driver}'),`,
     '  prefix: env(\'CACHE_PREFIX\', \'\'),',
     '  drivers: {',
     '    file: {',
@@ -160,17 +160,11 @@ export function renderCacheConfig(
     '      driver: \'memory\',',
     '      maxEntries: 1000,',
     '    },',
+    '    redis: {',
+    '      driver: \'redis\',',
+    `      connection: '${defaultRedisConnection}',`,
+    '    },',
   ]
-
-  if (driver === 'redis') {
-    lines.push(
-      '    redis: {',
-      '      driver: \'redis\',',
-      `      connection: '${defaultRedisConnection}',`,
-      '      prefix: \'cache:\',',
-      '    },',
-    )
-  }
 
   if (driver === 'database') {
     lines.push(
