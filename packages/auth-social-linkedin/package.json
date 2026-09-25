@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-social-linkedin",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "description": "Holo-JS Framework - LinkedIn social auth provider",
   "type": "module",
   "license": "MIT",
