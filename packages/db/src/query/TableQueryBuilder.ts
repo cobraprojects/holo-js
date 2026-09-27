@@ -97,6 +97,8 @@ import {
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
 
+import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
+
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
 
@@ -124,29 +126,16 @@ type DatabaseQueryGroupedAggregateValueCountGroupObservation = {
 }
 
 type SelectedColumnNames<TRow extends Record<string, unknown>> = Extract<keyof TRow, string>
-type ExactDeclaredColumnName<TTableOrName extends TableReference>
-  = TTableOrName extends TableDefinition ? Extract<keyof SelectRow<TTableOrName>, string> : string
-type DeclaredColumnName<TTableOrName extends TableReference>
-  = TTableOrName extends TableDefinition ? ExactDeclaredColumnName<TTableOrName> | `${string}.${ExactDeclaredColumnName<TTableOrName>}` : string
-type AliasedColumnSelection<TTableOrName extends TableReference>
-  = TTableOrName extends TableDefinition ? `${DeclaredColumnName<TTableOrName>} as ${string}` : string
+type DeclaredColumnName<
+  TTableOrName extends TableReference,
+  TColumns extends Record<string, unknown> = AvailableTableColumns<TTableOrName>,
+> = keyof TColumns & string
 type ColumnReference<TTableOrName extends TableReference>
   = TTableOrName extends TableDefinition ? DeclaredColumnName<TTableOrName> | `${string}.${string}` : string
-type JsonColumnPath<TTableOrName extends TableReference>
-  = TTableOrName extends TableDefinition ? DeclaredColumnName<TTableOrName> | `${DeclaredColumnName<TTableOrName>}->${string}` : string
-type SelectionResult<
+type JsonColumnPath<
   TTableOrName extends TableReference,
-  TCurrentRow extends Record<string, unknown>,
-  TColumns extends readonly SelectedColumnNames<SelectRow<TTableOrName>>[],
-> = TColumns extends readonly []
-  ? TCurrentRow
-  : Pick<SelectRow<TTableOrName>, TColumns[number]>
-
-type MergeSelections<
-  TTableOrName extends TableReference,
-  TCurrentRow extends Record<string, unknown>,
-  TColumns extends readonly SelectedColumnNames<SelectRow<TTableOrName>>[],
-> = TCurrentRow & Pick<SelectRow<TTableOrName>, TColumns[number]>
+  TColumns extends Record<string, unknown> = AvailableTableColumns<TTableOrName>,
+> = DeclaredColumnName<TTableOrName, TColumns> | `${DeclaredColumnName<TTableOrName, TColumns>}->${string}`
 
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
@@ -177,6 +166,7 @@ function normalizeAtomicQueryCacheTtl(ttl: QueryCacheTtlInput): QueryCacheFlexib
 export class TableQueryBuilder<
   TTableOrName extends TableReference = string,
   TSelectedRow extends Record<string, unknown> = SelectRow<TTableOrName>,
+  TAvailableColumns extends Record<string, unknown> = AvailableTableColumns<TTableOrName>,
 > {
   private readonly source: ReturnType<typeof createTableSource>
   private readonly plan: SelectQueryPlan
@@ -216,30 +206,22 @@ export class TableQueryBuilder<
     )
   }
 
-  select<const TColumns extends readonly SelectedColumnNames<SelectRow<TTableOrName>>[]>(
+  select<const TColumns extends readonly ColumnSelection<TAvailableColumns>[]>(
     ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, SelectionResult<TTableOrName, TSelectedRow, TColumns>>
-  select(...columns: readonly (DeclaredColumnName<TTableOrName> | AliasedColumnSelection<TTableOrName>)[]): TableQueryBuilder<TTableOrName, Record<string, unknown>>
-  select<const TColumns extends readonly SelectedColumnNames<SelectRow<TTableOrName>>[]>(
-    ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, SelectionResult<TTableOrName, TSelectedRow, TColumns>> {
+  ): TableQueryBuilder<TTableOrName, TColumns extends readonly [] ? TSelectedRow : SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
     return this.clone(withSelections(this.plan, columns))
   }
 
-  addSelect<const TColumns extends readonly SelectedColumnNames<SelectRow<TTableOrName>>[]>(
+  addSelect<const TColumns extends readonly ColumnSelection<TAvailableColumns>[]>(
     ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, MergeSelections<TTableOrName, TSelectedRow, TColumns>>
-  addSelect(...columns: readonly (DeclaredColumnName<TTableOrName> | AliasedColumnSelection<TTableOrName>)[]): TableQueryBuilder<TTableOrName, Record<string, unknown>>
-  addSelect<const TColumns extends readonly SelectedColumnNames<SelectRow<TTableOrName>>[]>(
-    ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, MergeSelections<TTableOrName, TSelectedRow, TColumns>> {
+  ): TableQueryBuilder<TTableOrName, Omit<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
     return this.clone(appendSelections(this.plan, columns))
   }
 
   selectCount<TAlias extends string = 'count'>(
     alias?: TAlias,
-    column: DeclaredColumnName<TTableOrName> | '*' = '*',
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | '*' = '*',
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('count', alias ?? 'count' as TAlias, column)),
     )
@@ -247,8 +229,8 @@ export class TableQueryBuilder<
 
   addSelectCount<TAlias extends string = 'count'>(
     alias?: TAlias,
-    column: DeclaredColumnName<TTableOrName> | '*' = '*',
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | '*' = '*',
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('count', alias ?? 'count' as TAlias, column)),
     )
@@ -256,8 +238,8 @@ export class TableQueryBuilder<
 
   selectSum<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('sum', alias, column)),
     )
@@ -265,8 +247,8 @@ export class TableQueryBuilder<
 
   addSelectSum<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('sum', alias, column)),
     )
@@ -274,8 +256,8 @@ export class TableQueryBuilder<
 
   selectAvg<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('avg', alias, column)),
     )
@@ -283,8 +265,8 @@ export class TableQueryBuilder<
 
   addSelectAvg<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('avg', alias, column)),
     )
@@ -292,8 +274,8 @@ export class TableQueryBuilder<
 
   selectMin<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('min', alias, column)),
     )
@@ -301,8 +283,8 @@ export class TableQueryBuilder<
 
   addSelectMin<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('min', alias, column)),
     )
@@ -310,8 +292,8 @@ export class TableQueryBuilder<
 
   selectMax<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('max', alias, column)),
     )
@@ -319,8 +301,8 @@ export class TableQueryBuilder<
 
   addSelectMax<TAlias extends string>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>> {
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('max', alias, column)),
     )
@@ -329,7 +311,7 @@ export class TableQueryBuilder<
   unsafeSelect(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
     return this.clone(withRawSelection(this.plan, {
       kind: 'raw',
       sql,
@@ -340,7 +322,7 @@ export class TableQueryBuilder<
   addUnsafeSelect(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendRawSelection(this.plan, {
       kind: 'raw',
       sql,
@@ -351,34 +333,34 @@ export class TableQueryBuilder<
   selectSub(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     alias: string,
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
     return this.clone(withSubquerySelection(this.plan, query.getPlan(), alias))
   }
 
   addSelectSub(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     alias: string,
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias))
   }
 
-  distinct(): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  distinct(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withDistinct(this.plan))
   }
 
   where(
-    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow>
+    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
   where(
-    column: JsonColumnPath<TTableOrName>,
+    column: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow>
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
   where(
-    columnOrCallback: string | BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
+    columnOrCallback: string | BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
     operator?: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (typeof columnOrCallback === 'function') {
       return this.whereGroupWithBoolean('and', columnOrCallback)
     }
@@ -388,18 +370,18 @@ export class TableQueryBuilder<
   }
 
   orWhere(
-    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow>
+    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
   orWhere(
-    column: JsonColumnPath<TTableOrName>,
+    column: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow>
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
   orWhere(
-    columnOrCallback: string | BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
+    columnOrCallback: string | BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
     operator?: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (typeof columnOrCallback === 'function') {
       return this.whereGroupWithBoolean('or', columnOrCallback)
     }
@@ -410,11 +392,11 @@ export class TableQueryBuilder<
 
   private whereGroupWithBoolean(
     boolean: 'and' | 'or',
-    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
+    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
     negated = false,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>(table, this.connection)
+    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection)
     const callbackResult = callback(nestedBuilder)
     const result = callbackResult instanceof TableQueryBuilder ? callbackResult : nestedBuilder
     const predicates = result.getPlan().predicates as readonly QueryPredicateNode[]
@@ -432,68 +414,68 @@ export class TableQueryBuilder<
   }
 
   whereNot(
-    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereGroupWithBoolean('and', callback, true)
   }
 
   orWhereNot(
-    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+    callback: BuilderCallback<TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereGroupWithBoolean('or', callback, true)
   }
 
   whereExists(
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereExistsWithBoolean('and', subquery, false)
   }
 
   orWhereExists(
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereExistsWithBoolean('or', subquery, false)
   }
 
   whereNotExists(
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereExistsWithBoolean('and', subquery, true)
   }
 
   orWhereNotExists(
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereExistsWithBoolean('or', subquery, true)
   }
 
   whereSub(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator,
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereSubWithBoolean('and', column, operator, subquery)
   }
 
   orWhereSub(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator,
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereSubWithBoolean('or', column, operator, subquery)
   }
 
   whereInSub(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereSubWithBoolean('and', column, 'in', subquery)
   }
 
   whereNotInSub(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereSubWithBoolean('and', column, 'not in', subquery)
   }
 
@@ -502,9 +484,9 @@ export class TableQueryBuilder<
     column: string,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (column.includes('->')) {
-      return this.whereJsonValueWithBoolean(boolean, column as JsonColumnPath<TTableOrName>, operator, value)
+      return this.whereJsonValueWithBoolean(boolean, column as JsonColumnPath<TTableOrName, TAvailableColumns>, operator, value)
     }
 
     const normalized = this.normalizeOperatorValue(operator, value)
@@ -522,7 +504,7 @@ export class TableQueryBuilder<
     boolean: 'and' | 'or',
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     negated: boolean,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'exists',
       boolean,
@@ -536,7 +518,7 @@ export class TableQueryBuilder<
     column: string,
     operator: QueryOperator,
     subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'subquery',
       boolean,
@@ -552,7 +534,7 @@ export class TableQueryBuilder<
     column: string,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalized = this.normalizeOperatorValue(operator, value)
 
     return this.clone(withPredicate(this.plan, {
@@ -634,10 +616,10 @@ export class TableQueryBuilder<
 
   private whereJsonValueWithBoolean(
     boolean: 'and' | 'or',
-    columnPath: JsonColumnPath<TTableOrName>,
+    columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const { column, path } = this.parseJsonPath(columnPath, true, 'whereJson')
     const normalizedOperator = typeof value === 'undefined' ? '=' : operator as QueryOperator
     const normalizedValue = typeof value === 'undefined' ? operator : value
@@ -665,7 +647,7 @@ export class TableQueryBuilder<
     boolean: 'and' | 'or',
     columnPath: string,
     value: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const { column, path } = this.parseJsonPath(columnPath, true, 'whereJsonContains')
 
     return this.clone(withPredicate(this.plan, {
@@ -683,7 +665,7 @@ export class TableQueryBuilder<
     columnPath: string,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const { column, path } = this.parseJsonPath(columnPath, true, 'whereJsonLength')
     const normalizedOperator = typeof value === 'undefined' ? '=' : operator as QueryOperator
     const normalizedValue = typeof value === 'undefined' ? operator : value
@@ -699,18 +681,18 @@ export class TableQueryBuilder<
     }))
   }
 
-  whereNull(column: DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  whereNull(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereNullWithBoolean('and', column)
   }
 
-  orWhereNull(column: DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  orWhereNull(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereNullWithBoolean('or', column)
   }
 
   private whereNullWithBoolean(
     boolean: 'and' | 'or',
     column: string,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'null',
       boolean,
@@ -719,18 +701,18 @@ export class TableQueryBuilder<
     }))
   }
 
-  whereNotNull(column: DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  whereNotNull(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereNotNullWithBoolean('and', column)
   }
 
-  orWhereNotNull(column: DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  orWhereNotNull(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereNotNullWithBoolean('or', column)
   }
 
   private whereNotNullWithBoolean(
     boolean: 'and' | 'or',
     column: string,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'null',
       boolean,
@@ -743,7 +725,7 @@ export class TableQueryBuilder<
     column: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     compareTo: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'column',
       boolean: 'and',
@@ -753,7 +735,7 @@ export class TableQueryBuilder<
     }))
   }
 
-  whereIn(column: DeclaredColumnName<TTableOrName>, values: readonly unknown[]): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  whereIn(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, values: readonly unknown[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'comparison',
       boolean: 'and',
@@ -763,7 +745,7 @@ export class TableQueryBuilder<
     }))
   }
 
-  whereNotIn(column: DeclaredColumnName<TTableOrName>, values: readonly unknown[]): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  whereNotIn(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, values: readonly unknown[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'comparison',
       boolean: 'and',
@@ -774,9 +756,9 @@ export class TableQueryBuilder<
   }
 
   whereBetween(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     range: readonly [unknown, unknown],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'comparison',
       boolean: 'and',
@@ -787,9 +769,9 @@ export class TableQueryBuilder<
   }
 
   whereNotBetween(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     range: readonly [unknown, unknown],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'comparison',
       boolean: 'and',
@@ -799,159 +781,195 @@ export class TableQueryBuilder<
     }))
   }
 
-  whereLike(column: DeclaredColumnName<TTableOrName>, pattern: string): TableQueryBuilder<TTableOrName, TSelectedRow> {
-    return this.where(column as JsonColumnPath<TTableOrName>, 'like', pattern)
+  whereLike(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, pattern: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.where(column as JsonColumnPath<TTableOrName, TAvailableColumns>, 'like', pattern)
   }
 
-  orWhereLike(column: DeclaredColumnName<TTableOrName>, pattern: string): TableQueryBuilder<TTableOrName, TSelectedRow> {
-    return this.orWhere(column as JsonColumnPath<TTableOrName>, 'like', pattern)
+  orWhereLike(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, pattern: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.orWhere(column as JsonColumnPath<TTableOrName, TAvailableColumns>, 'like', pattern)
   }
 
   whereAny(
-    columns: readonly DeclaredColumnName<TTableOrName>[],
+    columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereMultiColumns('any', columns, operator, value)
   }
 
   whereAll(
-    columns: readonly DeclaredColumnName<TTableOrName>[],
+    columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereMultiColumns('all', columns, operator, value)
   }
 
   whereNone(
-    columns: readonly DeclaredColumnName<TTableOrName>[],
+    columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereMultiColumns('none', columns, operator, value)
   }
 
   whereDate(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereDatePart('and', 'date', column, operator, value)
   }
 
   whereMonth(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereDatePart('and', 'month', column, operator, value)
   }
 
   whereDay(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereDatePart('and', 'day', column, operator, value)
   }
 
   whereYear(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereDatePart('and', 'year', column, operator, value)
   }
 
   whereTime(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereDatePart('and', 'time', column, operator, value)
   }
 
   whereJson(
-    columnPath: JsonColumnPath<TTableOrName>,
+    columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonValueWithBoolean('and', columnPath, operator, value)
   }
 
   orWhereJson(
-    columnPath: JsonColumnPath<TTableOrName>,
+    columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonValueWithBoolean('or', columnPath, operator, value)
   }
 
   whereJsonContains(
-    columnPath: JsonColumnPath<TTableOrName>,
+    columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     value: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonContainsWithBoolean('and', columnPath, value)
   }
 
   orWhereJsonContains(
-    columnPath: JsonColumnPath<TTableOrName>,
+    columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     value: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonContainsWithBoolean('or', columnPath, value)
   }
 
   whereJsonLength(
-    columnPath: JsonColumnPath<TTableOrName>,
+    columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonLengthWithBoolean('and', columnPath, operator, value)
   }
 
-  groupBy(...columns: readonly DeclaredColumnName<TTableOrName>[]): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  groupBy(...columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withGroupBy(this.plan, columns))
   }
 
+  join<const TJoinedTable extends TableDefinition>(
+    table: TJoinedTable,
+    leftColumn: keyof (TAvailableColumns & QualifiedTableColumns<NoInfer<TJoinedTable>>) & string,
+    operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
+    rightColumn: keyof (TAvailableColumns & QualifiedTableColumns<NoInfer<TJoinedTable>>) & string,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & QualifiedTableColumns<TJoinedTable>>
   join(
     table: string,
     leftColumn: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     rightColumn: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>>
+  join(
+    table: TableReference,
+    leftColumn: string,
+    operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
+    rightColumn: string,
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'inner',
-      table,
+      table: typeof table === 'string' ? table : table.tableName,
       leftColumn,
       operator,
       rightColumn,
     }))
   }
 
+  leftJoin<const TJoinedTable extends TableDefinition>(
+    table: TJoinedTable,
+    leftColumn: keyof (TAvailableColumns & QualifiedTableColumns<NoInfer<TJoinedTable>>) & string,
+    operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
+    rightColumn: keyof (TAvailableColumns & QualifiedTableColumns<NoInfer<TJoinedTable>>) & string,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & NullableColumns<QualifiedTableColumns<TJoinedTable>>>
   leftJoin(
     table: string,
     leftColumn: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     rightColumn: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>>
+  leftJoin(
+    table: TableReference,
+    leftColumn: string,
+    operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
+    rightColumn: string,
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'left',
-      table,
+      table: typeof table === 'string' ? table : table.tableName,
       leftColumn,
       operator,
       rightColumn,
     }))
   }
 
+  rightJoin<const TJoinedTable extends TableDefinition>(
+    table: TJoinedTable,
+    leftColumn: keyof (TAvailableColumns & QualifiedTableColumns<NoInfer<TJoinedTable>>) & string,
+    operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
+    rightColumn: keyof (TAvailableColumns & QualifiedTableColumns<NoInfer<TJoinedTable>>) & string,
+  ): TableQueryBuilder<TTableOrName, NullableColumns<TSelectedRow>, NullableColumns<TAvailableColumns> & QualifiedTableColumns<TJoinedTable>>
   rightJoin(
     table: string,
     leftColumn: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     rightColumn: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>>
+  rightJoin(
+    table: TableReference,
+    leftColumn: string,
+    operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
+    rightColumn: string,
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'right',
-      table,
+      table: typeof table === 'string' ? table : table.tableName,
       leftColumn,
       operator,
       rightColumn,
@@ -964,7 +982,7 @@ export class TableQueryBuilder<
     leftColumn: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     rightColumn: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'inner',
       subquery: query.getPlan(),
@@ -981,7 +999,7 @@ export class TableQueryBuilder<
     leftColumn: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     rightColumn: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'left',
       subquery: query.getPlan(),
@@ -998,7 +1016,7 @@ export class TableQueryBuilder<
     leftColumn: ColumnReference<TTableOrName>,
     operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
     rightColumn: ColumnReference<TTableOrName>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'right',
       subquery: query.getPlan(),
@@ -1012,7 +1030,7 @@ export class TableQueryBuilder<
   joinLateral(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     alias: string,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'inner',
       subquery: query.getPlan(),
@@ -1024,7 +1042,7 @@ export class TableQueryBuilder<
   leftJoinLateral(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     alias: string,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'left',
       subquery: query.getPlan(),
@@ -1033,18 +1051,20 @@ export class TableQueryBuilder<
     }))
   }
 
-  crossJoin(
-    table: string,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  crossJoin<const TJoinedTable extends TableDefinition>(
+    table: TJoinedTable,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & QualifiedTableColumns<TJoinedTable>>
+  crossJoin(table: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>>
+  crossJoin(table: TableReference): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'cross',
-      table,
+      table: typeof table === 'string' ? table : table.tableName,
     }))
   }
 
   union(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withUnion(this.plan, {
       all: false,
       query: query.getPlan(),
@@ -1053,7 +1073,7 @@ export class TableQueryBuilder<
 
   unionAll(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withUnion(this.plan, {
       all: true,
       query: query.getPlan(),
@@ -1064,7 +1084,7 @@ export class TableQueryBuilder<
     expression: string,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalizedOperator = typeof value === 'undefined' ? '=' : operator as QueryOperator
     const normalizedValue = typeof value === 'undefined' ? operator : value
     return this.clone(withHaving(this.plan, {
@@ -1077,7 +1097,7 @@ export class TableQueryBuilder<
   havingBetween(
     expression: string,
     range: readonly [unknown, unknown],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withHaving(this.plan, {
       expression,
       operator: 'between',
@@ -1089,14 +1109,14 @@ export class TableQueryBuilder<
     columnPath: string,
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonLengthWithBoolean('or', columnPath, operator, value)
   }
 
   unsafeWhere(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'raw',
       boolean: 'and',
@@ -1108,7 +1128,7 @@ export class TableQueryBuilder<
   orUnsafeWhere(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withPredicate(this.plan, {
       kind: 'raw',
       boolean: 'or',
@@ -1118,42 +1138,42 @@ export class TableQueryBuilder<
   }
 
   whereFullText(
-    columns: DeclaredColumnName<TTableOrName> | readonly DeclaredColumnName<TTableOrName>[],
+    columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
     value: string,
     options: { mode?: 'natural' | 'boolean' } = {},
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereFullTextWithBoolean('and', columns, value, options)
   }
 
   orWhereFullText(
-    columns: DeclaredColumnName<TTableOrName> | readonly DeclaredColumnName<TTableOrName>[],
+    columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
     value: string,
     options: { mode?: 'natural' | 'boolean' } = {},
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereFullTextWithBoolean('or', columns, value, options)
   }
 
   whereVectorSimilarTo(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     vector: readonly number[],
     minSimilarity = 0,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereVectorSimilarToWithBoolean('and', column, vector, minSimilarity)
   }
 
   orWhereVectorSimilarTo(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     vector: readonly number[],
     minSimilarity = 0,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereVectorSimilarToWithBoolean('or', column, vector, minSimilarity)
   }
 
   when<TValue>(
     value: TValue,
-    callback: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow>, TValue>,
-    defaultCallback?: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow>, TValue>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+    callback: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>, TValue>,
+    defaultCallback?: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>, TValue>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (value) {
       const result = callback(this, value)
       return result instanceof TableQueryBuilder ? result : this
@@ -1165,9 +1185,9 @@ export class TableQueryBuilder<
 
   unless<TValue>(
     value: TValue,
-    callback: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow>, TValue>,
-    defaultCallback?: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow>, TValue>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+    callback: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>, TValue>,
+    defaultCallback?: ValueBuilderCallback<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>, TValue>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (!value) {
       const result = callback(this, value)
       return result instanceof TableQueryBuilder ? result : this
@@ -1177,22 +1197,22 @@ export class TableQueryBuilder<
     return result instanceof TableQueryBuilder ? result : this
   }
 
-  withoutWhereNull(column: DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  withoutWhereNull(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withoutPredicates(this.plan, predicate => (
       predicate.kind === 'null' && predicate.column === column && predicate.negated === false
     )))
   }
 
-  withoutWhereNotNull(column: DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  withoutWhereNotNull(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withoutPredicates(this.plan, predicate => (
       predicate.kind === 'null' && predicate.column === column && predicate.negated === true
     )))
   }
 
   orderBy(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     direction: QueryDirection = 'asc',
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOrderBy(this.plan, {
       kind: 'column',
       column,
@@ -1203,7 +1223,7 @@ export class TableQueryBuilder<
   unsafeOrderBy(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOrderBy(this.plan, {
       kind: 'raw',
       sql,
@@ -1211,24 +1231,24 @@ export class TableQueryBuilder<
     }))
   }
 
-  inRandomOrder(): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  inRandomOrder(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(replaceOrderBy(this.plan, [Object.freeze({
       kind: 'random' as const,
     })]))
   }
 
-  latest(column: DeclaredColumnName<TTableOrName> = 'created_at' as DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
-  oldest(column: DeclaredColumnName<TTableOrName> = 'created_at' as DeclaredColumnName<TTableOrName>): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'asc')
   }
 
   reorder(
-    column?: DeclaredColumnName<TTableOrName>,
+    column?: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     direction: QueryDirection = 'asc',
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const reordered = replaceOrderBy(this.plan, [])
     if (!column) {
       return this.clone(reordered)
@@ -1242,9 +1262,9 @@ export class TableQueryBuilder<
   }
 
   orderByVectorSimilarity(
-    column: DeclaredColumnName<TTableOrName>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     vector: readonly number[],
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOrderBy(this.plan, {
       kind: 'vector',
       column,
@@ -1252,35 +1272,35 @@ export class TableQueryBuilder<
     }))
   }
 
-  lock(mode: 'update' | 'share'): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  lock(mode: 'update' | 'share'): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withLockMode(this.plan, mode))
   }
 
-  lockForUpdate(): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  lockForUpdate(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.lock('update')
   }
 
-  sharedLock(): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  sharedLock(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.lock('share')
   }
 
-  limit(value?: number): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  limit(value?: number): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withLimit(this.plan, value))
   }
 
-  offset(value?: number): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  offset(value?: number): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOffset(this.plan, value))
   }
 
-  skip(value: number): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  skip(value: number): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.offset(value)
   }
 
-  take(value: number): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  take(value: number): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.limit(value)
   }
 
-  forPage(page: number, perPage = 15): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  forPage(page: number, perPage = 15): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     assertPositiveInteger(page, 'Page', message => new SecurityError(message))
     assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
 
@@ -1315,15 +1335,15 @@ export class TableQueryBuilder<
     }
   }
 
-  dump(): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  dump(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     console.log(this.debug())
     return this
   }
 
   cache(
     config: QueryCacheTtlInput | QueryCacheConfig,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
-    return new TableQueryBuilder<TTableOrName, TSelectedRow>(
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return new TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
       this.plan,
@@ -2250,11 +2270,14 @@ export class TableQueryBuilder<
     })
   }
 
-  private clone<TRow extends Record<string, unknown> = TSelectedRow>(
+  private clone<
+    TRow extends Record<string, unknown> = TSelectedRow,
+    TNextColumns extends Record<string, unknown> = TAvailableColumns,
+  >(
     plan: SelectQueryPlan,
-  ): TableQueryBuilder<TTableOrName, TRow> {
+  ): TableQueryBuilder<TTableOrName, TRow, TNextColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    return new TableQueryBuilder<TTableOrName, TRow>(table, this.connection, plan, this.queryCacheConfig)
+    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig)
   }
 
   private async captureUpdatedMutationRows(
@@ -2595,13 +2618,13 @@ export class TableQueryBuilder<
     columns: readonly string[],
     operator: QueryOperator | unknown,
     value?: unknown,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (columns.length === 0) {
       throw new SecurityError(`where${mode.charAt(0).toUpperCase()}${mode.slice(1)}() requires at least one column.`)
     }
 
     const boolean = mode === 'all' ? 'and' : 'or'
-    const callback = (query: TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>>) => {
+    const callback = (query: TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>) => {
       let next = query.where(columns[0]! as never, operator, value)
       for (const column of columns.slice(1)) {
         next = boolean === 'and'
@@ -2623,7 +2646,7 @@ export class TableQueryBuilder<
     columns: string | readonly string[],
     value: string,
     options: { mode?: 'natural' | 'boolean' } = {},
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalizedColumns = Array.isArray(columns) ? [...columns] : [columns]
     if (normalizedColumns.length === 0) {
       throw new SecurityError('whereFullText() requires at least one column.')
@@ -2643,7 +2666,7 @@ export class TableQueryBuilder<
     column: string,
     vector: readonly number[],
     minSimilarity: number,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this
       .clone(withPredicate(this.plan, {
         kind: 'vector',
@@ -2655,7 +2678,7 @@ export class TableQueryBuilder<
       .orderByVectorSimilarity(column as never, vector)
   }
 
-  private prepareCursorPaginationQuery(): TableQueryBuilder<TTableOrName, TSelectedRow> {
+  private prepareCursorPaginationQuery(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     if (this.plan.orderBy.some(orderBy => orderBy.kind === 'random')) {
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }

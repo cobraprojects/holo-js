@@ -1885,6 +1885,31 @@ describe('query core slice', () => {
     ).rejects.toThrow(SecurityError)
   })
 
+  it('preserves SQL and locks when table definitions replace string joins', () => {
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const members = defineTable('members', { id: column.id(), userId: column.integer() })
+
+    for (const dialect of [createPostgresDialect(), createMySqlDialect()]) {
+      configureDB(createConnectionManager({
+        defaultConnection: 'default',
+        connections: { default: { adapter: new QueryAdapter(), dialect } },
+      }))
+      const typed = DB.table(members)
+        .join(users, 'members.userId', '=', 'users.id')
+        .select('members.id', 'users.name as userName')
+        .where('members.id', 1)
+      const strings = DB.table(members)
+        .join('users', 'members.userId', '=', 'users.id')
+        .select('members.id', 'users.name as userName')
+        .where('members.id', 1)
+
+      expect(typed.lockForUpdate().toSQL()).toEqual(strings.lockForUpdate().toSQL())
+      expect(typed.sharedLock().toSQL()).toEqual(strings.sharedLock().toSQL())
+      expect(typed.lockForUpdate().toSQL().sql).toContain('FOR UPDATE')
+      expect(typed.sharedLock().toSQL().sql).toContain(dialect.name === 'mysql' ? 'LOCK IN SHARE MODE' : 'FOR SHARE')
+    }
+  })
+
   it('compiles union and union all queries through the safe compiler path', () => {
     configureDB(createConnectionManager({
       defaultConnection: 'default',

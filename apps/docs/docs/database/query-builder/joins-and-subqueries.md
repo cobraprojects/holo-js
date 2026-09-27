@@ -22,6 +22,28 @@ Supported join families include:
 Use joins when the result should remain a table-shaped projection. If the application really wants related
 entities and lifecycle behavior, model relations are usually the better fit.
 
+## Typed joins
+
+Pass generated table definitions to the table builder and joins to retain column inference:
+
+```ts
+const rows = await DB.table(members)
+  .join(users, 'members.userId', '=', 'users.id')
+  .select('members.id', 'users.name as userName')
+  .get()
+```
+
+For a numeric member ID and string user name, `rows` is inferred as
+`{ id: number; userName: string }[]`. Qualified columns and selection aliases retain their
+column types. Filters and ordering accept columns from the joined definitions.
+
+`leftJoin()` adds `null` to columns from the joined table. `rightJoin()` adds `null` to
+columns from the preceding tables. `crossJoin()` also accepts a table definition.
+Use explicit selections and distinct aliases when column names overlap.
+
+String table names and subquery joins remain available, but their joined projections do not
+carry schema inference. Typed joins use the same SQL compilation and locking behavior.
+
 ## Subquery joins
 
 ```ts

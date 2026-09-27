@@ -2,6 +2,7 @@ import { describe, expectTypeOf, it } from 'vitest'
 import type { PoolConfig } from 'pg'
 import type { PoolOptions } from 'mysql2/promise'
 import {
+  DB,
   HasUlids,
   TableDefinitionBuilder,
   belongsToMany,
@@ -577,6 +578,71 @@ describe('type system contracts', () => {
     }
   })
 
+  it('infers qualified and aliased selections across typed joins', () => {
+    const members = defineTable('members', {
+      id: column.id(),
+      userId: column.integer(),
+    })
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      nickname: column.string().nullable(),
+    })
+    const teams = defineTable('teams', {
+      id: column.id(),
+      memberId: column.integer(),
+      title: column.string(),
+    })
+
+    if (false) {
+      const builder = DB.table(members)
+      const schemaUsers = defineTable('public.users', { id: column.id(), name: column.string() })
+      expectTypeOf(builder.join(schemaUsers, 'members.userId', '=', 'public.users.id').select('public.users.name').get()).toEqualTypeOf<Promise<Array<{ name: string }>>>()
+      expectTypeOf(builder.join('users', 'members.userId', '=', 'users.id').select('id').get()).toEqualTypeOf<Promise<Array<{ id: number }>>>()
+      const joined = builder.join(users, 'members.userId', '=', 'users.id')
+      const selected = joined.select('members.id', 'users.name as userName', 'users.nickname')
+      expectTypeOf(selected.get()).toEqualTypeOf<Promise<Array<{ id: number, userName: string, nickname: string | null }>>>()
+      expectTypeOf(selected.first()).toEqualTypeOf<Promise<{ id: number, userName: string, nickname: string | null } | undefined>>()
+      expectTypeOf(selected.pluck('userName')).toEqualTypeOf<Promise<string[]>>()
+      expectTypeOf(selected.paginate()).toEqualTypeOf<Promise<PaginatedResult<{ id: number, userName: string, nickname: string | null }>>>()
+      const chained = selected.where('users.name', 'Ava').orderBy('users.name').limit(5).lockForUpdate()
+      expectTypeOf(chained.get()).toEqualTypeOf<Promise<Array<{ id: number, userName: string, nickname: string | null }>>>()
+      expectTypeOf(chained.select('users.name as name').get()).toEqualTypeOf<Promise<Array<{ name: string }>>>()
+      const added = joined.select('members.id').addSelect('users.name as userName')
+      expectTypeOf(added.value('userName')).toEqualTypeOf<Promise<string | undefined>>()
+      expectTypeOf(added.pluck('id')).toEqualTypeOf<Promise<number[]>>()
+      expectTypeOf(joined.cache(60).select('users.name').get()).toEqualTypeOf<Promise<Array<{ name: string }>>>()
+      expectTypeOf(builder.crossJoin(users).select('users.name').get()).toEqualTypeOf<Promise<Array<{ name: string }>>>()
+      const multiple = joined.join(teams, 'members.id', '=', 'teams.memberId')
+      expectTypeOf(multiple.select('users.name', 'teams.title').get()).toEqualTypeOf<Promise<Array<{ name: string, title: string }>>>()
+      const left = builder.leftJoin(users, 'members.userId', '=', 'users.id')
+      expectTypeOf(left.select('members.id', 'users.name').get()).toEqualTypeOf<Promise<Array<{ id: number, name: string | null }>>>()
+      const right = builder.rightJoin(users, 'members.userId', '=', 'users.id')
+      expectTypeOf(right.select('members.id', 'users.name').get()).toEqualTypeOf<Promise<Array<{ id: number | null, name: string }>>>()
+      const outerChain = left.rightJoin(teams, 'members.id', '=', 'teams.memberId')
+      expectTypeOf(outerChain.select('members.id', 'users.name', 'teams.title').get()).toEqualTypeOf<Promise<Array<{ id: number | null, name: string | null, title: string }>>>()
+      const preselected = builder.select('id as memberId').rightJoin(users, 'members.userId', '=', 'users.id')
+      expectTypeOf(preselected.get()).toEqualTypeOf<Promise<Array<{ memberId: number | null }>>>()
+
+      // @ts-expect-error unjoined tables cannot be selected
+      builder.select('users.name')
+      // @ts-expect-error filters must reference declared joined columns
+      joined.where('users.missing', 1)
+      // @ts-expect-error ordering must reference declared joined columns
+      joined.orderBy('teams.title')
+      // @ts-expect-error joined columns must exist
+      joined.select('users.missing')
+      // @ts-expect-error joined aliases must reference declared columns
+      joined.select('users.missing as name')
+      // @ts-expect-error join conditions must reference declared columns
+      builder.join(users, 'members.missing', '=', 'users.id')
+      // @ts-expect-error join conditions cannot reference unjoined tables
+      builder.leftJoin(users, 'teams.id', '=', 'users.id')
+      // @ts-expect-error selected results only expose selected names
+      selected.pluck('name')
+    }
+  })
+
   it('narrows table-query result types from selected columns', () => {
     const users = defineTable('users', {
       id: column.id(),
@@ -604,7 +670,7 @@ describe('type system contracts', () => {
       expectTypeOf(cached.get()).toEqualTypeOf<Promise<Array<{ id: number, name: string, active: boolean, created_at: Date }>>>()
       expectTypeOf(narrowed.pluck('id')).toEqualTypeOf<Promise<number[]>>()
       expectTypeOf(activeOnly.value('active')).toEqualTypeOf<Promise<boolean | undefined>>()
-      expectTypeOf(aliased.get()).toEqualTypeOf<Promise<Array<Record<string, unknown>>>>()
+      expectTypeOf(aliased.get()).toEqualTypeOf<Promise<Array<{ displayName: string }>>>()
       expectTypeOf(groupedRows).toMatchTypeOf<Promise<Array<{ name: string, total: number, totalScore: number | null }>>>()
       void cached
       void widened
