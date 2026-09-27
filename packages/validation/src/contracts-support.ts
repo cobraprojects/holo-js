@@ -15,6 +15,8 @@ import {
   type FieldRule,
 } from './contracts-types'
 
+const repeatedFormValues = new WeakSet<unknown[]>()
+
 const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -341,7 +343,9 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
       } else if (Array.isArray(existing)) {
         existing.push(value)
       } else {
-        cursor[token] = [existing, value]
+        const values = [existing, value]
+        repeatedFormValues.add(values)
+        cursor[token] = values
       }
       return
     }
@@ -403,7 +407,7 @@ export async function normalizeRequestInput(input: Request): Promise<{ readonly 
 }
 
 function lastValue(value: unknown): unknown {
-  return Array.isArray(value) ? value[value.length - 1] : value
+  return Array.isArray(value) && repeatedFormValues.has(value) ? value[value.length - 1] : value
 }
 
 function coerceBoolean(value: unknown): unknown {

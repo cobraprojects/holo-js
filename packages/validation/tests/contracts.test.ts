@@ -365,6 +365,124 @@ describe('@holo-js/validation contracts', () => {
     })
   })
 
+  it.each([{ action: [] }, { action: ['add'] }, { action: ['invalid', 'add'] }])('rejects array input %j for a scalar enum with status 422', async ({ action }) => {
+    const memberAction = schema({ action: field.string().required().in(['add', 'remove']) })
+
+    await expect(validate({ action }, memberAction)).rejects.toMatchObject({ status: 422 })
+    await expect(validate(new Request('https://example.com/members', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action }),
+    }), memberAction)).rejects.toMatchObject({ status: 422 })
+  })
+
+  it('rejects arrays for scalar fields and nested scalar array items', async () => {
+    const scalarFields = schema({
+      name: field.string().optional(),
+      age: field.number().optional(),
+      active: field.boolean().optional(),
+      birthday: field.date().optional(),
+      profile: { action: field.string().in(['add']) },
+      tags: field.array(field.string()),
+    })
+    const result = await safeParse({
+      name: [],
+      age: ['42'],
+      active: [true],
+      birthday: ['2026-01-01'],
+      profile: { action: ['add'] },
+      tags: [['admin']],
+    }, scalarFields)
+
+    expect(result.valid).toBe(false)
+    expect(Object.keys(result.errors.flatten())).toEqual(expect.arrayContaining([
+      'name', 'age', 'active', 'birthday', 'profile.action', 'tags.0',
+    ]))
+    expect(await field.string().in(['add'])['~standard'].validate(['add'])).toHaveProperty('issues')
+    expect(await parse({ action: 'add' }, schema({ action: field.string().in(['add']) }))).toEqual({ action: 'add' })
+  })
+
+  it('rejects scalar arrays across validation rules', async () => {
+    const today = new Date()
+    const yesterday = new Date(today.getTime() - 86400000)
+    const tomorrow = new Date(today.getTime() + 86400000)
+    const image = new File(['image'], 'avatar.png', { type: 'image/png' })
+    const cases = [
+      { validator: field.string().required(), value: 'add' },
+      { validator: field.string().optional(), value: 'add' },
+      { validator: field.string().nullable(), value: null },
+      { validator: field.string().default('add'), value: undefined },
+      { validator: field.string().min(3), value: 'add' },
+      { validator: field.string().max(3), value: 'add' },
+      { validator: field.string().size(3), value: 'add' },
+      { validator: field.string().email(), value: 'ava@example.com' },
+      { validator: field.string().url(), value: 'https://example.com' },
+      { validator: field.string().uuid(), value: '550e8400-e29b-41d4-a716-446655440000' },
+      { validator: field.string().regex(/^add$/), value: 'add' },
+      { validator: field.string().in(['add']), value: 'add' },
+      { validator: field.password().confirmed(), value: 'secret' },
+      { validator: field.number().integer(), value: '42' },
+      { validator: field.number().min(1).max(42).size(42), value: '42' },
+      { validator: field.boolean(), value: 'true' },
+      { validator: field.date().before(tomorrow), value: today },
+      { validator: field.date().after(yesterday), value: today },
+      { validator: field.date().beforeOrEqual(today), value: today },
+      { validator: field.date().afterOrEqual(today), value: today },
+      { validator: field.date().today(), value: today },
+      { validator: field.date().beforeToday(), value: yesterday },
+      { validator: field.date().todayOrBefore(), value: today },
+      { validator: field.date().beforeOrToday(), value: today },
+      { validator: field.date().afterToday(), value: tomorrow },
+      { validator: field.date().todayOrAfter(), value: today },
+      { validator: field.date().afterOrToday(), value: today },
+      { validator: field.string().transform(value => value.length), value: 'add' },
+      { validator: field.string().custom(value => value === 'add'), value: 'add' },
+      { validator: field.string().customAsync(async value => value === 'add'), value: 'add' },
+      { validator: field.file().image().maxSize('1kb').size(image.size), value: image },
+    ]
+
+    for (const { validator, value } of cases) {
+      const contract = schema({ value: validator })
+      const label = `${validator.field.definition.kind}: ${validator.field.definition.rules.map(rule => rule.name).join(', ')}`
+      expect((await safeParse({ value, valueConfirmation: value }, contract)).valid, label).toBe(true)
+
+      for (const array of [[], [value], ['invalid', value]]) {
+        const result = await safeParse({ value: array, valueConfirmation: value }, contract)
+        expect(result.valid, label).toBe(false)
+        expect(result.errors.has('value'), label).toBe(true)
+      }
+    }
+  })
+
+  it('uses the last repeated form scalar while retaining repeated array items', async () => {
+    const formSchema = schema({
+      action: field.string().in(['add']),
+      profile: { active: field.boolean() },
+      tags: field.array(field.string()),
+    })
+    const entries = [
+      ['action', 'remove'], ['action', 'add'],
+      ['profile.active', 'false'], ['profile.active', 'true'],
+      ['tags', 'admin'], ['tags', 'editor'],
+    ] as const
+    const form = new FormData()
+    const query = new URLSearchParams()
+    for (const [key, value] of entries) {
+      form.append(key, value)
+      query.append(key, value)
+    }
+
+    for (const input of [form, query, new Request('https://example.com/members', { method: 'POST', body: form })]) {
+      expect(await parse(input, formSchema)).toEqual({
+        action: 'add', profile: { active: true }, tags: ['admin', 'editor'],
+      })
+    }
+
+    const explicitArray = new FormData()
+    explicitArray.append('action[]', 'add')
+    await expect(validate(explicitArray, schema({ action: field.string().in(['add']) }))).rejects.toMatchObject({ status: 422 })
+  })
+
   it('returns flattened errors for schema, required, integer, and confirmation failures', async () => {
     const registerUser = schema({
       name: field.string().required().min(3),
