@@ -57,6 +57,7 @@ function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = 
       },
       nitro: {
         storage: {} as Record<string, Record<string, unknown>>,
+        moduleSideEffects: [] as string[],
       },
       srcDir: rootDir,
       rootDir,
@@ -505,7 +506,7 @@ export default defineDatabaseConfig({
     expect(sendRedirect).toHaveBeenCalledWith(event, '/login', 303)
   })
 
-  it('generates a server import wrapper for model defaults when server models exist', async () => {
+  it.each(['.', 'app'])('registers project server models and schema when Nuxt source directory is %s', async sourceDirectory => {
     const root = await createProject()
     await writeFile(join(root, 'config/app.ts'), `
 import { defineAppConfig } from ${packageEntry}
@@ -523,12 +524,17 @@ export default defineAppConfig({
     const { module, addServerImportsDir, addServerPlugin } = await loadAdapterModule()
     const nuxt = createNuxtHarness(root)
 
+    nuxt.options.srcDir = join(root, sourceDirectory)
+    nuxt.options.nitro.moduleSideEffects = ['/application/bootstrap']
+    await mkdir(nuxt.options.srcDir, { recursive: true })
+
     await module.setup({}, nuxt as never)
 
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
     expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
     expect(addServerImportsDir).toHaveBeenCalledTimes(2)
     expect(addServerPlugin).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
+    expect(nuxt.options.nitro.moduleSideEffects).toEqual(['/application/bootstrap', resolve(root, '.holo-js/generated/schema.generated.ts')])
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
       "import '../schema.generated'",
       '',

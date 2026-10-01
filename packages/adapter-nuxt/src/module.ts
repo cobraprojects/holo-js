@@ -268,6 +268,7 @@ type NuxtViteOptions = {
 interface NuxtOptionsWithNitro {
   nitro: {
     storage: Record<string, unknown>
+    moduleSideEffects?: string[]
     errorHandler?: string | string[]
     externals?: {
       external?: unknown[]
@@ -643,13 +644,13 @@ type ServerModelImportArtifacts = {
 }
 
 async function createServerModelImports(
-  sourceDir: string,
+  projectRoot: string,
   modelsRelativePath: string,
   generatedSchemaRelativePath: string,
 ): Promise<ServerModelImportArtifacts | null> {
-  const modelsDir = resolve(sourceDir, modelsRelativePath)
-  const generatedSchemaPath = resolve(sourceDir, generatedSchemaRelativePath)
-  const modelImportDir = resolve(sourceDir, '.holo-js/generated/nuxt-server-imports')
+  const modelsDir = resolve(projectRoot, modelsRelativePath)
+  const generatedSchemaPath = resolve(projectRoot, generatedSchemaRelativePath)
+  const modelImportDir = resolve(projectRoot, '.holo-js/generated/nuxt-server-imports')
   const modelImportFile = resolve(modelImportDir, 'models.ts')
   const modelPluginFile = resolve(modelImportDir, 'plugin.ts')
 
@@ -704,7 +705,6 @@ export default defineNuxtModule<ModuleOptions>({
     const resolver = createResolver(import.meta.url)
     const opts = nuxt.options as unknown as NuxtOptionsWithNitro
     const rootDir = opts.rootDir ?? opts.srcDir ?? process.cwd()
-    const sourceDir = opts.srcDir ?? rootDir
     const authTypesPath = resolve(rootDir, '.holo-js/generated/auth.d.ts')
     const authorizationTypesPath = resolve(rootDir, '.holo-js/generated/authorization/types.d.ts')
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
@@ -767,13 +767,14 @@ export default defineNuxtModule<ModuleOptions>({
       addServerPlugin(resolver.resolve('./runtime/plugins/forms'))
       addServerImportsDir(resolver.resolve('./runtime/server/auto-imports'))
       const serverModelImports = await createServerModelImports(
-        sourceDir,
+        rootDir,
         loaded.app.paths.models,
         loaded.app.paths.generatedSchema,
       )
       if (serverModelImports) {
         addServerImportsDir(serverModelImports.importDir)
         addServerPlugin(serverModelImports.pluginFile)
+        opts.nitro.moduleSideEffects = [...new Set([...(opts.nitro.moduleSideEffects ?? []), resolve(rootDir, loaded.app.paths.generatedSchema)])]
       }
       opts._holoCoreRuntimeRegistered = true
     }
