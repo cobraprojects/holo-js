@@ -48,9 +48,14 @@ export function createConfigAccessors<TConfig extends RuntimeConfigMap>(configMa
   }
 }
 
-function getRuntimeConfigState(): { config?: RuntimeConfigMap } {
+type RuntimeConfigState = {
+  config?: RuntimeConfigMap
+  previousTimezone?: { value: string | undefined }
+}
+
+function getRuntimeConfigState(): RuntimeConfigState {
   const runtime = globalThis as typeof globalThis & {
-    __holoConfigRuntime__?: { config?: RuntimeConfigMap }
+    __holoConfigRuntime__?: RuntimeConfigState
   }
 
   runtime.__holoConfigRuntime__ ??= {}
@@ -58,11 +63,23 @@ function getRuntimeConfigState(): { config?: RuntimeConfigMap } {
 }
 
 export function configureConfigRuntime<TConfig extends RuntimeConfigMap>(configMap: TConfig): void {
-  getRuntimeConfigState().config = configMap
+  const state = getRuntimeConfigState()
+  state.previousTimezone ??= { value: process.env.TZ }
+  process.env.TZ = configMap.app.timezone
+  state.config = configMap
 }
 
 export function resetConfigRuntime(): void {
-  getRuntimeConfigState().config = undefined
+  const state = getRuntimeConfigState()
+  if (state.previousTimezone) {
+    if (state.previousTimezone.value === undefined) {
+      delete process.env.TZ
+    } else {
+      process.env.TZ = state.previousTimezone.value
+    }
+    state.previousTimezone = undefined
+  }
+  state.config = undefined
 }
 
 function requireConfigRuntime(): RuntimeConfigMap {

@@ -439,6 +439,38 @@ afterEach(async () => {
 })
 
 describe('@holo-js/core portable runtime', () => {
+  it.each([
+    ['America/New_York', 'America/New_York', '2026-07-15T16:00:00.000Z'],
+    ['UTC', 'UTC', '2026-07-15T12:00:00.000Z'],
+    [undefined, 'UTC', '2026-07-15T12:00:00.000Z'],
+  ])('applies APP_TIMEZONE %s during startup and restores the host timezone during shutdown', async (timezone, expectedTimezone, expectedDate) => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, '.env'), timezone === undefined ? '' : `APP_TIMEZONE=${timezone}\n`, 'utf8')
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  timezone: env('APP_TIMEZONE', 'UTC'),
+})
+`, 'utf8')
+    const originalTimezone = process.env.TZ
+    const originalOffset = new Date('2026-07-15T16:00:00Z').getTimezoneOffset()
+    const runtime = await createHolo(root, { processEnv: {} })
+
+    expect(process.env.TZ).toBe(originalTimezone)
+    await runtime.initialize()
+
+    expect(config('app.timezone')).toBe(expectedTimezone)
+    expect(new Date('2026-07-15T12:00:00').toISOString()).toBe(expectedDate)
+    expect(new Intl.DateTimeFormat('en').resolvedOptions().timeZone).toBe(expectedTimezone)
+    await runtime.shutdown()
+
+    expect(process.env.TZ).toBe(originalTimezone)
+    expect(new Date('2026-07-15T16:00:00Z').getTimezoneOffset()).toBe(originalOffset)
+  })
+
   it('creates and initializes the runtime from config files and generated registries', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -5606,6 +5638,7 @@ export default defineBroadcastConfig({
     vi.resetModules()
     vi.doMock('@holo-js/config', async () => {
       const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      const loaded = await actual.loadConfigDirectory(root)
       return {
         ...actual,
         loadConfigDirectory: vi.fn(async () => ({
@@ -5627,7 +5660,7 @@ export default defineBroadcastConfig({
           }),
           media: {},
           custom: {},
-          all: {} as never,
+          all: loaded.all,
           environment: {
             name: 'development',
             values: {},
@@ -5672,6 +5705,7 @@ export default defineBroadcastConfig({
     vi.resetModules()
     vi.doMock('@holo-js/config', async () => {
       const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      const loaded = await actual.loadConfigDirectory(root)
       return {
         ...actual,
         loadConfigDirectory: vi.fn(async () => ({
@@ -5697,7 +5731,7 @@ export default defineBroadcastConfig({
           queue: holoQueueDefaults,
           media: {},
           custom: {},
-          all: {} as never,
+          all: loaded.all,
           environment: {
             name: 'development',
             values: {},

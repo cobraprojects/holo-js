@@ -33,6 +33,28 @@ Typical built-in files:
 - `config/storage.ts`
 - `config/media.ts` when media is installed
 
+Example app config:
+
+```ts
+import { defineAppConfig, env } from '@holo-js/config'
+
+export default defineAppConfig({
+  timezone: env('APP_TIMEZONE', 'UTC'),
+})
+```
+
+Set `APP_TIMEZONE=Africa/Cairo` in `.env` to configure the application timezone.
+The default is `UTC`; invalid timezone identifiers are rejected during config loading.
+The normalized setting is available as `config('app.timezone')`. At server startup,
+Holo applies it as the process timezone before loading application models and booting
+services. Local `Date` getters, date-time strings without an offset, and newly created
+`Intl.DateTimeFormat` instances without an explicit timezone use this setting.
+`Date.toISOString()` and JSON date serialization still produce UTC. Explicit offsets
+remain authoritative, and existing database values are not rewritten. The browser
+continues to use the user's timezone; pass `app.timezone` explicitly when formatting
+dates there. Shutting down the Holo runtime restores the previous process timezone.
+New apps include `APP_TIMEZONE=UTC` in `.env` and an `APP_TIMEZONE` entry in `.env.example`.
+
 Example database config:
 
 ```ts

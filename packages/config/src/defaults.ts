@@ -14,6 +14,7 @@ export const holoAppDefaults: Readonly<NormalizedHoloAppConfig> = Object.freeze(
   name: DEFAULT_APP_NAME,
   key: '',
   url: 'http://localhost:3000',
+  timezone: 'UTC',
   debug: true,
   env: 'development',
   plugins: Object.freeze([]),
@@ -39,6 +40,13 @@ export function normalizeAppConfig(
   config: HoloAppConfig = {},
 ): NormalizedHoloAppConfig {
   const project = normalizeHoloProjectConfig(config)
+  let timezone = config.timezone ?? holoAppDefaults.timezone
+  try {
+    if (timezone.startsWith('+') || timezone.startsWith('-')) throw new RangeError()
+    timezone = new Intl.DateTimeFormat('en', { timeZone: timezone }).resolvedOptions().timeZone
+  } catch {
+    throw new Error(`Invalid application timezone: ${timezone}`)
+  }
   const rawDebug = (config as { debug?: unknown }).debug
   const debug = typeof rawDebug === 'string'
     ? !['false', '0', 'off', 'no'].includes(rawDebug.trim().toLowerCase())
@@ -48,6 +56,7 @@ export function normalizeAppConfig(
     name: config.name ?? holoAppDefaults.name,
     key: config.key ?? holoAppDefaults.key,
     url: config.url ?? holoAppDefaults.url,
+    timezone,
     debug: debug ?? holoAppDefaults.debug,
     env: normalizeAppEnv(config.env, holoAppDefaults.env),
     plugins: Object.freeze([...new Set((config.plugins ?? [])

@@ -443,6 +443,7 @@ export function renderScaffoldAppConfig(
     `  name: env('APP_NAME', ${JSON.stringify(projectName)}),`,
     '  key: env(\'APP_KEY\'),',
     `  url: env('APP_URL', '${defaultUrl}'),`,
+    "  timezone: env('APP_TIMEZONE', 'UTC'),",
     '  env: appEnv,',
     '  debug: env(\'APP_DEBUG\', true),',
     '  paths: {',
@@ -531,6 +532,7 @@ export function renderScaffoldEnvFiles(
     'APP_NAME=',
     'APP_KEY=',
     `APP_URL=${defaultUrl}`,
+    'APP_TIMEZONE=UTC',
     'APP_ENV=development',
     'APP_DEBUG=true',
   ]

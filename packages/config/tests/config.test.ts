@@ -1723,10 +1723,11 @@ export default defineAppConfig({
   })
 
   it('provides runtime accessors for file-level and string-path access', async () => {
+    const defaults = await loadConfigDirectory(await createProject(), { processEnv: {} })
     const loaded = {
-      app: {
-        name: 'Holo',
-      },
+      ...defaults.all,
+      app: normalizeAppConfig({ name: 'Holo' }),
+      redis: normalizeRedisConfig(),
       queue: normalizeQueueConfigForHolo(),
       session: normalizeSessionConfig(),
       auth: normalizeAuthConfig(),
@@ -1737,9 +1738,9 @@ export default defineAppConfig({
       },
     }
 
-    configureConfigRuntime(loaded as never)
+    configureConfigRuntime(loaded)
 
-    expect(useConfig('app')).toEqual({ name: 'Holo' })
+    expect(useConfig('app')).toEqual(loaded.app)
     expect(useConfig('queue.default' as never)).toBe('sync')
     expect(useConfig('session.driver' as never)).toBe('file')
     expect(useConfig('auth.defaults.guard' as never)).toBe('web')
@@ -1821,12 +1822,13 @@ export default defineAppConfig({
     configureEnvRuntime(undefined)
   })
 
-  it('returns undefined for missing config paths and throws when the runtime is not configured', () => {
+  it('returns undefined for missing config paths and throws when the runtime is not configured', async () => {
+    const loaded = await loadConfigDirectory(await createProject(), { processEnv: {} })
     configureConfigRuntime({
-      app: {
-        name: 'Holo',
-      },
-    } as never)
+      ...loaded.all,
+      app: normalizeAppConfig({ name: 'Holo' }),
+      redis: normalizeRedisConfig(),
+    })
 
     expect(config('app.missing.value' as never)).toBeUndefined()
     resetConfigRuntime()

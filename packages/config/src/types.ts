@@ -9,6 +9,7 @@ export interface HoloAppConfig extends HoloProjectConfig {
   name?: string
   key?: string
   url?: string
+  timezone?: string
   debug?: boolean
   env?: HoloAppEnv
   plugins?: readonly string[]
@@ -18,6 +19,7 @@ export interface NormalizedHoloAppConfig {
   readonly name: string
   readonly key: string
   readonly url: string
+  readonly timezone: string
   readonly debug: boolean
   readonly env: HoloAppEnv
   readonly plugins: readonly string[]
