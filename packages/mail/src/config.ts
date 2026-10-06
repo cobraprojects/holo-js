@@ -355,10 +355,10 @@ function normalizeMailMailerConfig(
         ?? DEFAULT_SMTP_HOST,
       port: normalizedPort,
       secure: (config as { secure?: boolean }).secure ?? smtpFallback?.secure ?? false,
-      user: normalizeOptionalMailString((config as { user?: string }).user, `Mail mailer "${name}" SMTP user`)
+      user: normalizeOptionalMailString((config as { user?: string }).user || undefined, `Mail mailer "${name}" SMTP user`)
         ?? smtpFallback?.user
         ?? undefined,
-      password: normalizeOptionalMailString((config as { password?: string }).password, `Mail mailer "${name}" SMTP password`)
+      password: normalizeOptionalMailString((config as { password?: string }).password || undefined, `Mail mailer "${name}" SMTP password`)
         ?? smtpFallback?.password
         ?? undefined,
     })

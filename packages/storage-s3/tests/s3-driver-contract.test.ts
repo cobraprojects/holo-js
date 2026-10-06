@@ -147,46 +147,47 @@ describe('custom s3 storage driver', () => {
     expect(request.headers.get('authorization')).toContain(`Signature=${expectedSignature}`)
   })
 
-  it('validates required driver options', async () => {
+  it('allows unconfigured disks at startup and validates options when used', async () => {
     const createDriver = await loadDriver()
 
-    expect(() => createDriver({
+    await expect(createDriver({
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
       accessKeyId: 'AKIAEXAMPLE',
       secretAccessKey: 'supersecretkey',
       bucket: 'media-bucket',
-    })).not.toThrow()
-    expect(() => createDriver({
+    })).toBeDefined()
+    await expect(createDriver({
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
       secretAccessKey: 'supersecretkey',
       bucket: 'media-bucket',
-    })).toThrow('Missing required option `accessKeyId`')
-    expect(() => createDriver({
+    }).getItemRaw('file.txt')).rejects.toThrow('Missing required option `accessKeyId`')
+    await expect(createDriver({
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
       accessKeyId: 'AKIAEXAMPLE',
       bucket: 'media-bucket',
-    })).toThrow('Missing required option `secretAccessKey`')
-    expect(() => createDriver({
+    }).getItemRaw('file.txt')).rejects.toThrow('Missing required option `secretAccessKey`')
+    await expect(createDriver({
       region: 'us-east-1',
       accessKeyId: 'AKIAEXAMPLE',
       secretAccessKey: 'supersecretkey',
       bucket: 'media-bucket',
-    })).toThrow('Missing required option `endpoint`')
-    expect(() => createDriver({
+    }).getItemRaw('file.txt')).rejects.toThrow('Missing required option `endpoint`')
+    await expect(createDriver({
       endpoint: 'https://s3.us-east-1.amazonaws.com',
       accessKeyId: 'AKIAEXAMPLE',
       secretAccessKey: 'supersecretkey',
       bucket: 'media-bucket',
-    })).toThrow('Missing required option `region`')
-    expect(() => createDriver({
+    }).getItemRaw('file.txt')).rejects.toThrow('Missing required option `region`')
+    await expect(createDriver({
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
       accessKeyId: 'AKIAEXAMPLE',
       secretAccessKey: 'supersecretkey',
-    })).toThrow('Missing required option `bucket`')
+    }).getItemRaw('file.txt')).rejects.toThrow('Missing required option `bucket`')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('supports text, raw, metadata, and missing-item operations', async () => {

@@ -99,7 +99,7 @@ function parseInteger(
 }
 
 function normalizeUrl(value: string | undefined, label: string): string | undefined {
-  if (typeof value === 'undefined') {
+  if (!value) {
     return undefined
   }
 

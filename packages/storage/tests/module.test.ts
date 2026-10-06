@@ -46,6 +46,33 @@ describe('applyEnvOverrides', () => {
     vi.unstubAllEnvs()
   })
 
+  it('uses disk defaults for blank optional environment overrides', () => {
+    for (const suffix of ['REGION', 'ENDPOINT', 'URL', 'BUCKET', 'ACCESS_KEY_ID', 'SECRET_ACCESS_KEY', 'SESSION_TOKEN']) {
+      vi.stubEnv(`STORAGE_DISKS_S3_${suffix}`, '')
+    }
+    vi.stubEnv('STORAGE_DISKS_PUBLIC_ROOT', '')
+    vi.stubEnv('STORAGE_DISKS_PUBLIC_URL', '')
+    vi.stubEnv('STORAGE_DISKS_LOCAL_ROOT', '')
+    const storage = normalizeModuleOptions({
+      disks: {
+        s3: { driver: 's3' },
+        public: { driver: 'public' },
+        local: { driver: 'local' },
+      },
+    })
+    expect(storage.disks.s3).toMatchObject({
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      url: undefined,
+      bucket: undefined,
+      accessKeyId: undefined,
+      secretAccessKey: undefined,
+      sessionToken: undefined,
+    })
+    expect(storage.disks.public).toMatchObject({ root: './storage/app/public', url: undefined })
+    expect(storage.disks.local?.root).toBe('./storage/app')
+  })
+
   it('applies string overrides to disk config', () => {
     vi.stubEnv('STORAGE_DISKS_PUBLIC_ROOT', '/srv/storage/public')
     vi.stubEnv('STORAGE_DISKS_PUBLIC_URL', 'https://cdn.example.com')

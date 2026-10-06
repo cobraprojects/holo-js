@@ -196,6 +196,10 @@ export function applyEnvOverrides(diskName: string, config: DiskConfig): DiskCon
   return merged as DiskConfig
 }
 
+function normalizeOptionalStorageString(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
 export function normalizeDiskConfig(diskName: string, config: DiskConfig): RuntimeDiskConfig {
   if (config.driver === 'local' && config.visibility === 'public') {
     throw new Error(
@@ -205,23 +209,21 @@ export function normalizeDiskConfig(diskName: string, config: DiskConfig): Runti
 
   const driver = normalizeStorageDriver(config.driver)
 
-  if (driver === 's3') {
-    const region = typeof config.region === 'string' ? config.region : 'us-east-1'
-    const endpoint = typeof config.endpoint === 'string'
-      ? config.endpoint
-      : `https://s3.${region}.amazonaws.com`
+  if (config.driver === 's3') {
+    const region = normalizeOptionalStorageString(config.region) ?? 'us-east-1'
+    const endpoint = normalizeOptionalStorageString(config.endpoint) ?? `https://s3.${region}.amazonaws.com`
 
     return {
       name: diskName,
       driver,
       visibility: config.visibility ?? 'private',
-      url: typeof config.url === 'string' ? config.url : undefined,
-      bucket: typeof config.bucket === 'string' ? config.bucket : undefined,
+      url: normalizeOptionalStorageString(config.url),
+      bucket: normalizeOptionalStorageString(config.bucket),
       region,
       endpoint,
-      accessKeyId: typeof config.accessKeyId === 'string' ? config.accessKeyId : undefined,
-      secretAccessKey: typeof config.secretAccessKey === 'string' ? config.secretAccessKey : undefined,
-      sessionToken: typeof config.sessionToken === 'string' ? config.sessionToken : undefined,
+      accessKeyId: normalizeOptionalStorageString(config.accessKeyId),
+      secretAccessKey: normalizeOptionalStorageString(config.secretAccessKey),
+      sessionToken: normalizeOptionalStorageString(config.sessionToken),
       forcePathStyleEndpoint: Boolean(config.forcePathStyleEndpoint),
     }
   }
@@ -230,12 +232,8 @@ export function normalizeDiskConfig(diskName: string, config: DiskConfig): Runti
     name: diskName,
     driver,
     visibility: driver === 'public' ? 'public' : (config.visibility ?? 'private'),
-    root: typeof config.root === 'string'
-      ? config.root
-      : resolveDefaultRoot(driver),
-    url: typeof config.url === 'string'
-      ? config.url
-      : undefined,
+    root: normalizeOptionalStorageString(config.root) ?? resolveDefaultRoot(driver),
+    url: normalizeOptionalStorageString(config.url),
   }
 }
 

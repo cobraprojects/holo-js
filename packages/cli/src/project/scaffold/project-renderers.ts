@@ -554,6 +554,14 @@ export function renderScaffoldEnvFiles(
     ? [
         `STORAGE_DEFAULT_DISK=${options.storageDefaultDisk}`,
         'STORAGE_ROUTE_PREFIX=/storage',
+        'STORAGE_DISKS_PUBLIC_ROOT=./storage/app/public',
+        'STORAGE_DISKS_S3_ACCESS_KEY_ID=',
+        'STORAGE_DISKS_S3_SECRET_ACCESS_KEY=',
+        'STORAGE_DISKS_S3_REGION=us-east-1',
+        'STORAGE_DISKS_S3_BUCKET=',
+        'STORAGE_DISKS_S3_URL=',
+        'STORAGE_DISKS_S3_ENDPOINT=',
+        'STORAGE_DISKS_S3_FORCE_PATH_STYLE_ENDPOINT=false',
       ]
     : []
   const authLines = optionalPackageNames.includes('auth')
@@ -589,7 +597,7 @@ export function renderScaffoldEnvFiles(
     baseLines.map(renderEnvExampleLine),
     databaseLines.map(renderEnvExampleLine),
     redisLines.map(renderEnvExampleLine),
-    storageLines.map(renderEnvExampleLine),
+    storageLines.map(line => line.startsWith('STORAGE_DISKS_') ? line : renderEnvExampleLine(line)),
     authLines.map(renderEnvExampleLine),
     queueLines.map(renderEnvExampleLine),
     securityLines.map(renderEnvExampleLine),

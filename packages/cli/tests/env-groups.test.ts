@@ -16,10 +16,10 @@ describe('env file groups', () => {
     for (const contents of [files.env, files.example]) {
       const groups = contents.trim().split('\n\n')
       expect(groups.map(group => group.split('\n').filter(line => !line.startsWith('#')).map(line => line.split('=')[0]))).toEqual([
-        ['APP_NAME', 'APP_KEY', 'APP_URL', 'APP_ENV', 'APP_DEBUG'],
+        ['APP_NAME', 'APP_KEY', 'APP_URL', 'APP_TIMEZONE', 'APP_ENV', 'APP_DEBUG'],
         ['DB_CONNECTION', 'DB_DRIVER', 'DB_URL'],
         ['REDIS_CONNECTION'],
-        ['STORAGE_DEFAULT_DISK', 'STORAGE_ROUTE_PREFIX'],
+        ['STORAGE_DEFAULT_DISK', 'STORAGE_ROUTE_PREFIX', 'STORAGE_DISKS_PUBLIC_ROOT', 'STORAGE_DISKS_S3_ACCESS_KEY_ID', 'STORAGE_DISKS_S3_SECRET_ACCESS_KEY', 'STORAGE_DISKS_S3_REGION', 'STORAGE_DISKS_S3_BUCKET', 'STORAGE_DISKS_S3_URL', 'STORAGE_DISKS_S3_ENDPOINT', 'STORAGE_DISKS_S3_FORCE_PATH_STYLE_ENDPOINT'],
         ['AUTH_GUARD', 'AUTH_PASSWORD_BROKER', 'AUTH_EMAIL_VERIFICATION_ROUTE', 'AUTH_PASSWORD_RESET_ROUTE'],
         ['RATE_LIMIT_DRIVER'],
         ['FRONTEND_URL', 'FRONTEND_DOMAIN'],

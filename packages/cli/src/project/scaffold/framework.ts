@@ -111,6 +111,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
 
   if (optionalPackages.includes('storage')) {
     dependencies['@holo-js/storage'] = getFrameworkRuntimeDependencyVersion(options.framework, '@holo-js/storage')
+    dependencies['@holo-js/storage-s3'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('events')) {

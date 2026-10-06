@@ -481,12 +481,16 @@ async function conditionallyPutEmptyObject(
 }
 
 export default function createS3Driver(input: S3DriverOptions) {
-  const options = resolveDriverOptions(input)
+  let resolvedOptions: ResolvedS3DriverOptions | undefined
+  const getOptions = (): ResolvedS3DriverOptions => resolvedOptions ??= resolveDriverOptions(input)
 
   return {
     name: 's3',
-    options,
+    get options() {
+      return getOptions()
+    },
     async getItem<T = unknown>(key: string) {
+      const options = getOptions()
       const response = await s3Fetch(options, 'GET', resolveObjectUrl(options, key))
       if (!response) {
         return null
@@ -495,6 +499,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       return deserializeStoredValue<T>(await response.text())
     },
     async getItemRaw(key: string) {
+      const options = getOptions()
       const response = await s3Fetch(options, 'GET', resolveObjectUrl(options, key))
       return response ? response.arrayBuffer() : null
     },
@@ -502,6 +507,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       key: string,
       request: { readonly chunkBytes?: number },
     ): Promise<AsyncIterable<Uint8Array> | null> {
+      const options = getOptions()
       const url = resolveObjectUrl(options, key)
       const chunkBytes = normalizeStreamChunkBytes(request.chunkBytes)
       try {
@@ -530,9 +536,11 @@ export default function createS3Driver(input: S3DriverOptions) {
       })()
     },
     async setItem(key: string, value: unknown) {
+      const options = getOptions()
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), serializeStoredValue(value))
     },
     async setItemRaw(key: string, value: DriverValue) {
+      const options = getOptions()
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value)
     },
     async setItemStream(
@@ -540,6 +548,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       source: AsyncIterable<Uint8Array>,
       request: { readonly overwrite: boolean },
     ) {
+      const options = getOptions()
       let uploadId: string | undefined
       try {
         const start = await s3Fetch(options, 'POST', multipartUrl(options, key))
@@ -590,6 +599,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       }
     },
     async getMeta(key: string) {
+      const options = getOptions()
       const response = await s3Fetch(options, 'HEAD', resolveObjectUrl(options, key))
       if (!response) {
         return null
@@ -606,10 +616,12 @@ export default function createS3Driver(input: S3DriverOptions) {
       return metaHeaders
     },
     async hasItem(key: string) {
+      const options = getOptions()
       const response = await s3Fetch(options, 'HEAD', resolveObjectUrl(options, key))
       return Boolean(response)
     },
     async getKeys(base?: string) {
+      const options = getOptions()
       const keys: string[] = []
       let continuationToken: string | undefined
 
@@ -646,6 +658,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       base: string | undefined,
       request: { readonly cursor: string | null, readonly limit: number },
     ) {
+      const options = getOptions()
       const url = resolveBucketUrl(options)
       url.searchParams.set('list-type', '2')
       url.searchParams.set('max-keys', String(request.limit))
@@ -662,6 +675,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       }
     },
     async removeItem(key: string) {
+      const options = getOptions()
       await s3Fetch(options, 'DELETE', resolveObjectUrl(options, key))
     },
     async clear(base?: string) {

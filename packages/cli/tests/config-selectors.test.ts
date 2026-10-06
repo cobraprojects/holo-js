@@ -1,9 +1,11 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { loadConfigDirectory } from '@holo-js/config'
+import { loadConfigDirectory, writeConfigCache } from '@holo-js/config'
+import { normalizeModuleOptions } from '@holo-js/storage'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderBroadcastConfig } from '../src/project/scaffold/config-renderers'
+import { renderScaffoldPackageJson } from '../src/project/scaffold/framework'
 import {
   renderAuthConfig,
   renderAuthEnvFiles,
@@ -45,6 +47,120 @@ afterEach(async () => {
 })
 
 describe('generated config selectors', () => {
+  it.each([false, true])('normalizes blank optional variables with cached config: %s', async (cached) => {
+    const root = await createProject()
+    await writeConfig(root, 'storage', renderStorageConfig())
+    await writeConfig(root, 'redis', renderRedisConfig())
+    await writeConfig(root, 'mail', renderMailConfig())
+    const processEnv = {
+      STORAGE_DEFAULT_DISK: 's3',
+      STORAGE_DISKS_S3_ACCESS_KEY_ID: 'key',
+      STORAGE_DISKS_S3_SECRET_ACCESS_KEY: 'secret',
+      STORAGE_DISKS_S3_BUCKET: 'media',
+      STORAGE_DISKS_S3_REGION: '',
+      STORAGE_DISKS_S3_ENDPOINT: '',
+      STORAGE_DISKS_S3_URL: '',
+      STORAGE_DISKS_PUBLIC_ROOT: '',
+      REDIS_URL: '',
+      REDIS_USERNAME: '',
+      REDIS_PASSWORD: '',
+      MAIL_USERNAME: '',
+      MAIL_PASSWORD: '',
+    }
+    if (cached) {
+      await writeConfigCache(root, { processEnv })
+    }
+    const loaded = await loadConfigDirectory(root, { processEnv, preferCache: cached })
+    const storage = normalizeModuleOptions(loaded.storage)
+    expect(storage.disks.s3).toMatchObject({
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      url: undefined,
+      accessKeyId: 'key',
+      secretAccessKey: 'secret',
+      bucket: 'media',
+    })
+    expect(storage.disks.public?.root).toBe('./storage/app/public')
+    expect(loaded.redis.connections.default).toMatchObject({
+      host: '127.0.0.1', port: 6379, username: undefined, password: undefined,
+    })
+    expect(loaded.redis.connections.default).not.toHaveProperty('url')
+    expect(loaded.mail.mailers.smtp).toMatchObject({
+      host: '127.0.0.1', port: 1025, user: undefined, password: undefined,
+    })
+    const configured = await loadConfigDirectory(root, {
+      processEnv: {
+        ...processEnv,
+        STORAGE_DISKS_S3_REGION: 'eu-west-1',
+        STORAGE_DISKS_S3_ENDPOINT: 'https://objects.example.com',
+        STORAGE_DISKS_S3_URL: 'https://cdn.example.com',
+        STORAGE_DISKS_PUBLIC_ROOT: './storage/media',
+        REDIS_URL: 'rediss://redis.example.com',
+        MAIL_USERNAME: 'mailer',
+        MAIL_PASSWORD: 'secret',
+      },
+      preferCache: cached,
+    })
+    const configuredStorage = normalizeModuleOptions(configured.storage)
+    expect(configuredStorage.disks.s3).toMatchObject({
+      region: 'eu-west-1', endpoint: 'https://objects.example.com', url: 'https://cdn.example.com',
+    })
+    expect(configuredStorage.disks.public?.root).toBe('./storage/media')
+    expect(configured.redis.connections.default?.url).toBe('rediss://redis.example.com')
+    expect(configured.mail.mailers.smtp).toMatchObject({ user: 'mailer', password: 'secret' })
+  })
+
+  it.each(['next', 'nuxt', 'sveltekit'] as const)('includes the S3 driver in a %s storage scaffold', framework => {
+    const options = {
+      projectName: 'Fixture', framework, databaseDriver: 'sqlite', packageManager: 'bun',
+      storageDefaultDisk: 'local', optionalPackages: ['storage'],
+    } as const
+    const enabled = JSON.parse(renderScaffoldPackageJson(options)) as { dependencies: Record<string, string> }
+    expect(enabled.dependencies['@holo-js/storage-s3']).toBe(enabled.dependencies['@holo-js/storage'])
+    const disabled = JSON.parse(renderScaffoldPackageJson({ ...options, optionalPackages: [] })) as { dependencies: Record<string, string> }
+    expect(disabled.dependencies).not.toHaveProperty('@holo-js/storage-s3')
+  })
+
+  it('loads the scaffolded S3 disk from documented storage variables', async () => {
+    const root = await createProject()
+    await writeConfig(root, 'storage', renderStorageConfig())
+    const options = {
+      projectName: 'Fixture', databaseDriver: 'sqlite', storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
+    } as const
+    const files = renderScaffoldEnvFiles(options)
+    for (const contents of [files.env, files.example]) {
+      await writeFile(join(root, '.env'), contents)
+      const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+      expect(defaults.storage.defaultDisk).toBe('local')
+      expect(defaults.storage.disks.s3).toEqual({
+        driver: 's3', accessKeyId: '', secretAccessKey: '', region: 'us-east-1',
+        bucket: '', url: undefined, endpoint: undefined, forcePathStyleEndpoint: false,
+      })
+      const configured = await loadConfigDirectory(root, {
+        processEnv: {
+          STORAGE_DEFAULT_DISK: 's3',
+          STORAGE_DISKS_PUBLIC_ROOT: './storage/media',
+          STORAGE_DISKS_S3_ACCESS_KEY_ID: 'example-key', STORAGE_DISKS_S3_SECRET_ACCESS_KEY: 'example-secret',
+          STORAGE_DISKS_S3_REGION: 'eu-west-1', STORAGE_DISKS_S3_BUCKET: 'media',
+          STORAGE_DISKS_S3_URL: 'https://cdn.example.com', STORAGE_DISKS_S3_ENDPOINT: 'https://objects.example.com',
+          STORAGE_DISKS_S3_FORCE_PATH_STYLE_ENDPOINT: 'true',
+        },
+        preferCache: false,
+      })
+      expect(configured.storage.defaultDisk).toBe('s3')
+      expect(configured.storage.disks.public?.root).toBe('./storage/media')
+      expect(configured.storage.disks.s3).toEqual({
+        driver: 's3', accessKeyId: 'example-key', secretAccessKey: 'example-secret',
+        region: 'eu-west-1', bucket: 'media', url: 'https://cdn.example.com',
+        endpoint: 'https://objects.example.com', forcePathStyleEndpoint: true,
+      })
+    }
+    const withoutStorage = renderScaffoldEnvFiles({ ...options, optionalPackages: [] })
+    expect(withoutStorage.env).not.toContain('STORAGE_')
+    expect(withoutStorage.example).not.toContain('STORAGE_')
+  })
+
   it.each(['sync', 'redis', 'database'] as const)('selects a queue connection with the %s installer fallback', async (driver) => {
     const root = await createProject()
     await writeConfig(root, 'redis', renderRedisConfig())
