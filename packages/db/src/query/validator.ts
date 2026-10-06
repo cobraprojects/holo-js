@@ -610,7 +610,8 @@ export function validateQueryPlan(plan: QueryPlan): void {
           continue
         }
 
-        assertColumnReference(orderBy.column, plan.source.tableName, allowedColumns)
+        const isSelectionAlias = plan.selections.some(selection => 'alias' in selection && selection.alias === orderBy.column)
+        assertColumnReference(orderBy.column, plan.source.tableName, isSelectionAlias ? undefined : allowedColumns)
 
         if (!DIRECTIONS.has(orderBy.direction)) {
           throw new SecurityError(`Order direction "${orderBy.direction}" is not allowed.`)

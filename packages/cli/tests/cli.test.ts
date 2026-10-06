@@ -1,3 +1,4 @@
+import type { RuntimeExecutor } from '../src/command-executors'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import type * as FsPromisesModule from 'node:fs/promises'
@@ -8633,7 +8634,7 @@ export default {
     }
     const runtimeExecutor = async <T>(
       _projectRoot: string,
-      kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema',
+      kind: Parameters<RuntimeExecutor>[1],
       options: Record<string, unknown>,
       callback: (stdout: string) => Promise<T>,
     ): Promise<T> => {
@@ -8798,7 +8799,7 @@ export default {
       fallbackContext,
       async <T>(
         _projectRoot: string,
-        kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema',
+        kind: Parameters<RuntimeExecutor>[1],
         options: Record<string, unknown>,
         callback: (stdout: string) => Promise<T>,
       ): Promise<T> => {
@@ -12146,6 +12147,42 @@ export default {
     expect(runCacheTable).toHaveBeenCalledWith(expect.anything(), projectRoot)
     expect(runCacheClear).toHaveBeenCalledWith(expect.anything(), projectRoot, 'redis')
     expect(runCacheForget).toHaveBeenCalledWith(expect.anything(), projectRoot, 'users', 'memory')
+  })
+
+  it('runs media regeneration through the built CLI runtime', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true, type: 'module' }))
+    await writeProjectFile(projectRoot, '.env', 'DB_DRIVER=sqlite\nDB_URL=./storage/database.sqlite\n')
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+export default defineDatabaseConfig({
+  defaultConnection: 'default',
+  connections: { default: { driver: 'sqlite', url: './storage/database.sqlite' } },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/storage.ts', `
+import { defineStorageConfig } from '@holo-js/storage'
+export default defineStorageConfig({ defaultDisk: 'local' })
+`)
+    await writeProjectFile(projectRoot, 'server/models/Post.ts', `
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+import { conversion, defineMediaModel } from '@holo-js/media'
+export default defineMediaModel(defineModel(defineGeneratedTable('posts', { id: column.id() }), { name: 'Post' }), {
+  conversions: [conversion('thumb').width(10)],
+})
+`)
+    const table = runCliProcess(projectRoot, ['media:table'])
+    expect(table.status, table.stderr || table.stdout).toBe(0)
+    const migration = runCliProcess(projectRoot, ['migrate'])
+    expect(migration.status, migration.stderr || migration.stdout).toBe(0)
+    const regenerated = runCliProcess(projectRoot, ['media:regenerate', 'Post', '--only=thumb'])
+    expect(regenerated.status, regenerated.stderr || regenerated.stdout).toBe(0)
+    expect(regenerated.stdout).toContain('Media regenerated: 0; skipped: 0')
+    const unknown = runCliProcess(projectRoot, ['media:regenerate', 'Missing'])
+    expect(unknown.status).not.toBe(0)
+    expect(unknown.stderr).toContain('Unknown model "Missing"')
   })
 
   it('prepares media table command and routes the media executor through the internal command registry', async () => {

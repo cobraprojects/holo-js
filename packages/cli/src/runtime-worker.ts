@@ -16,6 +16,10 @@ import {
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
 import { replayRanMigrationsInDryRunScope } from './runtime-schema-hydration'
+import { resolveProjectPackageImportSpecifier } from './project'
+import { regenerateMediaConversions, type MediaRegenerationOptions } from './media-regeneration'
+import type * as MediaModule from '@holo-js/media'
+import type * as StorageRuntimeModule from '@holo-js/storage/runtime'
 
 type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOptions>[0]
 
@@ -49,6 +53,7 @@ type RuntimeSeeder = {
 type RuntimeModel = {
   readonly definition: {
     readonly name: string
+    readonly morphClass?: string
     readonly kind: 'model'
     readonly prunable?: boolean
   }
@@ -417,7 +422,7 @@ function writeOutput(message: string): void {
 
 const resolvedRuntimeConfig = resolveRuntimeConfig(payload.runtimeConfig)
 const projectRoot = payload.projectRoot ?? process.cwd()
-const applicationRuntime = payload.kind === 'seed'
+const applicationRuntime = payload.kind === 'seed' || payload.kind === 'media:regenerate'
   ? await initializeHolo(projectRoot)
   : undefined
 const manager = applicationRuntime?.manager ?? resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
@@ -474,6 +479,16 @@ try {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
     const executed = await createSeederService(manager.connection(), await loadSeeders(payloadEntries(payload.seeders))).seed(payload.options ?? {})
     printExecutedItems(executed, 'No seeders were executed.', 'Seeders executed:')
+  } else if (payload.kind === 'media:regenerate') {
+    const media = await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/media')) as typeof MediaModule
+    const { Storage } = await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/storage/runtime')) as typeof StorageRuntimeModule
+    const models = await loadRuntimeItems(payloadEntries(payload.models), isModel, 'model')
+    const result = await regenerateMediaConversions(
+      { media, storage: Storage },
+      models.map(model => model.definition),
+      payload.options as MediaRegenerationOptions,
+    )
+    writeOutput(`Media regenerated: ${result.regenerated}; skipped: ${result.skipped}`)
   } else if (payload.kind === 'prune') {
     const models = await loadRuntimeItems(payloadEntries(payload.models), isModel, 'model')
     const byName = new Map(models.map(model => [model.definition.name, model]))

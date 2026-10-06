@@ -569,6 +569,7 @@
         "@holo-js/broadcast": "catalog:",
         "@holo-js/events": "catalog:",
         "@holo-js/mail": "catalog:",
+        "@holo-js/media": "catalog:",
         "@holo-js/queue": "catalog:",
         "@holo-js/queue-db": "catalog:",
         "@holo-js/session": "catalog:",
@@ -583,12 +584,14 @@
       "peerDependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/mail": "catalog:",
+        "@holo-js/media": "catalog:",
         "@holo-js/queue": "catalog:",
         "@holo-js/session": "catalog:",
       },
       "optionalPeers": [
         "@holo-js/broadcast",
         "@holo-js/mail",
+        "@holo-js/media",
         "@holo-js/queue",
         "@holo-js/session",
       ],

@@ -23,7 +23,7 @@ import {
   decodeValueCursor,
   normalizePaginationParameterName,
 } from '../query/pagination'
-import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
+import { compareChunkValuesDescending } from '../query/chunkOrdering'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { resolveMorphSelector } from './morphRegistry'
@@ -40,6 +40,7 @@ import type {
   SimplePaginationMeta,
 } from '../query/types'
 import type { TableDefinition } from '../schema/types'
+import { resolveTablePrimaryKey } from '../schema/tablePrimaryKey'
 import type { Entity } from './Entity'
 import type {
   EntityWithLoaded,
@@ -1089,7 +1090,7 @@ export class ModelQueryBuilder<
     return result
   }
 
-  private async cursorPage(perPage: number, cursor: string | null, options: CursorPaginationOptions) {
+  private async cursorPage(perPage: number, cursor: string | null, options: CursorPaginationOptions, hiddenColumns: readonly string[] = []) {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
     decodeValueCursor(cursor, message => new HydrationError(message))
@@ -1097,7 +1098,12 @@ export class ModelQueryBuilder<
       ? this.tableQuery.orderBy(this.repository.definition.primaryKey)
       : this.tableQuery
     const page = await query.cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
-    const collection = await this.hydrateRows(page.data)
+    const rows = hiddenColumns.length === 0 ? page.data : page.data.map(row => {
+      const attributes = { ...row }
+      for (const column of hiddenColumns) delete attributes[column]
+      return attributes
+    })
+    const collection = await this.hydrateRows(rows)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
     return { page, collection }
@@ -1129,22 +1135,50 @@ export class ModelQueryBuilder<
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    const entities = await this.getUnpaginatedEntities()
-    const sorted = [...entities].sort((left, right) => {
-      const a = left.get(column as never)
-      const b = right.get(column as never)
-      return compareChunkValuesAscending(a, b)
-    })
-
+    const plan = this.tableQuery.getPlan()
+    const tableName = plan.source.alias ?? plan.source.tableName
+    const chunkColumn: ModelColumnName<TTable> = `${tableName}.${column}`
+    const primaryKey: ModelColumnName<TTable> = `${tableName}.${this.repository.definition.primaryKey}`
+    const cursorColumns = [...new Set<ModelColumnName<TTable>>([
+      chunkColumn,
+      primaryKey,
+      ...(plan.source.table ? [`${tableName}.${resolveTablePrimaryKey(plan.source.table)}` as ModelColumnName<TTable>] : []),
+    ])]
+    const useCursor = !plan.distinct && plan.joins.length === 0 && plan.groupBy.length === 0 && plan.unions.length === 0
+    const selectedChunkColumn = plan.selections.find(selection =>
+      selection.kind === 'column' && (selection.column === column || selection.column === chunkColumn),
+    )
+    const canOrderByChunkColumn = (plan.groupBy.length === 0 || plan.groupBy.includes(column) || plan.groupBy.includes(chunkColumn))
+      && ((!plan.distinct && plan.unions.length === 0) || plan.selections.length === 0 || selectedChunkColumn !== undefined)
+    const unionOrderColumn = selectedChunkColumn?.kind === 'column' ? selectedChunkColumn.alias ?? column : column
+    const orderColumn = plan.unions.length > 0 ? unionOrderColumn : chunkColumn
+    let query = (canOrderByChunkColumn ? this.reorder(orderColumn as ModelColumnName<TTable>) : this).limit(undefined).offset(undefined)
+    if (!useCursor) return query.chunk(size, callback)
+    for (const cursorColumn of cursorColumns.slice(1)) query = query.orderBy(cursorColumn)
+    const hiddenColumns: string[] = []
+    if (plan.selections.length > 0) {
+      const selectedNames = new Set([
+        ...Object.keys(this.repository.definition.table.columns),
+        ...plan.selections.map(selection => selection.kind === 'column' ? selection.alias ?? selection.column.split('.').at(-1) : 'alias' in selection ? selection.alias : undefined),
+      ])
+      for (const cursorColumn of cursorColumns) {
+        let alias = `__holo_chunk_${hiddenColumns.length}`
+        while (selectedNames.has(alias)) alias += '_'
+        hiddenColumns.push(alias)
+        query = query.addSelect(`${cursorColumn} as ${alias}`)
+      }
+    }
+    let cursor: string | null = null
     let page = 1
-    for (let index = 0; index < sorted.length; index += size) {
-      const result = await callback(sorted.slice(index, index + size) as unknown as EntityWithLoaded<TTable, TRelations, TLoaded>[], page)
-      if (result === false) {
+    do {
+      const { page: batch, collection } = await query.cursorPage(size, cursor, {}, hiddenColumns)
+      query.rebindRowsToSerializedResult(batch.data, collection)
+      if (collection.length === 0 || await callback(collection, page) === false) {
         return
       }
-
+      cursor = batch.nextCursor
       page += 1
-    }
+    } while (cursor !== null)
   }
 
   async chunkByIdDesc(

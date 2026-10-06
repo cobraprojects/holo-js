@@ -282,6 +282,25 @@ media?.getAvailableConversions()
 
 ## Regenerating conversions
 
+Regenerate conversions from the CLI:
+
+```bash
+holo media:regenerate
+holo media:regenerate Post Product
+holo media:regenerate --ids=1,2,3
+holo media:regenerate Post --only=thumb
+holo media:regenerate --only-missing
+```
+
+Without model names, the command processes media for all models. `--ids` filters IDs from the
+`media` table, not IDs of the owning models. `--only` selects conversion names. Both flags accept
+comma-separated values or repeated flags, and all filters can be combined. `--only-missing` skips
+conversions whose stored files still exist.
+
+The command processes media in batches and uses each record's original disk and conversions disk,
+falling back to the original disk when its conversions disk is unset. Queued conversions use the
+configured queue connection.
+
 Regenerate conversions from the model:
 
 ```ts

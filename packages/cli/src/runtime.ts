@@ -488,11 +488,11 @@ function formatRuntimeFailureText(text: string): string {
 /* v8 ignore start */
 export async function withRuntimeEnvironment<T>(
   projectRoot: string,
-  kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema',
+  kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema' | 'media:regenerate',
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
-  if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'seed') {
+  if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })
     await prepareProjectDiscovery(projectRoot, project.config)
   }

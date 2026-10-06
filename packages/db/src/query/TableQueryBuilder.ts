@@ -79,6 +79,7 @@ import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
+import { resolveTablePrimaryKey } from '../schema/tablePrimaryKey'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
@@ -1826,10 +1827,14 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
+      if (plan.predicates.some(predicate => predicate.boolean === 'or')) {
+        plan = withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
+      }
       plan = withPredicate(plan, cursorPredicate(normalizedCursor, cursorOrders, !this.connection.getDialect().name.includes('postgres')))
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
-    const rows = await orderedQuery.clone(plan).get<TRow>()
+    const pageQuery = orderedQuery.clone(plan)
+    const rows = await pageQuery.getCompiledRows<TRow>(pageQuery.toSQL(), true, true)
     const pageRows = rows
     const hasMorePages = pageRows.length > perPage
     const data = pageRows.slice(0, perPage)
@@ -2574,13 +2579,7 @@ export class TableQueryBuilder<
   }
 
   private resolvePrimaryKeyColumn(): string {
-    const columns = this.source.table?.columns
-    if (!columns) {
-      return 'id'
-    }
-
-    const primaryKey = Object.values(columns).find(column => column.primaryKey)
-    return primaryKey?.name ?? 'id'
+    return resolveTablePrimaryKey(this.source.table)
   }
 
   private normalizeOperatorValue(

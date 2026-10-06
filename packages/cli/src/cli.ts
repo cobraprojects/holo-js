@@ -1385,6 +1385,45 @@ export function createInternalCommands(
       },
     },
     {
+      name: 'media:regenerate',
+      description: 'Regenerate media conversions on their stored disks.',
+      usage: 'holo media:regenerate [ModelName ...] [--ids=1,2,3] [--only=thumb] [--only-missing]',
+      source: 'internal',
+      async prepare(input) {
+        const idValues = (collectMultiStringFlag(input.flags, 'ids') ?? []).flatMap(entry => splitCsv(entry))
+        const only = (collectMultiStringFlag(input.flags, 'only') ?? []).flatMap(entry => splitCsv(entry))
+        if ((input.flags.ids !== undefined && idValues.length === 0) || (input.flags.only !== undefined && only.length === 0)) {
+          throw new Error('--ids and --only require values.')
+        }
+        const ids = idValues.map(value => {
+          const id = Number(value)
+          if (!/^\d+$/.test(value) || !Number.isSafeInteger(id) || id < 1) {
+            throw new Error(`Invalid media ID "${value}". Expected a positive integer.`)
+          }
+          return id
+        })
+        return {
+          args: [...input.args],
+          flags: {
+            ids: [...new Set(ids.map(String))],
+            only: [...new Set(only)],
+            'only-missing': resolveBooleanFlag(input.flags, 'only-missing') ?? false,
+          },
+        }
+      },
+      async run(commandContext) {
+        const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
+        await executeRuntime(context.projectRoot, 'media:regenerate', {
+          models: [...commandContext.args],
+          ids: Array.isArray(commandContext.flags.ids) ? commandContext.flags.ids.map(Number) : [],
+          only: Array.isArray(commandContext.flags.only) ? commandContext.flags.only : [],
+          onlyMissing: commandContext.flags['only-missing'] === true,
+        }, async stdout => {
+          for (const line of stdout.split('\n').filter(Boolean)) writeLine(context.stdout, line)
+        })
+      },
+    },
+    {
       name: 'queue:table',
       description: 'Generate the database queue jobs table migration.',
       usage: 'holo queue:table',

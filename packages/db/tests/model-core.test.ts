@@ -1944,48 +1944,35 @@ describe('model core slice', () => {
     })
     expect(stoppedChunks).toEqual([['Mohamed', 'Amina'], ['Salma', 'Youssef']])
 
-    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('sqlite') } } }))
+    await sqlite.execute('CREATE TABLE edge_users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, rank INTEGER)')
     const edgeUsers = defineTable('edge_users', {
       id: column.id(),
       name: column.string(),
       rank: column.integer() })
     const EdgeUser = defineModelFromTable(edgeUsers)
-    adapter.tables.edge_users = [
-      { id: 1, name: 'Equal A', rank: 1 },
-      { id: 2, name: 'Null', rank: null },
-      { id: 3, name: 'Equal B', rank: 1 },
-      { id: 4, name: 'Missing' },
-      { id: 5, name: 'Two', rank: 2 },
-    ]
+    await sqlite.execute("INSERT INTO edge_users VALUES (1, 'Equal A', 1), (2, 'Null', NULL), (3, 'Equal B', 1), (4, 'Other Null', NULL), (5, 'Two', 2)")
 
     const sortedEdgeChunks: string[][] = []
-    await EdgeUser.query().chunkById(10, (rows) => {
+    await EdgeUser.query().chunkById(2, (rows) => {
       sortedEdgeChunks.push(rows.map(user => user.get('name')))
     }, 'rank')
-    expect(sortedEdgeChunks).toEqual([['Missing', 'Null', 'Equal A', 'Equal B', 'Two']])
+    expect(sortedEdgeChunks).toEqual([['Null', 'Other Null'], ['Equal A', 'Equal B'], ['Two']])
 
-    adapter.tables.edge_users = [
-      { id: 10, name: 'Two', rank: 2 },
-      { id: 11, name: 'One', rank: 1 },
-    ]
+    await sqlite.execute('DELETE FROM edge_users')
+    await sqlite.execute("INSERT INTO edge_users VALUES (10, 'Two', 2), (11, 'One', 1)")
     const descendingInputSorted: string[][] = []
     await EdgeUser.query().chunkById(10, (rows) => {
       descendingInputSorted.push(rows.map(user => user.get('name')))
     }, 'rank')
     expect(descendingInputSorted).toEqual([['One', 'Two']])
 
-    adapter.tables.edge_users = [
-      { id: 1, name: 'Equal A', rank: 1 },
-      { id: 2, name: 'Null', rank: null },
-      { id: 3, name: 'Equal B', rank: 1 },
-      { id: 4, name: 'Missing' },
-      { id: 5, name: 'Two', rank: 2 },
-    ]
+    await sqlite.execute('DELETE FROM edge_users')
+    await sqlite.execute("INSERT INTO edge_users VALUES (1, 'Equal A', 1), (2, 'Null', NULL), (3, 'Equal B', 1), (4, 'Other Null', NULL), (5, 'Two', 2)")
     const descendingChunks: string[][] = []
     await EdgeUser.query().chunkByIdDesc(10, (rows) => {
       descendingChunks.push(rows.map(user => user.get('name')))
     }, 'rank')
-    expect(descendingChunks).toEqual([['Two', 'Equal A', 'Equal B', 'Null', 'Missing']])
+    expect(descendingChunks).toEqual([['Two', 'Equal A', 'Equal B', 'Null', 'Other Null']])
 
     const stoppedDescendingChunks: string[][] = []
     await EdgeUser.chunkByIdDesc(1, (rows, page) => {
@@ -1994,17 +1981,13 @@ describe('model core slice', () => {
     }, 'rank')
     expect(stoppedDescendingChunks).toEqual([['Two'], ['Equal A']])
 
-    adapter.tables.edge_users = [
-      { id: 20, name: 'Equal A', rank: 1 },
-      { id: 21, name: 'Equal B', rank: 1 },
-      { id: 22, name: 'Null', rank: null },
-      { id: 23, name: 'Missing' },
-    ]
+    await sqlite.execute('DELETE FROM edge_users')
+    await sqlite.execute("INSERT INTO edge_users VALUES (20, 'Equal A', 1), (21, 'Equal B', 1), (22, 'Null', NULL), (23, 'Other Null', NULL)")
     const descendingBranchCoverage: string[][] = []
     await EdgeUser.query().chunkByIdDesc(10, (rows) => {
       descendingBranchCoverage.push(rows.map(user => user.get('name')))
     }, 'rank')
-    expect(descendingBranchCoverage).toEqual([['Equal A', 'Equal B', 'Null', 'Missing']])
+    expect(descendingBranchCoverage).toEqual([['Equal A', 'Equal B', 'Null', 'Other Null']])
 
     const collection = await User.query().orderBy('id').get()
     expect(collection.modelKeys()).toEqual([1, 2, 3, 4, 5])

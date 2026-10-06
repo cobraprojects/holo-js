@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import type { DriverAdapter } from '@holo-js/db'
+import {
+  column, configureDB, createConnectionManager, createDialect, defineGeneratedTable,
+  defineModel, resetDB, type DriverAdapter,
+} from '@holo-js/db'
 import { createPostgresAdapter } from '../src'
 
 const runLivePostgres = process.env.HOLO_POSTGRES_INTEGRATION === '1' ? it : it.skip
@@ -222,6 +225,60 @@ describe('@holo-js/db-postgres', () => {
     expect(query).toHaveBeenNthCalledWith(4, 'COMMIT')
     void canonicalAdapter
   })
+
+  runLivePostgres('chunks grouped projections without selecting the primary key', async () => {
+    const tableName = `holo_grouped_chunks_${randomUUID().replaceAll('-', '_')}`
+    const adapter = createPostgresAdapter({
+      config: { host: '127.0.0.1', port: 5432, user: 'postgres', database: 'postgres' },
+    })
+    const Item = defineModel(defineGeneratedTable(tableName, { id: column.id(), active: column.boolean() }), { timestamps: false })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, active BOOLEAN NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${tableName} VALUES (1, true), (2, false), (3, true)`)
+      const batches: boolean[][] = []
+      await Item.select('active').groupBy('active').orderBy('active')
+        .chunkById(1, records => { batches.push(records.map(record => record.get('active'))) })
+      expect(batches).toEqual([[false], [true]])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
+
+  runLivePostgres.each((['union', 'unionAll'] as const).flatMap(operation => [
+    { operation, selection: 'id' as const, attribute: 'id' },
+    { operation, selection: 'id as other' as const, attribute: 'other' },
+  ]))('chunks $operation model results selecting $selection in ascending ID order', async ({ operation, selection, attribute }) => {
+    const tableName = `holo_union_chunks_${randomUUID().replaceAll('-', '_')}`
+    const adapter = createPostgresAdapter({
+      config: { host: '127.0.0.1', port: 5432, user: 'postgres', database: 'postgres' },
+    })
+    const Item = defineModel(defineGeneratedTable(tableName, { id: column.id() }), { timestamps: false })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY)`)
+      await adapter.execute(`INSERT INTO ${tableName} VALUES (4), (2), (3), (1)`)
+      const batches: Array<Array<Record<string, unknown>>> = []
+      const query = Item.select(selection).where('id', '<', 3)
+      await query[operation](Item.select(selection).where('id', '>=', 3))
+        .chunkById(2, records => { batches.push(records.map(record => record.toAttributes())) })
+      expect(batches).toEqual([[{ [attribute]: 1 }, { [attribute]: 2 }], [{ [attribute]: 3 }, { [attribute]: 4 }]])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
 
   runLivePostgres('runs queries against a local Postgres server through the public adapter', async () => {
     const tableName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`

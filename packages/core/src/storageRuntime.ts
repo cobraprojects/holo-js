@@ -6,7 +6,7 @@ import { importOptionalRuntimeModule } from './runtimeModule'
 
 type StorageBackend = {
   getItem<T = unknown>(key: string): Promise<T | null>
-  getItemRaw(key: string): Promise<unknown>
+  getItemRaw(key: string): Promise<string | Uint8Array | ArrayBuffer | Buffer | null>
   setItem(key: string, value: unknown): Promise<void>
   setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void>
   hasItem(key: string): Promise<boolean>

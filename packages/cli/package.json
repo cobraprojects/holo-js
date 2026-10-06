@@ -46,6 +46,7 @@
   "peerDependencies": {
     "@holo-js/broadcast": "catalog:",
     "@holo-js/mail": "catalog:",
+    "@holo-js/media": "catalog:",
     "@holo-js/session": "catalog:",
     "@holo-js/queue": "catalog:"
   },
@@ -54,6 +55,9 @@
       "optional": true
     },
     "@holo-js/mail": {
+      "optional": true
+    },
+    "@holo-js/media": {
       "optional": true
     },
     "@holo-js/queue": {
@@ -67,6 +71,7 @@
     "@holo-js/broadcast": "catalog:",
     "@holo-js/events": "catalog:",
     "@holo-js/mail": "catalog:",
+    "@holo-js/media": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/queue-db": "catalog:",
     "@holo-js/session": "catalog:",
