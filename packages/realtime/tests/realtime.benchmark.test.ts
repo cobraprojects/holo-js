@@ -7654,6 +7654,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
 
     const patchStartedAt = performance.now()
     const patchedRow = {
@@ -7668,7 +7669,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(adapter.queries).toHaveLength(2)
+    expect(adapter.queries).toHaveLength(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
       path: ['data', 50, 'title'],
@@ -7678,7 +7679,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     console.info(JSON.stringify({
       benchmark: '@holo-js/realtime paginated wrapper bounded backfill for unknown update',
       metrics: {
-        backfillQueries: adapter.queries.length - 1,
+        backfillQueries: adapter.queries.length,
         emittedPatches,
         pageRows: 100,
         patchDurationMs,
@@ -7731,6 +7732,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
 
     const patchStartedAt = performance.now()
     const patchedRow = {
@@ -7746,7 +7748,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(adapter.queries).toHaveLength(3)
+    expect(adapter.queries).toHaveLength(2)
     expect(countBackfillQueries).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
@@ -7763,7 +7765,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
-        rowBackfillQueries: adapter.queries.length - countBackfillQueries - 1,
+        rowBackfillQueries: adapter.queries.length - countBackfillQueries,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
@@ -14242,6 +14244,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const insertedRow = {
       author_id: 51,
       id: 1001,
@@ -14325,6 +14328,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const updatedRow = {
       ...duplicateRow,
       score: duplicateRow.score - 1,
@@ -14451,6 +14455,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const renamedRow = {
       ...unknownUpdateRow,
       title: 'Unknown relation update 51',
@@ -14558,6 +14563,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const renamedFirstRow = {
       ...unknownUpdateRow,
       title: 'Unknown relation update 51',
@@ -14677,6 +14683,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const updatedFirstDuplicate = {
       ...duplicateRow,
       score: duplicateRow.score - 1,
@@ -14781,6 +14788,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const deletedRow = tables.posts.pop()
     if (!deletedRow || deletedRow.id !== duplicateRow.id) {
       throw new Error('Expected benchmark relation duplicate aggregate delete row to exist.')
@@ -14850,6 +14858,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const upsertedRow = {
       ...duplicateRow,
       score: duplicateRow.score - 1,
@@ -14922,6 +14931,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
+    adapter.queries.length = 0
     const deletedRow = tables.posts[50]
     if (!deletedRow?.author_id) {
       throw new Error('Expected benchmark relation aggregate backfill row to exist.')

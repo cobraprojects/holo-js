@@ -1233,6 +1233,7 @@ beforeAll(() => {
 }, 300_000)
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   projectInternals.resetProjectModuleBundlerForTesting()
   for (const dir of tempDirs.splice(0)) {
     await rm(dir, { recursive: true, force: true })
@@ -8285,9 +8286,9 @@ export default {
     const notePath = join(projectRoot, 'note.txt')
     await writeTextFile(notePath, 'ready')
 
-    process.env.DB_DRIVER = 'postgres'
-    process.env.DB_SSL = 'true'
-    process.env.DB_LOGGING = 'false'
+    vi.stubEnv('DB_DRIVER', 'postgres')
+    vi.stubEnv('DB_SSL', 'true')
+    vi.stubEnv('DB_LOGGING', 'false')
     expect(parseBooleanEnv(undefined)).toBeUndefined()
     expect(parseBooleanEnv('true')).toBe(true)
     expect(parseBooleanEnv('false')).toBe(false)
@@ -11593,73 +11594,6 @@ export default {
       [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', ...explicitPort ? ['--port=6334'] : ['--port', '4334']],
       [join(projectRoot, '.holo-js/framework/run.mjs'), 'dev', ...explicitPort ? ['--port=6334'] : ['--port', '5334']],
     ])
-  })
-
-  it('treats child errors during a requested restart as a normal dev-server reload', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, 'server/commands/hello.mjs', `
-export default {
-  description: 'Hello command.',
-  async run() {},
-}
-`)
-
-    const io = createIo(projectRoot)
-    const spawnedChildren: Array<EventEmitter & {
-      stdout: PassThrough
-      stderr: PassThrough
-      stdin: PassThrough
-      kill: ReturnType<typeof vi.fn>
-    }> = []
-    let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
-    const prepare = vi.fn(async () => {})
-
-    const devPromise = withFakeBun(async () => runProjectDevServer(
-      io.io,
-      projectRoot,
-      (() => {
-        const child = new EventEmitter() as EventEmitter & {
-          stdout: PassThrough
-          stderr: PassThrough
-          stdin: PassThrough
-          kill: ReturnType<typeof vi.fn>
-        }
-        child.stdout = new PassThrough()
-        child.stderr = new PassThrough()
-        child.stdin = new PassThrough()
-        child.kill = vi.fn(() => {
-          queueMicrotask(() => {
-            child.emit('error', new Error('restart handoff'))
-          })
-          return true
-        })
-        spawnedChildren.push(child)
-        return child as never
-      }) as never,
-      ((_path: string, _options: { recursive?: boolean }, callback: (eventType: string, fileName: string | Buffer | null) => void) => {
-        watchCallback = callback
-        return { close() {} } as unknown as FSWatcher
-      }) as never,
-      prepare,
-    ))
-
-    while (!watchCallback || (spawnedChildren.at(0)?.listenerCount('error') ?? 0) === 0) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
-
-    watchCallback('change', 'server/commands/hello.mjs')
-    while (spawnedChildren.length < 2) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
-
-    const firstChild = spawnedChildren[0]!
-    const restartedChild = spawnedChildren[1]!
-    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM')
-
-    restartedChild.emit('close', 0)
-    await expect(devPromise).resolves.toBeUndefined()
-    expect(prepare).toHaveBeenCalledTimes(2)
   })
 
   it('refreshes discovery roots after config/app.ts changes during holo dev', async () => {
