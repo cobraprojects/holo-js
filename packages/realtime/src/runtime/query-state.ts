@@ -13,6 +13,7 @@ export type DatabaseQueryObservation = {
   readonly belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[]
   readonly connectionName: string
   readonly cursorRowCount?: number
+  readonly cursorRowCountKnown?: boolean
   readonly cursorRows?: readonly Readonly<Record<string, unknown>>[]
   readonly dependencies: readonly string[]
   readonly emptyRecordValue?: null
@@ -90,7 +91,7 @@ export type DatabaseQuerySimplePaginationObservation = {
   readonly kind: 'simple'
   readonly pageName: string
   readonly perPage: number
-  readonly rowCount: number
+  readonly rowCount: number | null
 }
 
 export type DatabaseQueryCursorPaginationObservation = {
@@ -102,6 +103,7 @@ export type DatabaseQueryCursorPaginationObservation = {
   readonly prevCursor: string | null
   readonly rows: readonly Readonly<Record<string, unknown>>[]
   readonly rowCount: number
+  readonly rowCountKnown?: boolean
 }
 
 export type DatabaseQueryAggregateObservation = {

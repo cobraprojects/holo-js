@@ -59,6 +59,18 @@ export class SQLQueryCompiler {
     }, this.createSelectMetadata(plan))
   }
 
+  compilePaginationCount(plan: SelectQueryPlan): CompiledStatement {
+    const statement = this.compile({ ...plan, orderBy: [], limit: undefined, offset: undefined, lockMode: undefined })
+    const metadata = this.createSelectMetadata(plan)
+    return this.withMetadata({
+      ...statement,
+      sql: `SELECT COUNT(*) AS ${this.quoteIdentifier('__holo_count')} FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_pagination')}`,
+    }, {
+      ...metadata,
+      selectedShape: { mode: 'projection', columns: [], aggregates: ['__holo_count'], hasRawSelections: false, hasSubqueries: true },
+    })
+  }
+
   protected compileSelectSql(
     plan: SelectQueryPlan,
     bindings: unknown[],

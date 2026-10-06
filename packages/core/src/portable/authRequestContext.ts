@@ -47,10 +47,11 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
   setRequestAccessors(accessors?: AuthRequestAccessors): void
   runWithRequestAccessors<TValue>(accessors: AuthRequestAccessors, callback: () => TValue): TValue
 } {
-  const requestAccessorStorage = new AsyncLocalStorage<{ readonly accessors?: AuthRequestAccessors }>()
+  const requestAccessorStorage = new AsyncLocalStorage<{ readonly accessors?: AuthRequestAccessors, readonly requestScoped?: true }>()
+  let defaultAccessors = accessors
   const resolveRequestContext = (): RequestAwareContext<TContext> => {
     const requestAccessors = requestAccessorStorage.getStore()
-    const resolvedAccessors = requestAccessors ? requestAccessors.accessors : accessors
+    const resolvedAccessors = requestAccessors ? requestAccessors.accessors : defaultAccessors
     return resolvedAccessors
       ? attachAuthRequestAccessors(context, resolvedAccessors)
       : context
@@ -71,11 +72,12 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
       return resolveRequestContext().redirectResponse?.(url, status)
     },
     setRequestAccessors(nextAccessors) {
-      requestAccessorStorage.enterWith({ accessors: nextAccessors })
+      defaultAccessors = nextAccessors
+      if (!requestAccessorStorage.getStore()?.requestScoped) requestAccessorStorage.enterWith({ accessors: nextAccessors })
     },
     runWithRequestAccessors(nextAccessors, callback) {
       return requestAccessorStorage.run(
-        { accessors: nextAccessors },
+        { accessors: nextAccessors, requestScoped: true },
         () => context.run ? context.run(callback) : callback(),
       )
     },

@@ -8,6 +8,7 @@ import {
   createDatabaseMutationEvent,
   createDatabaseQueryFallbackObservation,
   createDatabaseQueryObservation,
+  disableDatabaseQueryObservationPatching,
   inferAutomaticInsertCacheInvalidationPlan,
   inferAutomaticQueryCacheInvalidationPlan,
   inferDatabaseQueryObservationDependencies,
@@ -42,9 +43,9 @@ import {
   assertPositiveInteger,
   decodeValueCursor,
   encodeValueCursor,
-  isRowAfterCursor,
   normalizePaginationParameterName,
 } from './pagination'
+import { cursorPredicate } from './cursorPredicate'
 import {
   createDeleteQueryPlan,
   createInsertQueryPlan,
@@ -78,7 +79,7 @@ import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
-import type { DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
+import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
   QueryAggregateSelection,
@@ -1352,7 +1353,14 @@ export class TableQueryBuilder<
   }
 
   async get<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow[]> {
-    const statement = this.toSQL()
+    return this.getCompiledRows<TRow>(this.toSQL())
+  }
+
+  private async getCompiledRows<TRow extends Record<string, unknown>>(
+    statement: CompiledStatement,
+    collectObservation = true,
+    scopeCacheKey = false,
+  ): Promise<TRow[]> {
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
     const dependencies = this.plan.lockMode
@@ -1373,7 +1381,7 @@ export class TableQueryBuilder<
     if (!cacheConfig || this.plan.lockMode) {
       const result = await this.connection.queryCompiled<TRow>(statement)
       await this.recordCollectedQueryObservation(
-        activeDependencyCollector,
+        activeDependencyCollector && collectObservation,
         observationDependencies,
         createObservation,
         result.rows,
@@ -1386,7 +1394,9 @@ export class TableQueryBuilder<
       throw new ConfigurationError('[@holo-js/db] Query caching requires @holo-js/cache to be installed and configured.')
     }
 
-    const cacheKey = resolveQueryCacheKey(statement, this.connection.getConnectionName(), cacheConfig)
+    const cacheKey = scopeCacheKey && cacheConfig.key
+      ? `${cacheConfig.key}:${resolveQueryCacheKey(statement, this.connection.getConnectionName(), { ...cacheConfig, key: undefined })}`
+      : resolveQueryCacheKey(statement, this.connection.getConnectionName(), cacheConfig)
 
     if (cacheConfig.flexible) {
       const rows = await bridge.flexible(
@@ -1402,7 +1412,7 @@ export class TableQueryBuilder<
         },
       )
       await this.recordCollectedQueryObservation(
-        activeDependencyCollector,
+        activeDependencyCollector && collectObservation,
         observationDependencies,
         createObservation,
         rows,
@@ -1427,7 +1437,7 @@ export class TableQueryBuilder<
       },
     )
     await this.recordCollectedQueryObservation(
-      activeDependencyCollector,
+      activeDependencyCollector && collectObservation,
       observationDependencies,
       createObservation,
       rows,
@@ -1736,10 +1746,12 @@ export class TableQueryBuilder<
     assertPositiveInteger(page, 'Page', message => new SecurityError(message))
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
-    const rows = await this.getUnpaginatedRows<TRow>()
-    const total = rows.length
     const offset = (page - 1) * perPage
-    const data = rows.slice(offset, offset + perPage)
+    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compilePaginationCount(this.plan), false, true)
+    const total = Number(counts[0]?.__holo_count)
+    if (!Number.isSafeInteger(total) || total < 0) throw new CompilerError('Pagination count must be a non-negative safe integer.')
+    const pageQuery = this.limit(perPage).offset(offset === 0 ? undefined : offset)
+    const data = await pageQuery.getCompiledRows<TRow>(pageQuery.toSQL(), true, true)
     const from = data.length === 0 ? null : offset + 1
     const to = data.length === 0 ? null : offset + data.length
     const result = createPaginator(data, {
@@ -1752,7 +1764,7 @@ export class TableQueryBuilder<
       to,
       hasMorePages: offset + data.length < total,
     })
-    rebindDatabaseQueryObservationPagination(rows, result.data, result.meta, Object.freeze({
+    rebindDatabaseQueryObservationPagination(data, result.data, result.meta, Object.freeze({
       currentPage: page,
       kind: 'standard',
       pageName,
@@ -1772,9 +1784,9 @@ export class TableQueryBuilder<
     assertPositiveInteger(page, 'Page', message => new SecurityError(message))
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
-    const rows = await this.getUnpaginatedRows<TRow>()
     const offset = (page - 1) * perPage
-    const pageRows = rows.slice(offset, offset + perPage + 1)
+    const pageQuery = this.limit(perPage + 1).offset(offset === 0 ? undefined : offset)
+    const pageRows = await pageQuery.getCompiledRows<TRow>(pageQuery.toSQL(), true, true)
     const hasMorePages = pageRows.length > perPage
     const data = hasMorePages ? pageRows.slice(0, perPage) : pageRows
     const from = data.length === 0 ? null : offset + 1
@@ -1787,13 +1799,13 @@ export class TableQueryBuilder<
       to,
       hasMorePages,
     })
-    rebindDatabaseQueryObservationPagination(rows, result.data, result.meta, Object.freeze({
+    rebindDatabaseQueryObservationPagination(pageRows, result.data, result.meta, Object.freeze({
       currentPage: page,
       hasMorePages,
       kind: 'simple',
       pageName,
       perPage,
-      rowCount: rows.length,
+      rowCount: null,
     }), offset)
 
     return result
@@ -1809,25 +1821,31 @@ export class TableQueryBuilder<
     const decodedCursor = decodeValueCursor(cursor, message => new SecurityError(message))
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
-    const rows = await orderedQuery.getUnpaginatedRows<TRow>()
-    const filteredRows = decodedCursor
-      ? rows.filter(row => isRowAfterCursor(
-        cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column)),
-        decodedCursor.values,
-        cursorOrders,
-      ))
-      : rows
-    const pageRows = filteredRows.slice(0, perPage + 1)
+    if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
+    const previous = decodedCursor?.previous === true
+    let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
+    if (decodedCursor) {
+      const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
+      plan = withPredicate(plan, cursorPredicate(normalizedCursor, cursorOrders, !this.connection.getDialect().name.includes('postgres')))
+    }
+    if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
+    const rows = await orderedQuery.clone(plan).get<TRow>()
+    const pageRows = rows
     const hasMorePages = pageRows.length > perPage
-    const data = hasMorePages ? pageRows.slice(0, perPage) : pageRows
+    const data = pageRows.slice(0, perPage)
+    if (previous) data.reverse()
+    if (cursor !== null) disableDatabaseQueryObservationPatching(rows)
+    const firstRow = data.at(0)
     const lastRow = data.at(-1)
     const result = createCursorPaginator(data, {
       perPage,
       cursorName,
-      nextCursor: hasMorePages && lastRow
+      nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
         ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastRow, order.column)))
         : null,
-      prevCursor: cursor,
+      prevCursor: (previous ? hasMorePages : cursor !== null) && firstRow
+        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(firstRow, order.column)), true)
+        : null,
     })
     if (cursor === null) {
       rebindDatabaseQueryObservationCursorPagination(rows, result.data, {
@@ -1844,6 +1862,7 @@ export class TableQueryBuilder<
         prevCursor: result.prevCursor,
         rows: pageRows,
         rowCount: rows.length,
+        rowCountKnown: !hasMorePages,
       }))
     } else {
       rebindDatabaseQueryObservationResult(rows, data)
@@ -2688,9 +2707,16 @@ export class TableQueryBuilder<
         throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
       }
 
-      return this.orderBy(this.resolvePrimaryKeyColumn() as never)
+      const primaryKey = this.resolvePrimaryKeyColumn()
+      const column = this.plan.joins.length === 0 ? primaryKey : `${this.source.alias ?? this.source.tableName}.${primaryKey}`
+      return this.clone(withOrderBy(this.plan, { kind: 'column', column, direction: 'asc' }))
     }
 
+    const primaryKey = this.source.table && this.resolvePrimaryKeyColumn()
+    const qualifiedKey = `${this.source.alias ?? this.source.tableName}.${primaryKey}`
+    if (primaryKey && !this.plan.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))) {
+      return this.clone(withOrderBy(this.plan, { kind: 'column', column: this.plan.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' }))
+    }
     return this
   }
 
@@ -2708,6 +2734,8 @@ export class TableQueryBuilder<
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
+    const selection = this.plan.selections.find(selection => selection.kind === 'column' && selection.column === column)
+    if (selection?.kind === 'column' && selection.alias) return row[selection.alias]
     if (column in row) {
       return row[column]
     }

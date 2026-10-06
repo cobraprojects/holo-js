@@ -99,6 +99,7 @@ export function createPatchedQueryObservation(
     belongsToHydrations: query.belongsToHydrations,
     connectionName: query.connectionName,
     cursorRowCount: query.cursorRowCount,
+    cursorRowCountKnown: query.cursorRowCountKnown,
     cursorRows: query.cursorRows,
     dependencies: query.dependencies,
     emptyRecordValue: query.emptyRecordValue,

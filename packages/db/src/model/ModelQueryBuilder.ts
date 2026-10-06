@@ -5,8 +5,6 @@ import {
   hasActiveDatabaseDependencyCollector,
   rebindDatabaseQueryObservationHydratedResult,
   rebindDatabaseQueryObservationAggregate,
-  rebindDatabaseQueryObservationCursorPagination,
-  rebindDatabaseQueryObservationPagination,
   rebindDatabaseQueryObservationResult,
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
@@ -23,8 +21,6 @@ import {
 import {
   assertPositiveInteger,
   decodeValueCursor,
-  encodeValueCursor,
-  isRowAfterCursor,
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
@@ -993,29 +989,11 @@ export class ModelQueryBuilder<
   ): Promise<PaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     assertPositiveInteger(page, 'Page', message => new HydrationError(message))
-    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
-
-    const { collection: entities, rows } = await this.getUnpaginatedRowsAndEntities()
-    const total = entities.length
-    const offset = (page - 1) * perPage
-    const data = entities.slice(offset, offset + perPage)
-    const from = data.length === 0 ? null : offset + 1
-    const to = data.length === 0 ? null : offset + data.length
-    const collection = this.repository.createCollection(data)
-    this.recordPaginatedRelationObservations(collection)
-    this.recordPaginatedRelationAggregateObservations(collection)
-    const result = createPaginator(collection, {
-      total,
-      perPage,
-      pageName,
-      currentPage: page,
-      lastPage: Math.max(1, Math.ceil(total / perPage)),
-      from,
-      to,
-      hasMorePages: offset + data.length < total,
-    }) as PaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
-    this.rebindRowsToPaginatedResult(rows, result.data, result.meta, page, pageName, perPage, total, offset)
-
+    normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
+    const { page: pagination, collection } = await this.paginatedPage(perPage, page, options)
+    const result = createPaginator(collection, pagination.meta)
+    this.rebindRowsToSerializedResult(pagination.data, result.data)
+    rebindDatabaseQueryObservationResult(pagination.meta, result.meta)
     return result
   }
 
@@ -1026,32 +1004,21 @@ export class ModelQueryBuilder<
   ): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[], meta: PaginationMeta }> {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     assertPositiveInteger(page, 'Page', message => new HydrationError(message))
-    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
-
-    const { collection, rows } = await this.getUnpaginatedRowsAndEntities()
-    const total = collection.length
-    const offset = (page - 1) * perPage
-    const pageCollection = this.repository.createCollection(collection.slice(offset, offset + perPage))
-    const data = pageCollection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
-    this.recordPaginatedRelationObservations(pageCollection)
-    this.recordPaginatedRelationAggregateObservations(pageCollection)
-    const from = data.length === 0 ? null : offset + 1
-    const to = data.length === 0 ? null : offset + data.length
-    const result = createPaginator(data, {
-      total,
-      perPage,
-      pageName,
-      currentPage: page,
-      lastPage: Math.max(1, Math.ceil(total / perPage)),
-      from,
-      to,
-      hasMorePages: offset + data.length < total,
-    }).toJSON() as {
-      data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
-      meta: PaginationMeta
-    }
-    this.rebindRowsToPaginatedResult(rows, result.data, result.meta, page, pageName, perPage, total, offset)
+    normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
+    const { page: pagination, collection } = await this.paginatedPage(perPage, page, options)
+    const data = collection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    const result = createPaginator(data, pagination.meta).toJSON()
+    this.rebindRowsToSerializedResult(pagination.data, result.data)
+    rebindDatabaseQueryObservationResult(pagination.meta, result.meta)
     return result
+  }
+
+  private async paginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
+    const page = await this.tableQuery.paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const collection = await this.hydrateRows(page.data)
+    this.recordPaginatedRelationObservations(collection)
+    this.recordPaginatedRelationAggregateObservations(collection)
+    return { page, collection }
   }
 
   async simplePaginate(
@@ -1061,28 +1028,11 @@ export class ModelQueryBuilder<
   ): Promise<SimplePaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     assertPositiveInteger(page, 'Page', message => new HydrationError(message))
-    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
-
-    const { collection: entities, rows } = await this.getUnpaginatedRowsAndEntities()
-    const offset = (page - 1) * perPage
-    const pageEntities = entities.slice(offset, offset + perPage + 1)
-    const hasMorePages = pageEntities.length > perPage
-    const data = hasMorePages ? pageEntities.slice(0, perPage) : pageEntities
-    const from = data.length === 0 ? null : offset + 1
-    const to = data.length === 0 ? null : offset + data.length
-    const collection = this.repository.createCollection(data)
-    this.recordPaginatedRelationObservations(collection)
-    this.recordPaginatedRelationAggregateObservations(collection)
-    const result = createSimplePaginator(collection, {
-      perPage,
-      pageName,
-      currentPage: page,
-      from,
-      to,
-      hasMorePages,
-    }) as SimplePaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
-    this.rebindRowsToSimplePaginatedResult(rows, result.data, result.meta, page, pageName, perPage, entities.length, hasMorePages, offset)
-
+    normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
+    const { page: pagination, collection } = await this.simplePaginatedPage(perPage, page, options)
+    const result = createSimplePaginator(collection, pagination.meta)
+    this.rebindRowsToSerializedResult(pagination.data, result.data)
+    rebindDatabaseQueryObservationResult(pagination.meta, result.meta)
     return result
   }
 
@@ -1093,31 +1043,21 @@ export class ModelQueryBuilder<
   ): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[], meta: SimplePaginationMeta }> {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     assertPositiveInteger(page, 'Page', message => new HydrationError(message))
-    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
-
-    const { collection, rows } = await this.getUnpaginatedRowsAndEntities()
-    const offset = (page - 1) * perPage
-    const pageEntities = collection.slice(offset, offset + perPage + 1)
-    const hasMorePages = pageEntities.length > perPage
-    const pageCollection = this.repository.createCollection(hasMorePages ? pageEntities.slice(0, perPage) : pageEntities)
-    const data = pageCollection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
-    this.recordPaginatedRelationObservations(pageCollection)
-    this.recordPaginatedRelationAggregateObservations(pageCollection)
-    const from = data.length === 0 ? null : offset + 1
-    const to = data.length === 0 ? null : offset + data.length
-    const result = createSimplePaginator(data, {
-      perPage,
-      pageName,
-      currentPage: page,
-      from,
-      to,
-      hasMorePages,
-    }).toJSON() as {
-      data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
-      meta: SimplePaginationMeta
-    }
-    this.rebindRowsToSimplePaginatedResult(rows, result.data, result.meta, page, pageName, perPage, collection.length, hasMorePages, offset)
+    normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
+    const { page: pagination, collection } = await this.simplePaginatedPage(perPage, page, options)
+    const data = collection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    const result = createSimplePaginator(data, pagination.meta).toJSON()
+    this.rebindRowsToSerializedResult(pagination.data, result.data)
+    rebindDatabaseQueryObservationResult(pagination.meta, result.meta)
     return result
+  }
+
+  private async simplePaginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
+    const page = await this.tableQuery.simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const collection = await this.hydrateRows(page.data)
+    this.recordPaginatedRelationObservations(collection)
+    this.recordPaginatedRelationAggregateObservations(collection)
+    return { page, collection }
   }
 
   async cursorPaginate(
@@ -1125,48 +1065,9 @@ export class ModelQueryBuilder<
     cursor: string | null = null,
     options: CursorPaginationOptions = {},
   ): Promise<CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
-    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
-    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
-    const decodedCursor = decodeValueCursor(cursor, message => new HydrationError(message))
-    const orderedQuery = this.prepareCursorPaginationQuery()
-    const cursorOrders = orderedQuery.resolveCursorOrders()
-    const { collection: entities, rows } = await orderedQuery.getUnpaginatedRowsAndEntities()
-    const filteredEntities = decodedCursor
-      ? entities.filter(entity => isRowAfterCursor(
-        cursorOrders.map(order => orderedQuery.readCursorColumnValue(entity, order.column)),
-        decodedCursor.values,
-        cursorOrders,
-      ))
-      : entities
-    const pageEntities = filteredEntities.slice(0, perPage + 1)
-    const hasMorePages = pageEntities.length > perPage
-    const data = hasMorePages ? pageEntities.slice(0, perPage) : pageEntities
-    const lastEntity = data.at(-1)
-    const collection = orderedQuery.repository.createCollection(data)
-    const observedPageRows = orderedQuery.repository
-      .createCollection(pageEntities)
-      .toJSON() as readonly Readonly<Record<string, unknown>>[]
-    orderedQuery.recordPaginatedRelationObservations(collection)
-    orderedQuery.recordPaginatedRelationAggregateObservations(collection)
-    const result = createCursorPaginator(collection, {
-      perPage,
-      cursorName,
-      nextCursor: hasMorePages && lastEntity
-        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastEntity, order.column)))
-        : null,
-      prevCursor: cursor,
-    }) as CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
-    if (cursor === null) {
-      orderedQuery.rebindRowsToCursorPaginatedResult(rows, result.data, {
-        cursorName: result.cursorName,
-        nextCursor: result.nextCursor,
-        perPage: result.perPage,
-        prevCursor: result.prevCursor,
-      }, observedPageRows, entities.length, hasMorePages)
-    } else {
-      orderedQuery.rebindRowsToSerializedResult(rows, collection)
-    }
-
+    const { page, collection } = await this.cursorPage(perPage, cursor, options)
+    const result = createCursorPaginator(collection, page)
+    this.rebindRowsToSerializedResult(page.data, result.data)
     return result
   }
 
@@ -1181,54 +1082,25 @@ export class ModelQueryBuilder<
     nextCursor: string | null
     prevCursor: string | null
   }> {
-    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
-    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
-    const decodedCursor = decodeValueCursor(cursor, message => new HydrationError(message))
-    const orderedQuery = this.prepareCursorPaginationQuery()
-    const cursorOrders = orderedQuery.resolveCursorOrders()
-    const { collection, rows } = await orderedQuery.getUnpaginatedRowsAndEntities()
-    const filteredEntities = decodedCursor
-      ? collection.filter(entity => isRowAfterCursor(
-        cursorOrders.map(order => orderedQuery.readCursorColumnValue(entity, order.column)),
-        decodedCursor.values,
-        cursorOrders,
-      ))
-      : collection
-    const pageEntities = filteredEntities.slice(0, perPage + 1)
-    const hasMorePages = pageEntities.length > perPage
-    const pageCollection = orderedQuery.repository.createCollection(hasMorePages ? pageEntities.slice(0, perPage) : pageEntities)
-    const data = pageCollection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
-    const observedPageRows = orderedQuery.repository
-      .createCollection(pageEntities)
-      .toJSON() as readonly Readonly<Record<string, unknown>>[]
-    const lastEntity = pageCollection.at(-1)
-    orderedQuery.recordPaginatedRelationObservations(pageCollection)
-    orderedQuery.recordPaginatedRelationAggregateObservations(pageCollection)
-    const result = createCursorPaginator(data, {
-      perPage,
-      cursorName,
-      nextCursor: hasMorePages && lastEntity
-        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastEntity, order.column)))
-        : null,
-      prevCursor: cursor,
-    }).toJSON() as {
-      data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
-      perPage: number
-      cursorName: string
-      nextCursor: string | null
-      prevCursor: string | null
-    }
-    if (cursor === null) {
-      orderedQuery.rebindRowsToCursorPaginatedResult(rows, result.data, {
-        cursorName: result.cursorName,
-        nextCursor: result.nextCursor,
-        perPage: result.perPage,
-        prevCursor: result.prevCursor,
-      }, observedPageRows, collection.length, hasMorePages)
-    } else {
-      orderedQuery.rebindRowsToSerializedResult(rows, result.data)
-    }
+    const { page, collection } = await this.cursorPage(perPage, cursor, options)
+    const data = collection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    const result = createCursorPaginator(data, page).toJSON()
+    this.rebindRowsToSerializedResult(page.data, result.data)
     return result
+  }
+
+  private async cursorPage(perPage: number, cursor: string | null, options: CursorPaginationOptions) {
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
+    decodeValueCursor(cursor, message => new HydrationError(message))
+    const query = this.tableQuery.getPlan().orderBy.length === 0
+      ? this.tableQuery.orderBy(this.repository.definition.primaryKey)
+      : this.tableQuery
+    const page = await query.cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
+    const collection = await this.hydrateRows(page.data)
+    this.recordPaginatedRelationObservations(collection)
+    this.recordPaginatedRelationAggregateObservations(collection)
+    return { page, collection }
   }
 
   async chunk(
@@ -1972,14 +1844,6 @@ export class ModelQueryBuilder<
     return this.clone(this.tableQuery.limit(undefined).offset(undefined)).get()
   }
 
-  private async getUnpaginatedRowsAndEntities(): Promise<{
-    readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
-    readonly rows: readonly ModelRecord<TTable>[]
-  }> {
-    const query = this.clone(this.tableQuery.limit(undefined).offset(undefined))
-    return await query.getRowsAndEntities()
-  }
-
   private async getRowsAndEntities(): Promise<{
     readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
     readonly rows: readonly ModelRecord<TTable>[]
@@ -2217,130 +2081,4 @@ export class ModelQueryBuilder<
     disableDatabaseQueryObservationPatching(rows)
   }
 
-  private rebindRowsToPaginatedResult(
-    rows: readonly ModelRecord<TTable>[],
-    data: unknown,
-    meta: PaginationMeta,
-    currentPage: number,
-    pageName: string,
-    perPage: number,
-    total: number,
-    offset: number,
-  ): void {
-    if (!hasActiveDatabaseDependencyCollector()) {
-      return
-    }
-
-    const hydrations = this.createPatchableEagerRelationHydrations()
-    if (!this.canBindRowsToSerializedResult() && !hydrations) {
-      disableDatabaseQueryObservationPatching(rows)
-      return
-    }
-
-    rebindDatabaseQueryObservationPagination(rows, data, meta, Object.freeze({
-      currentPage,
-      kind: 'standard',
-      pageName,
-      perPage,
-      total,
-    }), offset, hydrations?.belongsToHydrations, hydrations?.relatedHydrations)
-  }
-
-  private rebindRowsToSimplePaginatedResult(
-    rows: readonly ModelRecord<TTable>[],
-    data: unknown,
-    meta: SimplePaginationMeta,
-    currentPage: number,
-    pageName: string,
-    perPage: number,
-    rowCount: number,
-    hasMorePages: boolean,
-    offset: number,
-  ): void {
-    if (!hasActiveDatabaseDependencyCollector()) {
-      return
-    }
-
-    const hydrations = this.createPatchableEagerRelationHydrations()
-    if (!this.canBindRowsToSerializedResult() && !hydrations) {
-      disableDatabaseQueryObservationPatching(rows)
-      return
-    }
-
-    rebindDatabaseQueryObservationPagination(rows, data, meta, Object.freeze({
-      currentPage,
-      hasMorePages,
-      kind: 'simple',
-      pageName,
-      perPage,
-      rowCount,
-    }), offset, hydrations?.belongsToHydrations, hydrations?.relatedHydrations)
-  }
-
-  private rebindRowsToCursorPaginatedResult(
-    rows: readonly ModelRecord<TTable>[],
-    data: unknown,
-    meta: {
-      readonly cursorName: string
-      readonly nextCursor: string | null
-      readonly perPage: number
-      readonly prevCursor: string | null
-    },
-    pageRows: readonly Readonly<Record<string, unknown>>[],
-    rowCount: number,
-    hasMorePages: boolean,
-  ): void {
-    if (!hasActiveDatabaseDependencyCollector()) {
-      return
-    }
-
-    const hydrations = this.createPatchableEagerRelationHydrations()
-    if (!this.canBindRowsToSerializedResult() && !hydrations) {
-      disableDatabaseQueryObservationPatching(rows)
-      return
-    }
-
-    rebindDatabaseQueryObservationCursorPagination(rows, data, meta, Object.freeze({
-      cursorName: meta.cursorName,
-      hasMorePages,
-      kind: 'cursor',
-      nextCursor: meta.nextCursor,
-      perPage: meta.perPage,
-      prevCursor: meta.prevCursor,
-      rows: pageRows,
-      rowCount,
-    }), hydrations?.belongsToHydrations, hydrations?.relatedHydrations)
-  }
-
-  private prepareCursorPaginationQuery(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const plan = this.tableQuery.getPlan()
-    if (plan.orderBy.some(orderBy => orderBy.kind === 'random')) {
-      throw new HydrationError('Cursor pagination cannot use random ordering.')
-    }
-
-    if (plan.orderBy.length === 0) {
-      return this.clone(this.tableQuery.orderBy(this.repository.definition.primaryKey as never))
-    }
-
-    return this
-  }
-
-  private resolveCursorOrders(): readonly { readonly column: string, readonly direction: 'asc' | 'desc' }[] {
-    const plan = this.tableQuery.getPlan()
-    return plan.orderBy.map((orderBy) => {
-      if (orderBy.kind !== 'column') {
-        throw new HydrationError('Cursor pagination requires column orderBy clauses.')
-      }
-
-      return {
-        column: orderBy.column,
-        direction: orderBy.direction,
-      }
-    })
-  }
-
-  private readCursorColumnValue(entity: Entity<TTable>, column: string): unknown {
-    const unqualifiedColumn = column.split('.').at(-1)!
-    return entity.get(unqualifiedColumn as ModelAttributeKey<TTable>)
-  }
 }

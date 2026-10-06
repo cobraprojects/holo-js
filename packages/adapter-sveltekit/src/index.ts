@@ -7,7 +7,6 @@ import {
 } from '@holo-js/core'
 import {
   type SerializedValidationException,
-  isValidationException,
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
@@ -114,7 +113,7 @@ function isSerializedValidationException(value: unknown): value is SerializedVal
 }
 
 function serializeValidationException(error: unknown): SerializedValidationException | undefined {
-  return isValidationException(error) ? error.toJSON() : undefined
+  return validationInternals.serializeValidationException(error)
 }
 
 function toSvelteKitValidationBody(payload: SerializedValidationException): SvelteKitErrorBody {
@@ -465,7 +464,12 @@ export function runWithSvelteKitRequestEvent<TValue>(
   callback: () => TValue,
 ): TValue {
   registerValidationExceptionThrower()
-  return getSvelteKitRequestEventStore().run(event, callback)
+  return getSvelteKitRequestEventStore().run(event, () => {
+    const runtime = svelteKitAdapter.internals.getState().project?.runtime
+    return runtime
+      ? runtime.runWithAuthRequestAccessors(resolveSvelteKitAuthRequestAccessors(), callback)
+      : callback()
+  })
 }
 
 export async function createSvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap>(

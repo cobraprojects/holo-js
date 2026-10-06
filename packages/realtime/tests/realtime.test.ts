@@ -24,6 +24,7 @@ import {
   type DriverQueryResult,
 } from '@holo-js/db'
 import { field, schema } from '@holo-js/validation'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   configureRealtimeClientTransport,
   createRealtimeClient,
@@ -521,7 +522,8 @@ class RelationalMemoryAdapter implements DriverAdapter {
     }
 
     const tableName = sql.match(/ FROM "([^"]+)"/)?.[1] ?? ''
-    let rows = filterMemoryRows(sql, bindings, this.tables[tableName] ?? [])
+    const filteredSql = sql.replace(/^SELECT COUNT\(\*\) AS "__holo_count" FROM \((.+)\) AS "__holo_pagination"$/, '$1')
+    let rows = filterMemoryRows(filteredSql, bindings, this.tables[tableName] ?? [])
 
     const orderMatch = sql.match(/ ORDER BY "([^"]+)" (ASC|DESC)/)
     if (orderMatch) {
@@ -11578,7 +11580,8 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" ORDER BY "id" DESC',
+      'SELECT COUNT(*) AS "__holo_count" FROM (SELECT * FROM "posts") AS "__holo_pagination"',
+      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
       'SELECT * FROM "posts" WHERE "id" = ?',
     ])
   })
@@ -12099,7 +12102,8 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" ORDER BY "id" DESC',
+      'SELECT COUNT(*) AS "__holo_count" FROM (SELECT * FROM "posts") AS "__holo_pagination"',
+      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
       'UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING *',
     ])
   })
@@ -12849,7 +12853,7 @@ describe('@holo-js/realtime', () => {
         value: 2,
       },
     ])
-    expect(adapter.queries.some(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"'))).toBe(false)
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"'))).toHaveLength(1)
   })
 
   it('patches subscribed model paginated numeric relation aggregate loads without rerunning the handler', async () => {
@@ -17105,69 +17109,69 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps subscribed cursor-paginated query windows anchored after earlier inserts', async () => {
-    const adapter = new RelationalMemoryAdapter({
-      posts: [
-        { id: 1, title: 'First' },
-        { id: 2, title: 'Second' },
-        { id: 3, title: 'Third' },
-        { id: 4, title: 'Fourth' },
-      ],
-    })
-    const db = createContext(adapter)
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => null,
-    })
-    const snapshots: Array<{
-      readonly ids: readonly number[]
-      readonly cursorName: string
-      readonly hasMorePages: boolean
-    }> = []
-    const firstPageQuery = defineRealtimeQuery({
-      access: 'public',
-      handler: async ({ db: context }) => {
-        return await context.table('posts').orderBy('id', 'desc').cursorPaginate(2)
-      },
-    })
-    const query = defineRealtimeQuery({
-      args: schema({
-        cursor: field.string().nullable(),
-      }),
-      access: 'public',
-      handler: async ({ args, db: context }) => {
-        return await context.table('posts').orderBy('id', 'desc').cursorPaginate(2, args.cursor)
-      },
-    })
-    const mutation = defineRealtimeMutation({
-      access: 'public',
-      handler: async ({ db: context }) => {
-        await context.table('posts').insert({ id: 5, title: 'Fifth' })
-        return true
-      },
-    })
-    const firstPage = await executeRealtimeQuery(firstPageQuery)
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    await adapter.initialize()
+    try {
+      await adapter.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)')
+      await adapter.execute("INSERT INTO posts VALUES (1, 'First'), (2, 'Second'), (3, 'Third'), (4, 'Fourth')")
+      const db = createContext(adapter)
+      configureRealtimeRuntime({
+        db: () => db,
+        loadAuthModule: async () => null,
+      })
+      const snapshots: Array<{
+        readonly ids: readonly number[]
+        readonly cursorName: string
+        readonly hasMorePages: boolean
+      }> = []
+      const firstPageQuery = defineRealtimeQuery({
+        access: 'public',
+        handler: async ({ db: context }) => {
+          return await context.table('posts').orderBy('id', 'desc').cursorPaginate(2)
+        },
+      })
+      const query = defineRealtimeQuery({
+        args: schema({
+          cursor: field.string().nullable(),
+        }),
+        access: 'public',
+        handler: async ({ args, db: context }) => {
+          return await context.table('posts').orderBy('id', 'desc').cursorPaginate(2, args.cursor)
+        },
+      })
+      const mutation = defineRealtimeMutation({
+        access: 'public',
+        handler: async ({ db: context }) => {
+          await context.table('posts').insert({ id: 5, title: 'Fifth' })
+          return true
+        },
+      })
+      const firstPage = await executeRealtimeQuery(firstPageQuery)
 
-    await subscribeRealtimeQuery(query, { cursor: firstPage.data.nextCursor }, {
-      onData: snapshot => {
-        snapshots.push({
-          ids: snapshot.data.data.map(post => Number(post.id)),
-          cursorName: snapshot.data.cursorName,
-          hasMorePages: snapshot.data.nextCursor !== null,
-        })
-      },
-      onError: error => {
-        throw error
-      },
-    })
-    await executeRealtimeMutation(mutation)
+      await subscribeRealtimeQuery(query, { cursor: firstPage.data.nextCursor }, {
+        onData: snapshot => {
+          snapshots.push({
+            ids: snapshot.data.data.map(post => Number(post.id)),
+            cursorName: snapshot.data.cursorName,
+            hasMorePages: snapshot.data.nextCursor !== null,
+          })
+        },
+        onError: error => {
+          throw error
+        },
+      })
+      await executeRealtimeMutation(mutation)
 
-    expect(snapshots).toEqual([
-      {
-        ids: [2, 1],
-        cursorName: 'cursor',
-        hasMorePages: false,
-      },
-    ])
+      expect(snapshots).toEqual([
+        {
+          ids: [2, 1],
+          cursorName: 'cursor',
+          hasMorePages: false,
+        },
+      ])
+    } finally {
+      await adapter.disconnect()
+    }
   })
 
   it('patches first-page cursor-paginated query data and next cursor after inserts without rerunning the handler', async () => {

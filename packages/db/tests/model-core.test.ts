@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   ConfigurationError,
   DB,
@@ -15,6 +16,7 @@ import {
   createModelRegistry,
   createConnectionManager,
   createDatabase,
+  createDialect as createDatabaseDialect,
   clearGeneratedTables,
   belongsTo,
   defineModel,
@@ -1790,6 +1792,13 @@ describe('model core slice', () => {
       bindings: [],
       source: 'query:select:users' })
 
+    const sqlite = createSQLiteAdapter({ filename: ':memory:' })
+    await sqlite.initialize()
+    onTestFinished(() => sqlite.disconnect())
+    await sqlite.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)')
+    await sqlite.execute("INSERT INTO users VALUES (1, 'Mohamed', 'm@example.com'), (2, 'Amina', 'a@example.com'), (3, 'Salma', 's@example.com'), (4, 'Youssef', 'y@example.com'), (5, 'Nada', 'n@example.com')")
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter: sqlite, dialect: createDatabaseDialect('sqlite') } } }))
+
     const paginated = await User.query().orderBy('id').paginate(2, 2)
     expect(paginated.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
     expect(paginated.meta).toEqual({
@@ -1905,21 +1914,6 @@ describe('model core slice', () => {
     expect(firstCursorPage.hasMorePages()).toBe(true)
     expect(firstCursorPage.getCursorName()).toBe('cursor')
 
-    const secondCursorPage = await User.query().orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
-    expect(secondCursorPage.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
-    expect(secondCursorPage.prevCursor).toBe(firstCursorPage.nextCursor)
-    const secondCursorJson = await User.query().orderBy('id').cursorPaginateJson(2, firstCursorPage.nextCursor)
-    expect(secondCursorJson.data).toEqual([
-      { id: 3, name: 'Salma', email: 's@example.com' },
-      { id: 4, name: 'Youssef', email: 'y@example.com' },
-    ])
-    expect(secondCursorJson.prevCursor).toBe(firstCursorPage.nextCursor)
-    expect(secondCursorJson.nextCursor).toBeTruthy()
-    adapter.tables.users?.unshift({ id: 0, name: 'Earlier', email: 'earlier@example.com' })
-    const anchoredSecondCursorPage = await User.query().orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
-    expect(anchoredSecondCursorPage.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
-    adapter.tables.users = adapter.tables.users?.filter(row => row.id !== 0) ?? []
-
     const lastCursorPage = await User.query().orderBy('id').cursorPaginate(10)
     expect(lastCursorPage.nextCursor).toBeNull()
 
@@ -1950,6 +1944,7 @@ describe('model core slice', () => {
     })
     expect(stoppedChunks).toEqual([['Mohamed', 'Amina'], ['Salma', 'Youssef']])
 
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('sqlite') } } }))
     const edgeUsers = defineTable('edge_users', {
       id: column.id(),
       name: column.string(),

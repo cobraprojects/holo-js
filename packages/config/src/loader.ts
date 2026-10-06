@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -83,7 +84,7 @@ async function importConfigModule(filePath: string): Promise<unknown> {
   configImportNonce += 1
   if (USE_TRANSIENT_IMPORTS) {
     const extension = extname(filePath)
-    const transientPath = `${filePath.slice(0, filePath.length - extension.length)}${TRANSIENT_CONFIG_IMPORT_MARKER}${configImportNonce}${extension}`
+    const transientPath = `${filePath.slice(0, filePath.length - extension.length)}${TRANSIENT_CONFIG_IMPORT_MARKER}${randomUUID()}${extension}`
     const source = await readFile(filePath, 'utf8')
     await writeFile(transientPath, source, 'utf8')
 
@@ -469,6 +470,7 @@ export function defineAppConfig<TConfig extends HoloAppConfig>(config: TConfig):
 }
 
 export const loaderInternals = {
+  collectConfigEntries,
   getDeferredConfigNames,
   getNormalizerConfigNames,
   getConfigExtensionPriority,

@@ -2828,6 +2828,11 @@ function unregisterProjectEventsAndListeners(
   }
 }
 
+type RuntimeAuthContext = ReturnType<AuthModule['createAsyncAuthContext']> & {
+  setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+  runWithRequestAccessors?<TValue>(accessors: NonNullable<CreateHoloOptions['authRequest']>, callback: () => TValue): TValue
+}
+
 export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
@@ -2835,19 +2840,13 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     readonly renderView?: HoloServerViewRenderer
     readonly authRequest?: CreateHoloOptions['authRequest']
     readonly authorizationError?: CreateHoloOptions['authorizationError']
+    readonly authContext?: RuntimeAuthContext
   } = {},
 ): Promise<{
   readonly queueModule?: QueueModule
   readonly session?: HoloSessionRuntimeBinding
   readonly auth?: HoloAuthRuntimeBinding
-  readonly authContext?: {
-    activate(): void
-    setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
-    runWithRequestAccessors?<TValue>(
-      accessors: NonNullable<CreateHoloOptions['authRequest']>,
-      callback: () => TValue,
-    ): TValue
-  }
+  readonly authContext?: RuntimeAuthContext
 	}> {
   const pluginDefinitions = await loadConfiguredHoloPluginDefinitions(projectRoot, resolveLoadedPluginNames(loadedConfig))
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
@@ -3124,9 +3123,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
   const authModule = await loadAuthModule(authConfigured)
   const authorizationModule = await loadAuthorizationModule()
-  let authContext: ReturnType<AuthModule['createAsyncAuthContext']> & {
-    setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
-  } | undefined
+  let authContext: RuntimeAuthContext | undefined
   const workosModule = authConfigUsesWorkosProviders(loadedConfig)
     ? await loadWorkosModule(true)
     : undefined
@@ -3178,8 +3175,8 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       : undefined
     const authStores = createCoreAuthStores(loadedConfig)
 
-    const baseAuthContext = authModule.createAsyncAuthContext()
-    authContext = createRequestAwareAuthContext(baseAuthContext, options.authRequest)
+    authContext = options.authContext ?? createRequestAwareAuthContext(authModule.createAsyncAuthContext(), options.authRequest)
+    authContext.setRequestAccessors?.(options.authRequest)
     authModule.configureAuthRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
@@ -3359,14 +3356,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeAuthorizationModule: AuthorizationModule | undefined
   let activeSessionRuntime: HoloSessionRuntimeBinding | undefined
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
-  let activeAuthContext: {
-    activate(): void
-    setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
-    runWithRequestAccessors?<TValue>(
-      accessors: NonNullable<CreateHoloOptions['authRequest']>,
-      callback: () => TValue,
-    ): TValue
-  } | undefined
+  let activeAuthContext: RuntimeAuthContext | undefined
   let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings<
     SecurityRedisAdapter,
     SessionRedisAdapter
@@ -3400,6 +3390,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     subsystemOptions: HoloRuntimeReconfigureOptions,
   ): Promise<Awaited<ReturnType<typeof reconfigureOptionalHoloSubsystems>>> => {
     const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+      authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
       authRequest: subsystemOptions.authRequest,
       authorizationError: subsystemOptions.authorizationError,

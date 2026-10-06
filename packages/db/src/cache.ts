@@ -150,7 +150,7 @@ export interface DatabaseQuerySimplePaginationObservation {
   readonly kind: 'simple'
   readonly pageName: string
   readonly perPage: number
-  readonly rowCount: number
+  readonly rowCount: number | null
 }
 
 export interface DatabaseQueryCursorPaginationObservation {
@@ -162,6 +162,7 @@ export interface DatabaseQueryCursorPaginationObservation {
   readonly prevCursor: string | null
   readonly rows: readonly Readonly<Record<string, unknown>>[]
   readonly rowCount: number
+  readonly rowCountKnown?: boolean
 }
 
 type DatabaseQueryPaginationMetaObservation =
@@ -202,6 +203,7 @@ export interface DatabaseQueryObservation {
   readonly belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[]
   readonly connectionName: string
   readonly cursorRowCount?: number
+  readonly cursorRowCountKnown?: boolean
   readonly cursorRows?: readonly Readonly<Record<string, unknown>>[]
   readonly tableName: string
   readonly dependencies: readonly string[]
@@ -550,6 +552,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       connectionName: query.connectionName,
       tableName: query.tableName,
       cursorRowCount: pagination.rowCount,
+      cursorRowCountKnown: pagination.rowCountKnown,
       cursorRows: pagination.rows,
       dependencies: query.dependencies,
       limit: pagination.perPage,

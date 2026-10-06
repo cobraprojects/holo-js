@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   column,
   configureDB,
   configureDatabaseQueryCacheBridge,
   collectDatabaseQueryDependencies,
   createConnectionManager,
+  createDialect as createDatabaseDialect,
   DatabaseContext,
   DB,
   defineGeneratedTable,
@@ -1465,11 +1467,12 @@ describe('@holo-js/db query cache integration', () => {
       id: column.id(),
       title: column.string(),
     })
-    adapter.queryRows = [
-      { id: 3, title: 'Third' },
-      { id: 2, title: 'Second' },
-      { id: 1, title: 'First' },
-    ]
+    const sqlite = createSQLiteAdapter({ filename: ':memory:' })
+    await sqlite.initialize()
+    onTestFinished(() => sqlite.disconnect())
+    await sqlite.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)')
+    await sqlite.execute("INSERT INTO posts VALUES (1, 'First'), (2, 'Second'), (3, 'Third')")
+    configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: { adapter: sqlite, dialect: createDatabaseDialect('sqlite') } } }))
 
     const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       return await DB.table(posts)
@@ -1527,6 +1530,18 @@ describe('@holo-js/db query cache integration', () => {
         },
       }),
     ])
+    const cached = DB.table(posts).orderBy('id', 'desc').cache({ key: 'post-pages', ttl: 60 })
+    expect((await cached.paginate(2)).data.map(row => row.id)).toEqual([3, 2])
+    expect((await cached.paginate(2, 2)).data.map(row => row.id)).toEqual([1])
+    expect((await cached.paginate(2)).meta.total).toBe(3)
+    expect(bridge.flexibleCalls).toHaveLength(3)
+    await DB.table(posts).insert({ id: 4, title: 'Fourth' })
+    expect(await cached.paginate(2)).toMatchObject({ data: [{ id: 4 }, { id: 3 }], meta: { total: 4 } })
+    const simple = DB.table(posts).orderBy('id', 'desc').cache({ key: 'simple-post-pages', ttl: 60 })
+    expect(await simple.simplePaginate(2)).toMatchObject({ data: [{ id: 4 }, { id: 3 }], meta: { hasMorePages: true } })
+    expect(await simple.simplePaginate(2, 2)).toMatchObject({ data: [{ id: 2 }, { id: 1 }], meta: { hasMorePages: false } })
+    await DB.table(posts).insert({ id: 5, title: 'Fifth' })
+    expect(await simple.simplePaginate(2)).toMatchObject({ data: [{ id: 5 }, { id: 4 }], meta: { hasMorePages: true } })
   })
 
   it('collects cursor paginated data and cursor metadata observations while collecting dependencies', async () => {
@@ -1559,6 +1574,7 @@ describe('@holo-js/db query cache integration', () => {
     expect(firstPage.queries).toEqual([
       expect.objectContaining({
         cursorRowCount: 3,
+        cursorRowCountKnown: false,
         cursorRows: [
           { id: 1, title: 'First' },
           { id: 2, title: 'Second' },
@@ -1589,6 +1605,7 @@ describe('@holo-js/db query cache integration', () => {
       }),
     ])
 
+    adapter.queryRows = [{ id: 3, title: 'Third' }]
     const secondPage = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       return await DB.table(posts)
         .orderBy('id')
@@ -1600,10 +1617,11 @@ describe('@holo-js/db query cache integration', () => {
       perPage: 2,
       cursorName: 'cursor',
       nextCursor: null,
-      prevCursor: firstPage.value.nextCursor,
+      prevCursor: expect.any(String),
     })
     expect(secondPage.queries).toEqual([expect.objectContaining({
-      limit: undefined,
+      limit: 3,
+      patchable: false,
       orderBy: [{ column: 'id', direction: 'asc' }],
       result: [{ id: 3, title: 'Third' }],
     })])

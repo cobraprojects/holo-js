@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   DB,
   Entity,
@@ -11,6 +12,7 @@ import {
   configureDB,
   createConnectionManager,
   createDatabase,
+  createDialect as createDatabaseDialect,
   defineModel,
   hasMany,
   hasManyThrough,
@@ -915,6 +917,17 @@ describe('model relation slice', () => {
     })
     expect(firstUser.value).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Lead' } })
 
+    const sqlite = createSQLiteAdapter({ filename: ':memory:' })
+    await sqlite.initialize()
+    onTestFinished(() => sqlite.disconnect())
+    await sqlite.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
+    await sqlite.execute('CREATE TABLE profiles (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, bio TEXT NOT NULL)')
+    await sqlite.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, userId INTEGER, title TEXT NOT NULL, score INTEGER NOT NULL)')
+    await sqlite.execute("INSERT INTO users VALUES (1, 'Ava'), (2, 'Nora')")
+    await sqlite.execute("INSERT INTO profiles VALUES (10, 1, 'Lead')")
+    await sqlite.execute("INSERT INTO posts VALUES (20, 1, 'Post A', 5), (21, 1, 'Post B', 3), (22, 2, 'Post C', 7), (23, NULL, 'Orphan', 9)")
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter: sqlite, dialect: createDatabaseDialect('sqlite') } } }))
+
     const paginatedUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       return User.query().with('profile').withCount('posts').orderBy('id').paginateJson(1, 1)
     })
@@ -967,6 +980,8 @@ describe('model relation slice', () => {
       return Post.query().with('author').orderBy('id').firstJson()
     })
     expect(patchablePost.value).toMatchObject({ id: 20, author: { name: 'Ava' } })
+
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect() } } }))
 
     await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       const path = () => [] as const

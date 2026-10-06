@@ -3,6 +3,7 @@ import type {
 } from './dependencies'
 import {
   hasRecordKey,
+  readMutationValueKeys,
   valueKeysChangeColumns,
 } from './predicate-matching'
 import {
@@ -16,6 +17,15 @@ import type {
   DatabaseQueryObservation,
   MutationPatchMetadata,
 } from './query-state'
+
+export function canPatchPartialCursorMutation(
+  query: DatabaseQueryObservation,
+  mutation: DatabaseMutationEvent,
+): boolean {
+  return mutation.kind === 'insert' || (mutation.kind === 'update'
+    && Boolean(mutation.values)
+    && !valueKeysChangeColumns(readMutationValueKeys(mutation), readStableWindowColumns(query)))
+}
 
 export function canPatchStableWindowMutationWithoutBackfill(
   query: DatabaseQueryObservation,

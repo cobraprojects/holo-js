@@ -49,6 +49,24 @@ function createBackfills(): BackfillCache {
 }
 
 describe('@holo-js/realtime cursor wrapper patching', () => {
+  it('refreshes incomplete cursor windows after removals but patches stable text updates', async () => {
+    const query = createQuery({ cursorRowCountKnown: false })
+    for (const mutation of [
+      createMutation({ kind: 'delete', rows: [cursorRows[0]!] }),
+      createMutation({ kind: 'update', values: { status: 'closed' }, previousRows: [cursorRows[0]!] }),
+      createMutation({ kind: 'update', values: { id: 0 }, previousRows: [cursorRows[0]!] }),
+    ]) {
+      await expect(tryPatchCursorWrapperDataRows(query, [mutation], createBackfills())).resolves.toMatchObject({ patched: false })
+    }
+    const result = await tryPatchCursorWrapperDataRows(query, [createMutation({
+      kind: 'update',
+      values: { title: 'Updated' },
+      previousRows: [cursorRows[0]!],
+      rows: [{ ...cursorRows[0]!, title: 'Updated' }],
+    })], createBackfills())
+    expect(result).toMatchObject({ patched: true, value: [{ id: 3, title: 'Updated' }, { id: 2 }] })
+  })
+
   it('rejects cursor wrappers without complete cached metadata', async () => {
     await expect(tryPatchCursorWrapperDataRows(createQuery({
       cursorRows: undefined,

@@ -61,10 +61,14 @@ export type CursorOrderDefinition = {
 
 export type ValueCursor = {
   readonly values: readonly unknown[]
+  readonly previous?: boolean
 }
 
-export function encodeValueCursor(values: readonly unknown[]): string {
-  return Buffer.from(JSON.stringify({ values }), 'utf8').toString('base64url')
+export function encodeValueCursor(values: readonly unknown[], previous = false): string {
+  if (values.some(value => value === undefined)) throw new Error('Cursor pagination requires selected orderBy columns.')
+  if (values.some(value => value !== null && typeof value !== 'string' && typeof value !== 'boolean' && typeof value !== 'bigint' && !(typeof value === 'number' && Number.isFinite(value)) && !(value instanceof Date && Number.isFinite(value.getTime())))) throw new Error('Cursor pagination requires scalar orderBy values.')
+  const serializedValues = values.map(value => typeof value === 'bigint' ? value.toString() : value)
+  return Buffer.from(JSON.stringify({ values: serializedValues, ...(previous ? { previous: true } : {}) }), 'utf8').toString('base64url')
 }
 
 export function decodeValueCursor(
@@ -76,61 +80,13 @@ export function decodeValueCursor(
   }
 
   try {
-    const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { values?: unknown }
-    if (!Array.isArray(decoded.values)) {
+    const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { values?: unknown, previous?: unknown }
+    if (!Array.isArray(decoded.values) || decoded.values.some(value => value !== null && typeof value !== 'string' && typeof value !== 'boolean' && (typeof value !== 'number' || !Number.isFinite(value))) || decoded.previous !== undefined && typeof decoded.previous !== 'boolean') {
       throw new Error('invalid cursor values')
     }
 
-    return { values: decoded.values }
+    return { values: decoded.values, ...(decoded.previous === true ? { previous: true } : {}) }
   } catch {
     throw createError('Cursor is malformed.')
   }
-}
-
-function normalizeComparableValue(value: unknown): string | number | boolean | null {
-  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return value
-  }
-
-  if (value instanceof Date) {
-    return value.getTime()
-  }
-
-  return String(value)
-}
-
-function compareCursorValues(left: unknown, right: unknown): number {
-  const normalizedLeft = normalizeComparableValue(left)
-  const normalizedRight = normalizeComparableValue(right)
-
-  if (normalizedLeft === normalizedRight) {
-    return 0
-  }
-
-  if (normalizedLeft === null) {
-    return -1
-  }
-
-  if (normalizedRight === null) {
-    return 1
-  }
-
-  return normalizedLeft < normalizedRight ? -1 : 1
-}
-
-export function isRowAfterCursor(
-  rowValues: readonly unknown[],
-  cursorValues: readonly unknown[],
-  orders: readonly CursorOrderDefinition[],
-): boolean {
-  for (const [index, order] of orders.entries()) {
-    const comparison = compareCursorValues(rowValues[index], cursorValues[index])
-    if (comparison === 0) {
-      continue
-    }
-
-    return order.direction === 'asc' ? comparison > 0 : comparison < 0
-  }
-
-  return false
 }

@@ -48,9 +48,13 @@ export async function tryPatchQueryPaginationMeta(
     return UNPATCHED_RESULT
   }
 
-  let rowCount = pagination.kind === 'standard' ? pagination.total : pagination.rowCount
-  let needsCountBackfill = false
+  const previousRowCount = pagination.kind === 'standard' ? pagination.total : pagination.rowCount
+  if (previousRowCount === null && mutations.every(mutation => readPaginationMutationTotalDelta(query, mutation) === 0)) return UNCHANGED_QUERY_RESULT
+
+  let rowCount = previousRowCount ?? 0
+  let needsCountBackfill = previousRowCount === null
   for (const mutation of mutations) {
+    if (needsCountBackfill) break
     const delta = readPaginationMutationTotalDelta(query, mutation)
     if (typeof delta === 'undefined') {
       needsCountBackfill = true
@@ -63,7 +67,6 @@ export async function tryPatchQueryPaginationMeta(
     }
   }
 
-  const previousRowCount = pagination.kind === 'standard' ? pagination.total : pagination.rowCount
   if (needsCountBackfill) {
     const backfilledCount = await getPaginationCountBackfill(query, backfills)
     if (typeof backfilledCount === 'undefined') {

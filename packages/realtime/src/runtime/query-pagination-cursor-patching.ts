@@ -27,6 +27,8 @@ import type {
   PatchQueryResult,
 } from './query-state'
 import type { BackfillCache } from './state'
+import { canPatchPartialCursorMutation } from './query-stable-window'
+import { backfillCurrentQueryRows } from './query-row-backfill'
 import {
   sortRowsForQuery,
 } from './query-row-ordering'
@@ -48,8 +50,18 @@ export async function tryPatchCursorPaginationNextCursor(
 ): Promise<PatchQueryResult> {
   let rowCount = pagination.rowCount
   let rows = pagination.rows
+  let rowCountKnown = pagination.rowCountKnown
   let changed = false
   for (const mutation of mutations) {
+    if (pagination.rowCountKnown === false && !canPatchPartialCursorMutation(query, mutation)) {
+      const refreshedRows = await backfillCurrentQueryRows({ ...query, limit: pagination.perPage + 1, rowWindowMode: undefined }, backfills)
+      if (!refreshedRows) return UNPATCHED_RESULT
+      rows = refreshedRows
+      rowCount = refreshedRows.length
+      rowCountKnown = rowCount <= pagination.perPage
+      changed = true
+      break
+    }
     const belongsToHydratedMutation = await hydrateBelongsToMutationRows(
       mutation,
       query.belongsToHydrations,
@@ -133,6 +145,7 @@ export async function tryPatchCursorPaginationNextCursor(
       nextCursor,
       rows: retainedRows,
       rowCount,
+      ...(rowCountKnown === undefined ? {} : { rowCountKnown }),
     }),
   })
 

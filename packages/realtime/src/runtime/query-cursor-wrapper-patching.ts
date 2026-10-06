@@ -6,6 +6,7 @@ import {
 } from './predicate-matching'
 import {
   UNCHANGED_QUERY_RESULT,
+  UNPATCHED_RESULT,
 } from './query-patch-results'
 import {
   hydrateBelongsToMutationRows,
@@ -24,6 +25,8 @@ import type {
   PatchQueryResult,
 } from './query-state'
 import type { BackfillCache } from './state'
+import { canPatchPartialCursorMutation } from './query-stable-window'
+import { backfillCurrentQueryRows } from './query-row-backfill'
 
 type CursorWrapperMutationResult = {
   readonly changed: boolean
@@ -47,6 +50,21 @@ export async function tryPatchCursorWrapperDataRows(
   let patchedRowCount = rowCount
   let changed = false
   for (const mutation of mutations) {
+    if (query.cursorRowCountKnown === false && !canPatchPartialCursorMutation(query, mutation)) {
+      const refreshedRows = await backfillCurrentQueryRows({ ...query, limit: perPage + 1, rowWindowMode: undefined }, backfills)
+      if (!refreshedRows) return UNPATCHED_RESULT
+      return Object.freeze({
+        nextQuery: Object.freeze({
+          ...query,
+          cursorRowCount: refreshedRows.length,
+          cursorRowCountKnown: refreshedRows.length <= perPage,
+          cursorRows: refreshedRows,
+        }),
+        patched: true,
+        query,
+        value: refreshedRows.slice(0, perPage),
+      })
+    }
     const belongsToHydratedMutation = await hydrateBelongsToMutationRows(
       mutation,
       query.belongsToHydrations,

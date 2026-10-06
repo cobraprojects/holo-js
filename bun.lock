@@ -194,7 +194,7 @@
     },
     "packages/adapter-next": {
       "name": "@holo-js/adapter-next",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -222,7 +222,7 @@
     },
     "packages/adapter-nuxt": {
       "name": "@holo-js/adapter-nuxt",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -260,7 +260,7 @@
     },
     "packages/adapter-shared": {
       "name": "@holo-js/adapter-shared",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
         "typescript": "catalog:",
@@ -272,7 +272,7 @@
     },
     "packages/adapter-sveltekit": {
       "name": "@holo-js/adapter-sveltekit",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -300,7 +300,7 @@
     },
     "packages/auth": {
       "name": "@holo-js/auth",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/validation": "catalog:",
@@ -333,7 +333,7 @@
     },
     "packages/auth-clerk": {
       "name": "@holo-js/auth-clerk",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@clerk/backend": "catalog:",
         "@holo-js/auth": "catalog:",
@@ -348,7 +348,7 @@
     },
     "packages/auth-social": {
       "name": "@holo-js/auth-social",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth": "catalog:",
       },
@@ -361,7 +361,7 @@
     },
     "packages/auth-social-apple": {
       "name": "@holo-js/auth-social-apple",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth": "catalog:",
         "@holo-js/auth-social": "catalog:",
@@ -375,7 +375,7 @@
     },
     "packages/auth-social-discord": {
       "name": "@holo-js/auth-social-discord",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -388,7 +388,7 @@
     },
     "packages/auth-social-facebook": {
       "name": "@holo-js/auth-social-facebook",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -401,7 +401,7 @@
     },
     "packages/auth-social-github": {
       "name": "@holo-js/auth-social-github",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -414,7 +414,7 @@
     },
     "packages/auth-social-google": {
       "name": "@holo-js/auth-social-google",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -427,7 +427,7 @@
     },
     "packages/auth-social-linkedin": {
       "name": "@holo-js/auth-social-linkedin",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -440,7 +440,7 @@
     },
     "packages/auth-workos": {
       "name": "@holo-js/auth-workos",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/auth": "catalog:",
         "@holo-js/session": "catalog:",
@@ -454,7 +454,7 @@
     },
     "packages/authorization": {
       "name": "@holo-js/authorization",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "devDependencies": {
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -464,7 +464,7 @@
     },
     "packages/broadcast": {
       "name": "@holo-js/broadcast",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -489,7 +489,7 @@
     },
     "packages/cache": {
       "name": "@holo-js/cache",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -504,7 +504,7 @@
     },
     "packages/cache-db": {
       "name": "@holo-js/cache-db",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "tslib": "catalog:",
       },
@@ -526,7 +526,7 @@
     },
     "packages/cache-redis": {
       "name": "@holo-js/cache-redis",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "ioredis": "catalog:",
         "tslib": "catalog:",
@@ -544,7 +544,7 @@
     },
     "packages/cli": {
       "name": "@holo-js/cli",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "bin": {
         "holo": "./dist/bin/holo.mjs",
         "holo-js": "./dist/bin/holo.mjs",
@@ -572,10 +572,12 @@
         "@holo-js/queue": "catalog:",
         "@holo-js/queue-db": "catalog:",
         "@holo-js/session": "catalog:",
+        "@sveltejs/kit": "catalog:",
         "@types/node": "catalog:",
         "@types/semver": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
+        "vite": "catalog:",
         "vitest": "catalog:",
       },
       "peerDependencies": {
@@ -593,7 +595,7 @@
     },
     "packages/config": {
       "name": "@holo-js/config",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
       },
@@ -605,7 +607,7 @@
     },
     "packages/core": {
       "name": "@holo-js/core",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -670,7 +672,7 @@
     },
     "packages/create-holo-js": {
       "name": "create-holo-js",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "bin": {
         "create-holo-js": "dist/bin/create-holo-js.mjs",
       },
@@ -686,7 +688,7 @@
     },
     "packages/db": {
       "name": "@holo-js/db",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -704,7 +706,7 @@
     },
     "packages/db-mysql": {
       "name": "@holo-js/db-mysql",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "mysql2": "catalog:",
       },
@@ -720,7 +722,7 @@
     },
     "packages/db-postgres": {
       "name": "@holo-js/db-postgres",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "pg": "catalog:",
       },
@@ -737,7 +739,7 @@
     },
     "packages/db-sqlite": {
       "name": "@holo-js/db-sqlite",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "better-sqlite3": "catalog:",
       },
@@ -754,7 +756,7 @@
     },
     "packages/events": {
       "name": "@holo-js/events",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/db": "catalog:",
       },
@@ -774,7 +776,7 @@
     },
     "packages/flux": {
       "name": "@holo-js/flux",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
       },
@@ -787,7 +789,7 @@
     },
     "packages/flux-react": {
       "name": "@holo-js/flux-react",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -810,7 +812,7 @@
     },
     "packages/flux-svelte": {
       "name": "@holo-js/flux-svelte",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -828,7 +830,7 @@
     },
     "packages/flux-vue": {
       "name": "@holo-js/flux-vue",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -846,7 +848,7 @@
     },
     "packages/forms": {
       "name": "@holo-js/forms",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/validation": "catalog:",
       },
@@ -865,7 +867,7 @@
     },
     "packages/kernel": {
       "name": "@holo-js/kernel",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "devDependencies": {
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -875,7 +877,7 @@
     },
     "packages/mail": {
       "name": "@holo-js/mail",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -898,7 +900,7 @@
     },
     "packages/media": {
       "name": "@holo-js/media",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -915,7 +917,7 @@
     },
     "packages/notifications": {
       "name": "@holo-js/notifications",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -935,7 +937,7 @@
     },
     "packages/queue": {
       "name": "@holo-js/queue",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -949,7 +951,7 @@
     },
     "packages/queue-db": {
       "name": "@holo-js/queue-db",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/db": "catalog:",
         "@holo-js/queue": "catalog:",
@@ -964,7 +966,7 @@
     },
     "packages/queue-redis": {
       "name": "@holo-js/queue-redis",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "bullmq": "catalog:",
         "ioredis": "catalog:",
@@ -983,7 +985,7 @@
     },
     "packages/realtime": {
       "name": "@holo-js/realtime",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/db": "catalog:",
         "@holo-js/validation": "catalog:",
@@ -1006,7 +1008,7 @@
     },
     "packages/security": {
       "name": "@holo-js/security",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -1033,7 +1035,7 @@
     },
     "packages/session": {
       "name": "@holo-js/session",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -1054,7 +1056,7 @@
     },
     "packages/storage": {
       "name": "@holo-js/storage",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "@holo-js/config": "catalog:",
       },
@@ -1067,7 +1069,7 @@
     },
     "packages/storage-s3": {
       "name": "@holo-js/storage-s3",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "devDependencies": {
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -1077,7 +1079,7 @@
     },
     "packages/validation": {
       "name": "@holo-js/validation",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "dependencies": {
         "valibot": "catalog:",
       },
@@ -1097,51 +1099,51 @@
     "@clack/prompts": "^1.5.1",
     "@clerk/backend": "^3.4.7",
     "@eslint/js": "^9.17.0",
-    "@holo-js/adapter-next": "^0.3.15",
-    "@holo-js/adapter-nuxt": "^0.3.15",
-    "@holo-js/adapter-shared": "^0.3.15",
-    "@holo-js/adapter-sveltekit": "^0.3.15",
-    "@holo-js/auth": "^0.3.15",
-    "@holo-js/auth-clerk": "^0.3.15",
-    "@holo-js/auth-social": "^0.3.15",
-    "@holo-js/auth-social-apple": "^0.3.15",
-    "@holo-js/auth-social-discord": "^0.3.15",
-    "@holo-js/auth-social-facebook": "^0.3.15",
-    "@holo-js/auth-social-github": "^0.3.15",
-    "@holo-js/auth-social-google": "^0.3.15",
-    "@holo-js/auth-social-linkedin": "^0.3.15",
-    "@holo-js/auth-workos": "^0.3.15",
-    "@holo-js/authorization": "^0.3.15",
-    "@holo-js/broadcast": "^0.3.15",
-    "@holo-js/cache": "^0.3.15",
-    "@holo-js/cache-db": "^0.3.15",
-    "@holo-js/cache-redis": "^0.3.15",
-    "@holo-js/cli": "^0.3.15",
-    "@holo-js/config": "^0.3.15",
-    "@holo-js/core": "^0.3.15",
-    "@holo-js/db": "^0.3.15",
-    "@holo-js/db-mysql": "^0.3.15",
-    "@holo-js/db-postgres": "^0.3.15",
-    "@holo-js/db-sqlite": "^0.3.15",
-    "@holo-js/events": "^0.3.15",
-    "@holo-js/flux": "^0.3.15",
-    "@holo-js/flux-react": "^0.3.15",
-    "@holo-js/flux-svelte": "^0.3.15",
-    "@holo-js/flux-vue": "^0.3.15",
-    "@holo-js/forms": "^0.3.15",
-    "@holo-js/kernel": "^0.3.15",
-    "@holo-js/mail": "^0.3.15",
-    "@holo-js/media": "^0.3.15",
-    "@holo-js/notifications": "^0.3.15",
-    "@holo-js/queue": "^0.3.15",
-    "@holo-js/queue-db": "^0.3.15",
-    "@holo-js/queue-redis": "^0.3.15",
-    "@holo-js/realtime": "^0.3.15",
-    "@holo-js/security": "^0.3.15",
-    "@holo-js/session": "^0.3.15",
-    "@holo-js/storage": "^0.3.15",
-    "@holo-js/storage-s3": "^0.3.15",
-    "@holo-js/validation": "^0.3.15",
+    "@holo-js/adapter-next": "^0.3.16",
+    "@holo-js/adapter-nuxt": "^0.3.16",
+    "@holo-js/adapter-shared": "^0.3.16",
+    "@holo-js/adapter-sveltekit": "^0.3.16",
+    "@holo-js/auth": "^0.3.16",
+    "@holo-js/auth-clerk": "^0.3.16",
+    "@holo-js/auth-social": "^0.3.16",
+    "@holo-js/auth-social-apple": "^0.3.16",
+    "@holo-js/auth-social-discord": "^0.3.16",
+    "@holo-js/auth-social-facebook": "^0.3.16",
+    "@holo-js/auth-social-github": "^0.3.16",
+    "@holo-js/auth-social-google": "^0.3.16",
+    "@holo-js/auth-social-linkedin": "^0.3.16",
+    "@holo-js/auth-workos": "^0.3.16",
+    "@holo-js/authorization": "^0.3.16",
+    "@holo-js/broadcast": "^0.3.16",
+    "@holo-js/cache": "^0.3.16",
+    "@holo-js/cache-db": "^0.3.16",
+    "@holo-js/cache-redis": "^0.3.16",
+    "@holo-js/cli": "^0.3.16",
+    "@holo-js/config": "^0.3.16",
+    "@holo-js/core": "^0.3.16",
+    "@holo-js/db": "^0.3.16",
+    "@holo-js/db-mysql": "^0.3.16",
+    "@holo-js/db-postgres": "^0.3.16",
+    "@holo-js/db-sqlite": "^0.3.16",
+    "@holo-js/events": "^0.3.16",
+    "@holo-js/flux": "^0.3.16",
+    "@holo-js/flux-react": "^0.3.16",
+    "@holo-js/flux-svelte": "^0.3.16",
+    "@holo-js/flux-vue": "^0.3.16",
+    "@holo-js/forms": "^0.3.16",
+    "@holo-js/kernel": "^0.3.16",
+    "@holo-js/mail": "^0.3.16",
+    "@holo-js/media": "^0.3.16",
+    "@holo-js/notifications": "^0.3.16",
+    "@holo-js/queue": "^0.3.16",
+    "@holo-js/queue-db": "^0.3.16",
+    "@holo-js/queue-redis": "^0.3.16",
+    "@holo-js/realtime": "^0.3.16",
+    "@holo-js/security": "^0.3.16",
+    "@holo-js/session": "^0.3.16",
+    "@holo-js/storage": "^0.3.16",
+    "@holo-js/storage-s3": "^0.3.16",
+    "@holo-js/validation": "^0.3.16",
     "@nuxt/kit": "^4.4.4",
     "@nuxt/module-builder": "^1.0.2",
     "@sveltejs/adapter-node": "^5.5.4",
@@ -1159,7 +1161,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "better-sqlite3": "^13.0.3",
     "bullmq": "^5.71.0",
-    "create-holo-js": "^0.3.15",
+    "create-holo-js": "^0.3.16",
     "esbuild": "^0.27.4",
     "eslint": "^9.17.0",
     "fast-check": "^4.5.3",
@@ -1180,7 +1182,7 @@
     "react-test-renderer": "^19.2.6",
     "semver": "^7.7.4",
     "sharp": "^0.35.4",
-    "svelte": "^5.55.5",
+    "svelte": "5.56.8",
     "svelte-check": "^4.4.6",
     "tslib": "^2.8.1",
     "tsup": "^8.3.5",
@@ -1599,7 +1601,7 @@
 
     "@jridgewell/source-map": ["@jridgewell/source-map@0.3.11", "", { "dependencies": { "@jridgewell/gen-mapping": "^0.3.5", "@jridgewell/trace-mapping": "^0.3.25" } }, "sha512-ZMp1V8ZFcPG5dIWnQLr3NSI1MiCU7UETdS/A0G8V/XWHvJv3ZsFqutJn1Y5RPmAPX6F3BiE397OqveU/9NCuIA=="],
 
-    "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
+    "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
@@ -2433,7 +2435,7 @@
 
     "esquery": ["esquery@1.7.0", "", { "dependencies": { "estraverse": "^5.1.0" } }, "sha512-Ap6G0WQwcU/LHsvLwON1fAQX9Zp0A2Y6Y/cJBl9r/JbW90Zyg4/zbG6zzKa2OTALELarYHmKu0GhpM5EO+7T0g=="],
 
-    "esrap": ["esrap@2.2.4", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.4.15", "@typescript-eslint/types": "^8.2.0" } }, "sha512-suICpxAmZ9A8bzJjEl/+rLJiDKC0X4gYWUxT6URAWBLvlXmtbZd5ySMu/N2ZGEtMCAmflUDPSehrP9BQcsGcSg=="],
+    "esrap": ["esrap@2.4.0", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.4.15" }, "peerDependencies": { "@typescript-eslint/types": "^8.2.0" }, "optionalPeers": ["@typescript-eslint/types"] }, "sha512-CQPcneEHw/czj32uwQC52nYnax8H4SXt25FCM+LIwGZ49cMIxpOj3bP8wmzcI+Z0HIy5KkClaPhRLfCySzwHPA=="],
 
     "esrecurse": ["esrecurse@4.3.0", "", { "dependencies": { "estraverse": "^5.2.0" } }, "sha512-KmfKL3b6G+RXvP8N1vr3Tq1kL/oCFgn2NYXEtqP8/L3pKapUA4G8cFVaoF3SU323CD4XypR/ffioHmkti6/Tag=="],
 
@@ -3233,7 +3235,7 @@
 
     "supports-preserve-symlinks-flag": ["supports-preserve-symlinks-flag@1.0.0", "", {}, "sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w=="],
 
-    "svelte": ["svelte@5.55.5", "", { "dependencies": { "@jridgewell/remapping": "^2.3.4", "@jridgewell/sourcemap-codec": "^1.5.0", "@sveltejs/acorn-typescript": "^1.0.5", "@types/estree": "^1.0.5", "@types/trusted-types": "^2.0.7", "acorn": "^8.12.1", "aria-query": "5.3.1", "axobject-query": "^4.1.0", "clsx": "^2.1.1", "devalue": "^5.6.4", "esm-env": "^1.2.1", "esrap": "^2.2.4", "is-reference": "^3.0.3", "locate-character": "^3.0.0", "magic-string": "^0.30.11", "zimmerframe": "^1.1.2" } }, "sha512-2uCs/LZ9us+AktdzYJM8OcxQ8qnPS1kpaO7syGT/MgO+6Qr1Ybl+TqPq+97u7PHqmmMlye5ZkoyXONy5mjjAbw=="],
+    "svelte": ["svelte@5.56.8", "", { "dependencies": { "@jridgewell/remapping": "^2.3.4", "@jridgewell/sourcemap-codec": "^1.5.0", "@sveltejs/acorn-typescript": "^1.0.10", "@types/estree": "^1.0.5", "@types/trusted-types": "^2.0.7", "acorn": "^8.12.1", "aria-query": "5.3.1", "axobject-query": "^4.1.0", "clsx": "^2.1.1", "devalue": "^5.8.1", "esm-env": "^1.2.1", "esrap": "^2.2.12", "is-reference": "^3.0.3", "locate-character": "^3.0.0", "magic-string": "^0.30.11", "zimmerframe": "^1.1.2" } }, "sha512-PY8LOw7xP6c8IOiVqdo0sbbZVYhXRSfklOQLAUyGBKqjTX0wx/z4l/9J+PmBpmlLnxzEb1NqltxQ5/wZme/Cmg=="],
 
     "svelte-check": ["svelte-check@4.4.8", "", { "dependencies": { "@jridgewell/trace-mapping": "^0.3.25", "chokidar": "^4.0.1", "fdir": "^6.2.0", "picocolors": "^1.0.0", "sade": "^1.7.4" }, "peerDependencies": { "svelte": "^4.0.0 || ^5.0.0-next.0", "typescript": ">=5.0.0" }, "bin": { "svelte-check": "bin/svelte-check" } }, "sha512-67adfgBox5eNSNIvIIwgFizKGdcRrGpiMoNO2obHcYuLz7iTa8Xgm/NGU3ntMFnNm8K1grFOIG6HhMLX/vcN8w=="],
 
@@ -3485,6 +3487,10 @@
 
     "@isaacs/cliui/wrap-ansi": ["wrap-ansi@8.1.0", "", { "dependencies": { "ansi-styles": "^6.1.0", "string-width": "^5.0.1", "strip-ansi": "^7.0.1" } }, "sha512-si7QWI6zUMq56bESFvagtmzMdGOtoxfR+Sez11Mobfc7tm+VkUckk9bW2UeffTGVUbOksxmSw0AA2gs8g71NCQ=="],
 
+    "@jridgewell/gen-mapping/@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
+
+    "@jridgewell/trace-mapping/@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
+
     "@manypkg/find-root/@types/node": ["@types/node@12.20.55", "", {}, "sha512-J8xLz7q2OFulZ2cyGTLE1TbbZcjpno7FaN6zdJNrgAdrJ+DZzh/uFR6YrTb4C+nXakvud8Q4+rbhoIWlYQbUFQ=="],
 
     "@manypkg/find-root/find-up": ["find-up@4.1.0", "", { "dependencies": { "locate-path": "^5.0.0", "path-exists": "^4.0.0" } }, "sha512-PpOwAdQ/YlXQ2vj8a3h8IipDuYRi3wceVQQGYWxNINccq40Anw7BlsEXCMbt1Zt+OLA6Fq9suIpIWD0OsnISlw=="],
@@ -3687,6 +3693,8 @@
 
     "magic-regexp/unplugin": ["unplugin@2.3.11", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "acorn": "^8.15.0", "picomatch": "^4.0.3", "webpack-virtual-modules": "^0.6.2" } }, "sha512-5uKD0nqiYVzlmCRs01Fhs2BdkEgBS3SAVP6ndrBsuK42iC2+JHyxM05Rm9G8+5mkmRtzMZGY8Ct5+mliZxU/Ww=="],
 
+    "magic-string/@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
+
     "make-dir/semver": ["semver@7.7.4", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA=="],
 
     "micromatch/picomatch": ["picomatch@2.3.2", "", {}, "sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA=="],
@@ -3755,6 +3763,8 @@
 
     "rollup/fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
+    "rollup-plugin-dts/@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
+
     "source-map-support/source-map": ["source-map@0.6.1", "", {}, "sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g=="],
 
     "string-width/strip-ansi": ["strip-ansi@7.2.0", "", { "dependencies": { "ansi-regex": "^6.2.2" } }, "sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w=="],
@@ -3764,6 +3774,14 @@
     "strip-literal/js-tokens": ["js-tokens@9.0.1", "", {}, "sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ=="],
 
     "sucrase/tinyglobby": ["tinyglobby@0.2.15", "", { "dependencies": { "fdir": "^6.5.0", "picomatch": "^4.0.3" } }, "sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ=="],
+
+    "svelte/@sveltejs/acorn-typescript": ["@sveltejs/acorn-typescript@1.0.13", "", { "peerDependencies": { "acorn": "^8.9.0" } }, "sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ=="],
+
+    "svelte/@types/estree": ["@types/estree@1.0.9", "", {}, "sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg=="],
+
+    "svelte/acorn": ["acorn@8.18.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ=="],
+
+    "svelte/devalue": ["devalue@5.9.4", "", {}, "sha512-sPAT4pztbu6586/hrhOnMKS17IJrvg12mXiSPSS3W5qDeN2RGgvZ0diZCm31dBbnevfVmujNO3IM2wrS4Y2Rhg=="],
 
     "svgo/commander": ["commander@11.1.0", "", {}, "sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ=="],
 

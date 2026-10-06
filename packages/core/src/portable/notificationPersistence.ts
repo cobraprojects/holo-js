@@ -1,4 +1,4 @@
-import type { HoloConfigMap, LoadedHoloConfig } from '@holo-js/config'
+import type { LoadedHoloConfig } from '@holo-js/config'
 import { DB, type TableQueryBuilder } from '@holo-js/db'
 import {
   type CoreNotificationJsonPrimitive,
@@ -68,8 +68,8 @@ function applyNotificationScope(
   return scoped
 }
 
-export function createCoreNotificationStore<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
+export function createCoreNotificationStore(
+  loadedConfig: Pick<LoadedHoloConfig, 'database' | 'notifications'>,
 ): CoreNotificationStore {
   const tableName = loadedConfig.notifications.table
   const connectionName = loadedConfig.database.defaultConnection

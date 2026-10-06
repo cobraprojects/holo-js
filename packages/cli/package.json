@@ -70,10 +70,12 @@
     "@holo-js/queue": "catalog:",
     "@holo-js/queue-db": "catalog:",
     "@holo-js/session": "catalog:",
+    "@sveltejs/kit": "catalog:",
     "@types/node": "catalog:",
     "@types/semver": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

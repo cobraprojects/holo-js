@@ -717,13 +717,13 @@ export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled
     ...(realtimeEnabled
       ? ['import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'']
       : []),
-    'import { defineConfig } from \'vite\'',
+    'import { defineConfig, searchForWorkspaceRoot } from \'vite\'',
     '',
     'export default defineConfig({',
     `  plugins: [${realtimeEnabled ? 'holoSvelteKitRealtime(), ' : ''}sveltekit()],`,
     '  server: {',
     '    fs: {',
-    '      allow: [\'.holo-js/generated\'],',
+    '      allow: [searchForWorkspaceRoot(process.cwd()), \'.holo-js/generated\'],',
     '    },',
     '  },',
     '  ssr: {',

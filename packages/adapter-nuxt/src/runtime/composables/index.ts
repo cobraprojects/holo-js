@@ -101,8 +101,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   async function readHeader(name: string): Promise<string | undefined> {
-    const nitroContext = await loadNitroContextModule()
-    const event = requestEvent ?? nitroContext.useEvent()
+    const event = requestEvent ?? (await loadNitroContextModule()).useEvent()
 
     if (!event) {
       return undefined
@@ -157,8 +156,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   async function appendCookie(cookie: string): Promise<void> {
-    const nitroContext = await loadNitroContextModule()
-    const event = requestEvent ?? nitroContext.useEvent()
+    const event = requestEvent ?? (await loadNitroContextModule()).useEvent()
     const response = event?.node?.res
     if (!response) {
       return
@@ -191,8 +189,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   const redirectResponse: NonNullable<CreateHoloOptions['authRequest']>['redirectResponse'] = async (url, status) => {
-    const nitroContext = await loadNitroContextModule()
-    const event = requestEvent ?? nitroContext.useEvent()
+    const event = requestEvent ?? (await loadNitroContextModule()).useEvent()
     if (!event) {
       throw new TypeError('Holo Nuxt auth redirect requires an active Nitro event.')
     }

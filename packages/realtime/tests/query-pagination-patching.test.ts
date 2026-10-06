@@ -564,6 +564,14 @@ describe('@holo-js/realtime pagination patching', () => {
     })
   })
 
+  it('leaves unknown simple totals unpatched without a backfill and preserves metadata for content updates', async () => {
+    const query = createQuery({ pagination: { currentPage: 3, hasMorePages: true, kind: 'simple', pageName: 'page', perPage: 2, rowCount: null } })
+    const value = { currentPage: 3, from: 5, to: 6, hasMorePages: true, pageName: 'page', perPage: 2 }
+    await expect(tryPatchQueryPaginationMeta(query, value, [createMutation({ kind: 'delete', rows: [{ id: 8 }] })], createBackfills())).resolves.toEqual({ patched: false })
+    await expect(tryPatchQueryPaginationMeta(query, value, [createMutation({ kind: 'insert', rows: [{ id: 9 }] })], createBackfills())).resolves.toEqual({ patched: false })
+    await expect(tryPatchQueryPaginationMeta(query, value, [createMutation({ kind: 'update', values: { title: 'Updated' }, valueKeys: ['title'] })], createBackfills())).resolves.toEqual({ patched: true, unchanged: true })
+  })
+
   it('keeps simple pagination metadata unchanged when the computed value is already current', async () => {
     const query = createQuery({
       pagination: {

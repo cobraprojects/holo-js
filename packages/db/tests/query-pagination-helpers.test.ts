@@ -6,7 +6,6 @@ import {
   decodeValueCursor,
   encodeOffsetCursor,
   encodeValueCursor,
-  isRowAfterCursor,
   normalizePaginationParameterName,
 } from '../src/query/pagination'
 
@@ -63,61 +62,5 @@ describe('@holo-js/db query pagination helpers', () => {
       Buffer.from(JSON.stringify({ values: 'Ava' }), 'utf8').toString('base64url'),
       createError,
     )).toThrow('Cursor is malformed.')
-  })
-
-  it('compares cursor rows across ascending, descending, date, null, and equal values', () => {
-    expect(isRowAfterCursor(
-      ['B'],
-      ['A'],
-      [{ column: 'name', direction: 'asc' }],
-    )).toBe(true)
-    expect(isRowAfterCursor(
-      ['A'],
-      ['B'],
-      [{ column: 'name', direction: 'asc' }],
-    )).toBe(false)
-    expect(isRowAfterCursor(
-      [1],
-      [2],
-      [{ column: 'rank', direction: 'desc' }],
-    )).toBe(true)
-    expect(isRowAfterCursor(
-      [2],
-      [1],
-      [{ column: 'rank', direction: 'desc' }],
-    )).toBe(false)
-    expect(isRowAfterCursor(
-      [new Date('2026-06-30T02:00:00.000Z')],
-      [new Date('2026-06-30T01:00:00.000Z')],
-      [{ column: 'created_at', direction: 'asc' }],
-    )).toBe(true)
-    expect(isRowAfterCursor(
-      [{ toString: () => 'B' }],
-      [{ toString: () => 'A' }],
-      [{ column: 'label', direction: 'asc' }],
-    )).toBe(true)
-    expect(isRowAfterCursor(
-      [null],
-      ['A'],
-      [{ column: 'name', direction: 'asc' }],
-    )).toBe(false)
-    expect(isRowAfterCursor(
-      ['A'],
-      [null],
-      [{ column: 'name', direction: 'asc' }],
-    )).toBe(true)
-    expect(isRowAfterCursor(
-      ['A', 2],
-      ['A', 1],
-      [
-        { column: 'name', direction: 'asc' },
-        { column: 'id', direction: 'asc' },
-      ],
-    )).toBe(true)
-    expect(isRowAfterCursor(
-      ['A'],
-      ['A'],
-      [{ column: 'name', direction: 'asc' }],
-    )).toBe(false)
   })
 })

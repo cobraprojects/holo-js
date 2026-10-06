@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { writeConfigCache } from '@holo-js/config'
+import { createSchemaService, DB } from '@holo-js/db'
 import {
   HOLO_MINIMUM_ADAPTER_CAPABILITIES,
   adapterInternals,
@@ -837,7 +838,7 @@ export default defineAppConfig({
     expect(second).not.toBe(first)
   })
 
-  it('reuses the singleton project in dev mode when source signatures do not change', async () => {
+  it('preserves stored records in dev mode when transient config imports appear', async () => {
     const adapter = createHoloFrameworkAdapter({
       stateKey: '__holoTestAdapter__',
       displayName: 'Test',
@@ -848,18 +849,22 @@ export default defineAppConfig({
       processEnv: process.env,
     })
 
-    const first = await adapter.initializeProject({
+    await adapter.initializeProject({
       projectRoot: root,
       preferCache: false,
       registerProjectQueueJobs: true,
     })
-    const second = await adapter.initializeProject({
+    await createSchemaService(DB.connection()).createTable('runtime_state', table => {
+      table.string('id').primaryKey()
+    })
+    await DB.table('runtime_state').insert({ id: 'retained' })
+    await writeFile(join(root, 'config/app.__holo_import_test.ts'), 'export default { name: "Transient import" }\n', 'utf8')
+    await adapter.initializeProject({
       projectRoot: root,
       preferCache: false,
       registerProjectQueueJobs: true,
     })
-
-    expect(second).toBe(first)
+    await expect(DB.table('runtime_state').where('id', 'retained').exists()).resolves.toBe(true)
   })
 
   it('reloads the singleton project in dev mode when discovered job sources change', async () => {

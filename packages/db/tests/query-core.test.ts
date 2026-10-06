@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   CompilerError,
   DB,
@@ -10,6 +11,7 @@ import {
   column,
   configureDB,
   createConnectionManager,
+  createDialect as createDatabaseDialect,
   createCursorPaginator,
   createDeleteQueryPlan,
   createInsertQueryPlan,
@@ -2847,6 +2849,13 @@ describe('query core slice', () => {
       bindings: [],
       source: 'query:select:users' })
 
+    const sqlite = createSQLiteAdapter({ filename: ':memory:' })
+    await sqlite.initialize()
+    onTestFinished(() => sqlite.disconnect())
+    await sqlite.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
+    await sqlite.execute("INSERT INTO users VALUES (1, 'Mohamed'), (2, 'Amina'), (3, 'Salma'), (4, 'Youssef'), (5, 'Nada')")
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter: sqlite, dialect: createDatabaseDialect('sqlite') } } }))
+
     const paginated = await DB.table(users).orderBy('id').paginate(2, 2)
     expect(paginated.data).toEqual([
       { id: 3, name: 'Salma' },
@@ -2924,23 +2933,6 @@ describe('query core slice', () => {
       nextCursor: firstCursorPage.nextCursor,
       prevCursor: null })
 
-    const secondCursorPage = await DB.table(users).orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
-    expect(secondCursorPage.data).toEqual([
-      { id: 3, name: 'Salma' },
-      { id: 4, name: 'Youssef' },
-    ])
-    expect(secondCursorPage.prevCursor).toBe(firstCursorPage.nextCursor)
-    adapter.queryRows = [
-      { id: 0, name: 'Earlier' },
-      ...adapter.queryRows,
-    ]
-    const anchoredSecondCursorPage = await DB.table(users).orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
-    expect(anchoredSecondCursorPage.data).toEqual([
-      { id: 3, name: 'Salma' },
-      { id: 4, name: 'Youssef' },
-    ])
-    adapter.queryRows = adapter.queryRows.filter(row => row.id !== 0)
-
     const lastCursorPage = await DB.table(users).orderBy('id').cursorPaginate(10)
     expect(lastCursorPage.nextCursor).toBeNull()
 
@@ -2951,6 +2943,7 @@ describe('query core slice', () => {
     const customCursor = await DB.table(users).orderBy('id').cursorPaginate(2, null, { cursorName: ' usersCursor ' })
     expect(customCursor.cursorName).toBe('usersCursor')
 
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('sqlite') } } }))
     const chunked: number[][] = []
     await DB.table(users).chunk(2, (rows) => {
       chunked.push(rows.map(row => row.id as number))

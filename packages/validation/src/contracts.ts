@@ -336,6 +336,7 @@ function isSerializedValidationExceptionPayload(value: unknown): value is Serial
     && typeof value.bag === 'string'
     && isPlainObject(value.values)
     && isPlainObject(value.errors)
+    && Object.values(value.errors).every(messages => Array.isArray(messages) && messages.every(message => typeof message === 'string'))
 }
 
 function findSerializedValidationExceptionPayload(value: unknown): SerializedValidationException | undefined {
@@ -596,6 +597,12 @@ export function isValidationException(value: unknown): value is ValidationExcept
   }
 }
 
+function serializeValidationException(value: unknown): SerializedValidationException | undefined {
+  const serialized = findSerializedValidationExceptionPayload(value)
+  if (serialized) return serialized
+  return isValidationException(value) ? value.toJSON() : undefined
+}
+
 export function isValidationSchema(value: unknown): value is ValidationSchema {
   return isPlainObject(value)
     && value.kind === 'schema'
@@ -642,6 +649,7 @@ export async function parse<TSchema extends ValidationSchema>(
 }
 
 export const validationInternals = {
+  serializeValidationException,
   appendIssues,
   assignNestedValue,
   buildErrorTree,

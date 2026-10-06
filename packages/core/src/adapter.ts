@@ -1,5 +1,5 @@
-import { readdir, stat } from 'node:fs/promises'
-import { extname, join, resolve } from 'node:path'
+import { stat } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import {
   createHolo,
   ensureHolo,
@@ -10,7 +10,7 @@ import {
   type CreateHoloOptions,
   type HoloRuntime,
 } from './portable/holo'
-import { configureConfigRuntime, resolveEnvironmentFileOrder } from '@holo-js/config'
+import { configureConfigRuntime, loaderInternals, resolveEnvironmentFileOrder } from '@holo-js/config'
 import type {
   DotPath,
   HoloConfigValues,
@@ -126,18 +126,9 @@ async function resolveFileStamp(filePath: string): Promise<string> {
   }
 }
 
-const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
-const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-
 async function resolveConfigDirectoryStamp(projectRoot: string): Promise<string> {
-  const configDir = resolve(projectRoot, 'config')
-  const entries = await readdir(configDir, { withFileTypes: true }).catch(() => [])
-  const files = entries
-    .filter(entry => entry.isFile() && SUPPORTED_CONFIG_EXTENSIONS.has(extname(entry.name)))
-    .map(entry => join(configDir, entry.name))
-    .sort((left, right) => left.localeCompare(right))
-
-  const stamps = await Promise.all(files.map(resolveFileStamp))
+  const entries = await loaderInternals.collectConfigEntries(resolve(projectRoot, 'config'))
+  const stamps = await Promise.all(entries.map(entry => resolveFileStamp(entry.filePath)))
   return stamps.join('|')
 }
 
