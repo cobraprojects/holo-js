@@ -33,4 +33,4 @@ jobs:
       - run: node scripts/build-libraries.mjs
       - name: Test ports and server lifecycle
         working-directory: packages/cli
-        run: node ../../node_modules/vitest/vitest.mjs --run tests/framework-port.test.ts --reporter=json
+        run: node ../../node_modules/vitest/vitest.mjs --run tests/framework-port.test.ts tests/framework-lifetime.test.ts --fileParallelism --reporter=json

@@ -1,3 +1,4 @@
+import { launchFrameworkRun } from './framework-run'
 import { loadEnvironment } from '@holo-js/config'
 import { spawnSync, spawn } from 'node:child_process'
 import { watch } from 'node:fs'
@@ -154,65 +155,6 @@ async function resolveServerArguments(projectRoot: string, args: readonly string
   return [...args, '--port', port]
 }
 
-type ManagedChildProcessResult =
-  | { kind: 'close', code: number | null, shutdownSignal?: NodeJS.Signals }
-  | { kind: 'error', error: Error, shutdownSignal?: NodeJS.Signals }
-
-function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
-  if (process.platform !== 'win32' || child.pid === undefined) {
-    child.kill?.(signal)
-    return
-  }
-
-  const result = spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  if (result.status !== 0) {
-    child.kill?.(signal)
-  }
-}
-
-async function waitForManagedChildProcess(
-  child: SpawnProcessLike,
-  onShutdownSignal?: (signal: NodeJS.Signals) => void,
-): Promise<ManagedChildProcessResult> {
-  return await new Promise(resolvePromise => {
-    let settled = false
-    let shutdownSignal: NodeJS.Signals | undefined
-
-    const detachSignalHandlers = () => {
-      process.off('SIGINT', onSigint)
-      process.off('SIGTERM', onSigterm)
-    }
-    const settle = (result: ManagedChildProcessResult) => {
-      if (settled) return
-
-      settled = true
-      detachSignalHandlers()
-      resolvePromise({ ...result, shutdownSignal })
-    }
-    const forwardSignal = (signal: NodeJS.Signals) => {
-      if (shutdownSignal) return
-
-      shutdownSignal = signal
-      onShutdownSignal?.(signal)
-      terminateChildProcess(child, signal)
-    }
-    function onSigint() {
-      forwardSignal('SIGINT')
-    }
-    function onSigterm() {
-      forwardSignal('SIGTERM')
-    }
-
-    child.on('error', error => settle({ kind: 'error', error }))
-    child.on('close', code => settle({ kind: 'close', code }))
-    process.on('SIGINT', onSigint)
-    process.on('SIGTERM', onSigterm)
-  })
-}
-
 export async function runProjectStartServer(
   io: IoStreams,
   projectRoot: string,
@@ -221,29 +163,14 @@ export async function runProjectStartServer(
 ): Promise<void> {
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'start')
   const serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
-  const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
-    cwd: projectRoot,
-    env: process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }) as SpawnProcessLike
-
-  child.stdout?.on('data', chunk => io.stdout.write(chunk))
-  child.stderr?.on('data', chunk => io.stderr.write(chunk))
-  if (child.stdin) {
-    io.stdin.pipe(child.stdin)
-  }
-
-  const result = await waitForManagedChildProcess(child)
-  if (child.stdin) {
-    io.stdin.unpipe(child.stdin)
+  const { completion } = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess)
+  const result = await completion
+  if (result.kind === 'error') {
+    throw result.error
   }
 
   if (result.shutdownSignal) {
     return
-  }
-
-  if (result.kind === 'error') {
-    throw result.error
   }
 
   if (result.code !== 0) {
@@ -1074,55 +1001,34 @@ export async function runProjectDevServer(
   }
 
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
-  while (!shuttingDown) {
-    const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
-      cwd: projectRoot,
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }) as SpawnProcessLike
+  try {
+    while (!shuttingDown) {
+      const run = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess, beginShutdown)
+      requestChildRestart = run.restart
+      const result = await run.completion
+      requestChildRestart = undefined
 
-    child.stdout?.on('data', chunk => io.stdout.write(chunk))
-    child.stderr?.on('data', chunk => io.stderr.write(chunk))
-    if (child.stdin) {
-      io.stdin.pipe(child.stdin)
-    }
+      if (result.kind === 'error') {
+        throw result.error
+      }
 
-    let restartRequested = false
-    requestChildRestart = () => {
-      if (restartRequested || shuttingDown || typeof child.kill !== 'function') {
+      if (result.shutdownSignal) {
         return
       }
 
-      restartRequested = true
-      child.kill('SIGTERM')
-    }
+      if (result.restartRequested) {
+        continue
+      }
 
-    const result = await waitForManagedChildProcess(child, beginShutdown)
-    if (child.stdin) {
-      io.stdin.unpipe(child.stdin)
+      if (result.code === 0) {
+        return
+      }
+
+      throw new Error(`Project development server failed with exit code ${result.code ?? 'unknown'}.`)
     }
+  } finally {
     requestChildRestart = undefined
-
-    if (result.shutdownSignal) {
-      await Promise.resolve(pendingPrepare)
-      return
-    }
-
-    if (restartRequested) {
-      continue
-    }
-
     beginShutdown()
     await Promise.resolve(pendingPrepare)
-
-    if (result.kind === 'error') {
-      throw result.error
-    }
-
-    if (result.code === 0) {
-      return
-    }
-
-    throw new Error(`Project development server failed with exit code ${result.code ?? 'unknown'}.`)
   }
 }

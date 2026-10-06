@@ -1,10 +1,11 @@
-import { spawnSync } from 'node:child_process'
-import type { watch } from 'node:fs'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import type { watch, WatchListener } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
+import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runProjectDevServer, runProjectStartServer } from '../src/dev'
 import type { IoStreams } from '../src/cli-types'
@@ -166,7 +167,10 @@ it.each([
     '    server.close(() => process.exit(0))',
     '  })',
     '}',
-    'server.listen(port, \'127.0.0.1\', () => writeFileSync(pidPath, String(process.pid)))',
+    'server.listen(port, \'127.0.0.1\', () => {',
+    '  writeFileSync(pidPath, String(process.pid))',
+    '  console.log(process.pid)',
+    '})',
   ])
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'shutdown-fixture', type: 'module' }))
   await mkdir(join(root, 'config'), { recursive: true })
@@ -181,6 +185,8 @@ it.each([
     stdout: stdout as unknown as NodeJS.WriteStream,
     stderr: stderr as unknown as NodeJS.WriteStream,
   }
+  const lines = createInterface({ input: stdout })
+  const ready = new Promise<string>(resolvePromise => lines.once('line', resolvePromise))
   const previousSignalListeners = new Set(process.listeners(signal))
   let frameworkPid: number | undefined
   const commandPromise = mode === 'dev'
@@ -188,14 +194,11 @@ it.each([
     : runProjectStartServer(io, root, undefined, ['--port', String(port)])
 
   try {
-    await vi.waitFor(async () => {
-      frameworkPid = Number(await readFile(pidPath, 'utf8'))
-      expect(frameworkPid).toBeGreaterThan(0)
-    })
-    await vi.waitFor(async () => {
-      const response = await fetch(`http://127.0.0.1:${port}`)
-      await expect(response.text()).resolves.toBe('ready')
-    })
+    await Promise.race([ready, commandPromise])
+    frameworkPid = Number(await readFile(pidPath, 'utf8'))
+    expect(frameworkPid).toBeGreaterThan(0)
+    const response = await fetch(`http://127.0.0.1:${port}`, { headers: { connection: 'close' } })
+    await expect(response.text()).resolves.toBe('ready')
     const signalListener = process.listeners(signal)
       .find(listener => !previousSignalListeners.has(listener))
     expect(signalListener).toBeDefined()
@@ -205,10 +208,86 @@ it.each([
     await assertPortIsReleased(port)
     expect(process.listeners(signal).every(listener => previousSignalListeners.has(listener))).toBe(true)
   } finally {
+    lines.close()
     if (frameworkPid) {
       killProcessIfRunning(frameworkPid)
     }
     await commandPromise.catch(() => undefined)
+  }
+})
+
+it('restarts only after the previous runner closes and releases the framework port', async () => {
+  const framework = frameworks[2]
+  const runner = await createRunner(framework, 'dev')
+  const root = resolve(dirname(runner), '../..')
+  const port = await getAvailablePort()
+  await writeFrameworkProgram(root, framework, 'dev', [
+    'import { createServer } from \'node:http\'',
+    `const port = ${port}`,
+    'const server = createServer((_request, response) => response.end(String(process.pid)))',
+    'process.on(\'SIGTERM\', () => setTimeout(() => server.close(() => process.exit(0)), 100))',
+    'server.listen(port, \'127.0.0.1\', () => console.log(process.pid))',
+  ])
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'restart-fixture', type: 'module' }))
+  await mkdir(join(root, 'config'), { recursive: true })
+  await writeFile(join(root, 'config/app.ts'), 'export default { name: \'Restart fixture\' }')
+  await writeFile(join(root, 'config/database.ts'), 'export default {}')
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  let output = ''
+  stdout.on('data', chunk => { output += String(chunk) })
+  const lines = createInterface({ input: stdout })
+  const ready = new Promise<string>(resolvePromise => lines.once('line', resolvePromise))
+  const io: IoStreams = {
+    cwd: root,
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    stderr: stderr as unknown as NodeJS.WriteStream,
+  }
+  let observeChange: WatchListener<string> | undefined
+  const createWatcher = ((_path: string, _options: { recursive?: boolean }, callback: WatchListener<string>) => {
+    observeChange = callback
+    return { close() {} }
+  }) as unknown as typeof watch
+  const children: ChildProcess[] = []
+  let previousClosed = false
+  let replacementAfterClosure = false
+  const spawnProcess = ((...args: Parameters<typeof spawn>) => {
+    if (children.length > 0) replacementAfterClosure = previousClosed
+    const child = spawn(...args)
+    children.push(child)
+    child.on('close', () => { previousClosed = true })
+    return child
+  }) as typeof spawn
+  const listeners = new Set(process.listeners('SIGTERM'))
+  const command = runProjectDevServer(io, root, spawnProcess, createWatcher, async () => {}, ['--port', String(port)])
+  const completion = expect(command).resolves.toBeUndefined()
+  try {
+    const firstPid = Number(await Promise.race([ready, command]))
+    expect(firstPid).toBeGreaterThan(0)
+    const replacementReady = new Promise<string>(resolvePromise => lines.once('line', resolvePromise))
+    observeChange?.('change', 'config/app.ts')
+    const replacementPid = Number(await Promise.race([replacementReady, command]))
+    expect(replacementPid).toBeGreaterThan(0)
+    expect(replacementAfterClosure).toBe(true)
+    expect(replacementPid).not.toBe(firstPid)
+    const response = await fetch(`http://127.0.0.1:${port}`, { headers: { connection: 'close' } })
+    await expect(response.text()).resolves.toBe(String(replacementPid))
+    const shutdown = process.listeners('SIGTERM').find(listener => !listeners.has(listener))
+    expect(shutdown).toBeDefined()
+    shutdown?.('SIGTERM')
+    await completion
+    await assertPortIsReleased(port)
+  } finally {
+    lines.close()
+    for (const pid of output.trim().split('\n').map(Number)) {
+      if (pid > 0) killProcessIfRunning(pid)
+    }
+    for (const child of children) {
+      if (child.exitCode === null) child.kill('SIGKILL')
+    }
+    await command.catch(() => undefined)
   }
 })
 
