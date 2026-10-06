@@ -24,14 +24,13 @@ function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals):
   }
 }
 
-export function launchFrameworkRun(
+function launchFrameworkRun(
   io: IoStreams,
   projectRoot: string,
   invocation: PackageManagerCommand,
   serverArgs: readonly string[],
   spawnProcess: typeof spawn,
-  onShutdown?: () => void,
-): { readonly completion: Promise<FrameworkRunResult>, restart(): void } {
+): { readonly completion: Promise<FrameworkRunResult>, restart(): void, shutdown(signal: NodeJS.Signals): void } {
   const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
     cwd: projectRoot,
     env: process.env,
@@ -50,8 +49,6 @@ export function launchFrameworkRun(
     if (settled) return
 
     settled = true
-    process.off('SIGINT', onSigint)
-    process.off('SIGTERM', onSigterm)
     child.stdout?.off('data', forwardOutput)
     child.stderr?.off('data', forwardError)
     if (child.stdin) io.stdin.unpipe(child.stdin)
@@ -68,31 +65,70 @@ export function launchFrameworkRun(
     if (settled || shutdownSignal) return
 
     shutdownSignal = signal
-    onShutdown?.()
     terminate(signal)
   }
-  function onSigint() {
-    shutdown('SIGINT')
-  }
-  function onSigterm() {
-    shutdown('SIGTERM')
-  }
-
   child.on('error', error => settle({ kind: 'error', error }))
   child.on('close', code => settle({ kind: 'close', code }))
-  process.on('SIGINT', onSigint)
-  process.on('SIGTERM', onSigterm)
   child.stdout?.on('data', forwardOutput)
   child.stderr?.on('data', forwardError)
   if (child.stdin) io.stdin.pipe(child.stdin)
 
   return {
     completion,
+    shutdown,
     restart() {
       if (settled || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
 
       restartRequested = true
       terminate('SIGTERM')
+    },
+  }
+}
+
+export function createFrameworkSession(
+  io: IoStreams,
+  projectRoot: string,
+  spawnProcess: typeof spawn,
+  onShutdown?: () => void,
+): {
+  readonly signal: AbortSignal
+  launch(invocation: PackageManagerCommand, serverArgs: readonly string[]): ReturnType<typeof launchFrameworkRun>
+  dispose(): void
+} {
+  const controller = new AbortController()
+  let activeRun: ReturnType<typeof launchFrameworkRun> | undefined
+  let shutdownSignal: NodeJS.Signals | undefined
+  const shutdown = (signal: NodeJS.Signals) => {
+    if (controller.signal.aborted) return
+
+    shutdownSignal = signal
+    controller.abort()
+    try {
+      onShutdown?.()
+    } finally {
+      activeRun?.shutdown(signal)
+    }
+  }
+  const onSigint = () => shutdown('SIGINT')
+  const onSigterm = () => shutdown('SIGTERM')
+  process.on('SIGINT', onSigint)
+  process.on('SIGTERM', onSigterm)
+
+  return {
+    signal: controller.signal,
+    launch(invocation: PackageManagerCommand, serverArgs: readonly string[]) {
+      controller.signal.throwIfAborted()
+      activeRun = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess)
+      if (shutdownSignal) activeRun.shutdown(shutdownSignal)
+      return activeRun
+    },
+    dispose() {
+      try {
+        shutdown('SIGTERM')
+      } finally {
+        process.off('SIGINT', onSigint)
+        process.off('SIGTERM', onSigterm)
+      }
     },
   }
 }

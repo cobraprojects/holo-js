@@ -1,4 +1,4 @@
-import { launchFrameworkRun } from './framework-run'
+import { createFrameworkSession } from './framework-run'
 import { loadEnvironment } from '@holo-js/config'
 import { spawnSync, spawn } from 'node:child_process'
 import { watch } from 'node:fs'
@@ -161,20 +161,20 @@ export async function runProjectStartServer(
   spawnProcess: typeof spawn = spawn,
   passthroughArgs: readonly string[] = [],
 ): Promise<void> {
-  const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'start')
-  const serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
-  const { completion } = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess)
-  const result = await completion
-  if (result.kind === 'error') {
-    throw result.error
-  }
+  const session = createFrameworkSession(io, projectRoot, spawnProcess)
+  try {
+    const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'start')
+    const serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
+    if (session.signal.aborted) return
 
-  if (result.shutdownSignal) {
-    return
-  }
-
-  if (result.code !== 0) {
-    throw new Error(`Project production server failed with exit code ${result.code ?? 'unknown'}.`)
+    const result = await session.launch(invocation, serverArgs).completion
+    if (result.kind === 'error') throw result.error
+    if (session.signal.aborted) return
+    if (result.code !== 0) {
+      throw new Error(`Project production server failed with exit code ${result.code ?? 'unknown'}.`)
+    }
+  } finally {
+    session.dispose()
   }
 }
 
@@ -183,11 +183,21 @@ export async function runProjectDependencyInstall(
   projectRoot: string,
   spawnProcess: typeof spawn = spawn,
 ): Promise<void> {
+  await installProjectDependencies(io, projectRoot, spawnProcess)
+}
+
+async function installProjectDependencies(
+  io: IoStreams,
+  projectRoot: string,
+  spawnProcess: typeof spawn,
+  signal?: AbortSignal,
+): Promise<void> {
   const invocation = await resolvePackageManagerInstallInvocation(projectRoot)
   const child = spawnProcess(invocation.command, [...invocation.args], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(signal ? { signal } : {}),
   }) as SpawnProcessLike
   let stdout = ''
   let stderr = ''
@@ -199,8 +209,12 @@ export async function runProjectDependencyInstall(
     | { kind: 'close', code: number | null }
     | { kind: 'error', error: Error }
   >((resolvePromise) => {
-    child.on('error', error => resolvePromise({ kind: 'error', error }))
-    child.on('close', code => resolvePromise({ kind: 'close', code }))
+    let processError: Error | undefined
+    child.on('error', (error) => {
+      processError = error
+      if (!signal?.aborted) resolvePromise({ kind: 'error', error })
+    })
+    child.on('close', code => resolvePromise(processError ? { kind: 'error', error: processError } : { kind: 'close', code }))
   })
 
   if (result.kind === 'error') {
@@ -240,9 +254,11 @@ export async function runProjectPrepare(
   io?: IoStreams,
   options: ProjectPrepareOptions = {},
 ): Promise<void> {
+  options.signal?.throwIfAborted()
   const project = options.prepareSchema === false
     ? await ensureProjectConfig(projectRoot)
     : await prepareProjectSchema(projectRoot)
+  options.signal?.throwIfAborted()
   const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
   const framework = await resolveProjectFramework(projectRoot, frameworkProjectPath)
   const command = options.command ?? 'prepare'
@@ -264,6 +280,7 @@ export async function runProjectPrepare(
     writeInfo: message => io?.stdout.write(`${message}\n`),
     writeWarning: message => io?.stderr.write(`${message}\n`),
   })
+  options.signal?.throwIfAborted()
   await refreshFrameworkRunner(projectRoot)
 
   const syncFramework = options.syncFramework ?? true
@@ -272,13 +289,16 @@ export async function runProjectPrepare(
     : []
   if (syncFramework) {
     for (const definition of syncDefinitions) {
-      await runFrameworkSync(projectRoot, definition)
+      options.signal?.throwIfAborted()
+      await runFrameworkSync(projectRoot, definition, options.signal)
     }
   }
 
+  options.signal?.throwIfAborted()
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
   if (updatedDependencies && io) {
-    await runProjectDependencyInstall(io, projectRoot)
+    options.signal?.throwIfAborted()
+    await installProjectDependencies(io, projectRoot, spawn, options.signal)
     const refreshedProject = await ensureProjectConfig(projectRoot)
     await prepareProjectDiscovery(projectRoot, refreshedProject.config)
     const refreshedFramework = await resolveProjectFramework(projectRoot, frameworkProjectPath)
@@ -297,11 +317,13 @@ export async function runProjectPrepare(
       writeInfo: message => io.stdout.write(`${message}\n`),
       writeWarning: message => io.stderr.write(`${message}\n`),
     })
+    options.signal?.throwIfAborted()
     await refreshFrameworkRunner(projectRoot)
     if (syncFramework) {
       const refreshedSyncDefinitions = await resolveProjectFrameworkSyncDefinitions(projectRoot)
       for (const definition of refreshedSyncDefinitions) {
-        await runFrameworkSync(projectRoot, definition)
+        options.signal?.throwIfAborted()
+        await runFrameworkSync(projectRoot, definition, options.signal)
       }
     }
   }
@@ -416,7 +438,7 @@ async function resolveProjectFrameworkSyncDefinitions(projectRoot: string): Prom
   return Object.freeze(definitions)
 }
 
-async function runFrameworkSync(projectRoot: string, definition: FrameworkSyncDefinition): Promise<void> {
+async function runFrameworkSync(projectRoot: string, definition: FrameworkSyncDefinition, signal?: AbortSignal): Promise<void> {
   const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
   try {
     const content = await readFile(frameworkProjectPath, 'utf8')
@@ -438,15 +460,21 @@ async function runFrameworkSync(projectRoot: string, definition: FrameworkSyncDe
     const child = spawn(command, args, {
       cwd: projectRoot,
       stdio: 'inherit',
+      ...(signal ? { signal } : {}),
+    })
+    let processError: Error | undefined
+    child.on('error', (error) => {
+      processError = error
     })
     child.on('close', (code: number | null) => {
-      if (code === 0) {
+      if (processError) {
+        reject(processError)
+      } else if (code === 0) {
         resolve(undefined)
       } else {
         reject(new Error(`${definition.errorLabel} exited with ${code}`))
       }
     })
-    child.on('error', reject)
   })
 }
 
@@ -810,7 +838,7 @@ export async function runProjectDevServer(
   passthroughArgs: readonly string[] = [],
 ): Promise<void> {
   let serverArgs: readonly string[] = []
-  let project = await ensureProjectConfig(projectRoot)
+  let project: LoadedProjectConfig
   let pluginWatches: readonly PluginPrepareWatch[] = []
   let watchedPathSnapshots = new Map<string, WatchedPathSnapshot>()
   const warnedBroadWatchPlugins = new Set<string>()
@@ -819,191 +847,198 @@ export async function runProjectDevServer(
   let requestChildRestart: (() => void) | undefined
   const hotPrepare = prepare === runProjectPrepare ? runProjectHotPrepare : prepare
 
-  const shutdownController = new AbortController()
-  const runDiscoveryPreparation = async (
-    syncFramework = false,
-    changes: readonly HoloProjectPrepareChange[] = [],
-  ): Promise<void> => {
-    if (prepare !== runProjectPrepare) {
-      await (syncFramework ? prepare : hotPrepare)(projectRoot, io)
-      return
-    }
-
-    if (syncFramework) {
-      await runProjectPrepare(projectRoot, io, {
-        command: 'dev',
-        reason: 'initial',
-        signal: shutdownController.signal,
-      })
-      return
-    }
-
-    const hasDependencyChange = changes.some(change => PACKAGE_MANIFEST_DISCOVERY_PATHS.has(change.path))
-    const hasConfigurationChange = changes.some(change =>
-      change.path === '.env'
-      || change.path.startsWith('.env.')
-      || change.path === 'config'
-      || change.path.startsWith('config/'),
-    )
-    if (!hasDependencyChange && !hasConfigurationChange) {
-      await runProjectHotPrepare(projectRoot, io, changes, shutdownController.signal)
-      return
-    }
-
-    await runProjectPrepare(projectRoot, io, {
-      syncFramework: false,
-      command: 'dev',
-      reason: hasDependencyChange ? 'dependencies-changed' : 'configuration-changed',
-      signal: shutdownController.signal,
-    })
-  }
-
-  const prepareDiscovery = async (
-    syncFramework = false,
-    changes: readonly HoloProjectPrepareChange[] = [],
-  ): Promise<void> => {
-    await runDiscoveryPreparation(syncFramework, changes)
-    project = await ensureProjectConfig(projectRoot)
-    const nextPluginWatches = await readPluginPrepareWatches(projectRoot)
-    for (const watch of nextPluginWatches) {
-      if (watch.roots.includes('.') && !warnedBroadWatchPlugins.has(watch.pluginId)) {
-        warnedBroadWatchPlugins.add(watch.pluginId)
-        io.stderr.write(`[${watch.pluginId}] Project prepare watch root "." watches the entire application and may increase watcher work.\n`)
-      }
-    }
-    const watchRootsChanged = JSON.stringify(pluginWatches) !== JSON.stringify(nextPluginWatches)
-    pluginWatches = nextPluginWatches
-    if (syncFramework || watchRootsChanged) {
-      watchedPathSnapshots = await collectWatchedPathSnapshots(projectRoot, project, pluginWatches)
-    }
-    serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
-    await refreshNonRecursiveWatchers?.()
-  }
-
-  await prepareDiscovery(true)
-
+  let closeWatchers = () => {}
   let pendingPrepare: Promise<void> | undefined
-  let queued = false
-  const pendingChanges = new Map<string, HoloProjectPrepareChange['kind']>()
-  let shuttingDown = false
-  const rerunPrepare = (change?: HoloProjectPrepareChange) => {
-    /* v8 ignore next 3 */
-    if (shuttingDown) {
-      return
-    }
-
-    if (change) {
-      pendingChanges.set(change.path, change.kind)
-    }
-    if (pendingPrepare) {
-      queued = true
-      return
-    }
-
-    const changes = [...pendingChanges.entries()]
-      .map(([path, kind]) => ({ path, kind }))
-      .sort((left, right) => left.path.localeCompare(right.path))
-    pendingChanges.clear()
-    pendingPrepare = prepareDiscovery(false, changes)
-      .then(() => {
-        requestChildRestart?.()
-      })
-      .catch((error) => {
-        io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
-      })
-      .finally(() => {
-        pendingPrepare = undefined
-        if (queued) {
-          queued = false
-          rerunPrepare()
-        }
-      })
+  const releaseWatchers = () => {
+    const close = closeWatchers
+    closeWatchers = () => {}
+    close()
   }
-
-  const observeWatchedPath = (path: string, eventType: string) => {
-    if (eventType !== 'rename') {
-      rerunPrepare({ path, kind: 'changed' })
-      return
-    }
-
-    const observedSnapshot = readWatchedPathSnapshot(resolve(projectRoot, path))
-    classifyEvents = classifyEvents.then(async () => {
-      const snapshot = await observedSnapshot
-      rerunPrepare(classifyWatchedPathChange(path, snapshot, watchedPathSnapshots))
-    })
-  }
-
-  const closeWatchers = (() => {
-    try {
-      const watcher = createWatcher(projectRoot, { recursive: true }, (_eventType, fileName) => {
-        if (shuttingDown || typeof fileName !== 'string') {
-          return
-        }
-
-        const normalizedPath = normalizeContainedWatchedFilePath(projectRoot, projectRoot, fileName)
-        if (!normalizedPath || !isDiscoveryRelevantPath(normalizedPath, project, pluginWatches)) {
-          return
-        }
-
-        observeWatchedPath(normalizedPath, _eventType)
-      })
-
-      return () => watcher.close()
-    } catch (error) {
-      if (!isRecursiveWatchUnsupported(error)) {
-        throw error
+  const session = createFrameworkSession(io, projectRoot, spawnProcess, releaseWatchers)
+  try {
+    project = await ensureProjectConfig(projectRoot)
+    session.signal.throwIfAborted()
+    const runDiscoveryPreparation = async (
+      syncFramework = false,
+      changes: readonly HoloProjectPrepareChange[] = [],
+    ): Promise<void> => {
+      if (prepare !== runProjectPrepare) {
+        await (syncFramework ? prepare : hotPrepare)(projectRoot, io)
+        return
       }
 
-      const watchers: WatchHandle[] = []
-      const closeAllWatchers = () => {
-        while (watchers.length > 0) {
-          watchers.pop()?.close()
-        }
+      if (syncFramework) {
+        await runProjectPrepare(projectRoot, io, {
+          command: 'dev',
+          reason: 'initial',
+          signal: session.signal,
+        })
+        return
       }
 
-      refreshNonRecursiveWatchers = async () => {
-        closeAllWatchers()
-        const watchRoots = await collectDiscoveryWatchRoots(projectRoot, project, pluginWatches)
-        for (const watchRoot of watchRoots) {
-          try {
-            watchers.push(createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
-              if (shuttingDown || typeof fileName !== 'string') {
+      const hasDependencyChange = changes.some(change => PACKAGE_MANIFEST_DISCOVERY_PATHS.has(change.path))
+      const hasConfigurationChange = changes.some(change =>
+        change.path === '.env'
+        || change.path.startsWith('.env.')
+        || change.path === 'config'
+        || change.path.startsWith('config/'),
+      )
+      if (!hasDependencyChange && !hasConfigurationChange) {
+        await runProjectHotPrepare(projectRoot, io, changes, session.signal)
+        return
+      }
+
+      await runProjectPrepare(projectRoot, io, {
+        syncFramework: false,
+        command: 'dev',
+        reason: hasDependencyChange ? 'dependencies-changed' : 'configuration-changed',
+        signal: session.signal,
+      })
+    }
+
+    const prepareDiscovery = async (
+      syncFramework = false,
+      changes: readonly HoloProjectPrepareChange[] = [],
+    ): Promise<void> => {
+      await runDiscoveryPreparation(syncFramework, changes)
+      session.signal.throwIfAborted()
+      project = await ensureProjectConfig(projectRoot)
+      const nextPluginWatches = await readPluginPrepareWatches(projectRoot)
+      for (const watch of nextPluginWatches) {
+        if (watch.roots.includes('.') && !warnedBroadWatchPlugins.has(watch.pluginId)) {
+          warnedBroadWatchPlugins.add(watch.pluginId)
+          io.stderr.write(`[${watch.pluginId}] Project prepare watch root "." watches the entire application and may increase watcher work.\n`)
+        }
+      }
+      const watchRootsChanged = JSON.stringify(pluginWatches) !== JSON.stringify(nextPluginWatches)
+      pluginWatches = nextPluginWatches
+      if (syncFramework || watchRootsChanged) {
+        watchedPathSnapshots = await collectWatchedPathSnapshots(projectRoot, project, pluginWatches)
+      }
+      serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
+      session.signal.throwIfAborted()
+      await refreshNonRecursiveWatchers?.()
+    }
+
+    await prepareDiscovery(true)
+
+    let queued = false
+    const pendingChanges = new Map<string, HoloProjectPrepareChange['kind']>()
+    const rerunPrepare = (change?: HoloProjectPrepareChange) => {
+      if (session.signal.aborted) {
+        return
+      }
+
+      if (change) {
+        pendingChanges.set(change.path, change.kind)
+      }
+      if (pendingPrepare) {
+        queued = true
+        return
+      }
+
+      const changes = [...pendingChanges.entries()]
+        .map(([path, kind]) => ({ path, kind }))
+        .sort((left, right) => left.path.localeCompare(right.path))
+      pendingChanges.clear()
+      pendingPrepare = prepareDiscovery(false, changes)
+        .then(() => {
+          if (!session.signal.aborted) requestChildRestart?.()
+        })
+        .catch((error) => {
+          if (!session.signal.aborted) io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+        })
+        .finally(() => {
+          pendingPrepare = undefined
+          if (queued) {
+            queued = false
+            rerunPrepare()
+          }
+        })
+    }
+
+    const observeWatchedPath = (path: string, eventType: string) => {
+      if (eventType !== 'rename') {
+        rerunPrepare({ path, kind: 'changed' })
+        return
+      }
+
+      const observedSnapshot = readWatchedPathSnapshot(resolve(projectRoot, path))
+      classifyEvents = classifyEvents.then(async () => {
+        const snapshot = await observedSnapshot
+        rerunPrepare(classifyWatchedPathChange(path, snapshot, watchedPathSnapshots))
+      })
+    }
+
+    closeWatchers = (() => {
+      try {
+        const watcher = createWatcher(projectRoot, { recursive: true }, (_eventType, fileName) => {
+          if (session.signal.aborted || typeof fileName !== 'string') {
+            return
+          }
+
+          const normalizedPath = normalizeContainedWatchedFilePath(projectRoot, projectRoot, fileName)
+          if (!normalizedPath || !isDiscoveryRelevantPath(normalizedPath, project, pluginWatches)) {
+            return
+          }
+
+          observeWatchedPath(normalizedPath, _eventType)
+        })
+
+        if (session.signal.aborted) watcher.close()
+        return session.signal.aborted ? () => {} : () => watcher.close()
+      } catch (error) {
+        if (!isRecursiveWatchUnsupported(error)) {
+          throw error
+        }
+
+        const watchers: WatchHandle[] = []
+        const closeAllWatchers = () => {
+          while (watchers.length > 0) {
+            watchers.pop()?.close()
+          }
+        }
+
+        refreshNonRecursiveWatchers = async () => {
+          closeAllWatchers()
+          const watchRoots = await collectDiscoveryWatchRoots(projectRoot, project, pluginWatches)
+          for (const watchRoot of watchRoots) {
+            if (session.signal.aborted) return
+            try {
+              const watcher = createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
+                if (session.signal.aborted || typeof fileName !== 'string') {
+                  return
+                }
+
+                const normalizedPath = normalizeContainedWatchedFilePath(projectRoot, watchRoot, fileName)
+                if (!normalizedPath || !isDiscoveryRelevantPath(normalizedPath, project, pluginWatches)) {
+                  return
+                }
+
+                observeWatchedPath(normalizedPath, _eventType)
+              })
+              if (session.signal.aborted) {
+                watcher.close()
                 return
               }
-
-              const normalizedPath = normalizeContainedWatchedFilePath(projectRoot, watchRoot, fileName)
-              if (!normalizedPath || !isDiscoveryRelevantPath(normalizedPath, project, pluginWatches)) {
-                return
+              watchers.push(watcher)
+            } catch (watchError) {
+              if (!isIgnorableWatchError(watchError)) {
+                throw watchError
               }
-
-              observeWatchedPath(normalizedPath, _eventType)
-            }))
-          } catch (watchError) {
-            if (!isIgnorableWatchError(watchError)) {
-              throw watchError
             }
           }
         }
+
+        return () => closeAllWatchers()
       }
+    })()
 
-      return () => closeAllWatchers()
-    }
-  })()
+    await refreshNonRecursiveWatchers?.()
 
-  await refreshNonRecursiveWatchers?.()
-
-  const beginShutdown = () => {
-    if (shuttingDown) return
-
-    shuttingDown = true
-    shutdownController.abort()
-    closeWatchers()
-  }
-
-  const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
-  try {
-    while (!shuttingDown) {
-      const run = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess, beginShutdown)
+    const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
+    while (!session.signal.aborted) {
+      const run = session.launch(invocation, serverArgs)
       requestChildRestart = run.restart
       const result = await run.completion
       requestChildRestart = undefined
@@ -1012,7 +1047,7 @@ export async function runProjectDevServer(
         throw result.error
       }
 
-      if (result.shutdownSignal) {
+      if (session.signal.aborted) {
         return
       }
 
@@ -1026,9 +1061,13 @@ export async function runProjectDevServer(
 
       throw new Error(`Project development server failed with exit code ${result.code ?? 'unknown'}.`)
     }
+  } catch (error) {
+    if (!session.signal.aborted) throw error
   } finally {
     requestChildRestart = undefined
-    beginShutdown()
-    await Promise.resolve(pendingPrepare)
+    session.dispose()
+    releaseWatchers()
+    await classifyEvents
+    await pendingPrepare
   }
 }

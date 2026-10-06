@@ -1,4 +1,4 @@
-import { ChildProcess, type spawn } from 'node:child_process'
+import { ChildProcess, spawn } from 'node:child_process'
 import type { watch, WatchListener } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -135,4 +135,210 @@ it.each(['close', 'error', 'throw'] as const)('waits for closure and handles res
     for (const child of children) child.emit('close', 0)
     await run.catch(() => undefined)
   }
+})
+
+
+it('prevents launch when shutdown interrupts initial preparation and waits for preparation to settle', async () => {
+  const root = await createProject()
+  const io = createIo(root)
+  const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
+  const launches: ChildProcess[] = []
+  let releasePreparation: () => void = () => {}
+  let preparationStarted: () => void = () => {}
+  const started = new Promise<void>(resolvePromise => { preparationStarted = resolvePromise })
+  const preparation = new Promise<void>(resolvePromise => { releasePreparation = resolvePromise })
+  const prepare = async () => {
+    preparationStarted()
+    await preparation
+  }
+  const spawnProcess = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args)
+    launches.push(child)
+    return child
+  }) as typeof spawn
+  const closeWatcher = vi.fn()
+  const createWatcher = (() => ({ close: closeWatcher })) as unknown as typeof watch
+  const command = runProjectDevServer(io, root, spawnProcess, createWatcher, prepare, ['--port=3000'])
+  let completed = false
+  const completion = command.then(() => { completed = true })
+  try {
+    await started
+    const shutdown = process.listeners('SIGTERM').find(listener => !listeners.SIGTERM.includes(listener))
+    expect(shutdown).toBeDefined()
+    shutdown?.('SIGTERM')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(completed).toBe(false)
+    releasePreparation()
+    await completion
+    expect(launches).toHaveLength(0)
+    expect(closeWatcher).not.toHaveBeenCalled()
+    expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
+    expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
+  } finally {
+    releasePreparation()
+    await command.catch(() => undefined)
+    for (const child of launches) child.kill()
+  }
+})
+
+it.each(['shutdown', 'failure'] as const)('cleans up partially acquired fallback watchers after setup %s', async (outcome) => {
+  const root = await createProject()
+  await mkdir(join(root, 'server'))
+  const io = createIo(root)
+  const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
+  const closeWatcher = vi.fn()
+  const spawnProcess = vi.fn(spawn) as unknown as typeof spawn
+  let acquired = false
+  const createWatcher = ((_path: string, options: { recursive?: boolean }) => {
+    if (options.recursive) throw Object.assign(new Error('unsupported'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' })
+    if (!acquired) {
+      acquired = true
+      return { close: closeWatcher }
+    }
+    if (outcome === 'failure') throw new Error('watch setup failed')
+    process.listeners('SIGINT').find(listener => !listeners.SIGINT.includes(listener))?.('SIGINT')
+    return { close: closeWatcher }
+  }) as unknown as typeof watch
+  const command = runProjectDevServer(io, root, spawnProcess, createWatcher, async () => {}, ['--port=3000'])
+  if (outcome === 'failure') await expect(command).rejects.toThrow('watch setup failed')
+  else await expect(command).resolves.toBeUndefined()
+  expect(spawnProcess).not.toHaveBeenCalled()
+  expect(closeWatcher).toHaveBeenCalledTimes(outcome === 'failure' ? 1 : 2)
+  expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
+  expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
+})
+
+it('releases session signals when initial preparation fails', async () => {
+  const root = await createProject()
+  const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
+  const spawnProcess = vi.fn(spawn) as unknown as typeof spawn
+  const createWatcher = vi.fn()
+  await expect(runProjectDevServer(createIo(root), root, spawnProcess, createWatcher, async () => {
+    throw new Error('preparation failed')
+  })).rejects.toThrow('preparation failed')
+  expect(spawnProcess).not.toHaveBeenCalled()
+  expect(createWatcher).not.toHaveBeenCalled()
+  expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
+  expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
+})
+
+it('delivers cancellation to a project preparer and waits for it to settle', async () => {
+  const root = await createProject()
+  await writeFile(join(root, 'config/app.ts'), "export default { plugins: ['shutdown-plugin'] }")
+  const pluginRoot = join(root, 'node_modules/shutdown-plugin')
+  await mkdir(pluginRoot, { recursive: true })
+  await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+    name: 'shutdown-plugin', type: 'module', holo: { plugin: './plugin.mjs' },
+  }))
+  await writeFile(join(pluginRoot, 'plugin.mjs'), "export default { id: 'shutdown', contributes: { project: { prepare: './prepare.mjs' } } }")
+  await writeFile(join(pluginRoot, 'prepare.mjs'), `export default {
+    apiVersion: 1,
+    async prepare(context) {
+      context.logger.info('preparation started')
+      await new Promise(resolve => context.signal.addEventListener('abort', resolve, { once: true }))
+      context.logger.info('preparation cancelled')
+      return { kind: 'prepared' }
+    }
+  }`)
+  const io = createIo(root)
+  let output = ''
+  io.stdout.on('data', chunk => { output += String(chunk) })
+  const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
+  const spawnProcess = vi.fn(spawn) as unknown as typeof spawn
+  const createWatcher = vi.fn()
+  const command = runProjectDevServer(io, root, spawnProcess, createWatcher)
+  try {
+    await vi.waitFor(() => expect(output).toContain('preparation started'))
+    process.listeners('SIGTERM').find(listener => !listeners.SIGTERM.includes(listener))?.('SIGTERM')
+    await expect(command).resolves.toBeUndefined()
+    expect(output).toContain('preparation cancelled')
+    expect(spawnProcess).not.toHaveBeenCalled()
+    expect(createWatcher).not.toHaveBeenCalled()
+    expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
+    expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
+  } finally {
+    process.listeners('SIGTERM').find(listener => !listeners.SIGTERM.includes(listener))?.('SIGTERM')
+    await command.catch(() => undefined)
+  }
+})
+
+it.each(['preparation', 'exit', 'close'] as const)('prevents replacement when shutdown arrives during restart %s', async (phase) => {
+  const root = await createProject()
+  await mkdir(join(root, '.holo-js/framework'), { recursive: true })
+  await writeFile(join(root, '.holo-js/framework/run.mjs'), "console.log('ready'); setInterval(() => {}, 1000)")
+  const io = createIo(root)
+  const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
+  const children: ChildProcess[] = []
+  const spawnProcess = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args)
+    children.push(child)
+    return child
+  }) as typeof spawn
+  let observeChange: WatchListener<string> | undefined
+  const closeWatcher = vi.fn()
+  const createWatcher = ((_path: string, _options: { recursive?: boolean }, callback: WatchListener<string>) => {
+    observeChange = callback
+    return { close: closeWatcher }
+  }) as unknown as typeof watch
+  let preparationCount = 0
+  let releasePreparation: () => void = () => {}
+  const preparation = new Promise<void>(resolvePromise => { releasePreparation = resolvePromise })
+  const prepare = async () => {
+    preparationCount++
+    if (phase === 'preparation' && preparationCount > 1) await preparation
+  }
+  let output = ''
+  io.stdout.on('data', chunk => { output += String(chunk) })
+  const command = runProjectDevServer(io, root, spawnProcess, createWatcher, prepare, ['--port=3000'])
+  const shutdown = () => process.listeners('SIGTERM').find(listener => !listeners.SIGTERM.includes(listener))?.('SIGTERM')
+  let completed = false
+  const completion = command.then(() => { completed = true })
+  try {
+    await vi.waitFor(() => expect(output).toContain('ready'))
+    const first = children[0]!
+    if (phase !== 'preparation') first.once(phase, shutdown)
+    observeChange?.('change', 'config/app.ts')
+    if (phase === 'preparation') {
+      await vi.waitFor(() => expect(preparationCount).toBe(2))
+      observeChange?.('change', 'config/database.ts')
+      shutdown()
+      await new Promise<void>(resolvePromise => first.once('close', () => resolvePromise()))
+      expect(completed).toBe(false)
+      expect(closeWatcher).toHaveBeenCalledOnce()
+      releasePreparation()
+    }
+    await completion
+    expect(children).toHaveLength(1)
+    expect(closeWatcher).toHaveBeenCalledOnce()
+    const preparationsBeforeLateEvents = preparationCount
+    observeChange?.('rename', 'config/app.ts')
+    io.stdin.emit('data', 'late input')
+    first.stdout?.emit('data', 'late output')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(preparationCount).toBe(preparationsBeforeLateEvents)
+    expect(output).toBe('ready\n')
+    expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
+    expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
+  } finally {
+    releasePreparation()
+    shutdown()
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }
+    await command.catch(() => undefined)
+  }
+})
+
+it('prevents production launch when shutdown arrives before argument preparation finishes', async () => {
+  const root = await createProject()
+  const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
+  const spawnProcess = vi.fn(spawn) as unknown as typeof spawn
+  const command = runProjectStartServer(createIo(root), root, spawnProcess)
+  const shutdown = process.listeners('SIGINT').find(listener => !listeners.SIGINT.includes(listener))
+  expect(shutdown).toBeDefined()
+  shutdown?.('SIGINT')
+  await expect(command).resolves.toBeUndefined()
+  expect(spawnProcess).not.toHaveBeenCalled()
+  expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
+  expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
 })
