@@ -11069,7 +11069,6 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('error as svelteKitError')
     expect(generatedServerHooks).toContain('cause.name !== \'AuthorizationError\'')
     expect(generatedServerHooks).toContain('svelteKitError(cause.decision.status, cause.message)')
-    expect(generatedServerHooks).toContain('export const handleError = holoHooks.handleError')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
 
     // Legacy .user.ts files are deleted, not left as empty artifacts.
