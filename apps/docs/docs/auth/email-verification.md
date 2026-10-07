@@ -270,6 +270,13 @@ if (!current?.email_verified_at) {
 }
 ```
 
+Verification and password-reset redemption for external providers or different database contexts must
+run outside a caller-owned token-storage transaction. Core rejects such redemption before claiming
+the token, revoking reset siblings, or invoking the provider; Auth propagates the existing
+native `TransactionError`. The token remains available for a later attempt outside the
+transaction. Proven shared native persistence still participates in the enclosing transaction and
+rolls the claim and user mutation back together on failure.
+
 ## Related Guides
 
 - [Local Authentication](/auth/local-auth)

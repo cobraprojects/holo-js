@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { connectionAsyncContext, DB, ModelRepository, type DatabaseContext } from '@holo-js/db'
+import { connectionAsyncContext, DB, ModelRepository, TransactionError, type DatabaseContext } from '@holo-js/db'
 
 export function createAuthRedemptionContext() {
   const repositories = new Map<string, () => object | null>()
@@ -30,6 +30,9 @@ export function createAuthRedemptionContext() {
         }))
       }
 
+      if (connection.getScope().kind !== 'root') {
+        throw new TransactionError('[Holo Auth] Token redemption for an external persistence context must run outside a database transaction.')
+      }
       if (!await claim(connection)) return null
       return operation()
     },

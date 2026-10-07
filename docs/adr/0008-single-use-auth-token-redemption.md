@@ -29,3 +29,10 @@ The concrete callback result remains inferred. Shared transaction participation 
 The single-winner guarantee applies per token, including when different valid password-reset tokens target the same email; no account-wide lock spans external provider operations. Password-reset sibling revocation retains its existing provider, email, and broker-table scope and occurs before user mutation. For external providers, those revocations remain permanent if mutation fails; proven shared-database participation rolls them back with the claim and user mutation.
 
 This redemption decision applies to email verification and password reset, not reusable personal access tokens or browser sessions.
+
+Verification and password-reset redemption for external providers or different database contexts must
+run outside a caller-owned token-storage transaction. Core rejects such redemption before claiming
+the token, revoking reset siblings, or invoking the provider; Auth propagates the existing
+native `TransactionError`. The token remains available for a later attempt outside the
+transaction. Proven shared native persistence still participates in the enclosing transaction and
+rolls the claim and user mutation back together on failure.

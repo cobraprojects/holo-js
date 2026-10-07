@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { DatabaseContext, createDialect, ModelRepository, TableQueryBuilder, column, defineGeneratedTable, defineModel, createSchemaService, connectionAsyncContext, DB } from '@holo-js/db'
+import { DatabaseContext, TransactionError, createDialect, ModelRepository, TableQueryBuilder, column, defineGeneratedTable, defineModel, createSchemaService, connectionAsyncContext, DB } from '@holo-js/db'
 import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig, authRuntimeInternals } from '../../auth/src'
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig } from '@holo-js/session'
 import { createCoreSessionRevocationStore } from '../src/portable/authSessionRevocations'
@@ -3495,7 +3495,7 @@ export default {
       await stores.passwordResetTokens!.create(token)
       await stores.passwordResetTokens!.create({ ...token, id: 'reset-2' })
       const input = { token: `${token.id}.${secret}`, password: 'new-secret', passwordConfirmation: 'new-secret' }
-      await expect(runtime.auth!.resetPassword(input)).rejects.toThrow('reset save failed')
+      await expect(DB.transaction(() => runtime.auth!.resetPassword(input))).rejects.toThrow('reset save failed')
       expect(await User.find(1)).toMatchObject({ password: 'old-secret' })
       expect(await stores.passwordResetTokens!.findById('reset-2')).not.toBeNull()
       await expect(runtime.auth!.resetPassword(input)).resolves.toMatchObject({ email: 'ava@example.com' })
@@ -3625,6 +3625,9 @@ export default defineAuthConfig({ defaults: { guard: 'web', passwords: 'users' }
     await store.create({ ...record, id: 'other-provider', provider: 'admins' })
     await store.create({ ...record, id: 'other-email', email: 'other@example.com' })
     const input = { token: `${record.id}.reset-secret`, password: 'new-secret', passwordConfirmation: 'new-secret' }
+    await expect(DB.transaction(() => runtime.auth!.resetPassword(input))).rejects.toBeInstanceOf(TransactionError)
+    expect(await store.findById(record.id)).not.toBeNull()
+    expect(await store.findById('reset-2')).not.toBeNull()
     await expect(runtime.auth!.resetPassword(input)).rejects.toThrow('external password save failed')
     expect(await store.findById('reset-2')).toBeNull()
     expect(await store.findById('other-broker')).not.toBeNull()
@@ -3717,7 +3720,7 @@ export default {
         await DB.table('verification_users').insert({ id: 1, email: 'ava@example.com', email_verified_at: null })
         await createVerificationTokenTable()
         const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
-        await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('native save failed')
+        await expect(DB.transaction(() => runtime.auth!.verification.consume(token.plainTextToken))).rejects.toThrow('native save failed')
         await expect(runtime.auth!.verification.consume(token.plainTextToken)).resolves.toMatchObject({
           id: driver === 'postgres' ? '1' : 1, email: 'ava@example.com', email_verified_at: expect.anything(),
         })
@@ -3782,6 +3785,9 @@ export default {
         await runtime.initialize()
         await createVerificationTokenTable()
         const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
+        await expect(DB.transaction(() => runtime.auth!.verification.consume(token.plainTextToken))).rejects.toBeInstanceOf(TransactionError)
+        const store = authRuntimeInternals.getRuntimeBindings().emailVerificationTokens!
+        expect(await store.findById(token.id)).not.toBeNull()
         await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('provider mutation failed')
         await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
       } finally {
