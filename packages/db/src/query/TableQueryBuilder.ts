@@ -33,7 +33,7 @@ import {
   type QueryCacheFlexibleTtlInput,
   type QueryCacheTtlInput,
 } from '../cache'
-import { queryIdBatches } from './traversal'
+import { queryBatches } from './traversal'
 import {
   createCursorPaginator,
   createPaginator,
@@ -1882,15 +1882,9 @@ export class TableQueryBuilder<
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
-    const rows = await this.getUnpaginatedRows<TRow>()
     let page = 1
-
-    for (let index = 0; index < rows.length; index += size) {
-      const result = await callback(rows.slice(index, index + size), page)
-      if (result === false) {
-        return
-      }
-
+    for await (const rows of queryBatches(this, size, {}, (rows: readonly TRow[]) => rows)) {
+      if (await callback(rows, page) === false) return
       page += 1
     }
   }
@@ -1903,7 +1897,7 @@ export class TableQueryBuilder<
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     let page = 1
-    for await (const rows of queryIdBatches(this, size, { column, direction: 'asc' }, (rows: readonly TRow[]) => rows)) {
+    for await (const rows of queryBatches(this, size, { column, direction: 'asc' }, (rows: readonly TRow[]) => rows)) {
       if (await callback(rows, page) === false) return
       page += 1
     }
@@ -1917,7 +1911,7 @@ export class TableQueryBuilder<
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     let page = 1
-    for await (const rows of queryIdBatches(this, size, { column, direction: 'desc' }, (rows: readonly TRow[]) => rows)) {
+    for await (const rows of queryBatches(this, size, { column, direction: 'desc' }, (rows: readonly TRow[]) => rows)) {
       if (await callback(rows, page) === false) return
       page += 1
     }
@@ -1928,19 +1922,13 @@ export class TableQueryBuilder<
   ): AsyncGenerator<TRow, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
-    const rows = await this.getUnpaginatedRows<TRow>()
-    for (let index = 0; index < rows.length; index += size) {
-      for (const row of rows.slice(index, index + size)) {
-        yield row
-      }
+    for await (const rows of queryBatches(this, size, {}, (rows: readonly TRow[]) => rows)) {
+      yield* rows
     }
   }
 
   async* cursor<TRow extends Record<string, unknown> = TSelectedRow>(): AsyncGenerator<TRow, void, unknown> {
-    const rows = await this.getUnpaginatedRows<TRow>()
-    for (const row of rows) {
-      yield row
-    }
+    yield* this.lazy<TRow>()
   }
 
   async count(): Promise<number> {
@@ -2550,10 +2538,6 @@ export class TableQueryBuilder<
 
   private getCompiler(): SQLQueryCompiler {
     return createQueryCompiler(this.connection)
-  }
-
-  private async getUnpaginatedRows<TRow extends Record<string, unknown>>(): Promise<TRow[]> {
-    return this.limit(undefined).offset(undefined).get<TRow>()
   }
 
   private resolvePrimaryKeyColumn(): string {

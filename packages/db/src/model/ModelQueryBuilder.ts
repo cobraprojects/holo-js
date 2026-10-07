@@ -23,7 +23,7 @@ import {
   decodeValueCursor,
   normalizePaginationParameterName,
 } from '../query/pagination'
-import { queryIdBatches } from '../query/traversal'
+import { queryBatches } from '../query/traversal'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { resolveMorphSelector } from './morphRegistry'
@@ -1114,15 +1114,11 @@ export class ModelQueryBuilder<
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    const entities = await this.getUnpaginatedEntities()
     let page = 1
-
-    for (let index = 0; index < entities.length; index += size) {
-      const result = await callback(entities.slice(index, index + size) as unknown as EntityWithLoaded<TTable, TRelations, TLoaded>[], page)
-      if (result === false) {
-        return
-      }
-
+    for await (const rows of queryBatches(this.tableQuery, size, {
+      primaryKey: this.repository.definition.primaryKey,
+    }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
+      if (await callback(rows, page) === false) return
       page += 1
     }
   }
@@ -1153,9 +1149,10 @@ export class ModelQueryBuilder<
     direction: 'asc' | 'desc',
   ): Promise<void> {
     let page = 1
-    for await (const rows of queryIdBatches(this.tableQuery, size, {
+    for await (const rows of queryBatches(this.tableQuery, size, {
       column,
       direction,
+      fallbackOrder: direction === 'asc' ? 'database' : 'rows',
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       if (await callback(rows, page) === false) return
@@ -1174,19 +1171,15 @@ export class ModelQueryBuilder<
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    const entities = await this.getUnpaginatedEntities()
-    for (let index = 0; index < entities.length; index += size) {
-      for (const entity of entities.slice(index, index + size)) {
-        yield entity as unknown as EntityWithLoaded<TTable, TRelations, TLoaded>
-      }
+    for await (const rows of queryBatches(this.tableQuery, size, {
+      primaryKey: this.repository.definition.primaryKey,
+    }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
+      yield* rows
     }
   }
 
   async* cursor(): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
-    const entities = await this.getUnpaginatedEntities()
-    for (const entity of entities) {
-      yield entity as unknown as EntityWithLoaded<TTable, TRelations, TLoaded>
-    }
+    yield* this.lazy()
   }
 
   async count(): Promise<number> {
@@ -1835,12 +1828,6 @@ export class ModelQueryBuilder<
 
       return value
     })
-  }
-
-  private async getUnpaginatedEntities(): Promise<
-    ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
-  > {
-    return this.clone(this.tableQuery.limit(undefined).offset(undefined)).get()
   }
 
   private async getRowsAndEntities(): Promise<{
