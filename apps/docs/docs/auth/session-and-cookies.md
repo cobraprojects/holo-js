@@ -7,6 +7,43 @@ Session auth in Holo is powered by `@holo-js/session`.
 Session state stores the authenticated user for session guards and handles remember-me cookies and cookie
 serialization. The session package is public, so it can be used by auth or by your own application code directly.
 
+Different browsers or devices may maintain independent sessions for the same user. Normal login and rotation affect the current browser's authentication rather than signing out other devices.
+
+## Approved Other-Device Logout
+
+::: info Pending implementation
+Other-device logout, its durable revocation adapter, are approved designs, not current functionality.
+:::
+
+Developers will explicitly request logout of the current user's other browser authentication:
+
+```ts
+await auth.logoutOtherDevices()
+await auth.guard('web').logoutOtherDevices()
+```
+
+These are alternatives for the default session guard and a selected session guard. The operation requires a valid authenticated browser session and retains that browser's authentication. Applications control any recent-password or hosted reauthentication requirement before calling it. Registered token guards do not expose this method.
+
+Other browsers lose the selected provider/user identity on their next authenticated request, including remember-cookie restoration. Unrelated identities in a shared browser session remain valid. Personal access tokens remain valid too; their [other-token revocation](/auth/personal-access-tokens#approved-other-token-revocation) is separate.
+
+For Clerk and WorkOS, this invalidates existing Holo sessions, not upstream provider sessions. A still-valid upstream session may authenticate again. The existing `logoutAll` continues to mean guards in the current request, not every device.
+
+### Durable revocation ownership
+
+Auth owns shared revocation state across database, file, and Redis session stores. A logical session identity survives physical session-ID rotation; revocation advances the user's authentication generation while retaining the current logical session. An already-revoked caller cannot make itself the survivor. Distinct identity checks are batched and reused within the request rather than scanning sessions.
+
+Core will supply this state through an `auth_session_revocations` table keyed by `(provider, user_id)`, with integer `generation` and nullable string `retained_session_id`. New scaffolds will include its migration; existing applications adopting the adapter will need that migration.
+
+When the adapter is enabled, older authenticated browser payloads without a logical session identity and generation will require a fresh login, including those restored through remember cookies. Existing personal access tokens will remain valid. After adoption, ordinary login and rotation will continue to preserve authentication on other devices.
+
+Standalone auth will accept an optional `sessionRevocations` adapter in its runtime bindings. Requesting other-device logout without that adapter will fail explicitly. See [Approved Ownership Designs](/architecture#approved-ownership-designs) for the related transition and failure rules.
+
+## Complete payload rotation
+
+Rotation accepts `data?: SessionRecord['data']` and `renewLifetime?: boolean`. Auth rotates with the complete next payload and lifetime renewal while preserving private flash state and current remember-token policy. Ordinary rotation retains its current defaults. Enabling lifetime renewal resets the session timestamps and clears its existing remember hash; Auth reissues a remember token when required by the transition.
+
+If a transition fails after persistence, its new session is invalidated and affected request identities cleared. The previous identifier remains invalidated, and other devices remain authenticated.
+
 ## Configuration
 
 ```ts
@@ -560,3 +597,5 @@ Use `@holo-js/session` directly when:
 - you are building flows such as carts, onboarding state, checkout progress, or temporary wizard state
 
 Use `@holo-js/auth` on top of it when the concern is user authentication rather than raw session management.
+
+Auth requires a native store `rotate` operation for complete payload transitions and rejects unsupported stores before mutation. Framework adapters own native request isolation and cookie transport. Persistence and browser cookies are not one transaction, and file stores do not guarantee crash atomicity across multiple files. If invalidation also fails, the thrown aggregate preserves both failures and request authentication is still cleared.

@@ -25,6 +25,8 @@ export interface TouchSessionOptions {
 export interface RotateSessionOptions {
   readonly store?: string
   readonly newId?: string
+  readonly data?: SessionRecord['data']
+  readonly renewLifetime?: boolean
 }
 
 export interface RememberTokenOptions {
