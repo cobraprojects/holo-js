@@ -1213,7 +1213,7 @@ describe('new core runtime slice', () => {
     expect(entries).toContain('tx-rollback:transaction:1:-:boom')
   })
 
-  it('wraps transaction callback execution failures with typed transaction errors', async () => {
+  it('preserves transaction callback failures and their primary rollback errors', async () => {
     const commitDb = createDatabase({
       adapter: new FakeAdapter(),
       dialect: createDialect(true),
@@ -1242,9 +1242,10 @@ describe('new core runtime slice', () => {
       throw new Error('force rollback')
     }).catch(error => error)
 
-    expect(rollbackError).toBeInstanceOf(TransactionError)
-    expect((rollbackError as TransactionError).cause).toBeInstanceOf(Error)
-    expect((rollbackError as TransactionError).message).toContain('afterRollback')
+    expect(rollbackError).toBeInstanceOf(AggregateError)
+    expect((rollbackError as AggregateError).errors[0]).toMatchObject({ message: 'force rollback' })
+    expect((rollbackError as AggregateError).errors[1]).toBeInstanceOf(TransactionError)
+    expect((rollbackError as AggregateError).errors[1].cause).toMatchObject({ message: 'rollback callback failed' })
 
     const stringThrowDb = createDatabase({
       adapter: new FakeAdapter(),
