@@ -55,3 +55,9 @@ The repository architecture check rejects:
 - abstraction-package dependencies on concrete drivers
 
 Run it through `bun run test:dependency-policy`.
+
+## Realtime row windows
+
+Realtime owns shared mutation metadata, projection checks, relation hydration, and patch preparation inside its row-window runtime. Standard rows defer a limited refill until the mutation batch is applied; wrappers refill as each mutation changes their window; offset windows patch stable updates locally and fetch the bounded page when its membership or ordering changes. Cursor windows retain their lookahead and next-page boundary. Aggregate and relation algorithms keep their own policies.
+
+Selected cursor results include only their selected fields, including after inserts and updates. Hidden-field updates leave visible results unchanged. Patching preserves unaffected projected rows where possible and shares cached reads across patch targets. Unsupported shapes fall back to the original query rather than widening an optimized fetch or returning an incomplete result. See [Realtime pagination](./realtime/index.md#pagination).

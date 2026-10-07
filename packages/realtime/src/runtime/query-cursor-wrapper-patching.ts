@@ -9,12 +9,6 @@ import {
   UNPATCHED_RESULT,
 } from './query-patch-results'
 import {
-  hydrateBelongsToMutationRows,
-} from './query-belongs-to-hydration'
-import {
-  hydrateRelatedMutationRows,
-} from './query-related-hydration'
-import {
   rowIdentity,
 } from './query-row-identity'
 import {
@@ -23,10 +17,15 @@ import {
 import type {
   DatabaseQueryObservation,
   PatchQueryResult,
+  RowPatchContext,
 } from './query-state'
 import type { BackfillCache } from './state'
 import { canPatchPartialCursorMutation } from './query-stable-window'
 import { backfillCurrentQueryRows } from './query-row-backfill'
+import { prepareRowWindowMutation } from './query-row-window-mutation'
+import { createMutationRowPatchContext, createQueryRowPatchContext } from './query-row-patch-context'
+import { projectRowWithContext } from './query-row-projection'
+import { isRecordArray } from './value'
 
 type CursorWrapperMutationResult = {
   readonly changed: boolean
@@ -46,6 +45,8 @@ export async function tryPatchCursorWrapperDataRows(
     return undefined
   }
 
+  const queryContext = createQueryRowPatchContext(query)
+  let patchContext: RowPatchContext | undefined
   let patchedRows = cursorRows
   let patchedRowCount = rowCount
   let changed = false
@@ -65,23 +66,17 @@ export async function tryPatchCursorWrapperDataRows(
         value: refreshedRows.slice(0, perPage),
       })
     }
-    const belongsToHydratedMutation = await hydrateBelongsToMutationRows(
-      mutation,
-      query.belongsToHydrations,
-      backfills,
-    )
-    const hydratedMutation = belongsToHydratedMutation
-      ? await hydrateRelatedMutationRows(
-          belongsToHydratedMutation,
-          query.relatedHydrations,
-          backfills,
-        )
-      : undefined
-    if (!hydratedMutation) {
+    const prepared = await prepareRowWindowMutation(query, queryContext, mutation, backfills)
+    if (prepared === null) {
+      continue
+    }
+
+    if (!prepared) {
       return undefined
     }
 
-    const result = applyCursorWrapperMutation(query, hydratedMutation, patchedRows, patchedRowCount)
+    patchContext = createMutationRowPatchContext(queryContext, prepared.metadata)
+    const result = applyCursorWrapperMutation(query, prepared.mutation, patchedRows, patchedRowCount)
     if (!result) {
       return undefined
     }
@@ -91,7 +86,7 @@ export async function tryPatchCursorWrapperDataRows(
     changed = changed || result.changed
   }
 
-  if (!changed) {
+  if (!changed || !patchContext) {
     return UNCHANGED_QUERY_RESULT
   }
 
@@ -107,6 +102,11 @@ export async function tryPatchCursorWrapperDataRows(
     ? retainedRows
     : Object.freeze(retainedRows.slice(0, perPage))
 
+  const projectedRows = projectCursorVisibleRows(query, visibleRows, patchContext)
+  if (!projectedRows) {
+    return undefined
+  }
+
   return Object.freeze({
     nextQuery: Object.freeze({
       ...query,
@@ -115,8 +115,38 @@ export async function tryPatchCursorWrapperDataRows(
     }),
     patched: true,
     query,
-    value: visibleRows,
+    value: projectedRows,
   })
+}
+
+function projectCursorVisibleRows(
+  query: DatabaseQueryObservation,
+  rows: readonly Readonly<Record<string, unknown>>[],
+  context: RowPatchContext,
+): readonly Readonly<Record<string, unknown>>[] | undefined {
+  if (!context.hasProjectedSelections) {
+    return rows
+  }
+
+  const previousRows = isRecordArray(query.result) ? query.result : []
+  const previousById = new Map(previousRows.map(row => [rowIdentity(row), row]))
+  const projectedRows: Readonly<Record<string, unknown>>[] = []
+  for (const row of rows) {
+    const projected = projectRowWithContext(context, row)
+    if (!projected) {
+      return undefined
+    }
+
+    const identity = rowIdentity(row)
+    const previous = typeof identity === 'undefined' ? undefined : previousById.get(identity)
+    const resultKeys = Object.keys(projected)
+    const unchanged = previous
+      && Object.keys(previous).length === resultKeys.length
+      && resultKeys.every(key => Object.is(previous[key], projected[key]))
+    projectedRows.push(unchanged ? previous : projected)
+  }
+
+  return Object.freeze(projectedRows)
 }
 
 function applyCursorWrapperMutation(

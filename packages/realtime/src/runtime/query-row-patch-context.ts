@@ -246,6 +246,10 @@ export function createQueryRowPatchContext(query: DatabaseQueryObservation): Que
     orderMultipliers: readQueryOrderMultipliers(query),
     projectedIdentityColumn,
     queryPredicates: createPredicateMatchContext(query.predicates, exactQueryId),
+    relationKeys: [
+      ...(query.belongsToHydrations ?? []).map(hydration => hydration.relationKey),
+      ...(query.relatedHydrations ?? []).map(hydration => hydration.relationKey),
+    ],
     selectionColumns: readQuerySelectionColumns(query),
     selectionResultKeys: readQuerySelectionResultKeys(query),
     usesExactQueryIdAsProjectedIdentity: exactQueryId !== NO_EXACT_ID_PREDICATE
@@ -269,6 +273,7 @@ export function createMutationRowPatchContext(
     projectedSelectionChanged: selectionColumnsChangedByMutation(queryContext.selectionColumns, metadata),
     queryOrderChanged: valueKeysChangeColumns(metadata.valueKeys, queryContext.orderColumns),
     queryPredicates: queryContext.queryPredicates,
+    relationKeys: queryContext.relationKeys,
     selectionColumns: queryContext.selectionColumns,
     selectionResultKeys: queryContext.selectionResultKeys,
     usesExactQueryIdAsProjectedIdentity: queryContext.usesExactQueryIdAsProjectedIdentity,
