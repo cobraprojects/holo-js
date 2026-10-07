@@ -1,3 +1,4 @@
+import { getCurrentSvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import { createSubscriber } from 'svelte/reactivity'
 import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag, type ValidationSchema } from '@holo-js/validation'
 import type {
@@ -44,25 +45,6 @@ type BrowserEventTarget = {
     listener: (event: BrowserSubmitEvent | Event) => void,
     options?: boolean | object,
   ): void
-}
-
-type SvelteKitCookieOptions = {
-  path: string
-  maxAge?: number
-  httpOnly?: boolean
-  sameSite?: 'lax' | 'strict' | 'none'
-}
-
-type SvelteKitRequestEvent = {
-  readonly url?: URL
-  readonly cookies: {
-    get(name: string): string | undefined
-    set(name: string, value: string, options: SvelteKitCookieOptions): void
-  }
-}
-
-type SvelteKitRequestEventStore = {
-  getStore(): SvelteKitRequestEvent | undefined
 }
 
 type BrowserSubmitEvent = {
@@ -359,14 +341,6 @@ function clearBrowserCookie(name: string): void {
   document.cookie = `${name}=; Max-Age=0; Path=${getBrowserCookiePath()}; SameSite=Lax`
 }
 
-function getSvelteKitRequestEvent(): SvelteKitRequestEvent | undefined {
-  const store = (globalThis as {
-    readonly __holoSvelteKitRequestEventStore?: SvelteKitRequestEventStore
-  }).__holoSvelteKitRequestEventStore
-
-  return store?.getStore()
-}
-
 function takeFlashedValidationState<TData>(
   schemaDefinition: ValidationSchema,
 ): FormFailurePayload<TData> | undefined {
@@ -374,7 +348,7 @@ function takeFlashedValidationState<TData>(
     return undefined
   }
 
-  const event = getSvelteKitRequestEvent()
+  const event = getCurrentSvelteKitRequestEvent()
   const payload = parseValidationFlashCookie<TData>(event?.cookies.get(validationFlashCookie))
   if (!event || !payload || !stateMatchesSchema(schemaDefinition, payload)) {
     return undefined
@@ -393,7 +367,7 @@ function takeFlashedValidationState<TData>(
 function takeValidationErrors<TData>(
   bag: string,
 ): FlashedValidationPayload<TData> | undefined {
-  const event = getSvelteKitRequestEvent()
+  const event = getCurrentSvelteKitRequestEvent()
   const payload = event
     ? parseValidationFlashCookie<TData>(event.cookies.get(validationFlashCookie))
     : parseValidationFlashCookie<TData>(readBrowserCookie(validationFlashCookie))

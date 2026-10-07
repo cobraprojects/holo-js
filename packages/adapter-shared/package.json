@@ -27,6 +27,11 @@
       "node": "./dist/next/request-context.node.mjs",
       "import": "./dist/next/request-context.mjs",
       "default": "./dist/next/request-context.mjs"
+    },
+    "./sveltekit/request-context": {
+      "types": "./dist/sveltekit/request-context.d.ts",
+      "import": "./dist/sveltekit/request-context.mjs",
+      "default": "./dist/sveltekit/request-context.mjs"
     }
   },
   "main": "./dist/index.mjs",

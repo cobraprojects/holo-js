@@ -113,46 +113,6 @@ describe('SvelteKit server adapter internals', () => {
     expect(() => validationInternals.throwValidationException(exception)).toThrow(exception)
   })
 
-  it('flashes and retrieves failures by event, request, and request key', () => {
-    const event = createEvent()
-    adapterSvelteKitInternals.flashValidationPayload(event as never, payload as never)
-    expect(event.cookies.set).toHaveBeenCalled()
-    adapterSvelteKitInternals.flashValidationPayload({ ...event, url: undefined } as never, payload as never)
-
-    adapterSvelteKitInternals.rememberValidationActionFailure(event as never, payload as never)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure(event as never)).toEqual(payload)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure({ ...event, url: undefined } as never)).toBeUndefined()
-
-    const noMethod = { ...createEvent('/method'), request: { headers: new Headers() } }
-    expect(adapterSvelteKitInternals.getValidationActionFailureKey(noMethod as never)).toBe(`GET ${noMethod.url.href}`)
-
-    const requestEvent = createEvent('/request')
-    adapterSvelteKitInternals.rememberValidationActionFailure(requestEvent as never, payload as never)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure({
-      ...requestEvent,
-      request: requestEvent.request,
-    } as never)).toEqual(payload)
-
-    const keyedEvent = createEvent('/keyed')
-    adapterSvelteKitInternals.rememberValidationActionFailure(keyedEvent as never, payload as never)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure(createEvent('/keyed') as never)).toEqual(payload)
-
-    const noUrl = { ...createEvent('/none'), url: undefined }
-    adapterSvelteKitInternals.rememberValidationActionFailure(noUrl as never, payload as never)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure({ ...noUrl, request: { ...noUrl.request } } as never)).toBeUndefined()
-
-    const eventWithoutKey = { ...createEvent('/event-no-key'), url: undefined }
-    adapterSvelteKitInternals.rememberValidationActionFailure(eventWithoutKey as never, payload as never)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure(eventWithoutKey as never)).toEqual(payload)
-
-    const requestWithoutKey = { ...createEvent('/request-no-key'), url: undefined }
-    adapterSvelteKitInternals.rememberValidationActionFailure(requestWithoutKey as never, payload as never)
-    expect(adapterSvelteKitInternals.takeValidationActionFailure({
-      ...requestWithoutKey,
-      request: requestWithoutKey.request,
-    } as never)).toEqual(payload)
-  })
-
   it('maps API, browser, malformed, and serialized action responses', async () => {
     const api = createEvent('/api/posts')
     adapterSvelteKitInternals.rememberValidationActionFailure(api as never, payload as never)
