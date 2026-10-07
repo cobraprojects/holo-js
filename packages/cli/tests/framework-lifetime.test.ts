@@ -122,7 +122,7 @@ it.each([
 it.each(['active', 'closed'] as const)('does not restart a %s framework run when preparation fails', async (state) => {
   const root = await createProject()
   await mkdir(join(root, '.holo-js/framework'), { recursive: true })
-  await writeFile(join(root, '.holo-js/framework/run.mjs'), "process.on('SIGTERM', () => process.exit(0)); console.log('ready'); setInterval(() => {}, 1000)")
+  await writeFile(join(root, '.holo-js/framework/run.mjs'), "process.stdin.once('data', () => process.exit(0)); console.log('ready'); setInterval(() => {}, 1000)")
   const io = createIo(root)
   let output = ''
   let errors = ''
@@ -159,7 +159,7 @@ it.each(['active', 'closed'] as const)('does not restart a %s framework run when
     const first = children[0]!
     if (state === 'closed') {
       const closed = new Promise<void>(resolvePromise => first.once('close', () => resolvePromise()))
-      first.kill('SIGTERM')
+      first.stdin?.write('stop\n')
       await closed
     }
     releasePreparation()
@@ -168,7 +168,7 @@ it.each(['active', 'closed'] as const)('does not restart a %s framework run when
       expect(completed).toBe(false)
       expect(first.exitCode).toBeNull()
       expect(first.signalCode).toBeNull()
-      first.kill('SIGTERM')
+      first.stdin?.write('stop\n')
     }
     await completion
     expect(children).toHaveLength(1)
@@ -182,10 +182,50 @@ it.each(['active', 'closed'] as const)('does not restart a %s framework run when
 })
 
 describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
+  it('closes a live framework process before reporting its error', async () => {
+    const root = await createProject()
+    await mkdir(join(root, '.holo-js/framework'), { recursive: true })
+    await writeFile(join(root, '.holo-js/framework/run.mjs'), "console.log('ready'); setInterval(() => {}, 1000)")
+    const io = createIo(root)
+    let output = ''
+    io.stdout.on('data', chunk => { output += String(chunk) })
+    let child: ChildProcess | undefined
+    let closed = false
+    const spawnProcess = ((...args: Parameters<typeof spawn>) => {
+      child = spawn(...args)
+      child.once('close', () => { closed = true })
+      return child
+    }) as typeof spawn
+    const createWatcher = (() => ({ close() {} })) as unknown as typeof watch
+    const run = mode === 'dev'
+      ? runProjectDevServer(io, root, spawnProcess, createWatcher, async () => {}, ['--port=3000'])
+      : runProjectStartServer(io, root, spawnProcess, ['--port=3000'])
+    const completion = expect(run).rejects.toThrow('process failed')
+    try {
+      await vi.waitFor(() => expect(output).toContain('ready'))
+      child?.emit('error', new Error('process failed'))
+      await completion
+      expect(closed).toBe(true)
+    } finally {
+      if (child && !closed) {
+        const closure = new Promise<void>(resolvePromise => child?.once('close', () => resolvePromise()))
+        child.kill('SIGKILL')
+        await closure
+      }
+      await run.catch(() => undefined)
+    }
+  })
+
   it.each(['close', 'error', 'launch failure'] as const)('releases streams and signals after %s', async (outcome) => {
     const root = await createProject()
     const io = createIo(root)
     const child = createChild()
+    if (outcome === 'error') {
+      child.kill = vi.fn(() => {
+        child.emit('error', new Error('termination failed'))
+        return false
+      })
+    }
     const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
     const output: string[] = []
     const errors: string[] = []
@@ -214,14 +254,17 @@ describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
       expect(errors).toEqual(['active error'])
       expect(input).toEqual(['active input'])
       if (outcome === 'close') child.emit('close', 0)
-      else child.emit('error', new Error('process failed'))
+      else {
+        child.emit('error', new Error('process failed'))
+        child.emit('close', null)
+      }
     }
     await completion
     child.stdout?.emit('data', 'late output')
     child.stderr?.emit('data', 'late error')
     io.stdin.emit('data', 'late input')
     expect(output).toEqual(outcome === 'launch failure' ? [] : ['active output'])
-    expect(errors).toEqual(outcome === 'launch failure' ? [] : ['active error'])
+    expect(errors).toEqual(outcome === 'launch failure' ? [] : outcome === 'error' ? ['active error', 'Framework termination failed: termination failed\n'] : ['active error'])
     expect(input).toEqual(outcome === 'launch failure' ? [] : ['active input'])
     expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)
     expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
@@ -232,6 +275,8 @@ describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
 it.each(['close', 'error', 'throw'] as const)('waits for closure and handles restart termination %s', async (outcome) => {
   const root = await createProject()
   const io = createIo(root)
+  let errors = ''
+  io.stderr.on('data', chunk => { errors += String(chunk) })
   const children: ChildProcess[] = []
   let observeChange: WatchListener<string> | undefined
   const closeWatcher = vi.fn()
@@ -264,6 +309,11 @@ it.each(['close', 'error', 'throw'] as const)('waits for closure and handles res
       children[1]?.emit('close', 0)
     } else if (outcome === 'error') {
       first.emit('error', new Error('stop failed'))
+    }
+    if (outcome !== 'close') {
+      expect(errors).toBe(`Framework termination failed: ${outcome === 'throw' ? 'termination failed' : 'stop failed'}\n`)
+      expect(closeWatcher).not.toHaveBeenCalled()
+      first.emit('close', null)
     }
     await completion
     first.emit('close', 0)
