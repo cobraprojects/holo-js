@@ -1,6 +1,6 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { column, createDatabase, createDialect, createSchemaService, defineGeneratedTable } from '../src'
+import { column, createDatabase, createDialect, createMigrationService, createSchemaService, defineGeneratedTable, defineMigration } from '../src'
 
 describe('schema mutation outcomes', () => {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -81,6 +81,97 @@ describe('schema mutation outcomes', () => {
     expect(await schema.hasTable('users')).toBe(true)
     expect((await schema.getIndexes('users')).map(index => index.name)).toEqual(['users_id_index'])
     expect(db.getSchemaRegistry().get('users')?.indexes.map(index => index.name)).toEqual(['users_id_index'])
+  })
+
+  it('restores metadata on root rollback while preserving an earlier declaration', async () => {
+    const declared = schema.register(defineGeneratedTable('declared', { id: column.id() }))
+    await expect(db.transaction(async (tx) => {
+      const transactionalSchema = createSchemaService(tx)
+      await transactionalSchema.sync([declared])
+      await transactionalSchema.table('declared', (table) => { table.string('name').nullable() })
+      await transactionalSchema.createTable('temporary', (table) => { table.id() })
+      expect(Object.keys(tx.getSchemaRegistry().get('declared')!.columns)).toEqual(['id', 'name'])
+      throw new Error('abort')
+    })).rejects.toThrow('abort')
+    expect(await schema.getTables()).toEqual([])
+    expect(db.getSchemaRegistry().get('declared')).toBe(declared)
+    expect(db.getSchemaRegistry().has('temporary')).toBe(false)
+  })
+
+  it('rolls back a nested scope without discarding its parent changes and commits later mutations', async () => {
+    await db.transaction(async (tx) => {
+      const parent = createSchemaService(tx)
+      await parent.createTable('users', table => { table.id(); table.string('name').nullable() })
+      const preceding = tx.getSchemaRegistry().get('users')
+      await expect(tx.transaction(async (nested) => {
+        const child = createSchemaService(nested)
+        await child.renameTable('users', 'renamed')
+        await child.table('renamed', table => { table.string('name').default('guest').change() })
+        await child.createTable('temporary', table => { table.id() })
+        throw new Error('nested abort')
+      })).rejects.toThrow('nested abort')
+      expect(await parent.getTables()).toEqual(['users'])
+      expect(tx.getSchemaRegistry().get('users')).toBe(preceding)
+      expect(tx.getSchemaRegistry().has('renamed')).toBe(false)
+      expect(tx.getSchemaRegistry().has('temporary')).toBe(false)
+      await parent.table('users', table => { table.string('nickname').nullable() })
+    })
+    expect(Object.keys(db.getSchemaRegistry().get('users')!.columns)).toEqual(['id', 'name', 'nickname'])
+    expect((await schema.getColumns('users')).map(column => column.name)).toEqual(['id', 'name', 'nickname'])
+  })
+
+  it('restores dropped and renamed definitions after an outer rollback of committed savepoints', async () => {
+    await schema.createTable('users', table => { table.id() })
+    await schema.createTable('posts', table => { table.id() })
+    const users = db.getSchemaRegistry().get('users')
+    const posts = db.getSchemaRegistry().get('posts')
+    await expect(db.transaction(async (tx) => {
+      await tx.transaction(async (nested) => {
+        const child = createSchemaService(nested)
+        await child.renameTable('users', 'renamed')
+        await child.dropTable('posts')
+      })
+      throw new Error('outer abort')
+    })).rejects.toThrow('outer abort')
+    expect(await schema.getTables()).toEqual(['posts', 'users'])
+    expect(db.getSchemaRegistry().get('users')).toBe(users)
+    expect(db.getSchemaRegistry().get('posts')).toBe(posts)
+    expect(db.getSchemaRegistry().has('renamed')).toBe(false)
+  })
+
+  it('preserves unrelated definitions registered while a transaction is pending', async () => {
+    let release!: () => void
+    let ready!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { ready = resolve })
+    const transaction = db.transaction(async (tx) => {
+      await createSchemaService(tx).createTable('temporary', table => { table.id() })
+      ready()
+      await pending
+      throw new Error('abort')
+    })
+    await started
+    const unrelated = schema.register(defineGeneratedTable('unrelated', { id: column.id() }))
+    release()
+    await expect(transaction).rejects.toThrow('abort')
+    expect(db.getSchemaRegistry().get('unrelated')).toBe(unrelated)
+    expect(db.getSchemaRegistry().has('temporary')).toBe(false)
+  })
+
+  it('leaves failed migrations pending with their schema metadata rolled back', async () => {
+    const migration = defineMigration({
+      name: '2026_10_07_120000_create_users',
+      async up({ schema }) {
+        await schema.createTable('users', table => { table.id() })
+        await schema.table('users', table => { table.string('name').nullable() })
+        throw new Error('migration abort')
+      },
+    })
+    const migrator = createMigrationService(db, [migration])
+    await expect(migrator.migrate()).rejects.toThrow('migration abort')
+    expect(await schema.hasTable('users')).toBe(false)
+    expect(db.getSchemaRegistry().has('users')).toBe(false)
+    expect(await migrator.status()).toEqual([{ name: migration.name, status: 'pending' }])
   })
 
 })

@@ -1,3 +1,4 @@
+import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
@@ -143,7 +144,9 @@ export class SchemaService {
   async dropTable(tableName: string): Promise<void> {
     assertValidIdentifierPath(tableName, 'Table name')
     await this.execute(this.createCompiler().compile(dropTableOperation(tableName)))
-    this.connection.getSchemaRegistry().delete(tableName)
+    mutateSchemaRegistry(this.connection, [tableName], () => {
+      this.connection.getSchemaRegistry().delete(tableName)
+    })
   }
 
   async renameTable(
@@ -528,9 +531,11 @@ export class SchemaService {
     for (const [position, statement] of statements.entries()) {
       await this.connection.executeCompiled(statement)
       if (!declared) {
-        registry.replace(defineTable(table.tableName, table.columns, {
-          indexes: table.indexes.slice(0, position),
-        }))
+        mutateSchemaRegistry(this.connection, [table.tableName], () => {
+          registry.replace(defineTable(table.tableName, table.columns, {
+            indexes: table.indexes.slice(0, position),
+          }))
+        })
       }
     }
   }
@@ -745,7 +750,9 @@ export class SchemaService {
       return
     }
 
-    registry.replace(update(existing))
+    mutateSchemaRegistry(this.connection, [tableName], () => {
+      registry.replace(update(existing))
+    })
   }
 
   private renameRegisteredTable(fromTableName: string, toTableName: string): void {
@@ -755,8 +762,10 @@ export class SchemaService {
       return
     }
 
-    registry.delete(fromTableName)
-    registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
+    mutateSchemaRegistry(this.connection, [fromTableName, toTableName], () => {
+      registry.delete(fromTableName)
+      registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
+    })
   }
 
   private withColumn(table: TableDefinition, column: AnyColumnDefinition): TableDefinition {
