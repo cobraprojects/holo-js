@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
-import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState, EmailVerificationTokenStore, EmailVerificationTokenRecord } from '@holo-js/auth'
+import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState, EmailVerificationTokenStore, EmailVerificationTokenRecord, PasswordResetTokenStore, PasswordResetTokenRecord } from '@holo-js/auth'
 import type {} from '@holo-js/auth/config'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/cache/config'
@@ -37,7 +37,7 @@ import {
   type DatabaseDriverFactory,
 } from '@holo-js/db'
 import { importBundledRuntimeModule, importOptionalRuntimeModule } from '../runtimeModule'
-import { createAuthRedemptionContext } from './authRedemption'
+import { authTokenExpiryPredicate, createAuthRedemptionContext } from './authRedemption'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
@@ -1920,17 +1920,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     deleteByUserId(provider: string, userId: string | number): Promise<number>
   }
   readonly emailVerificationTokens: EmailVerificationTokenStore
-  readonly passwordResetTokens: {
-    create(record: unknown): Promise<void>
-    findById(id: string): Promise<unknown | null>
-    findLatestByEmail(
-      provider: string,
-      email: string,
-      options?: { readonly table?: string },
-    ): Promise<unknown | null>
-    delete(id: string, options?: { readonly table?: string }): Promise<void>
-    deleteByEmail(provider: string, email: string, options?: { readonly table?: string }): Promise<number>
-  }
+  readonly passwordResetTokens: PasswordResetTokenStore
   readonly multiFactor: {
     find(provider: string, userId: string | number): Promise<unknown | null>
     save(record: unknown): Promise<void>
@@ -1995,10 +1985,6 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     emailVerificationTokens: Object.freeze({
       async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
         return redemption.redeem(record.provider, async (connection) => {
-          const dialect = connection.getDialect().name
-          const deadline = dialect === 'sqlite'
-            ? "expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-            : dialect === 'postgres' ? "expires_at > (clock_timestamp() AT TIME ZONE 'UTC')" : 'expires_at > CURRENT_TIMESTAMP(3)'
           const claimed = await new TableQueryBuilder('email_verification_tokens', connection)
             .where('id', record.id)
             .where('provider', record.provider)
@@ -2008,7 +1994,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-            .unsafeWhere(deadline, [])
+            .unsafeWhere(authTokenExpiryPredicate(connection), [])
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1
@@ -2045,17 +2031,26 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
     }),
     passwordResetTokens: Object.freeze({
-      async create(record: unknown) {
-        const value = record as {
-          readonly id: string
-          readonly provider: string
-          readonly email: string
-          readonly table?: string
-          readonly tokenHash: string
-          readonly createdAt: Date
-          readonly expiresAt: Date
-        }
-        await DB.table(value.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(value, DB.connection().getDriver()))
+      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+        const table = record.table ?? 'password_reset_tokens'
+        if (!Object.values(loadedConfig.auth.passwords).some(broker => broker.provider === record.provider && broker.table === table)) return null
+        return redemption.redeem(record.provider, async (connection) => {
+          const claimed = await new TableQueryBuilder(table, connection)
+            .where('id', record.id)
+            .where('provider', record.provider)
+            .where('email', record.email)
+            .where('token_hash', record.tokenHash)
+            .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
+            .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
+            .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
+            .unsafeWhere(authTokenExpiryPredicate(connection), [])
+            .whereNull('used_at')
+            .delete()
+          return claimed.affectedRows === 1
+        }, operation)
+      },
+      async create(record: PasswordResetTokenRecord) {
+        await DB.table(record.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(record, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const tables = Array.from(new Set(
@@ -2417,8 +2412,9 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
           return null
         }
 
-        if (typeof model.query === 'function') {
-          let query = model.query()
+        const repository = redemption.repository(providerName)
+        if (repository || typeof model.query === 'function') {
+          let query = repository ? repository.query() : model.query!()
           for (const [column, value] of entries) {
             query = query.where(column, value)
           }

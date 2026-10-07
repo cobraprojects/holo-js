@@ -533,6 +533,7 @@ export interface EmailVerificationTokenStore {
 }
 
 export interface PasswordResetTokenStore {
+  redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null>
   create(record: PasswordResetTokenRecord): Promise<void>
   findById(id: string): Promise<PasswordResetTokenRecord | null>
   findLatestByEmail(

@@ -2306,32 +2306,23 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }
 
-    const { adapter } = getProviderAdapter(record.provider)
-    const user = await adapter.findByCredentials({
-      email: record.email,
-    })
-    if (!user) {
-      throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
-        provider: record.provider,
-        email: record.email,
-      })
-    }
-
     const password = await getRuntimeBindings().passwordHasher.hash(input.password)
-    const userId = requireUserId(
-      adapter,
-      user,
-      '[@holo-js/auth] Password reset token user is invalid.',
-    )
-    await store.delete(record.id, {
-      table: record.table,
+    const updated = await store.redeem(record, async () => {
+      await store.deleteByEmail(record.provider, record.email, { table: record.table })
+      const { adapter } = getProviderAdapter(record.provider)
+      const user = await adapter.findByCredentials({ email: record.email })
+      if (!user) {
+        throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
+          provider: record.provider,
+          email: record.email,
+        })
+      }
+      const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
+      return updateUserRecord(record.provider, userId, { password })
     })
-    await store.deleteByEmail(record.provider, record.email, {
-      table: record.table,
-    })
-    const updated = await updateUserRecord(record.provider, userId, {
-      password,
-    })
+    if (!updated) {
+      throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
+    }
     return updated
   }, EXPECTED_PASSWORD_RESET_CONSUME_ERRORS, error => createPasswordResetConsumeFailure(error, input))
 }
