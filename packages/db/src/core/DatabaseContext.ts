@@ -1,3 +1,4 @@
+import { beginSchemaMutationScope, commitSchemaMutationScope, rollbackSchemaMutationScope } from '../schema/mutationState'
 import { createFactoryService, type FactoryService } from '../factories/FactoryService'
 import { createMigrationService, type MigrationService } from '../migrations/MigrationService'
 import { createModelEventService, type ModelEventService } from '../model/ModelEventService'
@@ -346,13 +347,16 @@ export class DatabaseContext {
           this._createTransactionCallbackState(),
         )
 
+        beginSchemaMutationScope(tx, this)
         try {
           const value = await this._runTransactionCallback(tx, callback)
           await this._callTransactionHook('commit', () => this._adapter.commit(options), options)
+          commitSchemaMutationScope(tx)
           return value
         } catch (error) {
           try {
             await this._callTransactionHook('rollback', () => this._adapter.rollback(options), options)
+            rollbackSchemaMutationScope(tx)
           } catch (rollbackError) {
             await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
             throw rollbackError
@@ -447,6 +451,7 @@ export class DatabaseContext {
       savepointName,
     }, this._createTransactionCallbackState())
     let released = false
+    beginSchemaMutationScope(tx, this)
 
     try {
       const result = await this._runTransactionCallback(tx, callback)
@@ -457,6 +462,7 @@ export class DatabaseContext {
         savepointName,
       )
       released = true
+      commitSchemaMutationScope(tx)
       this._mergeCommittedTransactionCallbacks(tx)
       await this._logger?.onTransactionCommit?.(entry)
       return result
@@ -476,6 +482,7 @@ export class DatabaseContext {
         await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
         throw rollbackError
       }
+      rollbackSchemaMutationScope(tx)
       await tx._flushTransactionCallbacks('afterRollback')
       await this._logger?.onTransactionRollback?.({ ...entry, error })
       throw error
