@@ -32,6 +32,13 @@ declare global {
 }
 
 describe('@holo-js/auth typing', () => {
+  it('mirrors precise complete session rotation options', () => {
+    type Session = NonNullable<AuthRuntimeBindings['session']>
+    type Options = NonNullable<Parameters<NonNullable<Session['rotate']>>[1]>
+    expectTypeOf<Options['data']>().toEqualTypeOf<Awaited<ReturnType<Session['create']>>['data'] | undefined>()
+    expectTypeOf<Options['renewLifetime']>().toEqualTypeOf<boolean | undefined>()
+  })
+
   it('keeps SvelteKit route guards compatible with native resolve options', () => {
     type NativeSvelteKitHandle = <TEvent extends SvelteKitHandleEvent>(input: {
       readonly event: TEvent
