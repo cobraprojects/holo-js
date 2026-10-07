@@ -44,6 +44,19 @@ Framework routing, rendering, and deployment output remain owned by the host fra
 
 Discovery converts canonical directories such as `server/models`, `server/db`, and `server/commands` into artifacts under `.holo-js/generated`. Adapters consume those registries instead of independently scanning application files.
 
+## Queue finalization ownership
+
+The Queue worker owns the outcome of a reserved job separately from adapter finalization.
+Handler errors determine retry, release, or terminal failure; acknowledgement and release each
+have one mutation path. Terminal finalization persists the failed job before deleting its
+reservation. Any adapter error stops `runQueueWorker` with the original error, without retrying
+the mutation or reclassifying it as a handler failure. Delivery may repeat according to driver
+reservation semantics.
+
+Completion hooks run before acknowledgement, and processed hooks follow successful
+acknowledgement. Timeout handling suppresses late lifecycle hooks without promising handler
+cancellation. See [Queue Workers](/queue/workers#delivery-and-finalization-failures).
+
 ## Architectural enforcement
 
 The repository architecture check rejects:
