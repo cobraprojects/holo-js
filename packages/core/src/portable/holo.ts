@@ -60,6 +60,7 @@ import {
   normalizeMultiFactorCredentialRecord,
   normalizePasswordResetTokenRecord,
   normalizeStoredUserId,
+  serializeAuthTimestamp,
   serializeAccessTokenRecord,
   serializeEmailVerificationTokenRecord,
   serializeMultiFactorCredentialRecord,
@@ -1764,8 +1765,8 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
         email_verified: value.emailVerified ? 1 : 0,
         profile: JSON.stringify(value.profile),
         tokens: JSON.stringify(value.tokens ?? {}),
-        created_at: value.linkedAt.toISOString(),
-        updated_at: value.updatedAt.toISOString(),
+        created_at: serializeAuthTimestamp(value.linkedAt, DB.connection().getDriver()),
+        updated_at: serializeAuthTimestamp(value.updatedAt, DB.connection().getDriver()),
       }
 
       if (existing && typeof existing.id !== 'undefined') {
@@ -1851,8 +1852,8 @@ function createCoreHostedIdentityStore(namespace: string): CoreHostedIdentitySto
       email: record.email ?? null,
       email_verified: record.emailVerified ? 1 : 0,
       profile: JSON.stringify(record.profile),
-      created_at: record.linkedAt.toISOString(),
-      updated_at: record.updatedAt.toISOString(),
+      created_at: serializeAuthTimestamp(record.linkedAt, DB.connection().getDriver()),
+      updated_at: serializeAuthTimestamp(record.updatedAt, DB.connection().getDriver()),
     }
   }
 
@@ -1952,7 +1953,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly createdAt: Date
           readonly lastUsedAt?: Date
           readonly expiresAt?: Date | null
-        }))
+        }, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const row = await DB.table('personal_access_tokens').find(id)
@@ -1976,7 +1977,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly createdAt: Date
           readonly lastUsedAt?: Date
           readonly expiresAt?: Date | null
-        })
+        }, DB.connection().getDriver())
         await DB.table('personal_access_tokens').where('id', String(payload.id)).update(payload)
       },
       async delete(id: string) {
@@ -1997,16 +1998,16 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           const dialect = connection.getDialect().name
           const deadline = dialect === 'sqlite'
             ? "expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-            : dialect === 'postgres' ? 'expires_at > clock_timestamp()' : 'expires_at > CURRENT_TIMESTAMP(3)'
+            : dialect === 'postgres' ? "expires_at > (clock_timestamp() AT TIME ZONE 'UTC')" : 'expires_at > CURRENT_TIMESTAMP(3)'
           const claimed = await new TableQueryBuilder('email_verification_tokens', connection)
             .where('id', record.id)
             .where('provider', record.provider)
             .where('user_id', String(record.userId))
             .where('email', record.email)
             .where('token_hash', record.tokenHash)
-            .where('created_at', record.createdAt.toISOString())
-            .where('expires_at', record.expiresAt.toISOString())
-            .where('expires_at', '>', new Date().toISOString())
+            .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
+            .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
+            .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
             .unsafeWhere(deadline, [])
             .whereNull('used_at')
             .delete()
@@ -2022,7 +2023,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly tokenHash: string
           readonly createdAt: Date
           readonly expiresAt: Date
-        }))
+        }, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const row = await DB.table('email_verification_tokens')
@@ -2054,7 +2055,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly createdAt: Date
           readonly expiresAt: Date
         }
-        await DB.table(value.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(value))
+        await DB.table(value.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(value, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const tables = Array.from(new Set(
@@ -2115,7 +2116,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
       async save(record: unknown) {
         const value = record as Parameters<typeof serializeMultiFactorCredentialRecord>[0]
-        await DB.table('auth_multi_factor_credentials').insert(serializeMultiFactorCredentialRecord(value))
+        await DB.table('auth_multi_factor_credentials').insert(serializeMultiFactorCredentialRecord(value, DB.connection().getDriver()))
       },
       async delete(provider: string, userId: string | number) {
         await DB.table('auth_multi_factor_credentials')
@@ -2136,7 +2137,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           await new TableQueryBuilder('auth_multi_factor_credentials', transaction)
             .where('provider', provider)
             .where('user_id', String(userId))
-            .update({ last_used_counter: counter, updated_at: new Date().toISOString() })
+            .update({ last_used_counter: counter, updated_at: serializeAuthTimestamp(new Date(), DB.connection().getDriver()) })
           return Object.freeze({ lastUsedCounter: counter, recoveryCodeHashes: record.recoveryCodeHashes })
         })
       },
@@ -2155,7 +2156,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           await new TableQueryBuilder('auth_multi_factor_credentials', transaction)
             .where('provider', provider)
             .where('user_id', String(userId))
-            .update({ recovery_code_hashes: JSON.stringify(hashes), updated_at: new Date().toISOString() })
+            .update({ recovery_code_hashes: JSON.stringify(hashes), updated_at: serializeAuthTimestamp(new Date(), DB.connection().getDriver()) })
           return Object.freeze({ lastUsedCounter: record.lastUsedCounter, recoveryCodeHashes: Object.freeze(hashes) })
         })
       },
@@ -2169,7 +2170,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           : query.where('last_used_counter', verification.lastUsedCounter)
         const result = await query.update({
           recovery_code_hashes: JSON.stringify(recoveryCodeHashes),
-          updated_at: updatedAt.toISOString(),
+          updated_at: serializeAuthTimestamp(updatedAt, DB.connection().getDriver()),
         })
         return (result.affectedRows ?? 0) > 0
       },
