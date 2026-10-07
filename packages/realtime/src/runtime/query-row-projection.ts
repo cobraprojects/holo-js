@@ -34,6 +34,14 @@ export function projectRowWithContext(
     projected[resultKey] = row[column]
   }
 
+  for (const key of context.relationKeys ?? []) {
+    if (!hasRecordKey(row, key)) {
+      return undefined
+    }
+
+    projected[key] = row[key]
+  }
+
   return Object.freeze(projected)
 }
 

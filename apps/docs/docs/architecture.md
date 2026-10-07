@@ -69,10 +69,15 @@ The repository architecture check rejects:
 
 Run it through `bun run test:dependency-policy`.
 
+## Realtime row windows
+
+Realtime owns shared mutation metadata, projection checks, relation hydration, and patch preparation inside its row-window runtime. Standard rows defer a limited refill until the mutation batch is applied; wrappers refill as each mutation changes their window; offset windows patch stable updates locally and fetch the bounded page when its membership or ordering changes. Cursor windows retain their lookahead and next-page boundary. Aggregate and relation algorithms keep their own policies.
+
+Selected cursor results include only their selected fields, including after inserts and updates. Hidden-field updates leave visible results unchanged. Patching preserves unaffected projected rows where possible and shares cached reads across patch targets. Unsupported shapes fall back to the original query rather than widening an optimized fetch or returning an incomplete result. See [Realtime pagination](./realtime/index.md#pagination).
 ## Approved ownership designs
 
 ::: info Pending implementation
-Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, and Media attachment/replacement ownership are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, Realtime row-window orchestration, and Media attachment/replacement ownership are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
@@ -83,7 +88,7 @@ These changes deepen existing modules by concentrating behavior behind their int
 | Optional capability lifetime (implemented) | Initialization, owned-resource disposal, and restoration | Continue cleanup after failures, collect errors, and preserve live external bindings |
 | Queue reserved job (implemented) | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
 | Authenticated session transition (implemented) | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
-| Realtime row window | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
+| Realtime row window (implemented) | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
 | Media mutation (attachment/replacement implemented; regeneration/deletion pending) | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
 | Flux presence membership | Shared membership rules with native framework adapters | Preserve inference, per-event snapshots, and distinct first-match versus all-match removal policies |
 
