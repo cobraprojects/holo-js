@@ -236,9 +236,28 @@ function toReadonlyArray<T>(value: T | readonly T[]): readonly T[] {
   return (Array.isArray(value) ? [...value] : [value]) as readonly T[]
 }
 
-function presenceMemberKey(member: BroadcastJsonObject): string {
-  /* v8 ignore next -- supported presence members are JSON objects, but keep a defensive fallback */
+function presenceMemberKey<TMember>(member: TMember): string {
   return JSON.stringify(member) ?? String(member)
+}
+
+function appendPresenceMember<TMember>(
+  members: readonly TMember[],
+  member: TMember,
+): readonly TMember[] {
+  return Object.freeze([...members, member])
+}
+
+function removePresenceMember<TMember>(
+  members: readonly TMember[],
+  member: TMember,
+): readonly TMember[] {
+  const key = presenceMemberKey(member)
+  const index = members.findIndex(candidate => Object.is(candidate, member) || presenceMemberKey(candidate) === key)
+  if (index === -1) {
+    return members
+  }
+
+  return Object.freeze(members.filter((_, candidateIndex) => candidateIndex !== index))
 }
 
 function presenceMemberDiff(
@@ -756,7 +775,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
 
     if (eventName === 'pusher_internal:member_added') {
       const member = parseWireData(payload.member)
-      state.members = Object.freeze([...state.members, member])
+      state.members = appendPresenceMember(state.members, member)
       for (const callback of state.memberListeners) {
         callback(state.members)
       }
@@ -1264,6 +1283,8 @@ export const flux = new Proxy({} as FluxClient, {
 })
 
 export const fluxInternals = {
+  appendPresenceMember,
+  removePresenceMember,
   createHoloWebSocketConnector,
   createUnavailableConnector,
   createPusherConnector,

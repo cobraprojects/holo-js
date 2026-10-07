@@ -40,6 +40,12 @@ The Next, Nuxt, and SvelteKit adapters own only framework-native startup, reques
 
 Framework routing, rendering, and deployment output remain owned by the host framework.
 
+## Flux presence membership
+
+`@holo-js/flux` owns presence member comparison and immutable membership updates through the existing `fluxInternals` export. Its generic `appendPresenceMember` and `removePresenceMember` methods accept readonly arrays and preserve the inferred member type. Comparison stays private: adapters remove the first equivalent member, while core wire-event removal removes all equivalent members.
+
+React effects, Vue scopes and refs, and Svelte stores own their native subscriptions, pause controls, and cleanup. Custom subscriptions need only the existing public subscription methods, and membership callbacks retain a separate snapshot for each event. [ADR-0014](https://github.com/cobraprojects/holo-js/blob/main/docs/adr/0014-flux-presence-membership-ownership.md) records this boundary.
+
 ## Generated registries
 
 Discovery converts canonical directories such as `server/models`, `server/db`, and `server/commands` into artifacts under `.holo-js/generated`. Adapters consume those registries instead of independently scanning application files.

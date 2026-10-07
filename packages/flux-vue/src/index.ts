@@ -1,5 +1,5 @@
 import { getCurrentScope, onScopeDispose, readonly, shallowRef, type Ref, type ShallowRef } from 'vue'
-import { getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
+import { fluxInternals, getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
 import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
 type ManifestEventName<TManifest extends GeneratedBroadcastManifest>
@@ -77,30 +77,6 @@ interface FluxPresenceState<TMember = BroadcastJsonObject> {
 
 type AnyFluxSubscription = ReturnType<FluxClient['channel']>
 type AnyFluxPresenceSubscription = ReturnType<FluxClient['presence']>
-
-function memberKey<TMember>(member: TMember): string {
-  return JSON.stringify(member) ?? String(member)
-}
-
-function appendPresenceMember<TMember>(
-  members: readonly TMember[],
-  member: TMember,
-): readonly TMember[] {
-  return Object.freeze([...members, member])
-}
-
-function removePresenceMember<TMember>(
-  members: readonly TMember[],
-  member: TMember,
-): readonly TMember[] {
-  const key = memberKey(member)
-  const index = members.findIndex(candidate => Object.is(candidate, member) || memberKey(candidate) === key)
-  if (index < 0) {
-    return members
-  }
-
-  return Object.freeze(members.filter((_, candidateIndex) => candidateIndex !== index))
-}
 
 function resolveClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   options: FluxComposableOptions<TManifest>,
@@ -230,9 +206,9 @@ export function useFluxPresence<
   subscription.here((nextMembers) => {
     updateMembers(nextMembers as readonly TResolvedMember[])
   }).joining((member) => {
-    updateMembers(appendPresenceMember(members.value, member as TResolvedMember))
+    updateMembers(fluxInternals.appendPresenceMember(members.value, member as TResolvedMember))
   }).leaving((member) => {
-    updateMembers(removePresenceMember(members.value, member as TResolvedMember))
+    updateMembers(fluxInternals.removePresenceMember(members.value, member as TResolvedMember))
   })
 
   registerCleanup(options, () => {

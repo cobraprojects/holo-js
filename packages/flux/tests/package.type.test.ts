@@ -3,6 +3,15 @@ import type { BroadcastJsonObject } from '@holo-js/broadcast'
 import { createFluxClient, fluxInternals } from '../src'
 
 describe('@holo-js/flux typing', () => {
+  it('preserves member inference with readonly arrays through adapter internals', () => {
+    const members: readonly { readonly id: string, readonly name: string }[] = [{ id: 'user-1', name: 'Ada' }]
+    const appended = fluxInternals.appendPresenceMember(members, { id: 'user-2', name: 'Grace' })
+    const removed = fluxInternals.removePresenceMember(appended, { id: 'user-1', name: 'Ada' })
+
+    expectTypeOf(appended).toEqualTypeOf<readonly { readonly id: string, readonly name: string }[]>()
+    expectTypeOf(removed).toEqualTypeOf<typeof appended>()
+  })
+
   it('infers channel/event/whisper names from generated manifest metadata', async () => {
     const manifest = {
       version: 1,
