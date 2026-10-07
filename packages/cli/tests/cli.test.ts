@@ -5109,6 +5109,25 @@ registerConfigNormalizer({
     expect(second.stderr).toContain('A migration for table "media" already exists.')
   }, 30_000)
 
+  it('serializes migration creation across CLI processes', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await prepareProjectDiscovery(projectRoot)
+    const { cliBinPath } = ensureBuiltWorkspacePackagesSync()
+    const run = (): Promise<{ code: number | null, output: string }> => new Promise((resolveResult, reject) => {
+      const child = spawn(process.execPath, [cliBinPath, 'make:migration', 'create_concurrent_items_table'], { cwd: projectRoot })
+      let output = ''
+      child.stdout.on('data', chunk => { output += String(chunk) })
+      child.stderr.on('data', chunk => { output += String(chunk) })
+      child.on('error', reject)
+      child.on('close', code => { resolveResult({ code, output }) })
+    })
+    const results = await Promise.all([run(), run()])
+    expect(results.map(result => result.code).sort()).toEqual([0, 1])
+    expect(results.find(result => result.code === 1)?.output).toContain('already exists')
+    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(name => name.endsWith('_create_concurrent_items_table.ts'))).toHaveLength(1)
+  }, 30_000)
+
   it('installs cache support with the redis driver', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
