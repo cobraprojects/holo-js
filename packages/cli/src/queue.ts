@@ -24,8 +24,8 @@ import {
   isRecursiveWatchUnsupported,
   isIgnorableWatchError,
   normalizeWatchedFilePath,
-  runProjectPrepare,
-} from './dev'
+} from './watch-paths'
+import { runProjectPrepare } from './project-prepare'
 import { writeLine } from './io'
 import { initializeProjectRuntime } from './runtime'
 import type {

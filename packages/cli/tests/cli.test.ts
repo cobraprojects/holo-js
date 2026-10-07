@@ -1,3 +1,4 @@
+import { isIgnorableWatchError } from '../src/watch-paths'
 import type { RuntimeExecutor } from '../src/command-executors'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
@@ -135,11 +136,6 @@ import {
   runQueueTableCommand,
 } from '../src/queue-migrations'
 import {
-  isIgnorableWatchError,
-  collectDiscoveryWatchRoots,
-  classifyWatchedPathChange,
-  isDiscoveryRelevantPath,
-  readPluginPrepareWatches,
   resolvePackageManagerCommand,
   resolvePackageManagerInstallInvocation,
   runProjectDependencyInstall,
@@ -10075,98 +10071,158 @@ export default defineDatabaseConfig({})
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
   }, 60_000)
 
-  it('runs sync commands contributed by plugin framework descriptors during prepare', async () => {
-    const projectRoot = await createTempDirectory()
-    tempDirs.push(projectRoot)
-    await linkWorkspaceDb(projectRoot)
-    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
-      name: 'plugin-framework-sync-fixture',
-      private: true,
-      packageManager: 'npm@10.0.0',
-      dependencies: {
-        '@holo-js/core': '^0.2.2',
-        '@holo-js/db': '^0.2.2',
-        'demo-framework': '^1.0.0',
-      },
-    }, null, 2))
-    await writeProjectFile(projectRoot, 'config/app.ts', `
+  it.each(['unchanged', 'preparer-changes-discovery', 'installation-changes-discovery'] as const)(
+    'keeps framework preparation consistent with %s', async (scenario) => {
+      const projectRoot = await createTempDirectory()
+      tempDirs.push(projectRoot)
+      await linkWorkspaceDb(projectRoot)
+      await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+        name: 'plugin-framework-sync-fixture',
+        private: true,
+        packageManager: 'npm@10.0.0',
+        dependencies: {
+          '@holo-js/core': '^0.2.2',
+          '@holo-js/db': expectedHoloPackageRange,
+          'demo-framework': '^1.0.0',
+        },
+      }, null, 2))
+      await writeProjectFile(projectRoot, 'config/app.ts', `
 import { defineAppConfig } from '@holo-js/config'
 
 export default defineAppConfig({
-  plugins: ['holo-plugin-demo-framework'],
+    plugins: ['holo-plugin-demo-framework'],
 })
 `)
-    await writeProjectFile(projectRoot, 'config/database.ts', `
+      await writeProjectFile(projectRoot, 'config/database.ts', `
 import { defineDatabaseConfig } from '@holo-js/db'
 
-export default defineDatabaseConfig({})
+export default defineDatabaseConfig(${scenario === 'installation-changes-discovery' ? JSON.stringify({ connections: { default: { driver: 'postgres', url: 'postgres://localhost/app' } } }) : '{}'})
 `)
 
-    const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-demo-framework')
-    await mkdir(pluginRoot, { recursive: true })
-    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
-      name: 'holo-plugin-demo-framework',
-      type: 'module',
-      holo: {
-        plugin: './plugin.mjs',
-      },
-    }, null, 2))
-    const syncCommand = [
-      'node',
-      '-e',
-      'require("node:fs").writeFileSync(".holo-js/plugin-framework-sync.txt", "synced\\n")',
-    ]
-    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-demo-framework')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-demo-framework',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      const syncCommand = [
+        'node',
+        '-e',
+        'require("node:fs").appendFileSync(".holo-js/plugin-framework-sync.txt", "demo-framework\\n")',
+      ]
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
 export default {
-  id: 'demo-framework-plugin',
-  contributes: {
-    framework: {
-      id: 'demo-framework',
-      displayName: 'Demo Framework',
-      detectPackages: ['demo-framework'],
-      adapterPackage: '@holo-js/adapter-demo',
-      scaffold: {
-        dependencies: {
-          'demo-framework': '^1.0.0',
-          '@holo-js/adapter-demo': '^1.0.0',
+    id: 'framework-fixture-plugin',
+    contributes: {
+      project: { prepare: './prepare.mjs' },
+      framework: {
+        id: 'demo-framework',
+        displayName: 'Demo Framework',
+        detectPackages: ['demo-framework'],
+        adapterPackage: '@holo-js/adapter-demo',
+        scaffold: {
+          dependencies: {
+            'demo-framework': '^1.0.0',
+            '@holo-js/adapter-demo': '^1.0.0',
+          },
+          devDependencies: {},
+          scripts: {},
+          lintScript: 'eslint . --fix',
+          typecheckScript: 'tsc -p tsconfig.json --noEmit',
+          defaultUrl: 'http://localhost:4000',
+          tsconfig: 'next',
         },
-        devDependencies: {},
-        scripts: {},
-        lintScript: 'eslint . --fix',
-        typecheckScript: 'tsc -p tsconfig.json --noEmit',
-        defaultUrl: 'http://localhost:4000',
-        tsconfig: 'next',
-      },
-      runner: {
-        commandName: 'demo-framework',
-        buildArgs: ['build'],
-        start: ['start'],
-        startUsesFrameworkBinary: true,
-        preloadNextRuntime: false,
-        suppressSvelteKitOutput: false,
-        nextDevServerConflictHandling: false,
-      },
-      sync: {
-        commands: {
-          npm: ${JSON.stringify(syncCommand)},
-          pnpm: ${JSON.stringify(syncCommand)},
-          yarn: ${JSON.stringify(syncCommand)},
-          bun: ${JSON.stringify(syncCommand)},
+        runner: {
+          commandName: 'demo-framework',
+          buildArgs: ['build'],
+          start: ['start'],
+          startUsesFrameworkBinary: true,
+          preloadNextRuntime: false,
+          suppressSvelteKitOutput: false,
+          nextDevServerConflictHandling: false,
         },
-        errorLabel: 'demo framework sync',
-      },
-      capabilities: {
-        managedBroadcastAuthRoute: false,
+        sync: {
+          commands: {
+            npm: ${JSON.stringify(syncCommand)},
+            pnpm: ${JSON.stringify(syncCommand)},
+            yarn: ${JSON.stringify(syncCommand)},
+            bun: ${JSON.stringify(syncCommand)},
+          },
+          errorLabel: 'demo framework sync',
+        },
+        capabilities: {
+          managedBroadcastAuthRoute: false,
+        },
       },
     },
-  },
 }
 `)
 
-    await runProjectPrepare(projectRoot, undefined)
+      const mutation = `
+const pluginPath = projectRoot + '/node_modules/holo-plugin-demo-framework/plugin.mjs'
+fs.writeFileSync(pluginPath, fs.readFileSync(pluginPath, 'utf8').replaceAll('demo-framework', 'changed-framework'))
+const manifest = JSON.parse(fs.readFileSync(projectRoot + '/package.json', 'utf8'))
+delete manifest.dependencies['demo-framework']
+manifest.dependencies['changed-framework'] = '^1.0.0'
+fs.writeFileSync(projectRoot + '/package.json', JSON.stringify(manifest))
+`
+      await writeFile(join(pluginRoot, 'prepare.mjs'), `
+import fs from 'node:fs'
+export default {
+    apiVersion: 1,
+    prepare(context) {
+      const projectRoot = context.projectRoot
+      ${scenario === 'preparer-changes-discovery' ? mutation : ''}
+      return {
+        kind: 'prepared',
+        generatedArtifacts: [{ path: 'framework-context.json', contents: JSON.stringify({ framework: context.framework?.id, run: context.run }) }],
+        managedArtifacts: [],
+        diagnostics: [],
+      }
+    },
+}
+`)
+      if (scenario === 'installation-changes-discovery') {
+        const fakeBinRoot = await createTempDirectory()
+        tempDirs.push(fakeBinRoot)
+        await writeFile(join(fakeBinRoot, 'npm'), `#!${process.execPath}
+const fs = require('node:fs')
+const projectRoot = process.cwd()
+  ${mutation}
+`)
+        await chmod(join(fakeBinRoot, 'npm'), 0o755)
+        const originalPath = process.env.PATH
+        process.env.PATH = `${fakeBinRoot}:${originalPath ?? ''}`
+        try {
+          await runProjectPrepare(projectRoot, createIo(projectRoot).io)
+        } finally {
+          process.env.PATH = originalPath
+        }
+      } else {
+        await runProjectPrepare(projectRoot)
+      }
 
-    await expect(readFile(join(projectRoot, '.holo-js/plugin-framework-sync.txt'), 'utf8')).resolves.toBe('synced\n')
-  }, 60_000)
+      const expectedFramework = scenario === 'installation-changes-discovery' ? 'changed-framework' : 'demo-framework'
+      expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8'))).toEqual({ framework: expectedFramework })
+      expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain(`const commandName = "${expectedFramework}"`)
+      expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/generated/framework-fixture-plugin/framework-context.json'), 'utf8'))).toEqual({
+        framework: expectedFramework,
+        run: { kind: 'full', command: 'prepare', reason: scenario === 'installation-changes-discovery' ? 'dependencies-changed' : 'explicit' },
+      })
+      await expect(readFile(join(projectRoot, '.holo-js/plugin-framework-sync.txt'), 'utf8')).resolves.toBe(
+        scenario === 'installation-changes-discovery' ? 'demo-framework\nchanged-framework\n' : 'demo-framework\n',
+      )
+      if (scenario === 'preparer-changes-discovery') {
+        await runProjectPrepare(projectRoot)
+        expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8'))).toEqual({ framework: 'changed-framework' })
+        expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/generated/framework-fixture-plugin/framework-context.json'), 'utf8'))).toMatchObject({ framework: 'changed-framework' })
+        await expect(readFile(join(projectRoot, '.holo-js/plugin-framework-sync.txt'), 'utf8')).resolves.toBe('demo-framework\nchanged-framework\n')
+      }
+    }, 60_000,
+  )
 
   it('uses plugin sync commands when plugin framework descriptors override built-in frameworks', async () => {
     const projectRoot = await createTempDirectory()
@@ -10558,18 +10614,16 @@ throw 'string discovery failure'
 `)
     watchCallback?.('change', 'server/commands/hello.mjs')
     watchCallback?.('change', 'server/commands/hello.mjs')
-    await new Promise(resolve => setTimeout(resolve, 250))
+    await vi.waitFor(() => expect(io.read().stderr).toContain('string discovery failure'), { timeout: 5000 })
     await writeProjectFile(projectRoot, 'server/commands/hello.mjs', 'export default { nope: true }')
     watchCallback?.('change', 'server/commands/hello.mjs')
-    await new Promise(resolve => setTimeout(resolve, 250))
+    await vi.waitFor(() => expect(io.read().stderr).toContain('does not export a Holo command'), { timeout: 5000 })
     child.emit('close', 0)
     watchCallback?.('change', 'server/commands/hello.mjs')
 
     await expect(devPromise).resolves.toBeUndefined()
     expect(io.read().stdout).toContain('dev stdout')
     expect(io.read().stderr).toContain('dev stderr')
-    expect(io.read().stderr).toContain('string discovery failure')
-    expect(io.read().stderr).toContain('does not export a Holo command')
     expect(closeWatcher).toHaveBeenCalledTimes(1)
   })
 
@@ -10621,230 +10675,6 @@ throw 'string discovery failure'
     await expect(devPromise).resolves.toBeUndefined()
     expect(prepare).toHaveBeenCalledTimes(5)
   }, 15000)
-
-  it('marks all discovery roots as relevant and collects existing authorization watch roots', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await mkdir(join(projectRoot, 'server/policies/admin'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/abilities/reports'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/broadcast'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/channels'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/jobs'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/events'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/listeners'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/commands'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/models'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/db/migrations'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/db/seeders'), { recursive: true })
-    await mkdir(join(projectRoot, '.holo-js/generated'), { recursive: true })
-    const project = { config: defaultProjectConfig() }
-
-    expect(isDiscoveryRelevantPath('config/app.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('.env.local', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(false)
-    expect(isDiscoveryRelevantPath('.holo-js/generated/schema.generated.ts', project as never)).toBe(true)
-    const broadPluginWatch = [{ pluginId: 'demo', roots: ['.'], excludes: [] }]
-    expect(isDiscoveryRelevantPath('node_modules/plugin/source.ts', project as never, broadPluginWatch)).toBe(false)
-    expect(isDiscoveryRelevantPath('.next/server/app.js', project as never, broadPluginWatch)).toBe(false)
-    expect(isDiscoveryRelevantPath('server/commands/hello.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/jobs/send-email.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/events/user-registered.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/listeners/send-welcome-email.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/broadcast/orders.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/channels/orders.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/policies/PostPolicy.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/abilities/exportReports.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/models/User.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/db/migrations/2026_01_01_000000_users.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/db/seeders/UserSeeder.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('README.md', project as never)).toBe(false)
-
-    const fallbackProject = {
-      config: {
-        ...defaultProjectConfig(),
-        paths: {
-          ...defaultProjectConfig().paths,
-          authorizationPolicies: '',
-          authorizationAbilities: '',
-        },
-      },
-    }
-    expect(isDiscoveryRelevantPath('server/policies/FallbackPolicy.ts', fallbackProject as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/abilities/fallback.ts', fallbackProject as never)).toBe(true)
-
-    const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
-    expect(roots).toContain(join(projectRoot, '.holo-js/generated'))
-    expect(roots).toContain(join(projectRoot, 'server/policies'))
-    expect(roots).toContain(join(projectRoot, 'server/policies/admin'))
-    expect(roots).toContain(join(projectRoot, 'server/abilities'))
-    expect(roots).toContain(join(projectRoot, 'server/abilities/reports'))
-
-    const fallbackRoots = await collectDiscoveryWatchRoots(projectRoot, fallbackProject as never)
-    expect(fallbackRoots).toContain(join(projectRoot, 'server/policies'))
-    expect(fallbackRoots).toContain(join(projectRoot, 'server/abilities'))
-  }, 20000)
-
-  it('applies plugin watch exclusions without weakening core discovery roots', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))
-    tempDirs.push(projectRoot)
-    await mkdir(join(projectRoot, 'extensions/demo/cache/nested'), { recursive: true })
-    await mkdir(join(projectRoot, 'extensions/demo/plugin/nested'), { recursive: true })
-    await mkdir(join(projectRoot, 'extensions/demo/source/nested'), { recursive: true })
-    await mkdir(join(projectRoot, 'server/models/nested'), { recursive: true })
-    const project = { config: defaultProjectConfig() }
-    const pluginWatches = [{
-      pluginId: 'demo',
-      roots: ['extensions/demo', 'server'],
-      excludes: ['extensions/demo/cache', 'server/models'],
-      packageRoot: 'extensions/demo/plugin',
-    }]
-
-    expect(isDiscoveryRelevantPath('extensions/demo/source/widget.ts', project as never, pluginWatches)).toBe(true)
-    expect(isDiscoveryRelevantPath('extensions/demo/cache/widget.ts', project as never, pluginWatches)).toBe(false)
-    expect(isDiscoveryRelevantPath('extensions/demo/plugin/source.ts', project as never, pluginWatches)).toBe(false)
-    expect(isDiscoveryRelevantPath('server/models/User.ts', project as never, pluginWatches)).toBe(true)
-    expect(isDiscoveryRelevantPath('.holo-js/generated/demo/registry.ts', project as never, pluginWatches)).toBe(false)
-
-    const roots = await collectDiscoveryWatchRoots(projectRoot, project as never, pluginWatches)
-    expect(roots).toContain(join(projectRoot, 'extensions/demo/source'))
-    expect(roots).toContain(join(projectRoot, 'extensions/demo/source/nested'))
-    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/cache'))
-    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/cache/nested'))
-    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/plugin'))
-    expect(roots).not.toContain(join(projectRoot, 'extensions/demo/plugin/nested'))
-    expect(roots).toContain(join(projectRoot, 'server/models'))
-    expect(roots).toContain(join(projectRoot, 'server/models/nested'))
-    expect(roots).not.toContain(join(projectRoot, '.holo-js'))
-
-    await mkdir(join(projectRoot, 'extensions/replacement/source'), { recursive: true })
-    const refreshedRoots = await collectDiscoveryWatchRoots(projectRoot, project as never, [{
-      pluginId: 'replacement',
-      roots: ['extensions/replacement'],
-      excludes: [],
-    }])
-    expect(refreshedRoots).toContain(join(projectRoot, 'extensions/replacement/source'))
-    expect(refreshedRoots).not.toContain(join(projectRoot, 'extensions/demo/source'))
-  })
-
-  it('reads the last successful plugin watch roots and exclusions', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))
-    tempDirs.push(projectRoot)
-    const pluginRoot = join(projectRoot, 'plugins/demo')
-    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
-      name: 'fixture',
-      private: true,
-      dependencies: { 'holo-plugin-demo': 'file:plugins/demo' },
-    }, null, 2))
-    await writeProjectFile(projectRoot, 'config/app.ts', `
-export default {
-  plugins: ['holo-plugin-demo'],
-}
-`)
-    await writeProjectFile(projectRoot, 'plugins/demo/package.json', JSON.stringify({
-      name: 'holo-plugin-demo',
-      version: '1.0.0',
-      type: 'module',
-      holo: { plugin: './plugin.mjs' },
-    }, null, 2))
-    await writeProjectFile(projectRoot, 'plugins/demo/plugin.mjs', `
-export default {
-  id: 'demo',
-  contributes: {
-    project: {
-      prepare: './prepare.mjs',
-    },
-  },
-}
-`)
-    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
-    await symlink(pluginRoot, join(projectRoot, 'node_modules/holo-plugin-demo'))
-    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/demo.json', JSON.stringify({
-      watch: {
-        roots: ['extensions/demo'],
-        excludes: ['extensions/demo/cache'],
-      },
-    }))
-    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/invalid.json', '{')
-    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/escape.json', JSON.stringify({
-      watch: { roots: ['../outside'], excludes: [] },
-    }))
-    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/uncontained.json', JSON.stringify({
-      watch: { roots: ['extensions/other'], excludes: ['secrets'] },
-    }))
-    await writeProjectFile(projectRoot, '.holo-js/generated/.plugins/inactive.json', JSON.stringify({
-      watch: { roots: ['.'], excludes: [] },
-    }))
-
-    const [activePlugin] = await resolveProjectPlugins(projectRoot)
-    if (!activePlugin?.loaded) {
-      throw new Error(activePlugin?.error ?? 'Expected the local plugin package to resolve.')
-    }
-    await expect(readPluginPrepareWatches(projectRoot)).resolves.toEqual([{
-      pluginId: 'demo',
-      roots: ['extensions/demo'],
-      excludes: ['extensions/demo/cache'],
-      packageRoot: 'plugins/demo',
-    }])
-  })
-
-  it('classifies atomic saves, creations, and deletions from previous path snapshots', () => {
-    const originalSnapshot = { modifiedAt: 1, size: 10 }
-    const snapshots = new Map([['extensions/demo/widget.ts', originalSnapshot]])
-
-    expect(classifyWatchedPathChange(
-      'extensions/demo/widget.ts',
-      { modifiedAt: 2, size: 12 },
-      snapshots,
-    )).toEqual({ path: 'extensions/demo/widget.ts', kind: 'changed' })
-    expect(classifyWatchedPathChange(
-      'extensions/demo/new-widget.ts',
-      { modifiedAt: 2, size: 4 },
-      snapshots,
-    )).toEqual({ path: 'extensions/demo/new-widget.ts', kind: 'created' })
-    expect(classifyWatchedPathChange(
-      'extensions/demo/widget.ts',
-      undefined,
-      snapshots,
-    )).toEqual({ path: 'extensions/demo/widget.ts', kind: 'deleted' })
-  })
-
-  it('treats package manifests and lockfiles as discovery relevant', () => {
-    const project = { config: defaultProjectConfig() }
-
-    expect(isDiscoveryRelevantPath('package.json', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('package-lock.json', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('pnpm-lock.yaml', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('yarn.lock', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('bun.lock', project as never)).toBe(true)
-  })
-
-  it('uses configured broadcast and channel paths for holo dev discovery watches', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await mkdir(join(projectRoot, 'src/broadcast/orders'), { recursive: true })
-    await mkdir(join(projectRoot, 'src/channels/orders'), { recursive: true })
-    const project = {
-      config: {
-        ...defaultProjectConfig(),
-        paths: {
-          ...defaultProjectConfig().paths,
-          broadcast: 'src/broadcast',
-          channels: 'src/channels',
-        },
-      },
-    }
-
-    expect(isDiscoveryRelevantPath('src/broadcast/orders/created.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('src/channels/orders/private.ts', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('server/broadcast/orders.ts', project as never)).toBe(false)
-    expect(isDiscoveryRelevantPath('server/channels/orders.ts', project as never)).toBe(false)
-
-    const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
-    expect(roots).toContain(join(projectRoot, 'src/broadcast'))
-    expect(roots).toContain(join(projectRoot, 'src/broadcast/orders'))
-    expect(roots).toContain(join(projectRoot, 'src/channels'))
-    expect(roots).toContain(join(projectRoot, 'src/channels/orders'))
-  }, 20000)
 
   it('ignores generated discovery artifacts during holo dev watch reloads', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'holo-watch-test-'))

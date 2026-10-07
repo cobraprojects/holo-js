@@ -118,9 +118,13 @@ async function writePackageJsonDependencyState(state: PackageJsonDependencyState
 }
 
 export async function hasProjectDependency(projectRoot: string, packageName: string): Promise<boolean> {
+  return (await readProjectDependencyNames(projectRoot)).has(packageName)
+}
+
+export async function readProjectDependencyNames(projectRoot: string): Promise<ReadonlySet<string>> {
   const packageJson = await readTextFile(join(projectRoot, 'package.json'))
   if (!packageJson) {
-    return false
+    return new Set()
   }
 
   try {
@@ -128,10 +132,13 @@ export async function hasProjectDependency(projectRoot: string, packageName: str
       dependencies?: Record<string, unknown>
       devDependencies?: Record<string, unknown>
     }
-    return typeof parsed.dependencies?.[packageName] === 'string'
-      || typeof parsed.devDependencies?.[packageName] === 'string'
+    return new Set(
+      [parsed.dependencies, parsed.devDependencies].flatMap(dependencies =>
+        Object.entries(dependencies ?? {}).filter(([, version]) => typeof version === 'string').map(([name]) => name),
+      ),
+    )
   } catch {
-    return false
+    return new Set()
   }
 }
 

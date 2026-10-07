@@ -13,3 +13,9 @@ Replacement of the active development framework run with another run.
 
 **Framework shutdown**:
 Termination of a framework run without replacement.
+
+**Framework preparation**:
+Preparation of project artifacts and framework tooling before a framework run.
+
+**Discovery watch**:
+Observation of application paths that trigger framework preparation during development.
