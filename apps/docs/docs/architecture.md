@@ -40,12 +40,6 @@ The Next, Nuxt, and SvelteKit adapters own only framework-native startup, reques
 
 Framework routing, rendering, and deployment output remain owned by the host framework.
 
-## Flux presence membership
-
-`@holo-js/flux` owns presence member comparison and immutable membership updates through the existing `fluxInternals` export. Its generic `appendPresenceMember` and `removePresenceMember` methods accept readonly arrays and preserve the inferred member type. Comparison stays private: adapters remove the first equivalent member, while core wire-event removal removes all equivalent members.
-
-React effects, Vue scopes and refs, and Svelte stores own their native subscriptions, pause controls, and cleanup. Custom subscriptions need only the existing public subscription methods, and membership callbacks retain a separate snapshot for each event. [ADR-0014](https://github.com/cobraprojects/holo-js/blob/main/docs/adr/0014-flux-presence-membership-ownership.md) records this boundary.
-
 ## Generated registries
 
 Discovery converts canonical directories such as `server/models`, `server/db`, and `server/commands` into artifacts under `.holo-js/generated`. Adapters consume those registries instead of independently scanning application files.
@@ -83,7 +77,7 @@ Selected cursor results include only their selected fields, including after inse
 ## Approved ownership designs
 
 ::: info Pending implementation
-Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, Realtime row-window orchestration, and Media attachment/replacement ownership are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, Realtime row-window orchestration, Media attachment/replacement ownership, and Flux presence membership are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
@@ -96,7 +90,7 @@ These changes deepen existing modules by concentrating behavior behind their int
 | Authenticated session transition (implemented) | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
 | Realtime row window (implemented) | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
 | Media mutation (attachment/replacement implemented; regeneration/deletion pending) | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
-| Flux presence membership | Shared membership rules with native framework adapters | Preserve inference, per-event snapshots, and distinct first-match versus all-match removal policies |
+| Flux presence membership (implemented) | Shared membership rules with native framework adapters | Preserve inference, per-event snapshots, and distinct first-match versus all-match removal policies |
 
 ### One-time auth token redemption
 
@@ -137,7 +131,7 @@ recorded in [ADR-0011](https://github.com/cobraprojects/holo-js/blob/main/docs/a
 
 ### Flux adapter integration
 
-The existing `fluxInternals` export gains generic `appendPresenceMember` and `removePresenceMember` methods taking a readonly member array and one member and returning a readonly array of the same inferred member type. Comparison stays private. Framework adapters remove the first matching member, while core removal retains its all-match policy; native effects, refs, stores, and cleanup stay with each adapter.
+The existing `fluxInternals` export provides generic `appendPresenceMember` and `removePresenceMember` methods taking a readonly member array and one member and returning a readonly array of the same inferred member type. Comparison stays private. Framework adapters remove the first matching member, while core removal retains its all-match policy; native effects, refs, stores, and cleanup stay with each adapter. Per-event membership callbacks retain separate immutable snapshots, and custom subscriptions use only public subscription methods. [ADR-0014](https://github.com/cobraprojects/holo-js/blob/main/docs/adr/0014-flux-presence-membership-ownership.md) records this boundary.
 
 ### Verification through module interfaces
 
