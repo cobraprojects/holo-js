@@ -11424,6 +11424,7 @@ export default defineConfig({
     }
 
     errorChild.emit('error', new Error('dev exploded'))
+    errorChild.emit('close', null)
     await expect(devErrorPromise).rejects.toThrow('dev exploded')
     expect(errorWatcherClose).toHaveBeenCalledTimes(1)
 

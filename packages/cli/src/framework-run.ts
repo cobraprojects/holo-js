@@ -5,7 +5,6 @@ type FrameworkRunResult = (
   | { kind: 'close', code: number | null }
   | { kind: 'error', error: Error }
 ) & {
-  readonly shutdownSignal?: NodeJS.Signals
   readonly restartRequested: boolean
 }
 
@@ -38,6 +37,8 @@ function launchFrameworkRun(
   }) as SpawnProcessLike
   let restartRequested = false
   let shutdownSignal: NodeJS.Signals | undefined
+  let processError: Error | undefined
+  let terminationRequested = false
   let settled = false
   let finish: (result: FrameworkRunResult) => void
   const completion = new Promise<FrameworkRunResult>((resolvePromise) => {
@@ -52,13 +53,16 @@ function launchFrameworkRun(
     child.stdout?.off('data', forwardOutput)
     child.stderr?.off('data', forwardError)
     if (child.stdin) io.stdin.unpipe(child.stdin)
-    finish({ ...result, restartRequested, ...(shutdownSignal ? { shutdownSignal } : {}) })
+    finish({ ...result, restartRequested })
   }
   const terminate = (signal: NodeJS.Signals) => {
+    terminationRequested = true
     try {
       terminateChildProcess(child, signal)
     } catch (error) {
-      settle({ kind: 'error', error: error instanceof Error ? error : new Error(String(error)) })
+      const terminationError = error instanceof Error ? error : new Error(String(error))
+      processError ??= terminationError
+      io.stderr.write(`Framework termination failed: ${terminationError.message}\n`)
     }
   }
   const shutdown = (signal: NodeJS.Signals) => {
@@ -67,8 +71,14 @@ function launchFrameworkRun(
     shutdownSignal = signal
     terminate(signal)
   }
-  child.on('error', error => settle({ kind: 'error', error }))
-  child.on('close', code => settle({ kind: 'close', code }))
+  child.on('error', (error) => {
+    if (settled) return
+
+    processError ??= error
+    if (terminationRequested) io.stderr.write(`Framework termination failed: ${error.message}\n`)
+    else terminate('SIGTERM')
+  })
+  child.on('close', code => settle(processError ? { kind: 'error', error: processError } : { kind: 'close', code }))
   child.stdout?.on('data', forwardOutput)
   child.stderr?.on('data', forwardError)
   if (child.stdin) io.stdin.pipe(child.stdin)
@@ -77,7 +87,7 @@ function launchFrameworkRun(
     completion,
     shutdown,
     restart() {
-      if (settled || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
+      if (settled || processError || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
 
       restartRequested = true
       terminate('SIGTERM')
