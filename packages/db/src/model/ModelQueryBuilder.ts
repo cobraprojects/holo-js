@@ -23,7 +23,7 @@ import {
   decodeValueCursor,
   normalizePaginationParameterName,
 } from '../query/pagination'
-import { compareChunkValuesDescending } from '../query/chunkOrdering'
+import { queryIdBatches } from '../query/traversal'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { resolveMorphSelector } from './morphRegistry'
@@ -40,7 +40,6 @@ import type {
   SimplePaginationMeta,
 } from '../query/types'
 import type { TableDefinition } from '../schema/types'
-import { resolveTablePrimaryKey } from '../schema/tablePrimaryKey'
 import type { Entity } from './Entity'
 import type {
   EntityWithLoaded,
@@ -1135,50 +1134,7 @@ export class ModelQueryBuilder<
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    const plan = this.tableQuery.getPlan()
-    const tableName = plan.source.alias ?? plan.source.tableName
-    const chunkColumn: ModelColumnName<TTable> = `${tableName}.${column}`
-    const primaryKey: ModelColumnName<TTable> = `${tableName}.${this.repository.definition.primaryKey}`
-    const cursorColumns = [...new Set<ModelColumnName<TTable>>([
-      chunkColumn,
-      primaryKey,
-      ...(plan.source.table ? [`${tableName}.${resolveTablePrimaryKey(plan.source.table)}` as ModelColumnName<TTable>] : []),
-    ])]
-    const useCursor = !plan.distinct && plan.joins.length === 0 && plan.groupBy.length === 0 && plan.unions.length === 0
-    const selectedChunkColumn = plan.selections.find(selection =>
-      selection.kind === 'column' && (selection.column === column || selection.column === chunkColumn),
-    )
-    const canOrderByChunkColumn = (plan.groupBy.length === 0 || plan.groupBy.includes(column) || plan.groupBy.includes(chunkColumn))
-      && ((!plan.distinct && plan.unions.length === 0) || plan.selections.length === 0 || selectedChunkColumn !== undefined)
-    const unionOrderColumn = selectedChunkColumn?.kind === 'column' ? selectedChunkColumn.alias ?? column : column
-    const orderColumn = plan.unions.length > 0 ? unionOrderColumn : chunkColumn
-    let query = (canOrderByChunkColumn ? this.reorder(orderColumn as ModelColumnName<TTable>) : this).limit(undefined).offset(undefined)
-    if (!useCursor) return query.chunk(size, callback)
-    for (const cursorColumn of cursorColumns.slice(1)) query = query.orderBy(cursorColumn)
-    const hiddenColumns: string[] = []
-    if (plan.selections.length > 0) {
-      const selectedNames = new Set([
-        ...Object.keys(this.repository.definition.table.columns),
-        ...plan.selections.map(selection => selection.kind === 'column' ? selection.alias ?? selection.column.split('.').at(-1) : 'alias' in selection ? selection.alias : undefined),
-      ])
-      for (const cursorColumn of cursorColumns) {
-        let alias = `__holo_chunk_${hiddenColumns.length}`
-        while (selectedNames.has(alias)) alias += '_'
-        hiddenColumns.push(alias)
-        query = query.addSelect(`${cursorColumn} as ${alias}`)
-      }
-    }
-    let cursor: string | null = null
-    let page = 1
-    do {
-      const { page: batch, collection } = await query.cursorPage(size, cursor, {}, hiddenColumns)
-      query.rebindRowsToSerializedResult(batch.data, collection)
-      if (collection.length === 0 || await callback(collection, page) === false) {
-        return
-      }
-      cursor = batch.nextCursor
-      page += 1
-    } while (cursor !== null)
+    return this.chunkIds(size, callback, column, 'asc')
   }
 
   async chunkByIdDesc(
@@ -1187,23 +1143,32 @@ export class ModelQueryBuilder<
     column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
+    return this.chunkIds(size, callback, column, 'desc')
+  }
 
-    const entities = await this.getUnpaginatedEntities()
-    const sorted = [...entities].sort((left, right) => {
-      const a = left.get(column as never)
-      const b = right.get(column as never)
-      return compareChunkValuesDescending(a, b)
-    })
-
+  private async chunkIds(
+    size: number,
+    callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
+    column: ModelAttributeKey<TTable>,
+    direction: 'asc' | 'desc',
+  ): Promise<void> {
     let page = 1
-    for (let index = 0; index < sorted.length; index += size) {
-      const result = await callback(sorted.slice(index, index + size) as unknown as EntityWithLoaded<TTable, TRelations, TLoaded>[], page)
-      if (result === false) {
-        return
-      }
-
+    for await (const rows of queryIdBatches(this.tableQuery, size, {
+      column,
+      direction,
+      primaryKey: this.repository.definition.primaryKey,
+    }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
+      if (await callback(rows, page) === false) return
       page += 1
     }
+  }
+
+  private async hydrateTraversalRows(rows: readonly ModelRecord<TTable>[]) {
+    const collection = await this.hydrateRows(rows)
+    this.recordCollectionRelationObservations(collection)
+    this.recordCollectionRelationAggregateObservations(collection)
+    this.rebindRowsToSerializedResult(rows, collection)
+    return collection
   }
 
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {

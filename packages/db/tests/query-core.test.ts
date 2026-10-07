@@ -2950,13 +2950,6 @@ describe('query core slice', () => {
     })
     expect(chunked).toEqual([[1, 2], [3, 4], [5]])
 
-    const stoppedChunks: number[][] = []
-    await DB.table(users).chunkById(2, (rows, page) => {
-      stoppedChunks.push(rows.map(row => row.id as number))
-      return page < 2
-    })
-    expect(stoppedChunks).toEqual([[1, 2], [3, 4]])
-
     const stoppedPages: number[][] = []
     await DB.table(users).chunk(2, (rows, page) => {
       stoppedPages.push(rows.map(row => row.id as number))

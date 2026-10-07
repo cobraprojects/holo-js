@@ -33,7 +33,7 @@ import {
   type QueryCacheFlexibleTtlInput,
   type QueryCacheTtlInput,
 } from '../cache'
-import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
+import { queryIdBatches } from './traversal'
 import {
   createCursorPaginator,
   createPaginator,
@@ -1902,20 +1902,9 @@ export class TableQueryBuilder<
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
-    const rows = await this.getUnpaginatedRows<TRow>()
-    const sortedRows = [...rows].sort((left, right) => {
-      const a = left[column]
-      const b = right[column]
-      return compareChunkValuesAscending(a, b)
-    })
-
     let page = 1
-    for (let index = 0; index < sortedRows.length; index += size) {
-      const result = await callback(sortedRows.slice(index, index + size), page)
-      if (result === false) {
-        return
-      }
-
+    for await (const rows of queryIdBatches(this, size, { column, direction: 'asc' }, (rows: readonly TRow[]) => rows)) {
+      if (await callback(rows, page) === false) return
       page += 1
     }
   }
@@ -1927,20 +1916,9 @@ export class TableQueryBuilder<
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
-    const rows = await this.getUnpaginatedRows<TRow>()
-    const sortedRows = [...rows].sort((left, right) => {
-      const a = left[column]
-      const b = right[column]
-      return compareChunkValuesDescending(a, b)
-    })
-
     let page = 1
-    for (let index = 0; index < sortedRows.length; index += size) {
-      const result = await callback(sortedRows.slice(index, index + size), page)
-      if (result === false) {
-        return
-      }
-
+    for await (const rows of queryIdBatches(this, size, { column, direction: 'desc' }, (rows: readonly TRow[]) => rows)) {
+      if (await callback(rows, page) === false) return
       page += 1
     }
   }

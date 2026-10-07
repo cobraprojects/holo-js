@@ -1,7 +1,7 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, hasMany, resetDB } from '../src'
 import type { QuerySuccessLog } from '../src/core/types'
 
 describe('model chunking', () => {
@@ -50,9 +50,76 @@ describe('model chunking', () => {
       }
     })
     expect(batches).toEqual([['First', 'Second'], ['Updated', 'Fourth']])
-    for (const log of logs.filter(log => log.sql.startsWith('SELECT'))) {
+    for (const log of logs.filter(log => log.kind === 'query')) {
       expect(log.rowCount).toBeLessThanOrEqual(3)
     }
+  })
+
+  it('reads table ID chunks in bounded descending batches and observes later updates', async () => {
+    const batches: string[][] = []
+    await DB.table(table).where('active', true).chunkByIdDesc(2, async (rows, page) => {
+      batches.push(rows.map(row => row.name))
+      if (page === 1) await DB.table(table).where('id', 2).update({ name: 'Updated' })
+    })
+    expect(batches).toEqual([['Fourth', 'Third'], ['Updated', 'First']])
+    expect(logs.filter(log => log.kind === 'query').every(log => log.rowCount !== undefined && log.rowCount <= 3)).toBe(true)
+  })
+
+  it.each(['chunkById', 'chunkByIdDesc'] as const)('stops table %s retrieval after a callback refuses the next batch', async method => {
+    const batches: number[][] = []
+    await DB.table('chunk_items')[method](2, rows => {
+      batches.push(rows.map(row => Number(row.id)))
+      return false
+    })
+    expect(batches).toEqual(method === 'chunkById' ? [[1, 2]] : [[5, 4]])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3])
+  })
+
+  it('bounds descending model chunks with projections and observes later mutations', async () => {
+    const batches: Array<Array<Record<string, unknown>>> = []
+    await Item.query().select('name').chunkByIdDesc(2, async (records, page) => {
+      batches.push(records.map(record => record.toAttributes()))
+      if (page === 1) await Item.where('id', 2).update({ name: 'Updated' })
+    })
+    expect(batches).toEqual([
+      [{ name: 'Excluded' }, { name: 'Fourth' }],
+      [{ name: 'Third' }, { name: 'Updated' }],
+      [{ name: 'First' }],
+    ])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
+  })
+
+  it('chunks projected table custom keys without exposing cursor columns or colliding with selected aliases', async () => {
+    await adapter.execute('CREATE TABLE custom_keys (code TEXT PRIMARY KEY, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO custom_keys VALUES ('z', 'Zed'), ('a', 'Alpha'), ('m', 'Middle')")
+    const keys = defineGeneratedTable('custom_keys', { code: column.string().primaryKey(), name: column.string() })
+    const batches: Array<Array<Record<string, unknown>>> = []
+    await DB.table(keys).select('name as __holo_chunk_0').chunkById(1, rows => {
+      batches.push([...rows])
+    }, 'code')
+    expect(batches).toEqual([
+      [{ __holo_chunk_0: 'Alpha' }], [{ __holo_chunk_0: 'Middle' }], [{ __holo_chunk_0: 'Zed' }],
+    ])
+  })
+
+  it.each([true, false])('batches relations and preserves fallback snapshots with bounded traversal %s', async bounded => {
+    await adapter.execute('CREATE TABLE chunk_notes (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL, text TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO chunk_notes VALUES (1, 1, 'First note'), (2, 2, 'Second note'), (3, 4, 'Fourth note')")
+    const Note = defineModel(defineGeneratedTable('chunk_notes', {
+      id: column.id(), item_id: column.integer(), text: column.string(),
+    }), { timestamps: false })
+    const RelatedItem = defineModel(table, {
+      timestamps: false,
+      relations: { notes: hasMany(() => Note, 'item_id') },
+    })
+    const notes: string[][] = []
+    const query = RelatedItem.query().with('notes')
+    await (bounded ? query : query.distinct()).chunkByIdDesc(2, async (records, page) => {
+      notes.push(...records.map(record => record.notes.map(note => note.get('text'))))
+      if (page === 1) await Note.where('item_id', 2).update({ text: 'Updated note' })
+    })
+    expect(notes).toEqual([[], ['Fourth note'], [], [bounded ? 'Updated note' : 'Second note'], ['First note']])
+    expect(logs.filter(log => log.kind === 'query')).toHaveLength(bounded ? 6 : 2)
   })
 
   it('chunks projected records without exposing cursor columns', async () => {
