@@ -744,6 +744,7 @@ function createEmailVerificationRedirectRoute(user: AuthUser): string {
 
 async function authenticateAccessTokenRecord(
   plainTextToken: string,
+  provider?: string,
 ): Promise<{
   readonly token: PersonalAccessTokenRecord
   readonly user: SerializedAuthUser
@@ -755,7 +756,7 @@ async function authenticateAccessTokenRecord(
 
   const tokenStore = ensureTokenStore()
   const tokenRecord = await tokenStore.findById(parsed.id)
-  if (!tokenRecord || !verifyTokenSecret(parsed.secret, tokenRecord.tokenHash) || isTokenExpired(tokenRecord)) {
+  if (!tokenRecord || (provider !== undefined && tokenRecord.provider !== provider) || !verifyTokenSecret(parsed.secret, tokenRecord.tokenHash) || isTokenExpired(tokenRecord)) {
     return null
   }
 
@@ -843,8 +844,8 @@ async function resolveUserFromGuard(
       return null
     }
 
-    const authenticated = await authenticateAccessTokenRecord(token)
-    if (!authenticated || authenticated.token.provider !== guard.provider) {
+    const authenticated = await authenticateAccessTokenRecord(token, guard.provider)
+    if (!authenticated) {
       bindings.context.setAccessToken?.(guardName)
       bindings.context.setCachedUser(guardName, null)
       return null
