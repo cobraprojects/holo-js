@@ -112,6 +112,7 @@
     "@holo-js/authorization": "catalog:",
     "@holo-js/broadcast": "catalog:",
     "@holo-js/db-mysql": "catalog:",
+    "@holo-js/db-postgres": "workspace:*",
     "@holo-js/db-sqlite": "catalog:",
     "@holo-js/events": "catalog:",
     "@holo-js/mail": "catalog:",

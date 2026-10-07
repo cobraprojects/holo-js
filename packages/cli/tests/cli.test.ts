@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import type * as FsPromisesModule from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
@@ -2365,7 +2366,7 @@ export default defineAppConfig({
     expect(result.stdout).toContain('created config/security.ts')
     expect(result.stdout).toContain('created config/cors.ts')
     expect(result.stdout).toContain('created server/models/User.ts')
-    expect(result.stdout).toContain('created 7 auth migrations')
+    expect(result.stdout).toContain('created 8 auth migrations')
 
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -2380,11 +2381,23 @@ export default defineAppConfig({
     expect(await readFile(join(projectRoot, 'config/security.ts'), 'utf8')).toContain('defineSecurityConfig')
     expect(await readFile(join(projectRoot, 'config/cors.ts'), 'utf8')).toContain('defineCorsConfig')
     expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\']')
-    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(7)
+    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(8)
 
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    const database = new DatabaseSync(join(projectRoot, 'data/database.sqlite'))
+    try {
+      const insert = database.prepare('INSERT INTO auth_session_revocations (provider, user_id) VALUES (?, ?)')
+      insert.run('users', '1')
+      insert.run('admins', '1')
+      expect(() => insert.run('users', '1')).toThrow('UNIQUE constraint failed')
+    } finally {
+      database.close()
+    }
   }, 90000)
 
 
@@ -2773,6 +2786,7 @@ module.exports = {
       'create_password_reset_tokens',
       'create_email_verification_tokens',
       'create_auth_multi_factor_credentials',
+      'create_auth_session_revocations',
     ] as const) {
       const timestamp = `2026_01_01_00000${index + 1}`
       await writeProjectFile(
@@ -6543,6 +6557,7 @@ export default defineMigration({
 })
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
@@ -6612,6 +6627,7 @@ export const migrations = [defineMigration({
 })]
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
     expect(migrated.stdout).toContain('2026_07_29_000001_create_plugin_roles')
@@ -6659,6 +6675,7 @@ export default defineMigration({
 })
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
@@ -6734,6 +6751,7 @@ export default defineMigration({
 })
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 

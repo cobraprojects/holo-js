@@ -1,10 +1,13 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { DatabaseContext, createDialect, ModelRepository, TableQueryBuilder, column, defineGeneratedTable, defineModel, createSchemaService, DB } from '@holo-js/db'
-import { configureAuthRuntime, authRuntimeInternals } from '../../auth/src'
+import { DatabaseContext, createDialect, ModelRepository, TableQueryBuilder, column, defineGeneratedTable, defineModel, createSchemaService, connectionAsyncContext, DB } from '@holo-js/db'
+import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig, authRuntimeInternals } from '../../auth/src'
+import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig } from '@holo-js/session'
+import { createCoreSessionRevocationStore } from '../src/portable/authSessionRevocations'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
@@ -17,6 +20,7 @@ const notificationsEntry = JSON.stringify(resolve(import.meta.dirname, '../../no
 const sessionEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
 const securityEntry = JSON.stringify(resolve(import.meta.dirname, '../../security/src/index.ts'))
 const tempDirs: string[] = []
+const revocationsSchema = 'CREATE TABLE auth_session_revocations (provider VARCHAR(255) NOT NULL, user_id VARCHAR(255) NOT NULL, generation INTEGER NOT NULL DEFAULT 0, retained_session_id VARCHAR(255), PRIMARY KEY (provider, user_id))'
 type VerificationTokenLike = {
   readonly id: string
   readonly plainTextToken: string
@@ -65,7 +69,7 @@ function unwrapAuthResult<TData>(
 }
 
 async function createProject(options: {
-  session?: 'file' | 'database' | false
+  session?: 'file' | 'database' | 'redis' | false
   auth?: boolean
   mail?: boolean
   notifications?: boolean
@@ -78,6 +82,11 @@ async function createProject(options: {
 } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-auth-'))
   tempDirs.push(root)
+  if (options.auth) {
+    const database = new DatabaseSync(join(root, 'database.sqlite'))
+    database.exec(revocationsSchema)
+    database.close()
+  }
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await symlink(resolve(import.meta.dirname, '../../auth-social-google'), join(root, 'node_modules/@holo-js/auth-social-google'))
   await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
@@ -110,7 +119,7 @@ export default defineDatabaseConfig({
   connections: {
     main: {
       driver: 'sqlite',
-      url: ':memory:',
+      url: ${JSON.stringify(options.auth ? join(root, 'database.sqlite') : ':memory:')},
     },
   },
 })
@@ -121,9 +130,11 @@ export default defineDatabaseConfig({
 import { defineSessionConfig } from ${sessionEntry}
 
 export default defineSessionConfig({
-  driver: '${options.session === 'database' ? 'database' : 'file'}',
+  driver: '${options.session === 'database' || options.session === 'redis' ? options.session : 'file'}',
   stores: {
-    ${options.session === 'database'
+    ${options.session === 'redis'
+      ? `redis: { driver: 'redis', connection: 'default', host: '127.0.0.1', port: 6379, db: 0, prefix: 'holo:core-revocations:${crypto.randomUUID()}:' },`
+      : options.session === 'database'
       ? `database: {
       driver: 'database',
       connection: 'main',
@@ -136,6 +147,11 @@ export default defineSessionConfig({
   },
 })
 `, 'utf8')
+  }
+
+  if (options.session === 'redis') {
+    await writeFile(join(root, 'config/redis.ts'), `import { defineRedisConfig } from ${JSON.stringify(resolve(import.meta.dirname, '../../kernel/src/index.ts'))}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: 6379, db: 0 } } })`)
   }
 
   if (options.auth) {
@@ -4518,4 +4534,142 @@ export default {
 
     await runtime.shutdown()
   })
+})
+
+
+it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? ['redis' as const] : [])] as const)('retains the current %s browser across restart and physical rotation through durable core revocation persistence', async session => {
+  const root = await createProject({ auth: true, session })
+  await writeFile(join(root, 'server/models/User.ts'), `export default { async find(id) { return { id: Number(id), email: 'browser@app.test' } } }`)
+  const runtime = await createHolo(root, { preferCache: false })
+  await runtime.initialize()
+  if (session === 'database') {
+    await createSchemaService(DB.connection()).createTable('sessions', table => {
+      table.string('id').primaryKey()
+      table.string('store')
+      table.json('data')
+      table.timestamp('created_at')
+      table.timestamp('last_activity_at')
+      table.timestamp('expires_at')
+      table.timestamp('invalidated_at').nullable()
+      table.string('remember_token_hash').nullable()
+    })
+  }
+  if (!runtime.auth) throw new Error('Auth unavailable')
+  const auth = runtime.auth
+  const first = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
+  const second = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
+  expect(first.sessionId).not.toBe(second.sessionId)
+  await runtime.runWithAuthRequestAccessors({ getCookie: () => second.sessionId }, async () => {
+    await auth.logoutOtherDevices()
+    expect(await auth.check()).toBe(true)
+  })
+  await runtime.shutdown()
+  const restarted = await createHolo(root, { preferCache: false })
+  await restarted.initialize()
+  if (!restarted.auth) throw new Error('Auth unavailable after restart')
+  const restoredAuth = restarted.auth
+  const rotated = await restarted.runWithAuthRequestAccessors({ getCookie: () => second.sessionId }, async () => {
+    expect(await restoredAuth.check()).toBe(true)
+    return restoredAuth.loginUsingId(1)
+  })
+  expect(rotated.sessionId).not.toBe(second.sessionId)
+  await restarted.runWithAuthRequestAccessors({ getCookie: () => first.sessionId }, async () => {
+    expect(await restoredAuth.check()).toBe(false)
+  })
+  await restarted.runWithAuthRequestAccessors({ getCookie: () => rotated.sessionId }, async () => {
+    expect(await restoredAuth.check()).toBe(true)
+  })
+  await restarted.session?.invalidate(first.sessionId)
+  await restarted.session?.invalidate(rotated.sessionId)
+})
+
+it('requires fresh browser login on adapter adoption while remembered legacy payloads reject and tokens remain valid', async () => {
+  const root = await createProject({ auth: true })
+  await writeFile(join(root, 'server/models/User.ts'), `export default { async find(id) { return { id: Number(id), email: 'browser@app.test' } } }`)
+  const runtime = await createHolo(root, { preferCache: false })
+  await runtime.initialize()
+  if (!runtime.auth || !runtime.session) throw new Error('Auth and Session unavailable')
+  const auth = runtime.auth
+  await createSchemaService(DB.connection()).createTable('personal_access_tokens', table => {
+    table.uuid('id').primaryKey()
+    table.string('provider')
+    table.string('user_id')
+    table.string('name')
+    table.string('token_hash')
+    table.json('abilities')
+    table.timestamp('last_used_at').nullable()
+    table.timestamp('expires_at').nullable()
+    table.timestamps()
+  })
+  const user = { id: 1, email: 'browser@app.test' }
+  const token = await auth.tokens.create(user, { name: 'independent-client', abilities: ['*'] })
+  const legacyPayload = { auth: { guard: 'web', provider: 'users', userId: 1, user, authenticatedAt: new Date().toISOString() } }
+  const ordinary = await runtime.session.create({ data: legacyPayload }) as SessionRecordLike
+  const remembered = await runtime.session.create({ data: legacyPayload }) as SessionRecordLike
+  const rememberToken = await runtime.session.issueRememberMeToken(remembered.id)
+  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? ordinary.id : undefined }, () => auth.check())).resolves.toBe(false)
+  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session_remember' ? rememberToken : undefined }, () => auth.check())).resolves.toBe(false)
+  const fresh = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
+  await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? fresh.sessionId : undefined }, async () => {
+    await auth.logoutOtherDevices()
+    expect(await auth.check()).toBe(true)
+  })
+  await expect(auth.tokens.authenticate(token.plainTextToken)).resolves.toMatchObject(user)
+})
+
+it('propagates missing durable persistence instead of authenticating with an implicit generation', async () => {
+  const root = await createProject({ auth: true })
+  await writeFile(join(root, 'server/models/User.ts'), `export default { async find(id) { return { id: Number(id), email: 'browser@app.test' } } }`)
+  const runtime = await createHolo(root, { preferCache: false })
+  await runtime.initialize()
+  await createSchemaService(DB.connection()).dropTable('auth_session_revocations')
+  await expect(runtime.runWithAuthRequestAccessors({}, () => runtime.auth?.loginUsingId(1))).rejects.toThrow('auth_session_revocations')
+})
+
+
+it.each(['shutdown', 'rollback'] as const)('restores the actual borrowed durable revocation store after core %s', async ending => {
+  const root = await createProject({ auth: true })
+  const borrowed = new DatabaseContext({ driver: 'sqlite', dialect: createDialect('sqlite'), adapter: createSQLiteAdapter({ filename: join(root, 'borrowed.sqlite') }) })
+  await borrowed.initialize()
+  await borrowed.executeCompiled({ sql: revocationsSchema, source: 'schema' })
+  const nativeStore = createCoreSessionRevocationStore()
+  const scope = { connectionName: 'borrowed', connection: borrowed }
+  const borrowedStore = {
+    readMany: (identities: Parameters<typeof nativeStore.readMany>[0]) => connectionAsyncContext.run(scope, () => nativeStore.readMany(identities)),
+    revokeOthers: (...args: Parameters<typeof nativeStore.revokeOthers>) => connectionAsyncContext.run(scope, () => nativeStore.revokeOthers(...args)),
+  }
+  const context = createAsyncAuthContext()
+  const user = { id: 1, email: 'borrowed@app.test' }
+  configureSessionRuntime({ config: normalizeSessionConfig(), stores: { file: createFileSessionStore(join(root, 'borrowed-sessions')) } })
+  configureAuthRuntime({
+    config: normalizeAuthConfig(), session: getSessionRuntime(), sessionRevocations: borrowedStore, context,
+    providers: { users: { async create() { return user }, async findByCredentials() { return user }, async findById() { return user }, getId() { return user.id }, serialize() { return user } } },
+  })
+  const originalBrowser = await context.run(() => getAuthRuntime().loginUsingId(1))
+  try {
+    if (ending === 'rollback') {
+      const plugin = join(root, 'node_modules/holo-plugin-failed-boot')
+      await mkdir(plugin, { recursive: true })
+      await writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'holo-plugin-failed-boot', version: '1.0.0', type: 'module', holo: { plugin: './plugin.mjs' } }))
+      await writeFile(join(plugin, 'plugin.mjs'), "export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime: { boot: './boot.mjs' } } }")
+      await writeFile(join(plugin, 'boot.mjs'), "export default function boot() { throw new Error('project initialization failed') }")
+      const appConfig = await readFile(join(root, 'config/app.ts'), 'utf8')
+      await writeFile(join(root, 'config/app.ts'), appConfig.replace("  name: 'Core Auth App',", "  name: 'Core Auth App',\n  plugins: ['holo-plugin-failed-boot'],"))
+    }
+    const runtime = await createHolo(root, { preferCache: false })
+    if (ending === 'rollback') await expect(runtime.initialize()).rejects.toThrow('project initialization failed')
+    else {
+      await runtime.initialize()
+      await runtime.shutdown()
+    }
+    await context.run(async () => {
+      context.setSessionId('web', originalBrowser.sessionId)
+      await getAuthRuntime().logoutOtherDevices()
+      expect(await getAuthRuntime().check()).toBe(true)
+    })
+    await expect(borrowedStore.readMany([{ provider: 'users', userId: 1 }])).resolves.toMatchObject([{ generation: 1 }])
+    expect(borrowed.isConnected()).toBe(true)
+  } finally {
+    await borrowed.disconnect()
+  }
 })

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
-import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState, EmailVerificationTokenStore, EmailVerificationTokenRecord, PasswordResetTokenStore, PasswordResetTokenRecord } from '@holo-js/auth'
+import type { AuthFacade, AuthSessionRevocationStore, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState, EmailVerificationTokenStore, EmailVerificationTokenRecord, PasswordResetTokenStore, PasswordResetTokenRecord } from '@holo-js/auth'
 import type {} from '@holo-js/auth/config'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/cache/config'
@@ -37,6 +37,7 @@ import {
   type DatabaseDriverFactory,
 } from '@holo-js/db'
 import { importBundledRuntimeModule, importOptionalRuntimeModule } from '../runtimeModule'
+import { createCoreSessionRevocationStore } from './authSessionRevocations'
 import { authTokenExpiryPredicate, createAuthRedemptionContext } from './authRedemption'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
@@ -553,6 +554,7 @@ type MailModule = {
 type AuthModule = {
   configureAuthRuntime(options?: {
     readonly config: LoadedHoloConfig['auth']
+    readonly sessionRevocations?: AuthSessionRevocationStore
     readonly session: HoloSessionRuntimeBinding
     readonly providers: Readonly<Record<string, unknown>>
     readonly tokens?: {
@@ -3120,6 +3122,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       session: sessionModule.getSessionRuntime(),
       providers,
       tokens: authStores.tokens,
+      sessionRevocations: createCoreSessionRevocationStore(),
       emailVerificationTokens: authStores.emailVerificationTokens,
       passwordResetTokens: authStores.passwordResetTokens,
       multiFactor: authStores.multiFactor,
