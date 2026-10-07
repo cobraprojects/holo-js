@@ -525,6 +525,7 @@ export interface PasswordResetTokenResult {
 }
 
 export interface EmailVerificationTokenStore {
+  redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null>
   create(record: EmailVerificationTokenRecord): Promise<void>
   findById(id: string): Promise<EmailVerificationTokenRecord | null>
   delete(id: string): Promise<void>

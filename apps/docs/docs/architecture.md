@@ -55,3 +55,9 @@ The repository architecture check rejects:
 - abstraction-package dependencies on concrete drivers
 
 Run it through `bun run test:dependency-policy`.
+
+## Auth Token Redemption
+
+Email verification owns one atomic claim of the exact unused, unexpired token and invokes the user mutation only for the winner. Core uses an operation-scoped native repository and actual database context identity to prove shared transaction participation. Participating failures roll back the claim and user update together. External providers and different database contexts consume the claim before mutation; failure requires a fresh token. See [Email Verification](/auth/email-verification#single-use-redemption).
+
+Password-reset redemption and its scoped sibling-revocation coordination remain approved pending implementation. The shared decision is recorded in ADR-0008.

@@ -2167,10 +2167,12 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }
 
-        await store.delete(record.id)
-        const updated = await updateUserRecord(record.provider, record.userId, {
+        const updated = await store.redeem(record, () => updateUserRecord(record.provider, record.userId, {
           email_verified_at: new Date(),
-        })
+        }))
+        if (!updated) {
+          throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
+        }
         return updated
       }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure))
     },
