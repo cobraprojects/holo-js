@@ -1,5 +1,5 @@
 import type * as FsPromises from 'node:fs/promises'
-import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -64,6 +64,14 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }) })
 
 describe('migration creation commands', () => {
+  it('reports the blocked project lock when migration creation times out without removing it', async () => {
+    const lockPath = join(await realpath(root), '.holo-js/migration-create.lock')
+    await mkdir(lockPath)
+    await expect(runMakeMigration(io, root, { args: ['blocked_migration'], flags: {} })).rejects.toThrow(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`)
+    expect((await stat(lockPath)).isDirectory()).toBe(true)
+    expect(await migrationFiles()).toEqual([])
+  }, 35_000)
+
   it('refuses an on-disk duplicate hidden by stale discovery', async () => {
     await write('server/db/migrations/2026_01_01_000000_add_status.ts', 'export default { up() {} }\n')
     await expect(runMakeMigration(io, root, { args: ['add-status'], flags: {} })).rejects.toThrow('A migration named "add_status" already exists.')
