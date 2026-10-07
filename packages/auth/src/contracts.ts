@@ -464,13 +464,14 @@ export interface AuthTokenStore {
   listByUserId(provider: string, userId: string | number): Promise<readonly PersonalAccessTokenRecord[]>
   update(record: PersonalAccessTokenRecord): Promise<void>
   delete(id: string): Promise<void>
-  deleteByUserId(provider: string, userId: string | number): Promise<number>
+  deleteByUserId(provider: string, userId: string | number, options?: { readonly exceptId?: string }): Promise<number>
 }
 
 export interface AuthTokenFacade {
   create(user: unknown, options: PersonalAccessTokenCreationOptions): Promise<PersonalAccessTokenResult>
   list(user: unknown, options?: { readonly guard?: string }): Promise<readonly PersonalAccessTokenRecord[]>
   revoke(options?: { readonly guard?: string }): Promise<void>
+  revokeOthers(options?: { readonly guard?: string }): Promise<number>
   revokeAll(user: unknown, options?: { readonly guard?: string }): Promise<number>
   authenticate(plainTextToken: string): Promise<AuthenticatedAuthUser | null>
   can(token: string, ability: string): Promise<boolean>

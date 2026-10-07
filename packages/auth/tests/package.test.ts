@@ -510,10 +510,10 @@ class InMemoryTokenStore implements AuthTokenStore {
     this.records.delete(id)
   }
 
-  async deleteByUserId(provider: string, userId: string | number): Promise<number> {
+  async deleteByUserId(provider: string, userId: string | number, options: { readonly exceptId?: string } = {}): Promise<number> {
     let deleted = 0
     for (const [id, record] of this.records.entries()) {
-      if (record.provider === provider && record.userId === userId) {
+      if (record.provider === provider && record.userId === userId && id !== options.exceptId) {
         this.records.delete(id)
         deleted += 1
       }
@@ -5001,6 +5001,89 @@ describe('@holo-js/auth package runtime', () => {
     await expect(tokens.can(postsToken.plainTextToken, 'users.read')).resolves.toBe(false)
     await expect(tokens.can(globalToken.plainTextToken, 'users.delete')).resolves.toBe(true)
     await expect(tokens.can(emptyToken.plainTextToken, 'posts.read')).resolves.toBe(false)
+  })
+
+  it('logs out only the current bearer credential and leaves browser and sibling tokens usable', async () => {
+    const runtime = configureRuntime()
+    const user = await runtime.usersProvider.create({ name: 'Ava', email: 'logout@example.com' })
+    await auth.loginUsingId(user.id)
+    const current = await tokens.create(user, { name: 'current' })
+    const sibling = await tokens.create(user, { name: 'sibling' })
+    runtime.context.setAccessToken('api', current.plainTextToken)
+    await auth.guard('api').logout()
+    await expect(tokens.authenticate(current.plainTextToken)).resolves.toBeNull()
+    await expect(tokens.authenticate(sibling.plainTextToken)).resolves.toMatchObject({ id: user.id })
+    await expect(auth.check()).resolves.toBe(true)
+    await expect(auth.guard('api').check()).resolves.toBe(false)
+  })
+
+  it('rejects missing, forged and incorrectly selected credentials without revoking tokens', async () => {
+    const runtime = configureRuntime()
+    const user = await runtime.usersProvider.create({ name: 'Ava', email: 'invalid@example.com' })
+    const current = await tokens.create(user, { name: 'current' })
+    await expect(tokens.revokeOthers()).rejects.toThrow('valid current token guard')
+    await expect(tokens.revokeOthers({ guard: 'missing' })).rejects.toThrow()
+    await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('valid current token guard')
+    runtime.context.setAccessToken('api', `${current.id}.forged`)
+    await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('valid current token guard')
+    runtime.context.setAccessToken('api', current.plainTextToken)
+    configureAuthRuntime({
+      config: defineAuthConfig({ guards: { web: { driver: 'session', provider: 'users' }, api: { driver: 'token', provider: 'admins' } }, providers: { users: { model: 'User' }, admins: { model: 'Admin' } } }),
+      session: getSessionRuntime(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider },
+      tokens: runtime.tokenStore, context: runtime.context,
+    })
+    await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('valid current token guard')
+    await expect(auth.guard('api').check()).resolves.toBe(false)
+    await auth.guard('api').logout()
+    await expect(tokens.authenticate(current.plainTextToken)).resolves.toMatchObject({ id: user.id })
+  })
+
+  it('rejects expired tokens and tokens whose user no longer exists', async () => {
+    const runtime = configureRuntime()
+    const user = await runtime.usersProvider.create({ name: 'Ava', email: 'deleted@example.com' })
+    const expired = await tokens.create(user, { name: 'expired', expiresAt: new Date(0) })
+    runtime.context.setAccessToken('api', expired.plainTextToken)
+    await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('valid current token guard')
+    const current = await tokens.create(user, { name: 'current' })
+    runtime.context.setAccessToken('api', current.plainTextToken)
+    await runtime.usersProvider.delete(user.id)
+    await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('valid current token guard')
+  })
+
+  it('preserves request authentication when current-token deletion or other-token revocation fails', async () => {
+    const runtime = configureRuntime()
+    const user = await runtime.usersProvider.create({ name: 'Ava', email: 'failure@example.com' })
+    const current = await tokens.create(user, { name: 'current' })
+    runtime.context.setAccessToken('api', current.plainTextToken)
+    vi.spyOn(runtime.tokenStore, 'delete').mockRejectedValueOnce(new Error('Token deletion failed.'))
+    await expect(auth.guard('api').logout()).rejects.toThrow('Token deletion failed.')
+    await expect(auth.guard('api').check()).resolves.toBe(true)
+    vi.spyOn(runtime.tokenStore, 'deleteByUserId').mockRejectedValueOnce(new Error('Revocation failed.'))
+    await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('Revocation failed.')
+    await expect(auth.guard('api').check()).resolves.toBe(true)
+  })
+
+  it('revokes other device tokens while retaining the current token and browser access', async () => {
+    const runtime = configureRuntime()
+    const user = await runtime.usersProvider.create({ name: 'Ava', email: 'devices@example.com' })
+    await auth.loginUsingId(user.id)
+    const first = await tokens.create(user, { name: 'first' })
+    const admin = await runtime.adminsProvider.create({ name: 'Admin', email: 'admin-devices@example.com' })
+    expect(admin.id).toBe(user.id)
+    const adminToken = await tokens.create(admin, { name: 'admin', guard: 'admin' })
+    const second = await tokens.create(user, { name: 'second' })
+    const third = await tokens.create(user, { name: 'third' })
+    runtime.context.setAccessToken('api', second.plainTextToken)
+    await expect(auth.guard('api').check()).resolves.toBe(true)
+    await expect(tokens.authenticate(first.plainTextToken)).resolves.toMatchObject({ id: user.id })
+    await expect(tokens.authenticate(first.plainTextToken)).resolves.toMatchObject({ id: user.id })
+    await expect(tokens.revokeOthers({ guard: 'api' })).resolves.toBe(2)
+    await expect(tokens.authenticate(first.plainTextToken)).resolves.toBeNull()
+    await expect(tokens.authenticate(third.plainTextToken)).resolves.toBeNull()
+    await expect(auth.guard('api').check()).resolves.toBe(true)
+    await expect(auth.check()).resolves.toBe(true)
+    await expect(tokens.authenticate(adminToken.plainTextToken)).resolves.toMatchObject({ id: admin.id })
+    await expect(tokens.revokeOthers({ guard: 'api' })).resolves.toBe(0)
   })
 
   it('lists tokens, revokes the current token, revokes all tokens for a user, and isolates revocation by user', async () => {

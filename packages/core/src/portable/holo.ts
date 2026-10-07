@@ -562,7 +562,7 @@ type AuthModule = {
       listByUserId(provider: string, userId: string | number): Promise<readonly unknown[]>
       update(record: unknown): Promise<void>
       delete(id: string): Promise<void>
-      deleteByUserId(provider: string, userId: string | number): Promise<number>
+      deleteByUserId(provider: string, userId: string | number, options?: { readonly exceptId?: string }): Promise<number>
     }
     readonly emailVerificationTokens?: {
       create(record: unknown): Promise<void>
@@ -1919,7 +1919,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     listByUserId(provider: string, userId: string | number): Promise<readonly unknown[]>
     update(record: unknown): Promise<void>
     delete(id: string): Promise<void>
-    deleteByUserId(provider: string, userId: string | number): Promise<number>
+    deleteByUserId(provider: string, userId: string | number, options?: { readonly exceptId?: string }): Promise<number>
   }
   readonly emailVerificationTokens: {
     create(record: unknown): Promise<void>
@@ -1990,11 +1990,11 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       async delete(id: string) {
         await DB.table('personal_access_tokens').where('id', id).delete()
       },
-      async deleteByUserId(provider: string, userId: string | number) {
-        const result = await DB.table('personal_access_tokens')
+      async deleteByUserId(provider: string, userId: string | number, options: { readonly exceptId?: string } = {}) {
+        const query = DB.table('personal_access_tokens')
           .where('provider', provider)
           .where('user_id', String(userId))
-          .delete()
+        const result = await (options.exceptId === undefined ? query : query.where('id', '!=', options.exceptId)).delete()
         /* v8 ignore next -- DB adapters that omit affectedRows normalize to 0. */
         return result.affectedRows ?? 0
       },
