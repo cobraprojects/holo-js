@@ -1,6 +1,6 @@
 # Coordinate single-use auth token redemption with persistence outcomes
 
-Email verification is implemented and behaviorally verified. Password-reset redemption, including sibling revocation coordination, remains approved pending implementation in ticket #85.
+Email verification and password-reset redemption, including sibling revocation coordination, are implemented and behaviorally verified.
 
 Exactly one concurrent request may redeem an email verification or password reset token. When the token and user mutation share a database transaction, a failed mutation rolls back both; when the user belongs to an external provider adapter, a claimed token remains consumed after mutation failure and the user must request a fresh token. We chose adapter-specific guarantees because a transaction across unrelated persistence adapters would promise atomicity the implementation cannot provide.
 

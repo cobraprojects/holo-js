@@ -2,6 +2,7 @@ import {
   DEFAULT_REDIS_DB,
   DEFAULT_REDIS_HOST,
   DEFAULT_REDIS_PORT,
+  normalizeRedisConfig,
   resolveNormalizedRedisConnection,
   type HoloRedisClusterNodeConfig,
   type NormalizedHoloRedisClusterNodeConfig,
@@ -329,7 +330,7 @@ function normalizeSecurityRateLimitConfig(
   }
 
   const file = (config?.file ?? {}) as SecurityRateLimitFileConfig
-  const redis = (config?.redis ?? {}) as SecurityRateLimitRedisConfig
+  const redis = (config?.redis ?? {}) as SecurityRateLimitRedisConfig & Partial<NormalizedSecurityRateLimitRedisConfig>
   const limiters = !config?.limiters || Object.keys(config.limiters).length === 0
     ? holoSecurityDefaults.rateLimit.limiters
     : Object.freeze(Object.fromEntries(Object.entries(config.limiters).map(([name, limiter]) => {
@@ -355,7 +356,12 @@ function normalizeSecurityRateLimitConfig(
             connectionName,
             'Security rate-limit Redis connection',
           )
-        : driver === 'redis'
+        : typeof redis.host === 'string' && typeof redis.port === 'number' && typeof redis.db === 'number'
+          ? resolveNormalizedRedisConnection(normalizeRedisConfig({
+              default: connectionName,
+              connections: { [connectionName]: redis },
+            }), connectionName, 'Security rate-limit Redis connection')
+          : driver === 'redis'
           ? (() => {
               throw new Error(
                 `[@holo-js/security] Rate-limit Redis config references shared connection "${connectionName}" without top-level Redis config.`,

@@ -566,6 +566,20 @@ class InMemoryEmailVerificationTokenStore implements EmailVerificationTokenStore
 }
 
 class InMemoryPasswordResetTokenStore implements PasswordResetTokenStore {
+  async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+    const stored = this.records.get(record.id)
+    if (!stored
+      || stored.provider !== record.provider
+      || stored.email !== record.email
+      || stored.table !== record.table
+      || stored.tokenHash !== record.tokenHash
+      || stored.createdAt.getTime() !== record.createdAt.getTime()
+      || stored.expiresAt.getTime() !== record.expiresAt.getTime()
+      || stored.expiresAt.getTime() <= Date.now()) return null
+    this.records.delete(record.id)
+    return operation()
+  }
+
   readonly records = new Map<string, PasswordResetTokenRecord>()
 
   async create(record: PasswordResetTokenRecord): Promise<void> {
@@ -2824,7 +2838,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.emailVerificationTokenStore.records.has(token.id)).toBe(true)
   })
 
-  it('does not reset the password when reset token deletion fails', async () => {
+  it('does not reset the password when reset token claiming fails', async () => {
     const runtime = configureRuntime({
       authConfig: {
         passwords: {
@@ -2846,9 +2860,9 @@ describe('@holo-js/auth package runtime', () => {
     })
     await requestPasswordReset({ email: 'ava@example.com' })
     const resetDelivery = runtime.deliveries[0]!
-    const deleteToken = runtime.passwordResetTokenStore.delete
-    runtime.passwordResetTokenStore.delete = async () => {
-      throw new Error('password reset token delete failed')
+    const redeemToken = runtime.passwordResetTokenStore.redeem
+    runtime.passwordResetTokenStore.redeem = async () => {
+      throw new Error('password reset token claim failed')
     }
 
     try {
@@ -2856,9 +2870,9 @@ describe('@holo-js/auth package runtime', () => {
         token: resetDelivery.tokenValue,
         password: 'new-secret',
         passwordConfirmation: 'new-secret',
-      })).rejects.toThrow('password reset token delete failed')
+      })).rejects.toThrow('password reset token claim failed')
     } finally {
-      runtime.passwordResetTokenStore.delete = deleteToken
+      runtime.passwordResetTokenStore.redeem = redeemToken
     }
 
     expect(runtime.passwordResetTokenStore.records.has(resetDelivery.tokenId)).toBe(true)
@@ -2874,6 +2888,65 @@ describe('@holo-js/auth package runtime', () => {
         runtime.usersProvider.users.get(1)?.password ?? '',
       ),
     ).resolves.toBe(false)
+  })
+
+  it('allows exactly one concurrent password reset', async () => {
+    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const input = { token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' }
+    const results = await Promise.allSettled([resetPassword(input), resetPassword(input)])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  it.each(['provider failure', 'sibling deletion failure'] as const)('consumes a reset claim and stops password changes after %s', async (failure) => {
+    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const delivery = runtime.deliveries[0]!
+    const record = runtime.passwordResetTokenStore.records.get(delivery.tokenId)!
+    await runtime.passwordResetTokenStore.create({ ...record, id: 'sibling' })
+    if (failure === 'provider failure') runtime.usersProvider.update = async () => { throw new Error('provider save failed') }
+    else runtime.passwordResetTokenStore.deleteByEmail = async () => { throw new Error('sibling delete failed') }
+    const input = { token: delivery.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' }
+    await expect(resetPassword(input)).rejects.toThrow(failure === 'provider failure' ? 'provider save failed' : 'sibling delete failed')
+    expect(runtime.usersProvider.users.get(1)?.password).toBe('old-secret')
+    expect(runtime.passwordResetTokenStore.records.has(delivery.tokenId)).toBe(false)
+    expect(runtime.passwordResetTokenStore.records.has('sibling')).toBe(failure === 'sibling deletion failure')
+    await expectAuthValidationError(() => resetPassword(input), 'password_reset_token_expired')
+  })
+
+  it('does not serialize different reset tokens across external provider updates', async () => {
+    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const delivery = runtime.deliveries[0]!
+    const record = runtime.passwordResetTokenStore.records.get(delivery.tokenId)!
+    let release: () => void = () => {}
+    const pending = new Promise<void>(resolve => { release = resolve })
+    let entered: () => void = () => {}
+    const entry = new Promise<void>(resolve => { entered = resolve })
+    const update = runtime.usersProvider.update.bind(runtime.usersProvider)
+    let updates = 0
+    runtime.usersProvider.update = async (id, values) => {
+      updates += 1
+      if (updates === 1) {
+        entered()
+        await pending
+      }
+      return update(id, values)
+    }
+    const first = resetPassword({ token: delivery.tokenValue, password: 'first-secret', passwordConfirmation: 'first-secret' })
+    await entry
+    await runtime.passwordResetTokenStore.create({ ...record, id: 'independent-token' })
+    try {
+      await expect(resetPassword({ token: `independent-token.${delivery.tokenValue.split('.')[1]}`, password: 'second-secret', passwordConfirmation: 'second-secret' }))
+        .resolves.toMatchObject({ email: 'ava@example.com' })
+    } finally {
+      release()
+      await first
+    }
   })
 
   it('creates, invalidates, and consumes password reset tokens', async () => {

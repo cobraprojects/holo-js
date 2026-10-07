@@ -3420,6 +3420,207 @@ export default {
     expect(identityRows[0]?.user_id).toBe('user-1')
   })
 
+  async function createResetTokenTable(tableName = 'password_reset_tokens'): Promise<void> {
+    await createSchemaService(DB.connection()).createTable(tableName, table => {
+      table.uuid('id').primaryKey()
+      table.string('provider')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('created_at')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamp('updated_at')
+    })
+  }
+
+  it('rolls back password reset siblings and the native user mutation together', async () => {
+    const root = await createProject({ auth: true })
+    let fail = true
+    let factoryActive = false
+    const User = defineModel(defineGeneratedTable('reset_users', {
+      id: column.id(), email: column.string(), password: column.string(),
+    }), {
+      timestamps: false,
+      events: {
+        updated() {
+          factoryActive = false
+          if (!fail) return
+          fail = false
+          throw new Error('reset save failed')
+        },
+      },
+    })
+    const key = Symbol.for('holo-test-reset-model')
+    const model = {
+      ...User,
+      getRepository() {
+        if (factoryActive) throw new Error('reset repository factory changed during the operation')
+        factoryActive = true
+        return User.getRepository()
+      },
+    }
+    Object.defineProperty(globalThis, key, { value: model, configurable: true })
+    try {
+      await writeFile(join(root, 'server/models/User.ts'), `export default globalThis[Symbol.for('holo-test-reset-model')]`, 'utf8')
+      const runtime = await createHolo(root, { envName: 'development' })
+      await runtime.initialize()
+      const schema = createSchemaService(DB.connection())
+      await schema.createTable('reset_users', table => {
+        table.id()
+        table.string('email')
+        table.string('password')
+      })
+      await DB.table('reset_users').insert({ id: 1, email: 'ava@example.com', password: 'old-secret' })
+      await createResetTokenTable()
+      const stores = authRuntimeInternals.getRuntimeBindings()
+      const secret = 'reset-secret'
+      const token = { id: 'reset-1', provider: 'users', email: 'ava@example.com', table: 'password_reset_tokens',
+        tokenHash: authRuntimeInternals.hashTokenSecret(secret), createdAt: new Date(), expiresAt: new Date(Date.now() + 60_000) }
+      await stores.passwordResetTokens!.create(token)
+      await stores.passwordResetTokens!.create({ ...token, id: 'reset-2' })
+      const input = { token: `${token.id}.${secret}`, password: 'new-secret', passwordConfirmation: 'new-secret' }
+      await expect(runtime.auth!.resetPassword(input)).rejects.toThrow('reset save failed')
+      expect(await User.find(1)).toMatchObject({ password: 'old-secret' })
+      expect(await stores.passwordResetTokens!.findById('reset-2')).not.toBeNull()
+      await expect(runtime.auth!.resetPassword(input)).resolves.toMatchObject({ email: 'ava@example.com' })
+      expect(await stores.passwordResetTokens!.findById('reset-2')).toBeNull()
+      await expect(runtime.auth!.resetPassword(input)).rejects.toThrow('password reset link')
+    } finally {
+      Reflect.deleteProperty(globalThis, key)
+    }
+  })
+
+  it('allows one winner when resetting the same password concurrently with persisted tokens', async () => {
+    const root = await createProject({ auth: true })
+    await writeFile(join(root, 'server/models/User.ts'), `
+const user = { id: 1, email: 'ava@example.com', password: 'old-secret' }
+export default {
+  async find() { return user },
+  where() { return { async first() { return user } } },
+  async update(_id, values) {
+    Object.assign(user, values)
+    return user
+  },
+}
+`, 'utf8')
+    const runtime = await createHolo(root, { envName: 'development' })
+    await runtime.initialize()
+    await createResetTokenTable()
+    const store = authRuntimeInternals.getRuntimeBindings().passwordResetTokens!
+    await store.create({ id: 'concurrent-reset', provider: 'users', email: 'ava@example.com', table: 'password_reset_tokens',
+      tokenHash: authRuntimeInternals.hashTokenSecret('reset-secret'), createdAt: new Date(), expiresAt: new Date(Date.now() + 60_000) })
+    const input = { token: 'concurrent-reset.reset-secret', password: 'new-secret', passwordConfirmation: 'new-secret' }
+    await expect(runtime.auth!.resetPassword({ ...input, token: 'concurrent-reset.wrong-secret' })).rejects.toThrow('password reset link')
+    const results = await Promise.allSettled([runtime.auth!.resetPassword(input), runtime.auth!.resetPassword(input)])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  it.each(['changed identity', 'changed secret', 'already used', 'expires while claiming', 'database deadline has passed'] as const)(
+    'rejects password reset when the looked-up token is %s', async (change) => {
+      const root = await createProject({ auth: true })
+      const runtime = await createHolo(root, { envName: 'development' })
+      await runtime.initialize()
+      await createResetTokenTable()
+      const bindings = authRuntimeInternals.getRuntimeBindings()
+      const store = bindings.passwordResetTokens!
+      const databaseDeadline = new Date(Date.now() - 10_000)
+      if (change === 'database deadline has passed') vi.setSystemTime(Date.now() - 60_000)
+      const record = { id: 'reset-race', provider: 'users', email: 'ava@example.com', table: 'password_reset_tokens',
+        tokenHash: authRuntimeInternals.hashTokenSecret('reset-secret'), createdAt: new Date(),
+        expiresAt: change === 'database deadline has passed' ? databaseDeadline : new Date(Date.now() + 60_000) }
+      await store.create(record)
+      configureAuthRuntime({
+        ...bindings,
+        passwordResetTokens: {
+          ...store,
+          async findById(id) {
+            const found = await store.findById(id)
+            if (change !== 'expires while claiming' && change !== 'database deadline has passed') {
+              const payload = change === 'changed identity' ? { email: 'other@example.com' }
+                : change === 'changed secret' ? { token_hash: 'changed' } : { used_at: new Date().toISOString() }
+              await DB.table('password_reset_tokens').where('id', id).update(payload)
+            }
+            return found
+          },
+          async redeem(token, operation) {
+            if (change === 'expires while claiming') vi.setSystemTime(token.expiresAt)
+            return store.redeem(token, operation)
+          },
+        },
+      })
+      try {
+        await expect(runtime.auth!.resetPassword({ token: `${record.id}.reset-secret`, password: 'new-secret', passwordConfirmation: 'new-secret' }))
+          .rejects.toThrow('password reset link')
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  it.each(['external', 'different connection', 'different context with the same name'] as const)('permanently consumes password reset and siblings before a failed %s mutation', async (persistence) => {
+    const root = await createProject({ auth: true })
+    const adapter = persistence === 'external' ? undefined : createSQLiteAdapter({ filename: ':memory:' })
+    await adapter?.initialize()
+    if (adapter) {
+      const connection = new DatabaseContext({ connectionName: persistence === 'different connection' ? 'users' : 'main', adapter, dialect: createDialect('sqlite') })
+      const User = defineModel(defineGeneratedTable('isolated_reset_users', {
+        id: column.id(), email: column.string(), password: column.string(),
+      }), { timestamps: false, events: { updated() { throw new Error('external password save failed') } } })
+      const repository = ModelRepository.from(User.definition, connection)
+      const model = { ...User, getRepository() { return repository }, query() { return repository.query() }, find(id: number) { return repository.find(id) } }
+      Object.defineProperty(globalThis, Symbol.for('holo-test-isolated-reset-model'), { value: model, configurable: true })
+      await writeFile(join(root, 'server/models/User.ts'), `export default globalThis[Symbol.for('holo-test-isolated-reset-model')]`, 'utf8')
+      await createSchemaService(connection).createTable('isolated_reset_users', table => {
+        table.id()
+        table.string('email')
+        table.string('password')
+      })
+      await new TableQueryBuilder('isolated_reset_users', connection).insert({ id: 1, email: 'ava@example.com', password: 'old-secret' })
+    } else {
+    await writeFile(join(root, 'server/models/User.ts'), `
+const user = { id: 1, email: 'ava@example.com', password: 'old-secret' }
+export default {
+  async find() { return user },
+  where() { return { async first() { return user } } },
+  async update() { throw new Error('external password save failed') },
+}
+`, 'utf8')
+    }
+    await writeFile(join(root, 'config/auth.ts'), `
+import { defineAuthConfig } from ${authEntry}
+export default defineAuthConfig({ defaults: { guard: 'web', passwords: 'users' }, guards: { web: { driver: 'session', provider: 'users' } },
+  providers: { users: { model: 'User' } }, passwords: {
+    users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 },
+    secondary: { provider: 'users', table: 'secondary_password_reset_tokens', expire: 60, throttle: 0 },
+  } })
+`, 'utf8')
+    try {
+    const runtime = await createHolo(root, { envName: 'development' })
+    await runtime.initialize()
+    await createResetTokenTable()
+    await createResetTokenTable('secondary_password_reset_tokens')
+    const store = authRuntimeInternals.getRuntimeBindings().passwordResetTokens!
+    const record = { id: 'reset-1', provider: 'users', email: 'ava@example.com', table: 'password_reset_tokens',
+      tokenHash: authRuntimeInternals.hashTokenSecret('reset-secret'), createdAt: new Date(), expiresAt: new Date(Date.now() + 60_000) }
+    await store.create(record)
+    await store.create({ ...record, id: 'reset-2' })
+    await store.create({ ...record, id: 'other-broker', table: 'secondary_password_reset_tokens' })
+    await store.create({ ...record, id: 'other-provider', provider: 'admins' })
+    await store.create({ ...record, id: 'other-email', email: 'other@example.com' })
+    const input = { token: `${record.id}.reset-secret`, password: 'new-secret', passwordConfirmation: 'new-secret' }
+    await expect(runtime.auth!.resetPassword(input)).rejects.toThrow('external password save failed')
+    expect(await store.findById('reset-2')).toBeNull()
+    expect(await store.findById('other-broker')).not.toBeNull()
+    expect(await store.findById('other-provider')).not.toBeNull()
+    expect(await store.findById('other-email')).not.toBeNull()
+    await expect(runtime.auth!.resetPassword(input)).rejects.toThrow('password reset link')
+    } finally {
+      Reflect.deleteProperty(globalThis, Symbol.for('holo-test-isolated-reset-model'))
+      await adapter?.disconnect()
+    }
+  })
+
   it('allows one winner when verifying the same email concurrently with persisted tokens', async () => {
     const root = await createProject({ auth: true })
     await writeFile(join(root, 'server/models/User.ts'), `

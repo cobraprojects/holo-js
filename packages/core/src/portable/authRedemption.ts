@@ -35,3 +35,10 @@ export function createAuthRedemptionContext() {
     },
   }
 }
+
+export function authTokenExpiryPredicate(connection: DatabaseContext): string {
+  const dialect = connection.getDialect().name
+  if (dialect === 'sqlite') return "expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+  if (dialect === 'postgres') return "expires_at > (clock_timestamp() AT TIME ZONE 'UTC')"
+  return 'expires_at > CURRENT_TIMESTAMP(3)'
+}
