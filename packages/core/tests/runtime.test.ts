@@ -50,6 +50,7 @@ import {
 } from '@holo-js/queue'
 import {
   configureSecurityRuntime,
+  createMemoryRateLimitStore,
   getSecurityRuntimeBindings,
   resetSecurityRuntime,
 } from '@holo-js/security'
@@ -2840,7 +2841,7 @@ export default defineSecurityConfig({
       const closeManagedStore = vi.fn(async () => {})
       const runtimeState = globalThis as typeof globalThis & {
         __holoRuntime__?: {
-          securityRateLimitStoreManaged?: boolean
+          securityRateLimitStore?: { close?(): Promise<void> }
         }
         __holoSecurityRuntime__?: {
           bindings?: {
@@ -2884,7 +2885,7 @@ export default defineSecurityConfig({
 
       runtimeState.__holoRuntime__ = {
         ...(runtimeState.__holoRuntime__ ?? {}),
-        securityRateLimitStoreManaged: true,
+        securityRateLimitStore: configuredSecurityBindings.rateLimitStore,
       }
       runtimeState.__holoSecurityRuntime__ = {
         bindings: configuredSecurityBindings,
@@ -4309,6 +4310,7 @@ export default defineSecurityConfig({
 
       const runtimeState = globalThis as typeof globalThis & {
         __holoRuntime__?: {
+          securityRateLimitStore?: { close?(): Promise<void> }
           securityRedisAdapter?: {
             close?(): Promise<void>
           }
@@ -4316,6 +4318,7 @@ export default defineSecurityConfig({
       }
       runtimeState.__holoRuntime__ = {
         ...(runtimeState.__holoRuntime__ ?? {}),
+        securityRateLimitStore: previousStore,
         securityRedisAdapter: {
           close: closePreviousRedisAdapter,
         },
@@ -5249,6 +5252,80 @@ export default defineBroadcastConfig({
     expect(getNotificationsRuntimeBindings().store).toBe(store)
     expect(customSend).toHaveBeenCalledTimes(0)
     expect(listFakeSentMails()).toHaveLength(0)
+  })
+
+  it('preserves an external Session replacement and releases the previously acquired Redis adapter once', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'redis', stores: { redis: { driver: 'redis' } } })
+`, 'utf8')
+    let closed = 0
+    vi.resetModules()
+    vi.doMock('@holo-js/session/drivers/redis-adapter', () => ({
+      createSessionRedisAdapter: () => ({
+        async connect() {},
+        async get() { return null },
+        async set() {},
+        async del() {},
+        async close() { closed += 1 },
+      }),
+    }))
+    try {
+      const portable = await import('../src/portable')
+      await portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+      configureSessionRuntime({
+        config: normalizeSessionConfig(),
+        stores: { file: createFileSessionStore(join(root, 'external-sessions')) },
+      })
+      const externalSession = await getSessionRuntime().create({ data: { owner: 'application' } })
+      await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: 'owned-sessions' } } })
+`, 'utf8')
+      const runtime = await portable.createHolo(root, { preferCache: false })
+      await runtime.initialize()
+      await runtime.shutdown()
+      expect(await getSessionRuntime().read(externalSession.id)).toMatchObject({ data: { owner: 'application' } })
+      expect(closed).toBe(1)
+      await runtime.shutdown()
+      expect(closed).toBe(1)
+    } finally {
+      vi.doUnmock('@holo-js/session/drivers/redis-adapter')
+      vi.resetModules()
+    }
+  })
+
+  it('preserves an external Security replacement and releases the previously acquired owned store once', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root, `
+import { defineSecurityConfig } from '@holo-js/security'
+export default defineSecurityConfig({ rateLimit: { driver: 'memory' } })
+`)
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const ownedStore = getSecurityRuntimeBindings()?.rateLimitStore
+    if (!ownedStore) throw new Error('Managed security store was not acquired')
+    const closeOwned = vi.spyOn(ownedStore, 'close')
+    const memoryStore = createMemoryRateLimitStore()
+    let externalClosed = false
+    const externalStore = {
+      ...memoryStore,
+      async close() { externalClosed = true; await memoryStore.close?.() },
+    }
+    configureSecurityRuntime({ config: {}, rateLimitStore: externalStore })
+    await externalStore.hit('application', { maxAttempts: 10, decaySeconds: 60 })
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    await runtime.shutdown()
+    expect(closeOwned).toHaveBeenCalledTimes(1)
+    expect(externalClosed).toBe(false)
+    expect(getSecurityRuntimeBindings()?.rateLimitStore).toBe(externalStore)
+    await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('application', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
+    await runtime.shutdown()
+    expect(closeOwned).toHaveBeenCalledTimes(1)
   })
 
   it.each(['shutdown', 'rollback'] as const)('continues capability cleanup in dependency order after %s failures', async (ending) => {

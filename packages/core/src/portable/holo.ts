@@ -2941,19 +2941,13 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     ? await loadSecurityModule(true)
     : undefined
   const existingManagedSecurityRedisAdapter = getRuntimeState().securityRedisAdapter
+  const existingManagedSecurityStore = getRuntimeState().securityRateLimitStore
 
   if (securityModule) {
     const existingSecurityBindings = securityModule.getSecurityRuntimeBindings()
     const existingSecurityStore = existingSecurityBindings?.rateLimitStore
     const shouldReuseExistingSecurityStore = Boolean(existingSecurityStore)
-      && !existingManagedSecurityRedisAdapter
-      && getRuntimeState().securityRateLimitStoreManaged !== true
-    const shouldCloseExistingManagedSecurityStore = !shouldReuseExistingSecurityStore
-      && Boolean(existingSecurityStore)
-      && (
-        Boolean(existingManagedSecurityRedisAdapter)
-        || getRuntimeState().securityRateLimitStoreManaged === true
-      )
+      && existingSecurityStore !== existingManagedSecurityStore
     let nextManagedSecurityRedisAdapter: SecurityRedisAdapter | undefined
     let rateLimitStore: ReturnType<typeof securityModule.createRateLimitStoreFromConfig> | undefined
     let configuredSecurityRuntime = false
@@ -2976,15 +2970,15 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
           ...(nextManagedSecurityRedisAdapter ? { redisAdapter: nextManagedSecurityRedisAdapter } : {}),
         })
 
-      const previousStore = shouldCloseExistingManagedSecurityStore && existingSecurityStore !== rateLimitStore
-        ? existingSecurityStore
+      const previousStore = existingManagedSecurityStore !== rateLimitStore
+        ? existingManagedSecurityStore
         : undefined
       const previousAdapter = existingManagedSecurityRedisAdapter !== nextManagedSecurityRedisAdapter
         ? existingManagedSecurityRedisAdapter
         : undefined
       if (previousStore || previousAdapter) {
         getRuntimeState().securityRedisAdapter = undefined
-        getRuntimeState().securityRateLimitStoreManaged = undefined
+        getRuntimeState().securityRateLimitStore = undefined
         await releaseSecurityResources(previousStore, previousAdapter)
       }
 
@@ -3013,7 +3007,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       })
       configuredSecurityRuntime = true
       getRuntimeState().securityRedisAdapter = nextManagedSecurityRedisAdapter
-      getRuntimeState().securityRateLimitStoreManaged = !shouldReuseExistingSecurityStore
+      getRuntimeState().securityRateLimitStore = shouldReuseExistingSecurityStore ? undefined : rateLimitStore
     } catch (error) {
       try {
         await releaseSecurityResources(
@@ -3025,18 +3019,12 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       }
       throw error
     }
-  } else if (existingManagedSecurityRedisAdapter || getRuntimeState().securityRateLimitStoreManaged === true) {
+  } else if (existingManagedSecurityRedisAdapter || existingManagedSecurityStore) {
     const existingSecurityModule = await loadSecurityModule()
-    const existingSecurityBindings = existingSecurityModule?.getSecurityRuntimeBindings()
-    const store = getRuntimeState().securityRateLimitStoreManaged === true
-      ? existingSecurityBindings?.rateLimitStore
-      : undefined
     getRuntimeState().securityRedisAdapter = undefined
-    getRuntimeState().securityRateLimitStoreManaged = undefined
-    await releaseSecurityResources(store, existingManagedSecurityRedisAdapter)
+    getRuntimeState().securityRateLimitStore = undefined
+    await releaseSecurityResources(existingManagedSecurityStore, existingManagedSecurityRedisAdapter)
     existingSecurityModule?.resetSecurityRuntime()
-  } else {
-    getRuntimeState().securityRateLimitStoreManaged = undefined
   }
 
   const sessionModule = sessionConfigured || authConfigured
@@ -3065,15 +3053,14 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     try {
       managedSessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)
 
-      sessionModule.configureSessionRuntime({
-        config: loadedConfig.session,
-        stores: managedSessionStores.stores,
-      })
+      const sessionBindings = { config: loadedConfig.session, stores: managedSessionStores.stores }
+      sessionModule.configureSessionRuntime(sessionBindings)
 
       if (existingManagedSessionRedisAdapters) {
         getRuntimeState().sessionRedisAdapters = undefined
         await releaseSessionAdapters(existingManagedSessionRedisAdapters)
       }
+      getRuntimeState().sessionRuntimeBindings = sessionBindings
       getRuntimeState().sessionRedisAdapters = managedSessionStores.redisAdapters.length > 0
         ? managedSessionStores.redisAdapters
         : undefined
@@ -3195,6 +3182,7 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
       const state = getRuntimeState()
       const adapters = state.sessionRedisAdapters ?? []
       state.sessionRedisAdapters = undefined
+      state.sessionRuntimeBindings = undefined
       try {
         await releaseSessionAdapters(adapters)
       } finally {
@@ -3204,12 +3192,10 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
     async () => {
       const state = getRuntimeState()
       const securityModule = await loadSecurityModule()
-      const store = state.securityRateLimitStoreManaged === true
-        ? securityModule?.getSecurityRuntimeBindings()?.rateLimitStore
-        : undefined
+      const store = state.securityRateLimitStore
       const adapter = state.securityRedisAdapter
       state.securityRedisAdapter = undefined
-      state.securityRateLimitStoreManaged = undefined
+      state.securityRateLimitStore = undefined
       try {
         await releaseSecurityResources(store, adapter)
       } finally {
@@ -3288,10 +3274,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeSessionRuntime: HoloSessionRuntimeBinding | undefined
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
   let activeAuthContext: RuntimeAuthContext | undefined
-  let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings<
-    SecurityRedisAdapter,
-    SessionRedisAdapter
-  > | undefined
+  let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
   const previousRenderView = options.renderView
     ? getHoloRenderingRuntime().renderView
     : undefined
