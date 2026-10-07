@@ -84,6 +84,9 @@
       ],
       "@holo-js/validation/internal/compiled": [
         "../validation/src/internal/compiled.ts"
+      ],
+      "@holo-js/adapter-shared/next/request-context": [
+        "../adapter-shared/src/next/request-context.node.ts"
       ]
     }
   },
