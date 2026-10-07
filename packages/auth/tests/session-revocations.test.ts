@@ -352,3 +352,12 @@ it('preserves guards explicitly bound to another session when cleaning a revoked
     expect(await auth.guard('admin').id()).toBe(2)
   })
 })
+
+it('establishes fresh authentication instead of copying invalid logical browser metadata', async () => {
+  const legacy = await getSessionRuntime().create({ data: { auth: { guard: 'web', provider: 'users', userId: 1, user, authenticatedAt: new Date().toISOString(), revocation: { id: '', generation: 0 } } } })
+  await context.run(async () => {
+    context.setSessionId('web', legacy.id)
+    await auth.loginUsingId(1)
+    expect(await auth.check()).toBe(true)
+  })
+})

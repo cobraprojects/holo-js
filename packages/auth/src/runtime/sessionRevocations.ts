@@ -66,7 +66,7 @@ export async function loginRevocationMetadata(
 ): Promise<NonNullable<SessionAuthPayload['revocation']>> {
   const states = await readSessionRevocations(store, context, [identity], true)
   return {
-    id: Object.values(payloads).find(payload => payload.revocation)?.revocation?.id ?? crypto.randomUUID(),
+    id: Object.values(payloads).find(payload => typeof payload.revocation?.id === 'string' && payload.revocation.id.length > 0)?.revocation?.id ?? crypto.randomUUID(),
     generation: states.get(identityKey(identity))?.generation ?? 0,
   }
 }
