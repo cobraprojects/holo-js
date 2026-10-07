@@ -1,8 +1,5 @@
 import {
   resolveCacheKey,
-  deserializeCacheValue,
-  normalizeCacheTtl,
-  serializeCacheValue,
   type CacheDependencyDescriptor,
   type CacheDependencyIndex,
   type CacheFlexibleTtlInput,
@@ -18,7 +15,16 @@ import {
   resolveFlexibleCachedValue,
   type NormalizedFlexibleTtl,
 } from './flexible'
-import { getCacheRuntime, resolveConfiguredDriver } from './runtime-shared'
+import { getCacheRuntime } from './runtime-shared'
+import {
+  createCacheLock,
+  createIndexedKey,
+  forgetCacheEntry,
+  forgetNormalizedCacheEntry,
+  readCacheEntry,
+  resolveDriverContext,
+  writeCacheEntry,
+} from './entries'
 
 type DependencyIndexState = {
   readonly keyToDependencies: Map<string, Set<CacheDependencyDescriptor>>
@@ -106,60 +112,12 @@ export function resetDefaultDependencyIndex(): void {
   getQueryBridgeState().dependencyIndex = undefined
 }
 
-function resolveDriverContext(driverName?: string): {
-  readonly driverName: string
-  readonly driver: ReturnType<typeof resolveConfiguredDriver>
-  readonly normalizedKeyPrefix: string
-} {
-  const runtime = getCacheRuntime()
-  const configuredDriverName = driverName?.trim() || runtime.config.default
-  const driver = resolveConfiguredDriver(runtime, configuredDriverName)
-  const normalizedKeyPrefix = runtime.config.drivers[configuredDriverName]!.prefix
-
-  return Object.freeze({
-    driverName: configuredDriverName,
-    driver,
-    normalizedKeyPrefix,
-  })
-}
-
-function resolveNormalizedKey(
-  key: CacheKeyInput<unknown>,
-  driverName?: string,
-): string {
-  const context = resolveDriverContext(driverName)
-  return `${context.normalizedKeyPrefix}${resolveCacheKey(key)}`
-}
-
 async function getCachedValue<TValue>(
   key: CacheKeyInput<TValue>,
   driverName?: string,
 ): Promise<TValue | null> {
-  const context = resolveDriverContext(driverName)
-  const entry = await context.driver.get(resolveNormalizedKey(key, driverName))
-  if (!entry.hit || typeof entry.payload !== 'string') {
-    return null
-  }
-
-  return deserializeCacheValue<TValue>(entry.payload)
-}
-
-async function putCachedValue(
-  key: CacheKeyInput<unknown>,
-  value: unknown,
-  ttl: CacheTtlInput | undefined,
-  driverName?: string,
-): Promise<void> {
-  const context = resolveDriverContext(driverName)
-  const expiresAt = typeof ttl === 'undefined'
-    ? undefined
-    : normalizeCacheTtl(ttl).expiresAt
-
-  await context.driver.put({
-    key: resolveNormalizedKey(key, driverName),
-    payload: serializeCacheValue(value),
-    expiresAt,
-  })
+  const entry = await readCacheEntry(key, driverName)
+  return entry.hit ? entry.value : null
 }
 
 function createFlexibleLock(
@@ -167,19 +125,7 @@ function createFlexibleLock(
   ttl: NormalizedFlexibleTtl,
   driverName?: string,
 ): CacheLockContract {
-  const context = resolveDriverContext(driverName)
-  return context.driver.lock(
-    `${context.normalizedKeyPrefix}__flexible__:${resolveCacheKey(key)}`,
-    Math.max(1, ttl.staleSeconds),
-  )
-}
-
-function createIndexedKey(
-  key: CacheKeyInput<unknown>,
-  driverName?: string,
-): string {
-  const context = resolveDriverContext(driverName)
-  return `${context.driverName}\u0000${resolveNormalizedKey(key, driverName)}`
+  return createCacheLock(`__flexible__:${resolveCacheKey(key)}`, Math.max(1, ttl.staleSeconds), driverName)
 }
 
 function parseIndexedKey(indexedKey: string): {
@@ -245,7 +191,7 @@ export function createCacheQueryBridge(
         ? options.ttl
         : normalizeFlexibleTtl(options.flexible).staleSeconds
 
-      await putCachedValue(key, value, resolvedTtl, options.driver)
+      await writeCacheEntry(key, value, resolvedTtl, options.driver)
       await syncDependencies(indexedKey, options.dependencies)
     },
     async flexible<TValue>(
@@ -262,7 +208,7 @@ export function createCacheQueryBridge(
       const refreshValue = async (normalizedTtl: NormalizedFlexibleTtl): Promise<Awaited<TValue>> => {
         const value = await callback()
         const envelope = createFlexibleEnvelope(normalizedTtl, value)
-        await putCachedValue(
+        await writeCacheEntry(
           key,
           envelope,
           normalizedTtl.staleSeconds,
@@ -280,17 +226,13 @@ export function createCacheQueryBridge(
       })
     },
     async forget(key: CacheKeyInput<unknown>, options?: { driver?: string }): Promise<boolean> {
-      const indexedKey = createIndexedKey(key, options?.driver)
-      const context = resolveDriverContext(options?.driver)
-      await dependencyIndex.removeKey(indexedKey)
-      return context.driver.forget(resolveNormalizedKey(key, options?.driver))
+      return forgetCacheEntry(key, options?.driver, dependencyIndex)
     },
     async invalidateDependencies(
       dependencies: readonly CacheDependencyDescriptor[],
       options?: { driver?: string },
     ): Promise<void> {
       const invalidatedKeys = new Set<string>()
-      const runtime = getCacheRuntime()
       const driverName = options?.driver?.trim()
 
       for (const dependency of dependencies) {
@@ -307,9 +249,7 @@ export function createCacheQueryBridge(
             continue
           }
 
-          const driver = resolveConfiguredDriver(runtime, parsed.driverName)
-          await driver.forget(parsed.normalizedKey)
-          await dependencyIndex.removeKey(indexedKey)
+          await forgetNormalizedCacheEntry(resolveDriverContext(parsed.driverName), parsed.normalizedKey, dependencyIndex)
         }
       }
     },
