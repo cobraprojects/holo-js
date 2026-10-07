@@ -368,3 +368,31 @@ it('rejects incomplete durable reads instead of assuming the missing identity ha
     await expect(auth.loginUsingId(1)).rejects.toThrow('must return state for every requested identity')
   })
 })
+
+it('clears revoked request identity before failed session persistence while retaining unrelated cached identity', async () => {
+  const bindings = authRuntimeInternals.getRuntimeBindings()
+  const shared = await context.run(async () => {
+    await auth.loginUsingId(1)
+    const otherGuard = auth.guard('other')
+    if (!('loginUsingId' in otherGuard)) throw new Error('Expected a session guard')
+    return otherGuard.loginUsingId(1)
+  })
+  const request = { ...authRuntimeInternals.createMemoryAuthContext() }
+  request.setSessionId('web', shared.sessionId)
+  request.setSessionId('other', shared.sessionId)
+  configureAuthRuntime({ ...bindings, context: request })
+  expect(await auth.check()).toBe(true)
+  expect(await auth.guard('other').check()).toBe(true)
+  configureAuthRuntime(bindings)
+  await context.run(async () => {
+    await auth.loginUsingId(1)
+    await auth.logoutOtherDevices()
+  })
+  const failure = new Error('Session persistence unavailable')
+  configureAuthRuntime({ ...bindings, context: request, session: { ...bindings.session, async write() { throw failure } } })
+  await expect(auth.user()).rejects.toBe(failure)
+  expect(request.getCachedUser('web')).toBeNull()
+  expect(request.getSessionId('web')).toBeUndefined()
+  expect(request.getCachedUser('other')).toMatchObject({ id: 1 })
+  expect(request.getSessionId('other')).toBe(shared.sessionId)
+})

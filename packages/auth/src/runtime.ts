@@ -837,8 +837,6 @@ async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: A
   if (!payloads || !bindings.sessionRevocations) return payloads
   const valid = await validSessionPayloads(bindings.sessionRevocations, bindings.context, payloads)
   if (Object.keys(valid).length === Object.keys(payloads).length) return valid
-  if (!Object.keys(valid).length) await bindings.session.invalidate(record.id, { store: record.store })
-  else await writeExistingSession(bindings, record, writeSessionPayloads(record.data, valid))
   for (const name of Object.keys(payloads)) {
     if (name in valid) continue
     const boundSessionId = bindings.context.getSessionId(name)
@@ -847,6 +845,8 @@ async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: A
     bindings.context.setCachedUser(name, null)
     bindings.context.setRememberToken?.(name)
   }
+  if (!Object.keys(valid).length) await bindings.session.invalidate(record.id, { store: record.store })
+  else await writeExistingSession(bindings, record, writeSessionPayloads(record.data, valid))
   return valid
 }
 
