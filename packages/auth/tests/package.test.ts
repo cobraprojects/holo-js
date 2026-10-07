@@ -524,6 +524,20 @@ class InMemoryTokenStore implements AuthTokenStore {
 }
 
 class InMemoryEmailVerificationTokenStore implements EmailVerificationTokenStore {
+  async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+    const stored = this.records.get(record.id)
+    if (!stored
+      || stored.provider !== record.provider
+      || stored.userId !== record.userId
+      || stored.email !== record.email
+      || stored.tokenHash !== record.tokenHash
+      || stored.createdAt.getTime() !== record.createdAt.getTime()
+      || stored.expiresAt.getTime() !== record.expiresAt.getTime()
+      || stored.expiresAt.getTime() <= Date.now()) return null
+    this.records.delete(record.id)
+    return operation()
+  }
+
   readonly records = new Map<string, EmailVerificationTokenRecord>()
 
   async create(record: EmailVerificationTokenRecord): Promise<void> {
@@ -552,6 +566,20 @@ class InMemoryEmailVerificationTokenStore implements EmailVerificationTokenStore
 }
 
 class InMemoryPasswordResetTokenStore implements PasswordResetTokenStore {
+  async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+    const stored = this.records.get(record.id)
+    if (!stored
+      || stored.provider !== record.provider
+      || stored.email !== record.email
+      || stored.table !== record.table
+      || stored.tokenHash !== record.tokenHash
+      || stored.createdAt.getTime() !== record.createdAt.getTime()
+      || stored.expiresAt.getTime() !== record.expiresAt.getTime()
+      || stored.expiresAt.getTime() <= Date.now()) return null
+    this.records.delete(record.id)
+    return operation()
+  }
+
   readonly records = new Map<string, PasswordResetTokenRecord>()
 
   async create(record: PasswordResetTokenRecord): Promise<void> {
@@ -987,6 +1015,62 @@ describe('@holo-js/auth package runtime', () => {
       ...established.cookies,
       ...loggedOut.cookies,
     ])
+  })
+
+  it.each(['remember', 'cookie'])('fails closed for all shared guards after a persisted transition fails in %s', async (failurePoint) => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    const admin = await runtime.adminsProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
+    const first = await auth.guard('web').loginUsing(created)
+    runtime.context.setSessionId('admin', first.sessionId)
+    const shared = await auth.guard('admin').loginUsing(admin)
+    const otherDevice = await getSessionRuntime().create({ data: { device: 'other' } })
+    const failure = new Error('transition delivery failed')
+    configureAuthRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      ...(failurePoint === 'remember' ? { session: { ...getSessionRuntime(), async issueRememberMeToken() { throw failure } } } : {}),
+      ...(failurePoint === 'cookie' ? { context: { ...runtime.context, async appendResponseCookie() { throw failure } } } : {}),
+    })
+    await expect(auth.guard('web').loginUsing(created, { remember: true })).rejects.toBe(failure)
+    await expect(getSessionRuntime().read(shared.sessionId)).resolves.toBeNull()
+    for (const guard of ['web', 'admin']) {
+      expect(runtime.context.getSessionId(guard)).toBeUndefined()
+      expect(runtime.context.getCachedUser(guard)).toBeNull()
+      expect(runtime.context.getRememberToken?.(guard)).toBeUndefined()
+    }
+    await expect(auth.guard('web').user()).resolves.toBeNull()
+    await expect(auth.guard('admin').user()).resolves.toBeNull()
+    await expect(getSessionRuntime().read(otherDevice.id)).resolves.toMatchObject({ data: { device: 'other' } })
+  })
+
+  it('reports transition and invalidation failures together while clearing request authentication', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    const initial = await auth.loginUsing(created)
+    const delivery = new Error('remember unavailable')
+    const cleanup = new Error('delete unavailable')
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), session: {
+      ...getSessionRuntime(),
+      async issueRememberMeToken() { throw delivery },
+      async invalidate() { throw cleanup },
+    } })
+    await expect(auth.loginUsing(created, { remember: true })).rejects.toMatchObject({ errors: [delivery, cleanup] })
+    await expect(getSessionRuntime().read(initial.sessionId)).resolves.toBeNull()
+    expect(runtime.context.getSessionId('web')).toBeUndefined()
+    expect(runtime.context.getCachedUser('web')).toBeNull()
+  })
+
+  it('does not restore an impersonation actor after cookie delivery fails following rotation', async () => {
+    const runtime = configureRuntime()
+    const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    const target = await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
+    const initial = await auth.loginUsing(actor)
+    const failure = new Error('cookies unavailable')
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: { ...runtime.context, async appendResponseCookie() { throw failure } } })
+    await expect(impersonate(target)).rejects.toBe(failure)
+    await expect(getSessionRuntime().read(initial.sessionId)).resolves.toBeNull()
+    await expect(user()).resolves.toBeNull()
+    await expect(impersonation()).resolves.toBeNull()
   })
 
   it('rotates a valid anonymous session during credential login', async () => {
@@ -1535,6 +1619,22 @@ describe('@holo-js/auth package runtime', () => {
     const established = await auth.multiFactor.recover({ code: enrolled.recoveryCodes[1]! })
 
     expect(established.multiFactorChallenge).toBeUndefined()
+  })
+
+  it('does not restore an MFA challenge after cookie delivery fails following rotation', async () => {
+    const runtime = configureRuntime({ multiFactor: true })
+    const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    await auth.loginUsing(created)
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const recovery = await auth.multiFactor.confirmEnrollment({ code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)) })
+    await logout()
+    const pending = await auth.loginUsing(created)
+    const failure = new Error('cookies unavailable')
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: { ...runtime.context, async appendResponseCookie() { throw failure } } })
+    await expect(auth.multiFactor.recover({ code: recovery.recoveryCodes[0]! })).rejects.toBe(failure)
+    await expect(getSessionRuntime().read(pending.sessionId)).resolves.toBeNull()
+    await expect(user()).resolves.toBeNull()
+    expect(runtime.context.getSessionId('web')).toBeUndefined()
   })
 
   it('activates request-scoped contexts before exposing runtime bindings', () => {
@@ -2542,6 +2642,23 @@ describe('@holo-js/auth package runtime', () => {
     await expectAuthValidationError(() => verifyEmail(expired.plainTextToken), 'email_verification_token_expired')
   })
 
+  it('allows exactly one concurrent email verification redemption', async () => {
+    configureRuntime()
+    const created = unwrapAuthResult(await register({
+      name: 'Ava',
+      email: 'concurrent@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    }))
+    const token = await verification.create(created)
+    const results = await Promise.allSettled([
+      verifyEmail(token.plainTextToken),
+      verifyEmail(token.plainTextToken),
+    ])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+
   it('resends verification tokens by email without requiring an active session', async () => {
     const runtime = configureRuntime({
       emailVerificationRequired: true,
@@ -2697,7 +2814,7 @@ describe('@holo-js/auth package runtime', () => {
     ).resolves.toBe(true)
   })
 
-  it('does not verify email when verification token deletion fails', async () => {
+  it('does not verify email when verification token claiming fails', async () => {
     const runtime = configureRuntime()
     const created = unwrapAuthResult(await register({
       name: 'Ava',
@@ -2706,22 +2823,22 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     }))
     const token = await verification.create(created)
-    const deleteToken = runtime.emailVerificationTokenStore.delete
-    runtime.emailVerificationTokenStore.delete = async () => {
-      throw new Error('verification token delete failed')
+    const redeemToken = runtime.emailVerificationTokenStore.redeem
+    runtime.emailVerificationTokenStore.redeem = async () => {
+      throw new Error('verification token claim failed')
     }
 
     try {
-      await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token delete failed')
+      await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token claim failed')
     } finally {
-      runtime.emailVerificationTokenStore.delete = deleteToken
+      runtime.emailVerificationTokenStore.redeem = redeemToken
     }
 
     expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeNull()
     expect(runtime.emailVerificationTokenStore.records.has(token.id)).toBe(true)
   })
 
-  it('does not reset the password when reset token deletion fails', async () => {
+  it('does not reset the password when reset token claiming fails', async () => {
     const runtime = configureRuntime({
       authConfig: {
         passwords: {
@@ -2743,9 +2860,9 @@ describe('@holo-js/auth package runtime', () => {
     })
     await requestPasswordReset({ email: 'ava@example.com' })
     const resetDelivery = runtime.deliveries[0]!
-    const deleteToken = runtime.passwordResetTokenStore.delete
-    runtime.passwordResetTokenStore.delete = async () => {
-      throw new Error('password reset token delete failed')
+    const redeemToken = runtime.passwordResetTokenStore.redeem
+    runtime.passwordResetTokenStore.redeem = async () => {
+      throw new Error('password reset token claim failed')
     }
 
     try {
@@ -2753,9 +2870,9 @@ describe('@holo-js/auth package runtime', () => {
         token: resetDelivery.tokenValue,
         password: 'new-secret',
         passwordConfirmation: 'new-secret',
-      })).rejects.toThrow('password reset token delete failed')
+      })).rejects.toThrow('password reset token claim failed')
     } finally {
-      runtime.passwordResetTokenStore.delete = deleteToken
+      runtime.passwordResetTokenStore.redeem = redeemToken
     }
 
     expect(runtime.passwordResetTokenStore.records.has(resetDelivery.tokenId)).toBe(true)
@@ -2771,6 +2888,65 @@ describe('@holo-js/auth package runtime', () => {
         runtime.usersProvider.users.get(1)?.password ?? '',
       ),
     ).resolves.toBe(false)
+  })
+
+  it('allows exactly one concurrent password reset', async () => {
+    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const input = { token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' }
+    const results = await Promise.allSettled([resetPassword(input), resetPassword(input)])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  it.each(['provider failure', 'sibling deletion failure'] as const)('consumes a reset claim and stops password changes after %s', async (failure) => {
+    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const delivery = runtime.deliveries[0]!
+    const record = runtime.passwordResetTokenStore.records.get(delivery.tokenId)!
+    await runtime.passwordResetTokenStore.create({ ...record, id: 'sibling' })
+    if (failure === 'provider failure') runtime.usersProvider.update = async () => { throw new Error('provider save failed') }
+    else runtime.passwordResetTokenStore.deleteByEmail = async () => { throw new Error('sibling delete failed') }
+    const input = { token: delivery.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' }
+    await expect(resetPassword(input)).rejects.toThrow(failure === 'provider failure' ? 'provider save failed' : 'sibling delete failed')
+    expect(runtime.usersProvider.users.get(1)?.password).toBe('old-secret')
+    expect(runtime.passwordResetTokenStore.records.has(delivery.tokenId)).toBe(false)
+    expect(runtime.passwordResetTokenStore.records.has('sibling')).toBe(failure === 'sibling deletion failure')
+    await expectAuthValidationError(() => resetPassword(input), 'password_reset_token_expired')
+  })
+
+  it('does not serialize different reset tokens across external provider updates', async () => {
+    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const delivery = runtime.deliveries[0]!
+    const record = runtime.passwordResetTokenStore.records.get(delivery.tokenId)!
+    let release: () => void = () => {}
+    const pending = new Promise<void>(resolve => { release = resolve })
+    let entered: () => void = () => {}
+    const entry = new Promise<void>(resolve => { entered = resolve })
+    const update = runtime.usersProvider.update.bind(runtime.usersProvider)
+    let updates = 0
+    runtime.usersProvider.update = async (id, values) => {
+      updates += 1
+      if (updates === 1) {
+        entered()
+        await pending
+      }
+      return update(id, values)
+    }
+    const first = resetPassword({ token: delivery.tokenValue, password: 'first-secret', passwordConfirmation: 'first-secret' })
+    await entry
+    await runtime.passwordResetTokenStore.create({ ...record, id: 'independent-token' })
+    try {
+      await expect(resetPassword({ token: `independent-token.${delivery.tokenValue.split('.')[1]}`, password: 'second-secret', passwordConfirmation: 'second-secret' }))
+        .resolves.toMatchObject({ email: 'ava@example.com' })
+    } finally {
+      release()
+      await first
+    }
   })
 
   it('creates, invalidates, and consumes password reset tokens', async () => {
@@ -6324,111 +6500,6 @@ describe('@holo-js/auth package runtime', () => {
     })
   })
 
-  it('rotates existing sessions without write support', async () => {
-    const runtime = configureRuntime()
-    const context = authRuntimeInternals.createMemoryAuthContext()
-    const existingRecord = Object.freeze({
-      id: 'shared-session',
-      store: 'database',
-      data: Object.freeze({
-        auth: Object.freeze({
-          guard: 'admin',
-          provider: 'admins',
-          userId: 9,
-          user: Object.freeze({
-            id: 9,
-            email: 'admin@example.com',
-          }),
-        }),
-      }),
-      createdAt: new Date(),
-      lastActivityAt: new Date(),
-      expiresAt: new Date(Date.now() + 60_000),
-      rememberTokenHash: 'remember-hash',
-    })
-    const createdSessions: string[] = []
-
-    context.setSessionId('admin', existingRecord.id)
-
-    configureAuthRuntime({
-      config: defineAuthConfig({
-        guards: {
-          web: {
-            driver: 'session',
-            provider: 'users',
-          },
-          admin: {
-            driver: 'session',
-            provider: 'admins',
-          },
-        },
-        providers: {
-          users: {
-            model: 'User',
-          },
-          admins: {
-            model: 'Admin',
-          },
-        },
-      }),
-      session: {
-        async create(input = {}) {
-          const record = Object.freeze({
-            id: input.id ?? `session-${createdSessions.length + 1}`,
-            store: 'database',
-            data: input.data ?? {},
-            createdAt: new Date(),
-            lastActivityAt: new Date(),
-            expiresAt: new Date(Date.now() + 60_000),
-          })
-          createdSessions.push(record.id)
-          return record
-        },
-        async read(sessionId) {
-          return sessionId === existingRecord.id ? existingRecord : null
-        },
-        async rotate() {
-          return Object.freeze({ ...existingRecord, id: 'session-1' })
-        },
-        async touch(sessionId) {
-          return sessionId === existingRecord.id ? existingRecord : null
-        },
-        async invalidate() {},
-        async issueRememberMeToken(sessionId) {
-          return `${sessionId}.remember`
-        },
-        sessionCookie(value) {
-          return `holo_session=${value}; Path=/`
-        },
-        rememberMeCookie(value) {
-          return `holo_session_remember=${value}; Path=/`
-        },
-      },
-      providers: {
-        users: runtime.usersProvider,
-        admins: runtime.adminsProvider,
-      },
-      context,
-    })
-
-    await expect(authRuntimeInternals.establishSessionForUser({
-      id: 1,
-      email: 'ava@example.com',
-      name: 'Ava',
-      role: 'member',
-      can: async () => false,
-    }, {
-      guard: 'web',
-      provider: 'users',
-    })).resolves.toMatchObject({
-      sessionId: 'session-1',
-      user: {
-        id: 1,
-        email: 'ava@example.com',
-      },
-    })
-    expect(createdSessions).toEqual(['session-1'])
-  })
 
   it('covers remaining token and shared-session edge branches', async () => {
     const runtime = configureRuntime()

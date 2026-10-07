@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
+import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
 import clientAuth, { type provider as clientProvider, type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
@@ -31,11 +31,34 @@ declare global {
   }
 }
 
+function redeemVerification(store: EmailVerificationTokenStore, record: EmailVerificationTokenRecord) {
+  return store.redeem(record, async () => ({ status: 'verified' as const, userId: 42 }))
+}
+
+function redeemReset(store: PasswordResetTokenStore, record: PasswordResetTokenRecord) {
+  return store.redeem(record, async () => ({ status: 'reset' as const, userId: 42 }))
+}
+
 describe('@holo-js/auth typing', () => {
   it('retains concrete token revocation options and counts', () => {
     expectTypeOf<AuthTokenFacade['revokeOthers']>().parameters.toEqualTypeOf<[options?: { readonly guard?: string }]>()
     expectTypeOf<AuthTokenFacade['revokeOthers']>().returns.toEqualTypeOf<Promise<number>>()
     expectTypeOf<AuthTokenStore['deleteByUserId']>().parameters.toEqualTypeOf<[provider: string, userId: string | number, options?: { readonly exceptId?: string }]>()
+  })
+
+  it('preserves the concrete password reset redemption callback result', () => {
+    expectTypeOf<ReturnType<typeof redeemReset>>().toEqualTypeOf<Promise<{ status: 'reset', userId: number } | null>>()
+  })
+
+  it('preserves the concrete verification redemption callback result', () => {
+    expectTypeOf<ReturnType<typeof redeemVerification>>().toEqualTypeOf<Promise<{ status: 'verified', userId: number } | null>>()
+  })
+
+  it('mirrors precise complete session rotation options', () => {
+    type Session = NonNullable<AuthRuntimeBindings['session']>
+    type Options = NonNullable<Parameters<NonNullable<Session['rotate']>>[1]>
+    expectTypeOf<Options['data']>().toEqualTypeOf<Awaited<ReturnType<Session['create']>>['data'] | undefined>()
+    expectTypeOf<Options['renewLifetime']>().toEqualTypeOf<boolean | undefined>()
   })
 
   it('keeps SvelteKit route guards compatible with native resolve options', () => {

@@ -1,4 +1,8 @@
 declare module 'pg' {
+  export const types: {
+    getTypeParser(oid: number, format?: 'text' | 'binary'): (value: string) => unknown
+  }
+
   export interface PoolConfig {
     connectionString?: string
     host?: string

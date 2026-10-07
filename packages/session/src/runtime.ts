@@ -402,11 +402,23 @@ export async function rotateSession(sessionId: string, options: RotateSessionOpt
     throw new Error(`[@holo-js/session] Session "${sessionId}" was not found.`)
   }
 
-  const { store, name } = getStore(options.store ?? located.record.store)
+  const { store, name, config } = getStore(options.store ?? located.record.store)
+  if ((options.data !== undefined || options.renewLifetime) && (located.store !== store || !store.rotate)) {
+    throw new Error(`[@holo-js/session] Session store "${name}" does not support state-preserving auth rotation.`)
+  }
+  const currentTime = now()
+  const renewedExpiry = new Date(currentTime.getTime() + Math.min(config.idleTimeout, config.absoluteLifetime) * 60_000)
   const rotated: SessionRecord = Object.freeze({
     ...located.record,
     id: options.newId?.trim() || createSessionId(),
     store: name,
+    data: Object.freeze({ ...(options.data ?? located.record.data) }),
+    ...(options.renewLifetime ? {
+      createdAt: currentTime,
+      lastActivityAt: currentTime,
+      expiresAt: renewedExpiry,
+      rememberTokenHash: undefined,
+    } : {}),
   })
   if (located.store !== store) {
     if (located.store.flash || located.store.take) {
