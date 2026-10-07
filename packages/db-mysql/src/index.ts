@@ -129,6 +129,16 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
   }
 }
 
+function createNativeMySQLPool(config: PoolOptions): MySQLPoolLike {
+  const pool = mysql.createPool({ ...config, timezone: config.timezone ?? 'Z' })
+  if (!config.timezone || config.timezone === 'Z') {
+    pool.pool.on('connection', (connection) => {
+      connection.query("SET time_zone = '+00:00'")
+    })
+  }
+  return wrapMySQLPool(pool)
+}
+
 function isMySQLDatabaseMissing(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
@@ -154,7 +164,7 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined
-      : config => wrapMySQLPool(mysql.createPool(config)))
+      : createNativeMySQLPool)
     this.config = options.config ?? (options.uri ? { uri: options.uri } as TConfig : {} as TConfig)
     this.connected = !!(options.client || options.pool)
   }

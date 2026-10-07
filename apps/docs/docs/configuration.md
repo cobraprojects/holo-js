@@ -31,7 +31,7 @@ Typical built-in files:
 - `config/redis.ts`
 - `config/queue.ts`
 - `config/storage.ts`
-- `config/media.ts` when media is installed
+- `config/media.ts` optionally overrides Media package defaults; installing Media does not require this file
 
 Example app config:
 

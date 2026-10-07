@@ -1613,6 +1613,45 @@ export default {
     })
   })
 
+  it.each([1, 2])('reports %i asynchronous shutdown failures and releases owned drivers once', async (failureCount) => {
+    const failures = [new Error('first close failed'), new Error('second close failed')].slice(0, failureCount)
+    const closed: string[] = []
+    registerNamedJob('jobs.close-failures', { async handle() {} })
+    configureQueueRuntime({
+      config: {
+        default: 'first',
+        connections: {
+          first: { driver: 'database', queue: 'first' },
+          second: { driver: 'database', queue: 'second' },
+        },
+      },
+      driverFactories: [{
+        ...createAsyncDriverFactory('database', () => {}),
+        create(connection, context) {
+          const driver = createAsyncDriverFactory('database', () => {}).create(connection, context)
+          return {
+            ...driver,
+            close() {
+              closed.push(connection.name)
+              const failure = failures[connection.name === 'first' ? 0 : 1]
+              if (failure) throw failure
+              return Promise.resolve()
+            },
+          }
+        },
+      }],
+    })
+    await dispatch('jobs.close-failures', {}).onConnection('first').dispatch()
+    await dispatch('jobs.close-failures', {}).onConnection('second').dispatch()
+
+    if (failureCount === 1) await expect(shutdownQueueRuntime()).rejects.toBe(failures[0])
+    else await expect(shutdownQueueRuntime()).rejects.toMatchObject({ errors: failures })
+    expect(getQueueRuntime().drivers.size).toBe(0)
+    expect(getQueueRuntime().config.default).toBe('sync')
+    await shutdownQueueRuntime()
+    expect(closed).toEqual(['first', 'second'])
+  })
+
   it('closes cached drivers when runtime configuration changes and swallows close failures', async () => {
     const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     const close = vi.fn(async () => {})

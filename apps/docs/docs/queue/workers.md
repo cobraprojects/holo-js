@@ -44,6 +44,22 @@ npx holo queue:work \
   --max-time 3600
 ```
 
+## Delivery and finalization failures
+
+Handler errors follow the job's attempts and backoff policy. Explicit `context.release()` and
+`context.fail()` retain their precedence; a timeout is terminal and does not cancel the handler.
+
+After handler execution, the worker finalizes the reservation once. Acknowledgement, release,
+failed-job persistence, or reservation deletion failure stops the worker and rejects
+`runQueueWorker` with the original adapter error. It does not retry the adapter mutation or
+classify that failure as a handler error. Delivery is uncertain after an adapter failure; a
+reservation may become available again according to the driver's reservation policy.
+
+Job completion hooks run before acknowledgement. Worker processed hooks run only after
+acknowledgement succeeds. Terminal failures are persisted before the reservation is deleted,
+and failure hooks run after both operations succeed. Hook errors remain observers and do not
+repeat finalized mutations. See [Failed Jobs](/queue/failed-jobs) for recovery commands.
+
 ## `queue:listen`
 
 `queue:listen` is a watch-mode worker for development. It watches queue-related project files, rebuilds
