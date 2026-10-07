@@ -24,7 +24,7 @@ await auth.guard('web').logoutOtherDevices()
 
 These are alternatives for the default session guard and a selected session guard. The operation requires a valid authenticated browser session and retains that browser's authentication. Applications control any recent-password or hosted reauthentication requirement before calling it. Registered token guards do not expose this method.
 
-Other browsers lose the selected provider/user identity on their next authenticated request, including remember-cookie restoration. Unrelated identities in a shared browser session remain valid. Personal access tokens remain valid too; their [other-token revocation](/auth/personal-access-tokens#approved-other-token-revocation) is separate.
+Other browsers lose the selected provider/user identity on their next authenticated request, including remember-cookie restoration. Unrelated identities in a shared browser session remain valid. Personal access tokens remain valid too; their [other-token revocation](/auth/personal-access-tokens#revoking-other-tokens) is separate.
 
 For Clerk and WorkOS, this invalidates existing Holo sessions, not upstream provider sessions. A still-valid upstream session may authenticate again. The existing `logoutAll` continues to mean guards in the current request, not every device.
 
