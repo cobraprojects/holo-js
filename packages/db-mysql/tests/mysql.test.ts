@@ -22,6 +22,16 @@ const liveMySqlConfig = {
 }
 
 describe('@holo-js/db-mysql', () => {
+  runLiveMySql('connects to the selected integration database', async () => {
+    const adapter = createMySQLAdapter({ config: liveMySqlConfig })
+    try {
+      const result = await adapter.query<{ selected_database: string }>('SELECT DATABASE() AS selected_database')
+      expect(result.rows).toEqual([{ selected_database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql' }])
+    } finally {
+      await adapter.disconnect()
+    }
+  }, 30_000)
+
   runLiveMySql.each(['create', 'add', 'compiled-add'] as const)('enforces constrained foreign keys when using %s columns', async (operation) => {
     const databaseName = `holo_foreign_keys_${randomUUID().replaceAll('-', '_')}`
     const admin = createMySQLAdapter({

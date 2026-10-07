@@ -16,6 +16,16 @@ const livePostgresConfig = {
 }
 
 describe('@holo-js/db-postgres', () => {
+  runLivePostgres('connects to the selected integration database', async () => {
+    const adapter = createPostgresAdapter({ config: livePostgresConfig })
+    try {
+      const result = await adapter.query<{ database: string }>('SELECT current_database() AS database')
+      expect(result.rows).toEqual([{ database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres' }])
+    } finally {
+      await adapter.disconnect()
+    }
+  }, 30_000)
+
   it('creates the configured database when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => ({
       rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
