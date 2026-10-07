@@ -62,7 +62,7 @@ interface AuthSessionRevocationStore {
 }
 ```
 
-`readMany` returns the current state for each distinct requested identity. An absent durable row represents generation zero. `revokeOthers` atomically checks that the caller has the current generation or is the retained logical browser, then increments the generation and retains that browser. Return `false` for an invalid caller; failures reject. Never perform an unconditional upsert that permits an already-revoked caller to become the survivor.
+`readMany` returns the current state for each distinct requested identity. An absent durable row must return an explicit state with generation zero; omitting a requested identity fails authentication rather than assuming zero. `revokeOthers` atomically checks that the caller has the current generation or is the retained logical browser, then increments the generation and retains that browser. Return `false` for an invalid caller; failures reject. Never perform an unconditional upsert that permits an already-revoked caller to become the survivor.
 
 The `currentSession.id` is Auth's stable logical browser identity, which survives physical session rotation. Authentication accepts a payload with the current generation or the retained logical identity. Later legitimate login snapshots the current generation; it does not invalidate other browsers. Older payloads without this metadata fail authentication when the adapter is enabled. Without an adapter, ordinary session authentication continues and `logoutOtherDevices` fails explicitly.
 

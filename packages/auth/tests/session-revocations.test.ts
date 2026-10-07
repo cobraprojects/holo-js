@@ -361,3 +361,10 @@ it('establishes fresh authentication instead of copying invalid logical browser 
     expect(await auth.check()).toBe(true)
   })
 })
+
+it('rejects incomplete durable reads instead of assuming the missing identity has generation zero', async () => {
+  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: { ...store, async readMany() { return [] } } })
+  await context.run(async () => {
+    await expect(auth.loginUsingId(1)).rejects.toThrow('must return state for every requested identity')
+  })
+})

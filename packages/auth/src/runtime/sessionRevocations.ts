@@ -36,10 +36,18 @@ export async function readSessionRevocations(
   if (missing.length) {
     const batch = store.readMany(missing).then(states => new Map(states.map(state => [identityKey(state), state])))
     for (const identity of missing) {
-      reads.set(identityKey(identity), batch.then(states => states.get(identityKey(identity)) ?? { ...identity, generation: 0 }))
+      reads.set(identityKey(identity), batch.then(states => {
+        const state = states.get(identityKey(identity))
+        if (!state) throw new Error('Session revocation stores must return state for every requested identity.')
+        return state
+      }))
     }
   }
-  return new Map(await Promise.all([...distinct.entries()].map(async ([key, identity]) => [key, await reads.get(key) ?? { ...identity, generation: 0 }] as const)))
+  return new Map(await Promise.all([...distinct.keys()].map(async key => {
+    const state = await reads.get(key)
+    if (!state) throw new Error('Session revocation stores must return state for every requested identity.')
+    return [key, state] as const
+  })))
 }
 
 export function sessionIdentityValid(payload: SessionAuthPayload, states: ReadonlyMap<string, AuthSessionRevocationState>): boolean {
@@ -65,9 +73,11 @@ export async function loginRevocationMetadata(
   payloads: SessionAuthPayloadMap,
 ): Promise<NonNullable<SessionAuthPayload['revocation']>> {
   const states = await readSessionRevocations(store, context, [identity], true)
+  const state = states.get(identityKey(identity))
+  if (!state) throw new Error('Session revocation stores must return state for every requested identity.')
   return {
     id: Object.values(payloads).find(payload => typeof payload.revocation?.id === 'string' && payload.revocation.id.length > 0)?.revocation?.id ?? crypto.randomUUID(),
-    generation: states.get(identityKey(identity))?.generation ?? 0,
+    generation: state.generation,
   }
 }
 
