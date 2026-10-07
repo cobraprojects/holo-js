@@ -525,6 +525,7 @@ export interface PasswordResetTokenResult {
 }
 
 export interface EmailVerificationTokenStore {
+  redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null>
   create(record: EmailVerificationTokenRecord): Promise<void>
   findById(id: string): Promise<EmailVerificationTokenRecord | null>
   delete(id: string): Promise<void>
@@ -532,6 +533,7 @@ export interface EmailVerificationTokenStore {
 }
 
 export interface PasswordResetTokenStore {
+  redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null>
   create(record: PasswordResetTokenRecord): Promise<void>
   findById(id: string): Promise<PasswordResetTokenRecord | null>
   findLatestByEmail(
@@ -589,7 +591,7 @@ export interface AuthSessionRuntime {
   ): Promise<AuthSessionRecord | null>
   rotate?(
     sessionId: string,
-    options?: { readonly store?: string, readonly newId?: string },
+    options?: { readonly store?: string, readonly newId?: string, readonly data?: AuthSessionRecord['data'], readonly renewLifetime?: boolean },
   ): Promise<AuthSessionRecord>
   touch(
     sessionId: string,
