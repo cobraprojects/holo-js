@@ -1,13 +1,15 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { QueueDriverFactory, QueueJobEnvelope, QueueJsonValue } from '@holo-js/queue'
 import type { EventReferenceInput, ListenerHandledEvent } from '../src'
 import {
   configureQueueRuntime,
+  defineJob,
   getRegisteredQueueJob,
   normalizeQueueConfig,
   queueRuntimeInternals,
@@ -21,6 +23,7 @@ import {
   defineListener,
   dispatchEvent,
   ensureEventsQueueJobRegistered,
+  ensureEventsQueueJobRegisteredAsync,
   eventQueueInternals,
   registerEvent,
   registerListener,
@@ -129,27 +132,34 @@ describe('@holo-js/events queue integration', () => {
     expect(manifest.devDependencies?.['@holo-js/queue']).toBe('catalog:')
   })
 
-  it('keeps the optional queue import visible to bundlers without a bare package specifier', async () => {
+  it('imports a bundled Events integration without Queue and reports registration errors', async () => {
     const outdir = await mkdtemp(join(tmpdir(), 'holo-events-queue-bundle-'))
 
     try {
       const result = await runBun([
         'build',
-        resolve(import.meta.dirname, '../src/queue.ts'),
+        resolve(import.meta.dirname, '../src/index.ts'),
         '--target=node',
         '--format=esm',
-        '--external=@holo-js/queue',
+        '--external=@holo-js/*',
         `--outdir=${outdir}`,
       ])
       if (!result) {
         return
       }
 
-      const output = await readFile(join(outdir, 'queue.js'), 'utf8')
-
-      expect(output).toContain('const specifier = "@holo-js/queue"')
-      expect(output).toContain('import(specifier)')
-      expect(output).not.toContain('import("@holo-js/queue")')
+      await mkdir(join(outdir, 'node_modules/@holo-js'), { recursive: true })
+      await symlink(dirname(dirname(fileURLToPath(import.meta.resolve('@holo-js/db')))), join(outdir, 'node_modules/@holo-js/db'))
+      const bundleUrl = pathToFileURL(join(outdir, 'index.js')).href
+      const { stdout } = await execFileAsync(process.execPath, ['--input-type=module', '-e', `
+        import assert from 'node:assert/strict'
+        const events = await import(${JSON.stringify(bundleUrl)})
+        const message = '[@holo-js/events] Queued listeners require @holo-js/queue to be installed.'
+        assert.throws(() => events.ensureEventsQueueJobRegistered(), { message })
+        await assert.rejects(events.ensureEventsQueueJobRegisteredAsync(), { message })
+        console.log('optional Queue remains optional')
+      `])
+      expect(stdout.trim()).toBe('optional Queue remains optional')
     } finally {
       await rm(outdir, { recursive: true, force: true })
     }
@@ -469,9 +479,32 @@ describe('@holo-js/events queue integration', () => {
     )
   })
 
-  it('supports the synchronous registration wrapper', () => {
-    ensureEventsQueueJobRegistered()
-    expect(getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)?.name).toBe(EVENTS_INVOKE_LISTENER_JOB)
+  it('registers dispatchable listener jobs synchronously and again after Queue resets', async () => {
+    const handled: string[] = []
+    const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+    registerEvent(event)
+    registerListener(defineListener({
+      name: 'send.welcome',
+      listensTo: [event],
+      queue: true,
+      handle(envelope) { handled.push(envelope.payload.userId) },
+    }))
+
+    expect(ensureEventsQueueJobRegistered()).toBeUndefined()
+    expect(ensureEventsQueueJobRegistered()).toBeUndefined()
+    const registered = getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)
+    expect(registered).toBeDefined()
+    if (!registered) throw new Error('Listener job was not registered')
+    await defineJob(registered.definition).dispatchSync({
+      listenerId: 'send.welcome',
+      eventName: 'user.registered',
+      occurredAt: 123,
+      payload: { userId: 'usr-1' },
+    })
+    resetQueueRegistry()
+    await expect(ensureEventsQueueJobRegisteredAsync()).resolves.toBeUndefined()
+    await Event.dispatch(event, { userId: 'usr-2' })
+    expect(handled).toEqual(['usr-1', 'usr-2'])
   })
 
   it('loads the queue package through the dynamic loader', async () => {

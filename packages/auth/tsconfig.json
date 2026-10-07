@@ -24,6 +24,9 @@
       "@holo-js/session": [
         "../session/src/index.ts"
       ],
+      "@holo-js/adapter-shared/next/request-context": [
+        "../adapter-shared/src/next/request-context.node.ts"
+      ],
       "@holo-js/adapter-shared/sveltekit/request-context": [
         "../adapter-shared/src/sveltekit/request-context.ts"
       ]

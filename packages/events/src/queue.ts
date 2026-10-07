@@ -1,4 +1,5 @@
-import type { QueueJobDefinition, QueueJsonValue } from '@holo-js/queue'
+import { createRequire } from 'node:module'
+import type { QueueJobDefinition, QueueJsonValue, QueueRegisteredJob } from '@holo-js/queue'
 import type { EventQueuedListenerDispatch, EventEnvelope, RegisteredListener } from './contracts'
 import { getRegisteredListener } from './registry'
 
@@ -23,7 +24,7 @@ type QueueModule = {
     jobName: string,
     payload: EventsInvokeListenerPayload,
   ): QueuePendingDispatchChain
-  getRegisteredQueueJob(name: string): unknown
+  getRegisteredQueueJob(name: string): QueueRegisteredJob | undefined
   registerQueueJob(
     definition: QueueJobDefinition<EventsInvokeListenerPayload, void>,
     options: { name: string },
@@ -37,45 +38,37 @@ type QueuePendingDispatchChain = {
   dispatch(): Promise<unknown>
 }
 
-type QueueRegistryState = {
-  jobs: Map<string, {
-    name: string
-    definition: QueueJobDefinition<EventsInvokeListenerPayload, void>
-  }>
-}
+const require = createRequire(import.meta.url)
+const queueSpecifier = '@holo-js/queue'
 
-function getQueueRegistryState(): QueueRegistryState {
-  const runtime = globalThis as typeof globalThis & {
-    __holoQueueRegistry__?: QueueRegistryState
+function rethrowQueueLoadError(error: unknown): never {
+  if (
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error.code === 'ERR_MODULE_NOT_FOUND' || error.code === 'MODULE_NOT_FOUND')
+  ) {
+    throw new Error('[@holo-js/events] Queued listeners require @holo-js/queue to be installed.')
   }
 
-  runtime.__holoQueueRegistry__ ??= {
-    jobs: new Map(),
-  }
-
-  return runtime.__holoQueueRegistry__
+  throw error
 }
 
-/* v8 ignore start -- optional-peer absence is validated in published-package integration, not in this monorepo test graph */
+function loadQueueModuleSync(): QueueModule {
+  try {
+    return require(queueSpecifier) as QueueModule
+  } catch (error) {
+    return rethrowQueueLoadError(error)
+  }
+}
+
 async function loadQueueModule(): Promise<QueueModule> {
   try {
-    // Keep the optional peer as a runtime string so bundlers do not eagerly resolve @holo-js/queue.
-    const specifier = '@holo-js/queue'
-    return await import(specifier) as QueueModule
+    return await import(queueSpecifier) as QueueModule
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
-      throw new Error('[@holo-js/events] Queued listeners require @holo-js/queue to be installed.')
-    }
-
-    throw error
+    return rethrowQueueLoadError(error)
   }
 }
-/* v8 ignore stop */
 
 function createQueuedListenerEventEnvelope(
   payload: EventsInvokeListenerPayload,
@@ -115,32 +108,29 @@ export async function runQueuedListenerInvocation(
   await listener.definition.handle(createQueuedListenerEventEnvelope(payload))
 }
 
-export function ensureEventsQueueJobRegistered(): void {
-  const registry = getQueueRegistryState().jobs
-  if (registry.has(EVENTS_INVOKE_LISTENER_JOB)) {
+function registerEventsQueueJob(queue: QueueModule): void {
+  if (queue.getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)) {
     return
   }
 
-  registry.set(EVENTS_INVOKE_LISTENER_JOB, Object.freeze({
-    name: EVENTS_INVOKE_LISTENER_JOB,
-    definition: Object.freeze({
-      async handle(payload: EventsInvokeListenerPayload) {
-        await runQueuedListenerInvocation(payload)
-      },
-    }),
-  }))
+  queue.registerQueueJob({
+    handle: runQueuedListenerInvocation,
+  }, { name: EVENTS_INVOKE_LISTENER_JOB })
+}
+
+export function ensureEventsQueueJobRegistered(): void {
+  registerEventsQueueJob(loadQueueModuleSync())
 }
 
 export async function ensureEventsQueueJobRegisteredAsync(): Promise<void> {
-  await loadQueueModule()
-  ensureEventsQueueJobRegistered()
+  registerEventsQueueJob(await loadQueueModule())
 }
 
 export async function dispatchQueuedListenerViaQueue(
   dispatch: EventQueuedListenerDispatch,
 ): Promise<void> {
   const queueModule = await loadQueueModule()
-  await ensureEventsQueueJobRegisteredAsync()
+  registerEventsQueueJob(queueModule)
 
   let pending = queueModule.dispatch(EVENTS_INVOKE_LISTENER_JOB, {
     listenerId: dispatch.listenerId,

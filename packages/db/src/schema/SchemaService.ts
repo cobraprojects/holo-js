@@ -523,10 +523,16 @@ export class SchemaService {
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
     const statements = this.createCompiler().compile(createTableOperation(table))
-    if (!this.connection.getSchemaRegistry().has(table.tableName)) {
-      this.register(table)
+    const registry = this.connection.getSchemaRegistry()
+    const declared = registry.has(table.tableName)
+    for (const [position, statement] of statements.entries()) {
+      await this.connection.executeCompiled(statement)
+      if (!declared) {
+        registry.replace(defineTable(table.tableName, table.columns, {
+          indexes: table.indexes.slice(0, position),
+        }))
+      }
     }
-    await this.execute(statements)
   }
 
   private assertTableMutationIndexNames(
@@ -581,7 +587,14 @@ export class SchemaService {
           await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
         } else {
           this.assertAlterCapability('altering columns')
-          await this.execute(this.createCompiler().compile(alterColumnOperation(tableName, definition)))
+          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition))
+          if (this.isPostgres()) {
+            await this.connection.transaction(async (tx) => {
+              await new SchemaService(tx).execute(statements)
+            })
+          } else {
+            await this.execute(statements)
+          }
         }
         this.updateRegisteredTable(tableName, table => this.withAlteredColumn(table, definition))
         return
@@ -648,6 +661,15 @@ export class SchemaService {
   }
 
   private async rebuildSqliteTableForAlteredColumn(
+    tableName: string,
+    column: AnyColumnDefinition,
+  ): Promise<void> {
+    await this.connection.transaction(async (tx) => {
+      await new SchemaService(tx).rebuildSqliteTable(tableName, column)
+    })
+  }
+
+  private async rebuildSqliteTable(
     tableName: string,
     column: AnyColumnDefinition,
   ): Promise<void> {
