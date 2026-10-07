@@ -15,6 +15,7 @@ import {
   toBinaryContent,
 } from '../runtime/binary'
 import type { GeneratedMediaConversions, Media } from './Media'
+import type { MediaMutation } from './mutation'
 import type {
   NormalizedMediaCollectionDefinition,
 } from '../definitions/collections'
@@ -203,6 +204,7 @@ export async function generateStoredConversions(options: {
   readonly conversionsDisk: string
   readonly requestedConversions?: string | readonly string[]
   readonly includeQueued?: boolean
+  readonly mutation?: MediaMutation
 }): Promise<GeneratedMediaConversions> {
   const requested = normalizeRequestedConversions(options.requestedConversions)
   const matchingConversions = resolveMatchingConversions(
@@ -245,7 +247,11 @@ export async function generateStoredConversions(options: {
       const conversionMimeType = inferMimeType(generatedFileName, generated.mimeType)
       const conversionContents = await toBinaryContent(generated.contents)
 
-      writtenSnapshots.push(await putFileWithRollbackRestore(targetDisk, conversionPath, conversionContents))
+      if (options.mutation) {
+        await options.mutation.put(targetDisk, conversionPath, conversionContents)
+      } else {
+        writtenSnapshots.push(await putFileWithRollbackRestore(targetDisk, conversionPath, conversionContents))
+      }
       generatedConversions[conversion.name] = Object.freeze({
         path: conversionPath,
         disk: targetDisk,

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import { readFile, realpath } from 'node:fs/promises'
@@ -9,13 +8,11 @@ import { tmpdir } from 'node:os'
 import { basename, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { Storage } from '@holo-js/storage/runtime'
-import { connectionAsyncContext, type Entity, type ModelRecord, type TableDefinition } from '@holo-js/db'
+import type { Entity, TableDefinition } from '@holo-js/db'
 import {
-  getMediaPathGenerator,
   requireMediaDefinition,
   resolveMediaCollection,
 } from '../registry'
-import { dispatchQueuedMediaConversionsForModel } from '../queue'
 import {
   getContentSize,
   getDisplayName,
@@ -25,16 +22,8 @@ import {
   toBinaryContent,
   type BinaryContent,
 } from '../runtime/binary'
-import { generateStoredConversions, resolveQueuedConversionNames } from './conversions'
-import { Media } from './Media'
-import { MediaItem } from './item'
-import type { GeneratedMediaConversions } from './Media'
-
-type MediaTable = typeof Media.definition.table
-type MediaRecord = ModelRecord<MediaTable>
-type MediaCapableEntity = Entity<TableDefinition> & {
-  getMedia(collectionName?: string): Promise<MediaItem[]>
-}
+import { attachMedia } from './mutation'
+import type { MediaItem } from './item'
 
 export type MediaSourceInput
   = | string
@@ -65,33 +54,6 @@ type ResolvedMediaSource = {
 type NamedBinaryContent = BinaryContent & {
   readonly name?: string
   readonly type?: string
-}
-
-type StoredMediaFileSnapshot = {
-  readonly disk: string
-  readonly path: string
-  readonly contents: Uint8Array
-}
-
-type DeletedMediaSnapshot = {
-  readonly record: Pick<
-    MediaRecord,
-    | 'uuid'
-    | 'model_type'
-    | 'model_id'
-    | 'collection_name'
-    | 'name'
-    | 'file_name'
-    | 'disk'
-    | 'conversions_disk'
-    | 'mime_type'
-    | 'extension'
-    | 'size'
-    | 'path'
-    | 'generated_conversions'
-    | 'order_column'
-  >
-  readonly files: readonly StoredMediaFileSnapshot[]
 }
 
 const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
@@ -638,141 +600,6 @@ function validateSource(
   }
 }
 
-async function resolveNextOrderColumn(
-  modelType: string,
-  modelId: string,
-  collectionName: string,
-): Promise<number> {
-  const max = await Media.query()
-    .where('model_type', modelType)
-    .where('model_id', modelId)
-    .where('collection_name', collectionName)
-    .max('order_column')
-
-  return (max ?? 0) + 1
-}
-
-async function deleteMediaItemsWithRollback(
-  items: readonly MediaItem[],
-): Promise<DeletedMediaSnapshot[]> {
-  const deletedSnapshots: DeletedMediaSnapshot[] = []
-
-  try {
-    for (const item of items) {
-      const snapshot = await snapshotDeletedMediaItem(item)
-      await item.delete()
-      deletedSnapshots.push(snapshot)
-    }
-  } catch (error) {
-    await restoreDeletedMediaSnapshots(deletedSnapshots)
-
-    throw error
-  }
-
-  return deletedSnapshots
-}
-
-async function deleteOverflowItems(
-  items: readonly MediaItem[],
-  limit: number,
-): Promise<DeletedMediaSnapshot[]> {
-  if (items.length <= limit) {
-    return []
-  }
-
-  return await deleteMediaItemsWithRollback(items.slice(0, items.length - limit))
-}
-
-async function cleanupGeneratedConversions(
-  conversions: GeneratedMediaConversions,
-  _fallbackDisk: string,
-): Promise<void> {
-  for (const conversion of Object.values(conversions)) {
-    /* v8 ignore next -- generated conversion cleanup failures are intentionally swallowed. */
-    await Storage.disk(conversion.disk).delete(conversion.path).catch(() => undefined)
-  }
-}
-
-function registerCreatedMediaRollbackCleanup(
-  cleanup: () => Promise<void>,
-): void {
-  const active = connectionAsyncContext.getActive()?.connection
-  if (!active || active.getScope().kind === 'root') {
-    return
-  }
-
-  active.afterRollback(cleanup)
-}
-
-async function snapshotDeletedMediaItem(item: MediaItem): Promise<DeletedMediaSnapshot> {
-  const record = item.record
-  const fileTargets: Array<{ disk: string, path: string }> = [{
-    disk: record.disk,
-    path: record.path,
-  }]
-  const fallbackDisk = record.conversions_disk ?? record.disk
-
-  for (const conversion of Object.values(record.generated_conversions ?? {})) {
-    if (!conversion?.path) {
-      continue
-    }
-
-    fileTargets.push({
-      disk: conversion.disk ?? fallbackDisk,
-      path: conversion.path,
-    })
-  }
-
-  const files = (
-    await Promise.all(fileTargets.map(async (file) => {
-      const contents = await Storage.disk(file.disk).getBytes(file.path)
-      return contents
-        ? {
-            ...file,
-            contents,
-          }
-        : null
-    }))
-  ).filter((file): file is StoredMediaFileSnapshot => Boolean(file))
-
-  return {
-    record: {
-      uuid: record.uuid,
-      model_type: record.model_type,
-      model_id: record.model_id,
-      collection_name: record.collection_name,
-      name: record.name,
-      file_name: record.file_name,
-      disk: record.disk,
-      conversions_disk: record.conversions_disk,
-      mime_type: record.mime_type,
-      extension: record.extension,
-      size: record.size,
-      path: record.path,
-      generated_conversions: record.generated_conversions,
-      order_column: record.order_column,
-    },
-    files,
-  }
-}
-
-async function restoreDeletedMediaSnapshot(snapshot: DeletedMediaSnapshot): Promise<void> {
-  for (const file of snapshot.files) {
-    await Storage.disk(file.disk).put(file.path, file.contents)
-  }
-
-  await Media.create(snapshot.record as Partial<MediaRecord>)
-}
-
-async function restoreDeletedMediaSnapshots(
-  snapshots: DeletedMediaSnapshot[],
-): Promise<void> {
-  for (const snapshot of snapshots.reverse()) {
-    /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
-    await restoreDeletedMediaSnapshot(snapshot).catch(() => undefined)
-  }
-}
-
 export const mediaAdderInternals = {
   appendRemoteMediaHeaders,
   createPinnedRemoteMediaLookup,
@@ -874,114 +701,13 @@ export class MediaAdder<
     )
     validateSource(collection, source)
 
-    const existing = collection.singleFile
-      ? await (this.entity as MediaCapableEntity).getMedia(collectionName)
-      : []
-
-    const uuid = randomUUID()
-    const diskName = this.state.disk ?? collection.disk ?? resolveImplicitDiskName()
-    const conversionsDisk = collection.conversionsDisk ?? diskName
-    const originalPath = getMediaPathGenerator().originalPath({
-      uuid,
-      fileName: source.fileName,
-      extension: source.extension,
+    return await attachMedia<TEntity, TCollectionName | 'default', TConversionName>({
+      owner: this.entity,
+      collectionName,
       collection,
+      definition: mediaDefinition,
+      source,
+      disk: this.state.disk ?? collection.disk ?? resolveImplicitDiskName(),
     })
-
-    let originalStored = false
-    let createdMedia: Entity<MediaTable> | undefined
-    let generatedConversions = Object.freeze({}) as GeneratedMediaConversions
-    const deletedMediaSnapshots: DeletedMediaSnapshot[] = []
-
-    try {
-      await Storage.disk(diskName).put(originalPath, source.contents)
-      originalStored = true
-      registerCreatedMediaRollbackCleanup(async () => {
-        /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
-        await cleanupGeneratedConversions(generatedConversions, conversionsDisk).catch(() => undefined)
-        /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
-        await Storage.disk(diskName).delete(originalPath).catch(() => undefined)
-      })
-
-      generatedConversions = await generateStoredConversions({
-        definition: mediaDefinition,
-        collection,
-        conversionsDisk,
-        source: {
-          uuid,
-          fileName: source.fileName,
-          extension: source.extension,
-          mimeType: source.mimeType,
-          size: source.size,
-          contents: source.contents,
-        },
-      })
-
-      const media = await Media.create({
-        uuid,
-        model_type: ownerDefinition.morphClass,
-        model_id: String(ownerId),
-        collection_name: collectionName,
-        name: source.name,
-        file_name: source.fileName,
-        disk: diskName,
-        conversions_disk: conversionsDisk,
-        mime_type: source.mimeType ?? null,
-        extension: source.extension ?? null,
-        size: source.size,
-        path: originalPath,
-        generated_conversions: generatedConversions,
-        order_column: await resolveNextOrderColumn(
-          ownerDefinition.morphClass,
-          String(ownerId),
-          collectionName,
-        ),
-      } as Partial<MediaRecord>)
-      createdMedia = media
-
-      this.entity.forgetRelation('media')
-
-      deletedMediaSnapshots.push(...await deleteMediaItemsWithRollback(existing))
-
-      if (typeof collection.onlyKeepLatest === 'number') {
-        const items = await (this.entity as MediaCapableEntity).getMedia(collectionName)
-        deletedMediaSnapshots.push(...await deleteOverflowItems(items, collection.onlyKeepLatest))
-      }
-
-      const queuedConversions = resolveQueuedConversionNames({
-        definition: mediaDefinition,
-        collectionName: collection.name,
-      })
-
-      await dispatchQueuedMediaConversionsForModel({
-        mediaId: media.get('id'),
-        conversionNames: queuedConversions,
-      }, async () => {
-        await media.refresh()
-      })
-
-      return new MediaItem(media, this.entity)
-    } catch (error) {
-      /* v8 ignore next -- cleanup failures are intentionally swallowed. */
-      await cleanupGeneratedConversions(generatedConversions, conversionsDisk).catch(() => undefined)
-
-      /* v8 ignore else -- the storage mock cannot fail after entering this cleanup block before storing. */
-      if (originalStored) {
-        /* v8 ignore next -- original cleanup failures are intentionally swallowed. */
-        await Storage.disk(diskName).delete(originalPath).catch(() => undefined)
-      }
-
-      if (createdMedia) {
-        /* v8 ignore next -- refresh cleanup failures are intentionally swallowed. */
-        await createdMedia.refresh().catch(() => undefined)
-        /* v8 ignore next -- media-row cleanup failures are intentionally swallowed. */
-        await createdMedia.delete().catch(() => undefined)
-      }
-
-      await restoreDeletedMediaSnapshots(deletedMediaSnapshots)
-      this.entity.forgetRelation('media')
-
-      throw error
-    }
   }
 }
