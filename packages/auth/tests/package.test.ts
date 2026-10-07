@@ -2931,7 +2931,10 @@ describe('@holo-js/auth package runtime', () => {
     let updates = 0
     runtime.usersProvider.update = async (id, values) => {
       updates += 1
-      if (updates === 1) { entered(); await pending }
+      if (updates === 1) {
+        entered()
+        await pending
+      }
       return update(id, values)
     }
     const first = resetPassword({ token: delivery.tokenValue, password: 'first-secret', passwordConfirmation: 'first-secret' })

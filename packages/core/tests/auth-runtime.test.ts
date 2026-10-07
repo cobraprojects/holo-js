@@ -3441,7 +3441,14 @@ export default {
       id: column.id(), email: column.string(), password: column.string(),
     }), {
       timestamps: false,
-      events: { updated() { factoryActive = false; if (fail) { fail = false; throw new Error('reset save failed') } } },
+      events: {
+        updated() {
+          factoryActive = false
+          if (!fail) return
+          fail = false
+          throw new Error('reset save failed')
+        },
+      },
     })
     const key = Symbol.for('holo-test-reset-model')
     const model = {
@@ -3458,7 +3465,11 @@ export default {
       const runtime = await createHolo(root, { envName: 'development' })
       await runtime.initialize()
       const schema = createSchemaService(DB.connection())
-      await schema.createTable('reset_users', table => { table.id(); table.string('email'); table.string('password') })
+      await schema.createTable('reset_users', table => {
+        table.id()
+        table.string('email')
+        table.string('password')
+      })
       await DB.table('reset_users').insert({ id: 1, email: 'ava@example.com', password: 'old-secret' })
       await createResetTokenTable()
       const stores = authRuntimeInternals.getRuntimeBindings()
@@ -3486,7 +3497,10 @@ const user = { id: 1, email: 'ava@example.com', password: 'old-secret' }
 export default {
   async find() { return user },
   where() { return { async first() { return user } } },
-  async update(_id, values) { Object.assign(user, values); return user },
+  async update(_id, values) {
+    Object.assign(user, values)
+    return user
+  },
 }
 `, 'utf8')
     const runtime = await createHolo(root, { envName: 'development' })
@@ -3557,7 +3571,11 @@ export default {
       const model = { ...User, getRepository() { return repository }, query() { return repository.query() }, find(id: number) { return repository.find(id) } }
       Object.defineProperty(globalThis, Symbol.for('holo-test-isolated-reset-model'), { value: model, configurable: true })
       await writeFile(join(root, 'server/models/User.ts'), `export default globalThis[Symbol.for('holo-test-isolated-reset-model')]`, 'utf8')
-      await createSchemaService(connection).createTable('isolated_reset_users', table => { table.id(); table.string('email'); table.string('password') })
+      await createSchemaService(connection).createTable('isolated_reset_users', table => {
+        table.id()
+        table.string('email')
+        table.string('password')
+      })
       await new TableQueryBuilder('isolated_reset_users', connection).insert({ id: 1, email: 'ava@example.com', password: 'old-secret' })
     } else {
     await writeFile(join(root, 'server/models/User.ts'), `
