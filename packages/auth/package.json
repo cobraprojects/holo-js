@@ -65,7 +65,8 @@
   },
   "dependencies": {
     "@holo-js/config": "catalog:",
-    "@holo-js/validation": "catalog:"
+    "@holo-js/validation": "catalog:",
+    "@holo-js/adapter-shared": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/security": "catalog:",
