@@ -42,28 +42,66 @@ export class MediaMutation {
   }
 }
 
-async function removeObsoleteFiles(items: readonly MediaItem[], retained: readonly StoredFile[]): Promise<void> {
+export async function runMediaMutation<TResult>(options: {
+  readonly operation: (mutation: MediaMutation) => Promise<TResult>
+  readonly afterRollback?: () => Promise<void> | void
+  readonly afterCommit?: (result: TResult) => Promise<void>
+  readonly committedMessage: string
+}): Promise<TResult> {
+  const mutation = new MediaMutation()
+  return await DB.writeTransaction(async (transaction) => {
+    transaction.afterRollback(() => mutation.compensate())
+    if (options.afterRollback) transaction.afterRollback(options.afterRollback)
+    const result = await options.operation(mutation)
+    const afterCommit = options.afterCommit
+    if (afterCommit) {
+      transaction.afterCommit(async () => {
+        try {
+          await afterCommit(result)
+        } catch (cause) {
+          throw new Error(options.committedMessage, { cause })
+        }
+      })
+    }
+    return result
+  })
+}
+
+export async function removeStoredFiles(files: readonly StoredFile[], retained: readonly StoredFile[] = []): Promise<void> {
   const failures: unknown[] = []
-  for (const item of items) {
-    const record = item.record
-    const files = [
-      { disk: record.disk, path: record.path },
-      ...Object.values(record.generated_conversions ?? {}).filter(conversion => conversion?.path).map(conversion => ({
-        disk: conversion.disk ?? record.conversions_disk ?? record.disk,
-        path: conversion.path,
-      })),
-    ]
-    for (const file of files) {
-      if (retained.some(current => current.disk === file.disk && current.path === file.path)) continue
-      try {
-        await Storage.disk(file.disk).delete(file.path)
-      } catch (error) {
-        failures.push(error)
-      }
+  for (const file of files) {
+    if (retained.some(current => current.disk === file.disk && current.path === file.path)) continue
+    try {
+      await Storage.disk(file.disk).delete(file.path)
+    } catch (error) {
+      failures.push(error)
     }
   }
   if (failures.length === 1) throw failures[0]
   if (failures.length > 1) throw new AggregateError(failures, '[Holo Media] Obsolete-file cleanup failed.')
+}
+
+export async function removeObsoleteFiles(items: readonly MediaItem[], retained: readonly StoredFile[]): Promise<void> {
+  await removeStoredFiles(items.flatMap(({ record }) => [
+    { disk: record.disk, path: record.path },
+    ...Object.values(record.generated_conversions ?? {}).filter(conversion => conversion?.path).map(conversion => ({
+      disk: conversion.disk ?? record.conversions_disk ?? record.disk,
+      path: conversion.path,
+    })),
+  ]), retained)
+}
+
+export async function deleteMediaItems(items: readonly MediaItem[], owner?: Entity<TableDefinition>): Promise<void> {
+  if (items.length === 0) return
+  await runMediaMutation({
+    committedMessage: '[Holo Media] Deletion remains committed; post-commit file cleanup failed.',
+    operation: async () => {
+      for (const item of items) await item.getEntity().delete()
+      owner?.forgetRelation('media')
+    },
+    afterRollback: () => { owner?.forgetRelation('media') },
+    afterCommit: async () => { await removeObsoleteFiles(items, []) },
+  })
 }
 
 export async function attachMedia<
@@ -84,53 +122,58 @@ export async function attachMedia<
   const uuid = randomUUID()
   const conversionsDisk = collection.conversionsDisk ?? disk
   const path = getMediaPathGenerator().originalPath({ uuid, fileName: source.fileName, extension: source.extension, collection })
-  const mutation = new MediaMutation()
-  return await DB.writeTransaction(async (transaction) => {
-    transaction.afterRollback(() => mutation.compensate())
-    transaction.afterRollback(() => { owner.forgetRelation('media') })
-    const existing = collection.singleFile
-      ? await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
-      : []
-    await mutation.put(disk, path, source.contents)
-    const generatedConversions = await generateStoredConversions({
-      definition: options.definition,
-      collection,
-      conversionsDisk,
-      source: { ...source, uuid },
-      mutation,
-    })
-    const max = await Media.query()
-      .where('model_type', ownerDefinition.morphClass)
-      .where('model_id', ownerId)
-      .where('collection_name', options.collectionName)
-      .max('order_column')
-    const media = await Media.create({
-      uuid,
-      model_type: ownerDefinition.morphClass,
-      model_id: ownerId,
-      collection_name: options.collectionName,
-      name: source.name,
-      file_name: source.fileName,
-      disk,
-      conversions_disk: conversionsDisk,
-      mime_type: source.mimeType ?? null,
-      extension: source.extension ?? null,
-      size: source.size,
-      path,
-      generated_conversions: generatedConversions,
-      order_column: (max ?? 0) + 1,
-    } as Partial<ModelRecord<typeof Media.definition.table>>)
-    for (const item of existing) await item.getEntity().delete()
-    owner.forgetRelation('media')
-    const obsolete = [...existing]
-    if (typeof collection.onlyKeepLatest === 'number') {
-      const items = await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
-      const overflow = items.slice(0, Math.max(0, items.length - collection.onlyKeepLatest))
-      for (const item of overflow) await item.getEntity().delete()
-      obsolete.push(...overflow)
+  const obsolete: MediaItem[] = []
+  return await runMediaMutation({
+    committedMessage: '[Holo Media] Attachment remains committed; post-commit cleanup or conversion dispatch failed.',
+    afterRollback: () => { owner.forgetRelation('media') },
+    operation: async (mutation) => {
+      const existing = collection.singleFile
+        ? await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
+        : []
+      await mutation.put(disk, path, source.contents)
+      const generatedConversions = await generateStoredConversions({
+        definition: options.definition,
+        collection,
+        conversionsDisk,
+        source: { ...source, uuid },
+        mutation,
+      })
+      const max = await Media.query()
+        .where('model_type', ownerDefinition.morphClass)
+        .where('model_id', ownerId)
+        .where('collection_name', options.collectionName)
+        .max('order_column')
+      const media = await Media.create({
+        uuid,
+        model_type: ownerDefinition.morphClass,
+        model_id: ownerId,
+        collection_name: options.collectionName,
+        name: source.name,
+        file_name: source.fileName,
+        disk,
+        conversions_disk: conversionsDisk,
+        mime_type: source.mimeType ?? null,
+        extension: source.extension ?? null,
+        size: source.size,
+        path,
+        generated_conversions: generatedConversions,
+        order_column: (max ?? 0) + 1,
+      } as Partial<ModelRecord<typeof Media.definition.table>>)
+      for (const item of existing) await item.getEntity().delete()
       owner.forgetRelation('media')
-    }
-    transaction.afterCommit(async () => {
+      obsolete.push(...existing)
+      if (typeof collection.onlyKeepLatest === 'number') {
+        const items = await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
+        const overflow = items.slice(0, Math.max(0, items.length - collection.onlyKeepLatest))
+        for (const item of overflow) await item.getEntity().delete()
+        obsolete.push(...overflow)
+        owner.forgetRelation('media')
+      }
+      return new MediaItem<TCollectionName, TConversionName, TEntity>(media, owner)
+    },
+    afterCommit: async (item) => {
+      const media = item.getEntity()
+      const generatedConversions = item.record.generated_conversions
       const failures: unknown[] = []
       try {
         await removeObsoleteFiles(obsolete, [
@@ -152,12 +195,8 @@ export async function attachMedia<
         failures.push(error)
       }
       owner.forgetRelation('media')
-      if (failures.length > 0) {
-        throw new Error('[Holo Media] Attachment remains committed; post-commit cleanup or conversion dispatch failed.', {
-          cause: failures.length === 1 ? failures[0] : new AggregateError(failures, '[Holo Media] Post-commit effects failed.'),
-        })
-      }
-    })
-    return new MediaItem<TCollectionName, TConversionName, TEntity>(media, owner)
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new AggregateError(failures, '[Holo Media] Post-commit effects failed.')
+    },
   })
 }
