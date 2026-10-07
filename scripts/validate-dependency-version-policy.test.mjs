@@ -282,3 +282,15 @@ test('dependency policy validator keeps package Node.js support aligned with the
   assert.equal(failures.length, 1)
   assert.match(failures[0], /engines\.node must match the root range/)
 })
+
+
+test('dependency policy permits only actual workspace packages to use workspace ranges', async () => {
+  const repoRoot = await createTestScaffold({
+    'packages/core/package.json': ['{"name":"@holo-js/core","version":"0.3.16"}'],
+    'packages/example/package.json': ['{"name":"@holo-js/example","dependencies":{"@holo-js/core":"workspace:*","typescript":"workspace:*","@holo-js/missing":"workspace:*"}}'],
+  })
+  const failures = await collectPackageManifestFailures(repoRoot)
+  assert.equal(failures.length, 2)
+  assert.ok(failures.some(failure => failure.includes('typescript')))
+  assert.ok(failures.some(failure => failure.includes('@holo-js/missing')))
+})

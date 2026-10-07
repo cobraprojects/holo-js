@@ -101,11 +101,14 @@ export async function collectAppManifestFailures(root = repoRoot) {
 
 export async function collectPackageManifestFailures(root = repoRoot) {
   const manifestPaths = await listTrackedPackageManifests(root)
+  const manifests = await Promise.all(manifestPaths.map(async manifestPath => ({
+    manifestPath,
+    manifest: JSON.parse(await readFile(manifestPath, 'utf8')),
+  })))
+  const workspacePackageNames = new Set(manifests.map(({ manifest }) => manifest.name))
   const failures = []
 
-  for (const manifestPath of manifestPaths) {
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-
+  for (const { manifestPath, manifest } of manifests) {
     for (const sectionName of dependencySections) {
       const section = manifest[sectionName]
       if (!isObject(section)) {
@@ -113,7 +116,7 @@ export async function collectPackageManifestFailures(root = repoRoot) {
       }
 
       for (const [packageName, version] of Object.entries(section)) {
-        if (version !== 'catalog:') {
+        if (version !== 'catalog:' && !(version === 'workspace:*' && workspacePackageNames.has(packageName))) {
           failures.push(`${manifestPath}: ${sectionName}.${packageName} must use "catalog:" in package manifests, found "${version}".`)
         }
       }

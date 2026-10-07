@@ -3,6 +3,7 @@ import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveCatalogRangesInManifest } from './publish-with-resolved-catalogs.mjs'
+import { collectPackageManifestFailures } from './validate-dependency-version-policy.mjs'
 import { syncWorkspaceCatalogVersions } from './sync-workspace-catalog-versions.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -44,8 +45,8 @@ function restoreCatalogRanges(manifest, originalManifest) {
     }
 
     for (const [packageName, version] of Object.entries(originalSection)) {
-      if (version === 'catalog:' && Object.hasOwn(currentSection, packageName)) {
-        currentSection[packageName] = 'catalog:'
+      if ((version === 'catalog:' || version === 'workspace:*') && Object.hasOwn(currentSection, packageName)) {
+        currentSection[packageName] = version
       }
     }
   }
@@ -92,6 +93,9 @@ export async function versionPackages(options = {}) {
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) {
     throw new Error('Root package.json is missing workspaces.catalog.')
   }
+
+  const failures = await collectPackageManifestFailures(root)
+  if (failures.length > 0) throw new Error(failures.join('\n'))
 
   const manifestPaths = await listPackageManifestPaths(root)
   const originalManifests = new Map()

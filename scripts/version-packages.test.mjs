@@ -95,3 +95,18 @@ test('versioning restores package manifests when Changesets fails', async () => 
 
   assert.equal(await readFile(appPath, 'utf8'), originalManifest)
 })
+
+
+test('versioning resolves workspace ranges and retains the declared workspace protocol', async () => {
+  const root = await createTempRepo()
+  const appPath = join(root, 'packages/app/package.json')
+  const original = JSON.parse(await readFile(appPath, 'utf8'))
+  original.dependencies['@holo-js/core'] = 'workspace:*'
+  await writeFile(appPath, JSON.stringify(original) + '\n')
+  await versionPackages({ root, runChangeset: async () => {
+    const manifest = JSON.parse(await readFile(appPath, 'utf8'))
+    assert.equal(manifest.dependencies['@holo-js/core'], '^0.2.6')
+  } })
+  const manifest = JSON.parse(await readFile(appPath, 'utf8'))
+  assert.equal(manifest.dependencies['@holo-js/core'], 'workspace:*')
+})

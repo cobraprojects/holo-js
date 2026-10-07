@@ -173,3 +173,18 @@ test('npm publish authentication preflight rejects invalid npm credentials', () 
     /Cannot publish Holo packages because npm authentication failed\.[\s\S]*npm login[\s\S]*E401/,
   )
 })
+
+
+test('publishing resolves workspace ranges and restores original manifests', async () => {
+  const original = '{"name":"@holo-js/example","devDependencies":{"@holo-js/core":"workspace:*"}}\n'
+  const repoRoot = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{"@holo-js/core":"^0.3.16"}}}'],
+    'packages/core/package.json': ['{"name":"@holo-js/core","version":"0.3.16"}'],
+    'packages/example/package.json': original.split('\n'),
+  })
+  await withResolvedCatalogManifests(async () => {
+    const manifest = JSON.parse(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'))
+    assert.equal(manifest.devDependencies['@holo-js/core'], '^0.3.16')
+  }, repoRoot)
+  assert.equal(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), original)
+})
