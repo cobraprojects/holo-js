@@ -78,3 +78,11 @@ table.
 
 - [Database Tables](/queue/database)
 - [Workers](/queue/workers)
+
+## Worker finalization errors
+
+A terminal handler failure is stored before the worker deletes its reservation. If persistence
+fails, the reservation is retained. If deletion fails after persistence, the worker stops without
+persisting again or releasing the reservation. `runQueueWorker` rejects with the original adapter
+error; failure hooks run only after both mutations succeed. See
+[Queue Workers](/queue/workers#delivery-and-finalization-failures) for uncertain delivery semantics.
