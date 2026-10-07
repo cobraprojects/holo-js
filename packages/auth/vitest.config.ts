@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/adapter-shared/sveltekit/request-context': resolve(__dirname, '../adapter-shared/src/sveltekit/request-context.ts'),
       '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
     },
   },

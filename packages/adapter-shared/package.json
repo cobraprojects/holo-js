@@ -19,6 +19,11 @@
       "types": "./dist/build.d.ts",
       "import": "./dist/build.mjs",
       "default": "./dist/build.mjs"
+    },
+    "./sveltekit/request-context": {
+      "types": "./dist/sveltekit/request-context.d.ts",
+      "import": "./dist/sveltekit/request-context.mjs",
+      "default": "./dist/sveltekit/request-context.mjs"
     }
   },
   "main": "./dist/index.mjs",

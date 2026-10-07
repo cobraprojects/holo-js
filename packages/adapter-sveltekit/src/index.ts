@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent, type SvelteKitCookieOptions } from '@holo-js/adapter-shared/sveltekit/request-context'
 import { error as svelteKitError } from '@sveltejs/kit'
 import {
   createHoloFrameworkAdapter,
@@ -19,29 +19,6 @@ export type SvelteKitHoloOptions = HoloFrameworkOptions
 
 export type SvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap> = HoloAdapterProject<TCustom>
 
-type SvelteKitRequestEvent = {
-  readonly url?: URL
-  readonly cookies: {
-    get(name: string): string | undefined
-    set(name: string, value: string, options: SvelteKitCookieOptions): void
-  }
-  readonly request: {
-    readonly method?: string
-    readonly headers: Headers
-  }
-}
-
-type SvelteKitCookieOptions = {
-  path: string
-  domain?: string
-  maxAge?: number
-  expires?: Date
-  secure?: boolean
-  httpOnly?: boolean
-  sameSite?: 'lax' | 'strict' | 'none'
-  partitioned?: boolean
-}
-
 type ParsedResponseCookie = {
   readonly name: string
   readonly value: string
@@ -53,10 +30,6 @@ type SvelteKitActionResult = {
   readonly error?: unknown
 }
 
-type SvelteKitRuntimeGlobal = typeof globalThis & {
-  __holoSvelteKitRequestEventStore?: AsyncLocalStorage<SvelteKitRequestEvent>
-}
-
 type SvelteKitModule = {
   readonly redirect: (status: SvelteKitRedirectStatus, location: string) => never
 }
@@ -65,9 +38,6 @@ type SvelteKitRedirectStatus = 301 | 302 | 303 | 307 | 308
 type SvelteKitErrorStatus = Parameters<typeof svelteKitError>[0]
 type SvelteKitErrorBody = Parameters<typeof svelteKitError>[1]
 
-// Shared AsyncLocalStorage contract with packages/auth/src/sveltekit/server.ts:
-// keep this exact global key and compatible AsyncLocalStorage<SvelteKitRequestEvent>
-// / AsyncLocalStorage<SvelteKitStoredRequestEvent> value types in sync.
 const svelteKitAdapter = createHoloFrameworkAdapter<SvelteKitHoloOptions>({
   stateKey: '__holoSvelteKitAdapter__',
   displayName: 'SvelteKit',
@@ -76,13 +46,6 @@ const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let validationExceptionThrowerRegistered = false
 const validationActionFailures = new WeakMap<object, SerializedValidationException>()
 const validationActionFailureKeys = new Map<string, SerializedValidationException>()
-
-function getSvelteKitRequestEventStore(): AsyncLocalStorage<SvelteKitRequestEvent> {
-  const runtimeGlobal = globalThis as SvelteKitRuntimeGlobal
-  runtimeGlobal.__holoSvelteKitRequestEventStore ??= new AsyncLocalStorage<SvelteKitRequestEvent>()
-
-  return runtimeGlobal.__holoSvelteKitRequestEventStore
-}
 
 function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
@@ -334,7 +297,7 @@ function registerValidationExceptionThrower(): void {
 
   validationExceptionThrowerRegistered = true
   validationInternals.setValidationExceptionThrower((exception) => {
-    const event = getSvelteKitRequestEventStore().getStore()
+    const event = getCurrentSvelteKitRequestEvent()
     if (!event) {
       return
     }
@@ -421,15 +384,15 @@ function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
 function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOptions['authRequest']> {
   return {
     async getCookie(name: string) {
-      const event = getSvelteKitRequestEventStore().getStore()
+      const event = getCurrentSvelteKitRequestEvent()
       return event?.cookies.get(name) ?? undefined
     },
     async getHeader(name: string) {
-      const event = getSvelteKitRequestEventStore().getStore()
+      const event = getCurrentSvelteKitRequestEvent()
       return event?.request.headers.get(name) ?? undefined
     },
     appendResponseCookie(cookie: string) {
-      const event = getSvelteKitRequestEventStore().getStore()
+      const event = getCurrentSvelteKitRequestEvent()
       const parsed = parseResponseCookie(cookie)
       if (!event || !parsed) {
         return
@@ -464,7 +427,7 @@ export function runWithSvelteKitRequestEvent<TValue>(
   callback: () => TValue,
 ): TValue {
   registerValidationExceptionThrower()
-  return getSvelteKitRequestEventStore().run(event, () => {
+  return runWithRequestEvent(event, () => {
     const runtime = svelteKitAdapter.internals.getState().project?.runtime
     return runtime
       ? runtime.runWithAuthRequestAccessors(resolveSvelteKitAuthRequestAccessors(), callback)

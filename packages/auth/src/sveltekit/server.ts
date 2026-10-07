@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { AuthUserLike, HoloAuthUser } from '../contracts'
 
@@ -29,24 +29,6 @@ export type SvelteKitHandleEvent = {
   readonly url: URL
 }
 
-type SvelteKitCookieOptions = {
-  path: string
-  domain?: string
-  maxAge?: number
-  expires?: Date
-  secure?: boolean
-  httpOnly?: boolean
-  sameSite?: 'lax' | 'strict' | 'none'
-}
-
-type SvelteKitStoredRequestEvent = SvelteKitHandleEvent & {
-  readonly cookies: {
-    get(name: string): string | undefined
-    set(name: string, value: string, options: SvelteKitCookieOptions): void
-  }
-  readonly request: Request
-}
-
 type SvelteKitResolveOptions = {
   readonly transformPageChunk?: (input: {
     readonly html: string
@@ -59,13 +41,6 @@ type SvelteKitResolveOptions = {
   }) => boolean
 }
 
-type SvelteKitRuntimeGlobal = typeof globalThis & {
-  __holoSvelteKitRequestEventStore?: AsyncLocalStorage<SvelteKitStoredRequestEvent>
-}
-
-// Shared AsyncLocalStorage contract with packages/adapter-sveltekit/src/index.ts:
-// keep this exact global key and compatible AsyncLocalStorage<SvelteKitStoredRequestEvent>
-// / AsyncLocalStorage<SvelteKitRequestEvent> value types in sync.
 export type SvelteKitHandleInput<TEvent extends SvelteKitHandleEvent = SvelteKitHandleEvent> = {
   readonly event: TEvent
   readonly resolve: (event: TEvent, options?: SvelteKitResolveOptions) => Response | Promise<Response>
@@ -75,14 +50,7 @@ export type SvelteKitHandle = <TEvent extends SvelteKitHandleEvent>(
   input: SvelteKitHandleInput<TEvent>,
 ) => Response | Promise<Response>
 
-function getSvelteKitRequestEventStore(): AsyncLocalStorage<SvelteKitStoredRequestEvent> {
-  const runtimeGlobal = globalThis as SvelteKitRuntimeGlobal
-  runtimeGlobal.__holoSvelteKitRequestEventStore ??= new AsyncLocalStorage<SvelteKitStoredRequestEvent>()
-
-  return runtimeGlobal.__holoSvelteKitRequestEventStore
-}
-
-function isSvelteKitStoredRequestEvent(event: SvelteKitHandleEvent): event is SvelteKitStoredRequestEvent {
+function isSvelteKitStoredRequestEvent(event: SvelteKitHandleEvent): event is SvelteKitHandleEvent & SvelteKitRequestEvent {
   const candidate = event as SvelteKitHandleEvent & {
     readonly cookies?: {
       get?: unknown
@@ -106,7 +74,7 @@ function runWithSvelteKitRequestEvent<TValue>(
     return callback()
   }
 
-  return getSvelteKitRequestEventStore().run(event, callback)
+  return runWithRequestEvent(event, callback)
 }
 
 function toClientAuthUser(user: (HoloAuthUser & AuthUserLike) | null): HoloAuthUser | null {

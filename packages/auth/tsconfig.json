@@ -23,6 +23,9 @@
       ],
       "@holo-js/session": [
         "../session/src/index.ts"
+      ],
+      "@holo-js/adapter-shared/sveltekit/request-context": [
+        "../adapter-shared/src/sveltekit/request-context.ts"
       ]
     }
   },
