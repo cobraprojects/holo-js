@@ -1,3 +1,4 @@
+import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
@@ -143,7 +144,9 @@ export class SchemaService {
   async dropTable(tableName: string): Promise<void> {
     assertValidIdentifierPath(tableName, 'Table name')
     await this.execute(this.createCompiler().compile(dropTableOperation(tableName)))
-    this.connection.getSchemaRegistry().delete(tableName)
+    mutateSchemaRegistry(this.connection, [tableName], () => {
+      this.connection.getSchemaRegistry().delete(tableName)
+    })
   }
 
   async renameTable(
@@ -523,10 +526,18 @@ export class SchemaService {
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
     const statements = this.createCompiler().compile(createTableOperation(table))
-    if (!this.connection.getSchemaRegistry().has(table.tableName)) {
-      this.register(table)
+    const registry = this.connection.getSchemaRegistry()
+    const declared = registry.has(table.tableName)
+    for (const [position, statement] of statements.entries()) {
+      await this.connection.executeCompiled(statement)
+      if (!declared) {
+        mutateSchemaRegistry(this.connection, [table.tableName], () => {
+          registry.replace(defineTable(table.tableName, table.columns, {
+            indexes: table.indexes.slice(0, position),
+          }))
+        })
+      }
     }
-    await this.execute(statements)
   }
 
   private assertTableMutationIndexNames(
@@ -581,7 +592,14 @@ export class SchemaService {
           await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
         } else {
           this.assertAlterCapability('altering columns')
-          await this.execute(this.createCompiler().compile(alterColumnOperation(tableName, definition)))
+          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition))
+          if (this.isPostgres()) {
+            await this.connection.transaction(async (tx) => {
+              await new SchemaService(tx).execute(statements)
+            })
+          } else {
+            await this.execute(statements)
+          }
         }
         this.updateRegisteredTable(tableName, table => this.withAlteredColumn(table, definition))
         return
@@ -648,6 +666,15 @@ export class SchemaService {
   }
 
   private async rebuildSqliteTableForAlteredColumn(
+    tableName: string,
+    column: AnyColumnDefinition,
+  ): Promise<void> {
+    await this.connection.transaction(async (tx) => {
+      await new SchemaService(tx).rebuildSqliteTable(tableName, column)
+    })
+  }
+
+  private async rebuildSqliteTable(
     tableName: string,
     column: AnyColumnDefinition,
   ): Promise<void> {
@@ -723,7 +750,9 @@ export class SchemaService {
       return
     }
 
-    registry.replace(update(existing))
+    mutateSchemaRegistry(this.connection, [tableName], () => {
+      registry.replace(update(existing))
+    })
   }
 
   private renameRegisteredTable(fromTableName: string, toTableName: string): void {
@@ -733,8 +762,10 @@ export class SchemaService {
       return
     }
 
-    registry.delete(fromTableName)
-    registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
+    mutateSchemaRegistry(this.connection, [fromTableName, toTableName], () => {
+      registry.delete(fromTableName)
+      registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
+    })
   }
 
   private withColumn(table: TableDefinition, column: AnyColumnDefinition): TableDefinition {

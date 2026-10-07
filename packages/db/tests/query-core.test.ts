@@ -2479,44 +2479,6 @@ describe('query core slice', () => {
     })
   })
 
-  it('supports lazy and cursor iteration on table queries', async () => {
-    const adapter = new QueryAdapter()
-    adapter.queryRows = [
-      { id: 1, name: 'Mohamed' },
-      { id: 2, name: 'Amina' },
-      { id: 3, name: 'Layla' },
-    ]
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          adapter,
-          dialect: createDialect('sqlite') } } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string() })
-
-    const lazyNames: string[] = []
-    for await (const row of DB.table(users).orderBy('id').lazy(2)) {
-      lazyNames.push(String(row.name))
-    }
-
-    const cursorNames: string[] = []
-    for await (const row of DB.table(users).orderBy('id').cursor()) {
-      cursorNames.push(String(row.name))
-    }
-
-    expect(lazyNames).toEqual(['Mohamed', 'Amina', 'Layla'])
-    expect(cursorNames).toEqual(['Mohamed', 'Amina', 'Layla'])
-    await expect((async () => {
-      for await (const _ of DB.table(users).lazy(0)) {
-        void _
-      }
-    })()).rejects.toThrow(SecurityError)
-  })
-
   it('exposes DB.raw as an explicit unsafe statement constructor', async () => {
     const adapter = new QueryAdapter()
     configureDB(createConnectionManager({
@@ -2944,26 +2906,6 @@ describe('query core slice', () => {
     expect(customCursor.cursorName).toBe('usersCursor')
 
     configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('sqlite') } } }))
-    const chunked: number[][] = []
-    await DB.table(users).chunk(2, (rows) => {
-      chunked.push(rows.map(row => row.id as number))
-    })
-    expect(chunked).toEqual([[1, 2], [3, 4], [5]])
-
-    const stoppedChunks: number[][] = []
-    await DB.table(users).chunkById(2, (rows, page) => {
-      stoppedChunks.push(rows.map(row => row.id as number))
-      return page < 2
-    })
-    expect(stoppedChunks).toEqual([[1, 2], [3, 4]])
-
-    const stoppedPages: number[][] = []
-    await DB.table(users).chunk(2, (rows, page) => {
-      stoppedPages.push(rows.map(row => row.id as number))
-      return page < 2
-    })
-    expect(stoppedPages).toEqual([[1, 2], [3, 4]])
-
     adapter.queryRows = [
       { id: 1, sortKey: 1, name: 'Equal A' },
       { id: 2, sortKey: null, name: 'Null' },

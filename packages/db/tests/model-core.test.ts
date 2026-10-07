@@ -1716,48 +1716,6 @@ describe('model core slice', () => {
       bindings: ['m@example.com', 'Mohamed'] })
   })
 
-  it('supports lazy and cursor iteration on model queries and statics', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', status: 'active' },
-        { id: 2, name: 'Amina', status: 'active' },
-        { id: 3, name: 'Layla', status: 'inactive' },
-      ] }, { users: 3 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      status: column.string() })
-
-    const User = defineModelFromTable(users)
-
-    const lazyNames: string[] = []
-    for await (const user of User.query().orderBy('id').lazy(2)) {
-      lazyNames.push(String(user.get('name')))
-    }
-
-    const cursorNames: string[] = []
-    for await (const user of User.cursor()) {
-      cursorNames.push(String(user.get('name')))
-    }
-
-    expect(lazyNames).toEqual(['Mohamed', 'Amina', 'Layla'])
-    expect(cursorNames).toEqual(['Mohamed', 'Amina', 'Layla'])
-    await expect((async () => {
-      for await (const _user of User.lazy(0)) {
-        void _user
-      }
-    })()).rejects.toThrow('Chunk size must be a positive integer.')
-  })
-
   it('supports pagination and chunking on model queries and statics', async () => {
     const adapter = new InMemoryAdapter({
       users: [

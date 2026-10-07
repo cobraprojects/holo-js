@@ -81,6 +81,9 @@
       ],
       "@holo-js/validation/internal/compiled": [
         "../validation/src/internal/compiled.ts"
+      ],
+      "@holo-js/adapter-shared/sveltekit/request-context": [
+        "../adapter-shared/src/sveltekit/request-context.ts"
       ]
     }
   },

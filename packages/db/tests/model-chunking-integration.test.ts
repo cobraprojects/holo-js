@@ -1,7 +1,7 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, hasMany, resetDB } from '../src'
 import type { QuerySuccessLog } from '../src/core/types'
 
 describe('model chunking', () => {
@@ -50,9 +50,271 @@ describe('model chunking', () => {
       }
     })
     expect(batches).toEqual([['First', 'Second'], ['Updated', 'Fourth']])
-    for (const log of logs.filter(log => log.sql.startsWith('SELECT'))) {
+    for (const log of logs.filter(log => log.kind === 'query')) {
       expect(log.rowCount).toBeLessThanOrEqual(3)
     }
+  })
+
+  it('reads table ID chunks in bounded descending batches and observes later updates', async () => {
+    const batches: string[][] = []
+    await DB.table(table).where('active', true).chunkByIdDesc(2, async (rows, page) => {
+      batches.push(rows.map(row => row.name))
+      if (page === 1) await DB.table(table).where('id', 2).update({ name: 'Updated' })
+    })
+    expect(batches).toEqual([['Fourth', 'Third'], ['Updated', 'First']])
+    expect(logs.filter(log => log.kind === 'query').every(log => log.rowCount !== undefined && log.rowCount <= 3)).toBe(true)
+  })
+
+  it.each(['chunkById', 'chunkByIdDesc'] as const)('stops table %s retrieval after a callback refuses the next batch', async method => {
+    const batches: number[][] = []
+    await DB.table(table)[method](2, rows => {
+      batches.push(rows.map(row => Number(row.id)))
+      return false
+    })
+    expect(batches).toEqual(method === 'chunkById' ? [[1, 2]] : [[5, 4]])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3])
+  })
+
+  it('bounds descending model chunks with projections and observes later mutations', async () => {
+    const batches: Array<Array<Record<string, unknown>>> = []
+    await Item.query().select('name').chunkByIdDesc(2, async (records, page) => {
+      batches.push(records.map(record => record.toAttributes()))
+      if (page === 1) await Item.where('id', 2).update({ name: 'Updated' })
+    })
+    expect(batches).toEqual([
+      [{ name: 'Excluded' }, { name: 'Fourth' }],
+      [{ name: 'Third' }, { name: 'Updated' }],
+      [{ name: 'First' }],
+    ])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
+  })
+
+  it('chunks projected table custom keys without exposing cursor columns or colliding with selected aliases', async () => {
+    await adapter.execute('CREATE TABLE custom_keys (code TEXT PRIMARY KEY, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO custom_keys VALUES ('z', 'Zed'), ('a', 'Alpha'), ('m', 'Middle')")
+    const keys = defineGeneratedTable('custom_keys', { code: column.string().primaryKey(), name: column.string() })
+    const batches: Array<Array<Record<string, unknown>>> = []
+    await DB.table(keys).select('name as __holo_chunk_0').chunkById(1, rows => {
+      batches.push([...rows])
+    }, 'code')
+    expect(batches).toEqual([
+      [{ __holo_chunk_0: 'Alpha' }], [{ __holo_chunk_0: 'Middle' }], [{ __holo_chunk_0: 'Zed' }],
+    ])
+  })
+
+  it.each([true, false])('batches relations and preserves fallback snapshots with bounded traversal %s', async bounded => {
+    await adapter.execute('CREATE TABLE chunk_notes (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL, text TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO chunk_notes VALUES (1, 1, 'First note'), (2, 2, 'Second note'), (3, 4, 'Fourth note')")
+    const Note = defineModel(defineGeneratedTable('chunk_notes', {
+      id: column.id(), item_id: column.integer(), text: column.string(),
+    }), { timestamps: false })
+    const RelatedItem = defineModel(table, {
+      timestamps: false,
+      relations: { notes: hasMany(() => Note, 'item_id') },
+    })
+    const notes: string[][] = []
+    const query = RelatedItem.query().with('notes')
+    await (bounded ? query : query.distinct()).chunkByIdDesc(2, async (records, page) => {
+      notes.push(...records.map(record => record.notes.map(note => note.get('text'))))
+      if (page === 1) await Note.where('item_id', 2).update({ text: 'Updated note' })
+    })
+    expect(notes).toEqual([[], ['Fourth note'], [], [bounded ? 'Updated note' : 'Second note'], ['First note']])
+    expect(logs.filter(log => log.kind === 'query')).toHaveLength(bounded ? 6 : 2)
+  })
+
+  it('bounds ordinary table chunks while preserving requested ordering and live updates', async () => {
+    const batches: string[][] = []
+    await DB.table(table).orderBy('id', 'desc').chunk(2, async (rows, page) => {
+      batches.push(rows.map(row => row.name))
+      if (page === 1) await DB.table(table).where('id', 2).update({ name: 'Updated' })
+    })
+    expect(batches).toEqual([['Excluded', 'Fourth'], ['Third', 'Updated'], ['First']])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
+  })
+
+  it('preserves duplicate values when a declared table has no primary key', async () => {
+    await adapter.execute('CREATE TABLE unkeyed_items (id INTEGER NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO unkeyed_items VALUES (1, 'First'), (1, 'Second'), (2, 'Third')")
+    const unkeyed = defineGeneratedTable('unkeyed_items', { id: column.integer(), name: column.string() })
+    const names: string[] = []
+    await DB.table(unkeyed).orderBy('id').chunk(1, rows => {
+      names.push(...rows.map(row => row.name))
+    })
+    expect(names).toEqual(['First', 'Second', 'Third'])
+  })
+
+  it('preserves duplicate id values when a string table has no registered schema', async () => {
+    await adapter.execute('CREATE TABLE unregistered_items (id INTEGER NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO unregistered_items VALUES (1, 'First'), (1, 'Second'), (2, 'Third')")
+    const names: string[] = []
+    await DB.table('unregistered_items').orderBy('id').chunk(1, rows => {
+      names.push(...rows.map(row => String(row.name)))
+    })
+    expect(names).toEqual(['First', 'Second', 'Third'])
+  })
+
+  it('traverses declared tables without an id column in the requested order', async () => {
+    await adapter.execute('CREATE TABLE unkeyed_names (name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO unkeyed_names VALUES ('Third'), ('First'), ('Second')")
+    const unkeyed = defineGeneratedTable('unkeyed_names', { name: column.string() })
+    const names: string[] = []
+    for await (const row of DB.table(unkeyed).orderBy('name').lazy(1)) names.push(row.name)
+    expect(names).toEqual(['First', 'Second', 'Third'])
+  })
+
+  it('stops ordinary model chunks after callback refusal', async () => {
+    const batches: string[][] = []
+    await Item.orderBy('id', 'desc').chunk(2, records => {
+      batches.push(records.map(record => record.get('name')))
+      return false
+    })
+    expect(batches).toEqual([['Excluded', 'Fourth']])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3])
+  })
+
+  it('stops projected table and model lazy retrieval when iteration ends', async () => {
+    const rows: Array<Record<string, unknown>> = []
+    for await (const row of DB.table(table).select('name as label').orderBy('id', 'desc').lazy(2)) {
+      rows.push(row)
+      break
+    }
+    expect(rows).toEqual([{ label: 'Excluded' }])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3])
+    logs.length = 0
+    const attributes: Array<Record<string, unknown>> = []
+    for await (const record of Item.select('name').orderBy('id', 'desc').lazy(2)) {
+      attributes.push(record.toAttributes())
+      break
+    }
+    expect(attributes).toEqual([{ name: 'Excluded' }])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3])
+  })
+
+  it.each(['table', 'model'] as const)('bounds %s cursor retrieval and stops after an early iterator return', async family => {
+    await adapter.execute("WITH RECURSIVE ids(id) AS (SELECT 6 UNION ALL SELECT id + 1 FROM ids WHERE id < 1005) INSERT INTO chunk_items SELECT id, 'More', 1 FROM ids")
+    const ids: number[] = []
+    if (family === 'table') {
+      for await (const row of DB.table(table).cursor()) {
+        ids.push(row.id)
+        break
+      }
+    } else {
+      for await (const record of Item.cursor()) {
+        ids.push(record.get('id'))
+        break
+      }
+    }
+    expect(ids).toEqual([1])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([1001])
+  })
+
+  it('traverses all projected rows in requested order across lazy batches', async () => {
+    const rows: Array<Record<string, unknown>> = []
+    for await (const row of DB.table(table).select('name as label').orderBy('active').orderBy('id', 'desc').lazy(2)) rows.push(row)
+    expect(rows).toEqual([
+      { label: 'Excluded' }, { label: 'Fourth' }, { label: 'Third' }, { label: 'Second' }, { label: 'First' },
+    ])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
+  })
+
+  it('keeps ordinary distinct chunks as a snapshot when callbacks update later records', async () => {
+    const names: string[] = []
+    await DB.table(table).distinct().orderBy('id').chunk(2, async (rows, page) => {
+      names.push(...rows.map(row => row.name))
+      if (page === 1) await DB.table(table).where('id', 3).update({ name: 'Updated' })
+    })
+    expect(names).toEqual(['First', 'Second', 'Third', 'Fourth', 'Excluded'])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([5])
+  })
+
+  it('retains raw ordering on fallback iterators', async () => {
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('sqlite'), security: { allowUnsafeRawSql: true }, logger: { onQuerySuccess: entry => { logs.push(entry) } } } },
+    }))
+    const names: string[] = []
+    for await (const record of Item.query().unsafeOrderBy('"id" DESC', []).lazy(2)) names.push(record.get('name'))
+    expect(names).toEqual(['Excluded', 'Fourth', 'Third', 'Second', 'First'])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([5])
+  })
+
+  it('rejects invalid lazy batch sizes at both table and model seams', async () => {
+    await expect(DB.table(table).lazy(0).next()).rejects.toThrow('Chunk size must be a positive integer')
+    await expect(Item.lazy(0).next()).rejects.toThrow('Chunk size must be a positive integer')
+    expect(logs).toHaveLength(0)
+  })
+
+  it.each(['chunkById', 'chunkByIdDesc'] as const)('preserves requested joined tie ordering in table %s fallback', async method => {
+    await adapter.execute('CREATE TABLE ordered_children (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL)')
+    await adapter.execute('INSERT INTO ordered_children VALUES (10, 1), (20, 1), (30, 2), (40, 2)')
+    const joined: Array<Record<string, unknown>> = []
+    await DB.table(table).join('ordered_children', 'chunk_items.id', '=', 'ordered_children.item_id')
+      .select('chunk_items.id', 'ordered_children.id as child_id').orderBy('ordered_children.id', 'desc')[method](1, rows => {
+        joined.push(...rows)
+      })
+    expect(joined).toEqual(method === 'chunkById'
+      ? [{ id: 1, child_id: 20 }, { id: 1, child_id: 10 }, { id: 2, child_id: 40 }, { id: 2, child_id: 30 }]
+      : [{ id: 2, child_id: 40 }, { id: 2, child_id: 30 }, { id: 1, child_id: 20 }, { id: 1, child_id: 10 }])
+  })
+
+  it('preserves requested joined tie ordering in model descending fallback', async () => {
+    await adapter.execute('CREATE TABLE ordered_children (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL)')
+    await adapter.execute('INSERT INTO ordered_children VALUES (10, 1), (20, 1), (30, 2), (40, 2)')
+    const joined: Array<Record<string, unknown>> = []
+    await Item.query().join('ordered_children', 'chunk_items.id', '=', 'ordered_children.item_id')
+      .select('chunk_items.id', 'ordered_children.id as child_id').orderBy('ordered_children.id', 'desc').chunkByIdDesc(1, records => {
+        joined.push(...records.map(record => record.toAttributes()))
+      })
+    expect(joined).toEqual([{ id: 2, child_id: 40 }, { id: 2, child_id: 30 }, { id: 1, child_id: 20 }, { id: 1, child_id: 10 }])
+  })
+
+  it('orders ascending model joined projections by ID without exposing the hidden ID', async () => {
+    await adapter.execute('CREATE TABLE projected_children (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL)')
+    await adapter.execute('INSERT INTO projected_children VALUES (10, 1), (20, 1), (30, 2), (40, 2)')
+    const attributes: Array<Record<string, unknown>> = []
+    await Item.query().join('projected_children', 'chunk_items.id', '=', 'projected_children.item_id')
+      .select('chunk_items.name').orderBy('projected_children.id', 'desc').chunkById(1, records => {
+        attributes.push(...records.map(record => record.toAttributes()))
+      })
+    expect(attributes).toEqual([{ name: 'First' }, { name: 'First' }, { name: 'Second' }, { name: 'Second' }])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([4])
+  })
+
+  it('traverses qualified table ID columns without duplicating their source qualifier', async () => {
+    const ids: number[] = []
+    await DB.table(table).chunkById(2, rows => { ids.push(...rows.map(row => row.id)) }, 'chunk_items.id')
+    expect(ids).toEqual([1, 2, 3, 4, 5])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
+  })
+
+  it.each(['table', 'model'] as const)('supports repeated %s cached fallback traversal', async family => {
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    const passes: number[][] = []
+    for (let pass = 0; pass < 2; pass += 1) {
+      const ids: number[] = []
+      if (family === 'table') {
+        await DB.table(table).distinct().cache({ key: 'table-fallback', ttl: 60 }).chunkByIdDesc(2, rows => {
+          ids.push(...rows.map(row => row.id))
+        })
+      } else {
+        await Item.query().distinct().cache({ key: 'model-fallback', ttl: 60 }).chunkByIdDesc(2, records => {
+          ids.push(...records.map(record => record.get('id')))
+        })
+      }
+      passes.push(ids)
+    }
+    expect(passes).toEqual([[5, 4, 3, 2, 1], [5, 4, 3, 2, 1]])
+  })
+
+  it.each(['table', 'model'] as const)('preserves requested ordering for duplicate %s ID-column values', async family => {
+    const ids: number[] = []
+    if (family === 'table') {
+      await DB.table(table).orderBy('id', 'desc').chunkById(2, rows => { ids.push(...rows.map(row => row.id)) }, 'active')
+    } else {
+      await Item.orderBy('id', 'desc').chunkByIdDesc(2, records => { ids.push(...records.map(record => record.get('id'))) }, 'active')
+    }
+    expect(ids).toEqual(family === 'table' ? [5, 4, 3, 2, 1] : [4, 3, 2, 1, 5])
+    expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
   })
 
   it('chunks projected records without exposing cursor columns', async () => {

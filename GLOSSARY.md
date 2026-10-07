@@ -19,3 +19,9 @@ Preparation of project artifacts and framework tooling before a framework run.
 
 **Discovery watch**:
 Observation of application paths that trigger framework preparation during development.
+
+**Declared schema**:
+The tables and attributes an application describes for use, including tables that have not yet been created.
+
+**Database schema**:
+The tables and attributes that currently exist in a connected database.

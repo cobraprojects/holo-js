@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -377,6 +378,7 @@ describe('@holo-js/auth framework helpers', () => {
   it('keeps the published Next route protection edge condition out of Node-only bundles', async () => {
     const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
     const tempDir = await mkdtemp(resolve(tmpdir(), 'holo-auth-published-edge-'))
+    await symlink(resolve(packageRoot, 'node_modules'), resolve(tempDir, 'node_modules'), 'dir')
     const outDir = resolve(tempDir, 'dist')
     const entryPath = resolve(tempDir, 'published-next-route-protection-edge-entry.ts')
     const outputPath = resolve(tempDir, 'published-next-route-protection-edge-entry.mjs')
@@ -597,11 +599,12 @@ describe('@holo-js/auth framework helpers', () => {
     await expect(proxy(request)).resolves.toMatchObject({ status: 401 })
   })
 
-  it('clears fallback Next request context after async and throwing callbacks', async () => {
+  it('clears Next request context after async and throwing callbacks', async () => {
     const globals = globalThis as typeof globalThis & {
-      __holoNextAuthRequestStore?: unknown
+      __holoNextRequestStore?: unknown
     }
-    delete globals.__holoNextAuthRequestStore
+    delete globals.__holoNextRequestStore
+    vi.resetModules()
 
     const { getCurrentNextAuthRequest, runWithNextAuthRequest } = await import('../src/next/request-context')
     const request = {
@@ -1219,9 +1222,10 @@ describe('@holo-js/auth framework helpers', () => {
     })
   })
 
-  it('restores synchronous fallback Next request context callbacks', async () => {
-    const globals = globalThis as typeof globalThis & { __holoNextAuthRequestStore?: unknown }
-    delete globals.__holoNextAuthRequestStore
+  it('restores synchronous Next request context callbacks', async () => {
+    const globals = globalThis as typeof globalThis & { __holoNextRequestStore?: unknown }
+    delete globals.__holoNextRequestStore
+    vi.resetModules()
     const { getCurrentNextAuthRequest, runWithNextAuthRequest } = await import('../src/next/request-context')
     const request = { cookies: { get: vi.fn() }, headers: new Headers() }
     expect(runWithNextAuthRequest(request, () => getCurrentNextAuthRequest())).toBe(request)
@@ -1234,18 +1238,10 @@ describe('@holo-js/auth framework helpers', () => {
         getStore(): TValue | undefined
         run<TResult>(value: TValue, callback: () => TResult): TResult
       }
-      __holoNextAuthRequestStore?: unknown
+      __holoNextRequestStore?: unknown
     }
-    delete globals.__holoNextAuthRequestStore
-    class TestStorage<TValue> {
-      value?: TValue
-      getStore(): TValue | undefined { return this.value }
-      run<TResult>(value: TValue, callback: () => TResult): TResult {
-        this.value = value
-        return callback()
-      }
-    }
-    vi.stubGlobal('AsyncLocalStorage', TestStorage)
+    delete globals.__holoNextRequestStore
+    vi.stubGlobal('AsyncLocalStorage', AsyncLocalStorage)
     vi.resetModules()
     const { getCurrentNextAuthRequest, runWithNextAuthRequest } = await import('../src/next/request-context')
     const request = { cookies: { get: vi.fn() }, headers: new Headers() }

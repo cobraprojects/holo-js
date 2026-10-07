@@ -1,3 +1,4 @@
+import { createMigrationFiles } from './migration-creation'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve } from 'node:path'
@@ -399,45 +400,16 @@ export async function runMakeMigration(
   projectRoot: string,
   input: PreparedInput,
 ): Promise<void> {
-  const project = await ensureProjectConfig(projectRoot)
-  const registry = await loadGeneratedProjectRegistry(projectRoot)
-    ?? await prepareProjectDiscovery(projectRoot, project.config)
-  /* v8 ignore next */
   const requestedName = String(input.args[0] ?? '')
   const createTable = typeof input.flags.create === 'string' ? normalizeMigrationSlug(input.flags.create) : undefined
   const alterTable = typeof input.flags.table === 'string' ? normalizeMigrationSlug(input.flags.table) : undefined
-
-  if (createTable && alterTable) {
-    throw new Error('Use either "--create" or "--table", not both.')
-  }
-
-  const requestedSlug = normalizeMigrationSlug(requestedName)
-  if (createTable) {
-    if (hasRegisteredCreateTableMigration(registry, createTable)) {
-      throw new Error(`A migration for table "${createTable}" already exists.`)
-    }
-  } else if (alterTable) {
-    if (hasRegisteredMigrationSlug(registry, requestedSlug)) {
-      throw new Error(`A migration named "${requestedSlug}" already exists.`)
-    }
-  } else if (hasRegisteredMigrationSlug(registry, requestedSlug)) {
-    throw new Error(`A migration named "${requestedSlug}" already exists.`)
-  }
-
-  const migrationTemplate = await nextMigrationTemplate(
-    requestedSlug,
-    resolve(projectRoot, project.config.paths.migrations),
-    {
-      ...(createTable ? { kind: 'create_table' as const, tableName: createTable } : {}),
-      ...(alterTable ? { kind: 'alter_table' as const, tableName: alterTable } : {}),
-    },
-  )
-  const migrationFilePath = resolveDefaultArtifactPath(projectRoot, project.config.paths.migrations, migrationTemplate.fileName)
-
-  await writeTextFile(migrationFilePath, migrationTemplate.contents)
-  await runProjectPrepare(projectRoot)
-
-  writeLine(io.stdout, `Created migration: ${makeProjectRelativePath(projectRoot, migrationFilePath)}`)
+  if (createTable && alterTable) throw new Error('Use either "--create" or "--table", not both.')
+  await createMigrationFiles(projectRoot, () => [{
+    name: requestedName,
+    ...(!createTable ? { conflictMessage: `A migration named "${normalizeMigrationSlug(requestedName)}" already exists.` } : {}),
+    ...(createTable ? { tableNames: [createTable], templateOptions: { kind: 'create_table', tableName: createTable } } : {}),
+    ...(alterTable ? { tableNames: [], templateOptions: { kind: 'alter_table', tableName: alterTable } } : {}),
+  }], { io, prepare: true })
 }
 
 export async function runMakeSeeder(

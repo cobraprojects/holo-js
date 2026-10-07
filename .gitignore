@@ -61,7 +61,8 @@ coverage
 .holo-test-typecheck-*
 .eslintcache-generated
 .eslintcache-main
-/docs
+/docs/*
+!/docs/adr/
 /apps/Nuxt_test_app
 /apps/Next_test_app
 /apps/svelte_test_app
