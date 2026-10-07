@@ -14,15 +14,7 @@ import {
   tryPatchCursorWrapperDataRows,
 } from './query-cursor-wrapper-patching'
 import {
-  hydrateBelongsToMutationRows,
-} from './query-belongs-to-hydration'
-import {
-  hydrateRelatedMutationRows,
-} from './query-related-hydration'
-import {
   createMutationRowPatchContext,
-  projectedUpdateCannotAffectQueryResult,
-  readMutationPatchMetadata,
 } from './query-row-patching'
 import {
   canPatchStableWindowMutationWithoutBackfill,
@@ -35,6 +27,14 @@ import type {
   RowsQueryPatchTarget,
 } from './query-state'
 import type { BackfillCache } from './state'
+import { prepareRowWindowMutation } from './query-row-window-mutation'
+
+type RowWindowPolicy = 'standard' | 'wrapper' | 'offset'
+type PatchedRowWindow = {
+  readonly rows: readonly Readonly<Record<string, unknown>>[]
+  readonly changed: boolean
+  readonly needsBackfill: boolean
+}
 
 export async function tryPatchQueryRows(
   query: DatabaseQueryObservation,
@@ -50,83 +50,32 @@ export async function tryPatchQueryRows(
   }
 
   if (rowPatchMode === 'offset-window') {
-    const localPatch = await tryPatchOffsetQueryRows(
-      query,
-      rows,
-      mutations,
-      backfills,
-      queryContext,
-      applyMutation,
-    )
+    const localPatch = await tryPatchOffsetQueryRows(query, rows, mutations, backfills, queryContext, applyMutation)
     if (localPatch) {
       return localPatch
     }
 
     const backfilledRows = await backfillOffsetQueryRows(query, backfills)
-    return backfilledRows
-      ? Object.freeze({
-          patched: true,
-          query,
-          value: backfilledRows,
-        })
-      : UNPATCHED_RESULT
+    return backfilledRows ? createPatchedRowsResult(query, backfilledRows) : UNPATCHED_RESULT
   }
 
-  let patchedRows = rows
-  let changed = false
-  let needsBackfill = false
-  for (const mutation of mutations) {
-    const metadata = readMutationPatchMetadata(mutation, backfills)
-    if (projectedUpdateCannotAffectQueryResult(query, queryContext, mutation, metadata)) {
-      continue
-    }
-
-    const belongsToHydratedMutation = await hydrateBelongsToMutationRows(
-      mutation,
-      query.belongsToHydrations,
-      backfills,
-    )
-    const hydratedMutation = belongsToHydratedMutation
-      ? await hydrateRelatedMutationRows(
-          belongsToHydratedMutation,
-          query.relatedHydrations,
-          backfills,
-        )
-      : undefined
-    if (!hydratedMutation) {
-      return await tryBackfillCurrentQueryRows(query, backfills)
-    }
-
-    const result = applyMutation(patchedRows, query, hydratedMutation, createMutationRowPatchContext(queryContext, metadata))
-    if (!result.patched) {
-      return await tryBackfillCurrentQueryRows(query, backfills)
-    }
-
-    if ('rows' in result) {
-      changed = true
-      needsBackfill = needsBackfill || result.backfill === true
-      patchedRows = result.rows
-    }
+  const patched = await patchRowWindowMutations(query, rows, mutations, backfills, queryContext, applyMutation, 'standard')
+  if (!patched) {
+    return await tryBackfillCurrentQueryRows(query, backfills)
   }
 
-  if (!changed) {
+  if (!patched.changed) {
     return UNCHANGED_QUERY_RESULT
   }
 
-  if (needsBackfill) {
-    const backfilledRows = await backfillLimitedQueryRows(query, patchedRows, backfills)
-    if (!backfilledRows) {
-      return await tryBackfillCurrentQueryRows(query, backfills)
-    }
-
-    patchedRows = backfilledRows
+  if (patched.needsBackfill) {
+    const backfilledRows = await backfillLimitedQueryRows(query, patched.rows, backfills)
+    return backfilledRows
+      ? createPatchedRowsResult(query, backfilledRows)
+      : await tryBackfillCurrentQueryRows(query, backfills)
   }
 
-  return Object.freeze({
-    patched: true,
-    query,
-    value: patchedRows,
-  })
+  return createPatchedRowsResult(query, patched.rows)
 }
 
 export async function tryPatchWrapperDataRows(
@@ -142,78 +91,12 @@ export async function tryPatchWrapperDataRows(
     return cursorPatch
   }
 
-  let patchedRows = rows
-  let changed = false
-  for (const mutation of mutations) {
-    const metadata = readMutationPatchMetadata(mutation, backfills)
-    if (projectedUpdateCannotAffectQueryResult(query, queryContext, mutation, metadata)) {
-      continue
-    }
-
-    const belongsToHydratedMutation = await hydrateBelongsToMutationRows(
-      mutation,
-      query.belongsToHydrations,
-      backfills,
-    )
-    const hydratedMutation = belongsToHydratedMutation
-      ? await hydrateRelatedMutationRows(
-          belongsToHydratedMutation,
-          query.relatedHydrations,
-          backfills,
-        )
-      : undefined
-    if (!hydratedMutation) {
-      return await tryBackfillCurrentQueryRows(query, backfills)
-    }
-
-    const result = applyMutation(
-      patchedRows,
-      query,
-      hydratedMutation,
-      createMutationRowPatchContext(queryContext, metadata),
-    )
-    if (!result.patched) {
-      return await tryBackfillCurrentQueryRows(query, backfills)
-    }
-
-    if ('rows' in result) {
-      if (result.backfill === true || result.rows.length !== patchedRows.length) {
-        const backfilledRows = await backfillLimitedQueryRows(query, result.rows, backfills)
-        if (!backfilledRows) {
-          return await tryBackfillCurrentQueryRows(query, backfills)
-        }
-
-        changed = true
-        patchedRows = backfilledRows
-        continue
-      }
-
-      changed = true
-      patchedRows = result.rows
-    }
+  const patched = await patchRowWindowMutations(query, rows, mutations, backfills, queryContext, applyMutation, 'wrapper')
+  if (!patched) {
+    return await tryBackfillCurrentQueryRows(query, backfills)
   }
 
-  return changed
-    ? Object.freeze({
-        patched: true,
-        query,
-        value: patchedRows,
-      })
-    : UNCHANGED_QUERY_RESULT
-}
-
-async function tryBackfillCurrentQueryRows(
-  query: DatabaseQueryObservation,
-  backfills: BackfillCache,
-): Promise<PatchQueryResult> {
-  const backfilledRows = await backfillCurrentQueryRows(query, backfills)
-  return backfilledRows
-    ? Object.freeze({
-        patched: true,
-        query,
-        value: backfilledRows,
-      })
-    : UNPATCHED_RESULT
+  return patched.changed ? createPatchedRowsResult(query, patched.rows) : UNCHANGED_QUERY_RESULT
 }
 
 async function tryPatchOffsetQueryRows(
@@ -224,59 +107,78 @@ async function tryPatchOffsetQueryRows(
   queryContext: QueryRowPatchContext,
   applyMutation: RowMutationApplier,
 ): Promise<PatchQueryResult | undefined> {
+  const patched = await patchRowWindowMutations(query, rows, mutations, backfills, queryContext, applyMutation, 'offset')
+  if (!patched) {
+    return undefined
+  }
+
+  return patched.changed ? createPatchedRowsResult(query, patched.rows) : UNCHANGED_QUERY_RESULT
+}
+
+async function patchRowWindowMutations(
+  query: DatabaseQueryObservation,
+  rows: readonly Readonly<Record<string, unknown>>[],
+  mutations: readonly DatabaseMutationEvent[],
+  backfills: BackfillCache,
+  queryContext: QueryRowPatchContext,
+  applyMutation: RowMutationApplier,
+  policy: RowWindowPolicy,
+): Promise<PatchedRowWindow | undefined> {
   let patchedRows = rows
   let changed = false
+  let needsBackfill = false
   for (const mutation of mutations) {
-    const metadata = readMutationPatchMetadata(mutation, backfills)
-    if (projectedUpdateCannotAffectQueryResult(query, queryContext, mutation, metadata)) {
+    const prepared = await prepareRowWindowMutation(query, queryContext, mutation, backfills)
+    if (prepared === null) {
       continue
     }
 
-    const belongsToHydratedMutation = await hydrateBelongsToMutationRows(
-      mutation,
-      query.belongsToHydrations,
-      backfills,
-    )
-    const hydratedMutation = belongsToHydratedMutation
-      ? await hydrateRelatedMutationRows(
-          belongsToHydratedMutation,
-          query.relatedHydrations,
-          backfills,
-        )
-      : undefined
-    if (!hydratedMutation) {
+    if (!prepared || (policy === 'offset' && !canPatchStableWindowMutationWithoutBackfill(query, prepared.mutation, prepared.metadata))) {
       return undefined
     }
 
-    if (!canPatchStableWindowMutationWithoutBackfill(query, hydratedMutation, metadata)) {
-      return undefined
-    }
-
-    const result = applyMutation(
-      patchedRows,
-      query,
-      hydratedMutation,
-      createMutationRowPatchContext(queryContext, metadata),
-    )
+    const result = applyMutation(patchedRows, query, prepared.mutation, createMutationRowPatchContext(queryContext, prepared.metadata))
     if (!result.patched) {
       return undefined
     }
 
-    if ('rows' in result) {
-      if (result.rows.length !== patchedRows.length) {
+    if (!('rows' in result)) {
+      continue
+    }
+
+    if (policy === 'offset' && result.rows.length !== patchedRows.length) {
+      return undefined
+    }
+
+    if (policy === 'wrapper' && (result.backfill === true || result.rows.length !== patchedRows.length)) {
+      const backfilledRows = await backfillLimitedQueryRows(query, result.rows, backfills)
+      if (!backfilledRows) {
         return undefined
       }
 
-      changed = true
+      patchedRows = backfilledRows
+    } else {
       patchedRows = result.rows
     }
+
+    changed = true
+    needsBackfill = needsBackfill || result.backfill === true
   }
 
-  return changed
-    ? Object.freeze({
-        patched: true,
-        query,
-        value: patchedRows,
-      })
-    : UNCHANGED_QUERY_RESULT
+  return { rows: patchedRows, changed, needsBackfill }
+}
+
+function createPatchedRowsResult(
+  query: DatabaseQueryObservation,
+  rows: readonly Readonly<Record<string, unknown>>[],
+): PatchQueryResult {
+  return Object.freeze({ patched: true, query, value: rows })
+}
+
+async function tryBackfillCurrentQueryRows(
+  query: DatabaseQueryObservation,
+  backfills: BackfillCache,
+): Promise<PatchQueryResult> {
+  const backfilledRows = await backfillCurrentQueryRows(query, backfills)
+  return backfilledRows ? createPatchedRowsResult(query, backfilledRows) : UNPATCHED_RESULT
 }

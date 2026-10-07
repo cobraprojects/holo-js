@@ -163,15 +163,16 @@ Relation queries work the same way. A query that returns `Post.query().with('tag
 table, and the tag table reads performed by eager loading. Attaching a tag through a Holo mutation refreshes consumers
 of that query after the write commits.
 
-Aggregates are regular query results. If a realtime query returns `count()`, `sum(...)`, `avg(...)`, or relation
-aggregate data, Holo reruns the query after matching writes and sends the recalculated result.
+Aggregates are regular query results. Matching committed writes update `count()`, `sum(...)`, `avg(...)`, and relation
+aggregate data through their own patch and refill policies. When a result cannot be patched safely, Holo reruns the
+original query and sends its recalculated result.
 
 ## Pagination
 
 Realtime pagination uses the same result type as the normal Holo paginator. If the realtime query returns
 `paginate(...)`, the next snapshot contains the refreshed `data` and `meta` for that page. Page-number pagination can
-shift when new records are inserted before the current page, because realtime reruns the same query and returns the
-current state of that page.
+shift when new records are inserted before the current page. Stable updates patch the page locally; membership or
+ordering changes fetch the bounded current page. Holo reruns the original query when safe patching is unavailable.
 
 Use cursor pagination for realtime feeds and large lists:
 
@@ -188,7 +189,10 @@ export const feed = query({
 ```
 
 Cursor pagination keeps the result window anchored by the cursor, so live updates do not behave like a moving
-page-number window.
+page-number window. Cursor refills retain a bounded lookahead so deletions preserve the next-page boundary.
+Selected rows expose only selected fields after mutations, and hidden-field updates leave visible results unchanged.
+Standard rows, paginator wrappers, cursor windows, offset windows, aggregates, and relations retain distinct patch
+and refill policies; unsafe shapes fall back to the original query.
 
 ## Access rules
 
