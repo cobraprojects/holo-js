@@ -6,12 +6,15 @@ Record commitment means the enclosing database transaction has committed, not me
 
 Successful return types remain unchanged. A single failure uses a native error with its cause preserved, while primary and compensation failures use `AggregateError`; post-commit errors explicitly report that the Media result remains committed. A new exported error type is deferred unless callers need to branch programmatically on commitment.
 
-Attachment and replacement are implemented through the private Media mutation module. It starts a
+Attachment, replacement, regeneration, and deletion are implemented through the private Media mutation module. It starts a
 write transaction, retains rollback compensation until the enclosing transaction completes, and
 defers obsolete-file cleanup and queued dispatch until commit. A failed post-commit effect retains
 the durable attachment; cleanup continues across obsolete files and dispatch is attempted even when
 cleanup fails. Native causes retain the failures. Database rollback callback failures preserve the
 original transaction failure alongside compensation failures through `AggregateError`.
 
-Regeneration and explicit deletion remain approved pending work. Their existing mutation paths do
-not yet provide the complete ownership and failure guarantees described by this decision.
+Regeneration snapshots overwritten conversion files before writing and restores them on operation
+failure or enclosing rollback. Obsolete conversions are removed only after commitment. Explicit
+deletion commits the record removal before removing its stored files; a cleanup failure retains the
+deletion and reports commitment. These paths use the same private mutation owner and compensation
+policy, including visible failed restoration. Queued regeneration dispatch runs after commitment.

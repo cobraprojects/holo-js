@@ -145,6 +145,12 @@ Event helpers return:
 
 Helpers leave channels automatically on unmount.
 
+## Presence membership
+
+Presence helpers maintain readonly membership snapshots through React effects, Vue scopes and refs, and Svelte stores. Each join or leave delivers its own snapshot to `onHere`, even when framework rendering batches updates. Pausing stops updates until listening resumes; native unmount or scope disposal cleans up the subscription.
+
+Member comparison preserves object identity and JSON equivalence. Framework helpers remove the first equivalent member, preserve remaining duplicates, and retain the current array when no member matches. Core wire-event removal removes all equivalent members. Custom subscriptions remain compatible through their public `here`, `joining`, and `leaving` methods.
+
 ## Direct Flux API
 
 ```ts

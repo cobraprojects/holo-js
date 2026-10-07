@@ -1072,7 +1072,7 @@ describe('@holo-js/media', () => {
     await expect(Storage.disk(media.record.disk).missing(media.record.path)).resolves.toBe(true)
   })
 
-  it('keeps the model and its media when attachment cleanup fails', async () => {
+  it('retains model and media deletion when postcommit file cleanup fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -1088,11 +1088,11 @@ describe('@holo-js/media', () => {
     }).toMediaCollection())
     storageState.failDelete(second.record.disk, second.record.path)
 
-    await expect(post.delete()).rejects.toThrow(`delete failed for ${second.record.disk}`)
+    await expect(post.delete()).rejects.toThrow('committed')
 
-    await expect(Post.find(post.id)).resolves.not.toBeUndefined()
-    expect(await Media.query().count()).toBe(2)
-    await expect(Storage.disk(first.record.disk).exists(first.record.path)).resolves.toBe(true)
+    await expect(Post.find(post.id)).resolves.toBeUndefined()
+    expect(await Media.query().count()).toBe(0)
+    await expect(Storage.disk(first.record.disk).exists(first.record.path)).resolves.toBe(false)
     await expect(Storage.disk(second.record.disk).exists(second.record.path)).resolves.toBe(true)
   })
 
@@ -1908,7 +1908,7 @@ describe('@holo-js/media', () => {
     expect(storageState.getDiskStore('public').has(current!.record.generated_conversions!.thumb!.path)).toBe(true)
   })
 
-  it('preserves the original media row when a conversion delete fails during item deletion', async () => {
+  it('retains committed deletion when conversion file cleanup fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -1942,11 +1942,11 @@ describe('@holo-js/media', () => {
     expect(thumbPath).toBeTruthy()
     storageState.failDelete('public', thumbPath!)
 
-    await expect(media.delete()).rejects.toThrow('delete failed for public:')
+    await expect(media.delete()).rejects.toThrow('committed')
 
-    expect(storageState.getDiskStore('public').has(media.record.path)).toBe(true)
+    expect(storageState.getDiskStore('public').has(media.record.path)).toBe(false)
     expect(storageState.getDiskStore('public').has(thumbPath!)).toBe(true)
-    expect(await Media.query().count()).toBe(1)
+    expect(await Media.query().count()).toBe(0)
   })
 
   it('retains committed latest media when overflow cleanup fails', async () => {

@@ -3665,7 +3665,7 @@ export default {
         if (driver !== 'sqlite') {
           await symlink(resolve(import.meta.dirname, `../../db-${driver}`), join(root, `node_modules/@holo-js/db-${driver}`))
           const connection = driver === 'postgres'
-            ? { driver, host: '/tmp', username: 'postgres', database: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_DATABASE }
+            ? { driver, host: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_HOST ?? '/tmp', port: Number(process.env.HOLO_AUTH_REDEMPTION_POSTGRES_PORT ?? 5432), username: 'postgres', database: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_DATABASE }
             : { driver, host: '127.0.0.1', port: Number(process.env.HOLO_AUTH_REDEMPTION_MYSQL_PORT ?? 33183), username: 'root', database: process.env.HOLO_AUTH_REDEMPTION_MYSQL_DATABASE }
           await writeFile(join(root, 'config/database.ts'), `
     import { defineDatabaseConfig } from ${databaseEntry}

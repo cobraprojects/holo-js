@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useSyncExternalStore } from 'react'
-import { getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
+import { fluxInternals, getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
 import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
 type ManifestEventName<TManifest extends GeneratedBroadcastManifest>
@@ -102,31 +102,6 @@ function useLatestRef<TValue>(value: TValue): { current: TValue } {
 
 function serializeEventDependency<TEvent extends string>(events: TEvent | readonly TEvent[]): string {
   return Array.isArray(events) ? events.map(String).join('\0') : String(events)
-}
-
-function memberKey<TMember>(member: TMember): string {
-  /* v8 ignore next -- supported presence members are JSON-compatible, but keep a defensive fallback */
-  return JSON.stringify(member) ?? String(member)
-}
-
-function appendPresenceMember<TMember>(
-  members: readonly TMember[],
-  member: TMember,
-): readonly TMember[] {
-  return Object.freeze([...members, member])
-}
-
-function removePresenceMember<TMember>(
-  members: readonly TMember[],
-  member: TMember,
-): readonly TMember[] {
-  const key = memberKey(member)
-  const index = members.findIndex(candidate => Object.is(candidate, member) || memberKey(candidate) === key)
-  if (index < 0) {
-    return members
-  }
-
-  return Object.freeze(members.filter((_, candidateIndex) => candidateIndex !== index))
 }
 
 function useControls(
@@ -305,11 +280,11 @@ export function useFluxPresence<
       }
     }).joining((member) => {
       if (active) {
-        updateMembers(appendPresenceMember(membersRef.current, member as TResolvedMember))
+        updateMembers(fluxInternals.appendPresenceMember(membersRef.current, member as TResolvedMember))
       }
     }).leaving((member) => {
       if (active) {
-        updateMembers(removePresenceMember(membersRef.current, member as TResolvedMember))
+        updateMembers(fluxInternals.removePresenceMember(membersRef.current, member as TResolvedMember))
       }
     }).listen()
     onUnmountRef.current?.(cleanup)

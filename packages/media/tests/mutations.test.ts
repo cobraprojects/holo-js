@@ -169,3 +169,148 @@ it('retains the outer failure and file compensation failure together', async () 
   expect(failure.errors[1]).toBeInstanceOf(Error)
   expect(await post.getMedia('avatars')).toEqual([])
 })
+
+it('restores regenerated files when persistence fails after generation', async () => {
+  let regenerating = false
+  setMediaConversionExecutor({
+    async generate() {
+      if (regenerating) await createSchemaService(DB.connection()).dropTable('media')
+      return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: 'thumb.txt' }
+    },
+  })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Regeneration failure' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  const path = item.record.generated_conversions.thumb!.path
+  regenerating = true
+  await expect(item.regenerate()).rejects.toThrow()
+  await expect(Storage.disk('public').get(path)).resolves.toBe('old')
+  expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(item.record.generated_conversions)
+})
+
+it('retains committed deletion when file cleanup fails and preserves files on outer rollback', async () => {
+  const post = await Post.create({ title: 'Deletion' })
+  const first = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  await expect(DB.transaction(async () => {
+    await first.delete()
+    await expect(Storage.disk('public').get(first.record.path)).resolves.toBe('original')
+    throw new Error('outer deletion rollback')
+  })).rejects.toThrow('outer deletion rollback')
+  const restored = (await post.getFirstMedia('avatars'))!
+  await rm(join(directory, restored.record.path), { force: true })
+  await mkdir(join(directory, restored.record.path), { recursive: true })
+  await expect(restored.delete()).rejects.toThrow('committed')
+  expect(await post.getMedia('avatars')).toEqual([])
+})
+
+it('preserves deletion files and record when the database operation fails before commit', async () => {
+  const post = await Post.create({ title: 'Deletion failure' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  await expect(DB.transaction(async () => {
+    await createSchemaService(DB.connection()).dropTable('media')
+    await item.delete()
+  })).rejects.toThrow()
+  await expect(Storage.disk('public').get(item.record.path)).resolves.toBe('original')
+  expect((await post.getMedia('avatars')).map(current => current.record.id)).toEqual([item.record.id])
+})
+
+it('retains regenerated files and record when obsolete conversion cleanup fails after commit', async () => {
+  let regenerating = false
+  setMediaConversionExecutor({ async generate() {
+    return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: regenerating ? 'new.txt' : 'old.txt' }
+  } })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars')],
+  })
+  setMediaPathGenerator({ originalPath: () => 'original.txt', conversionPath: ({ generatedFileName, fileName }) => generatedFileName ?? fileName })
+  const post = await ConvertedPost.create({ title: 'Cleanup failure' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  const oldPath = item.record.generated_conversions.thumb!.path
+  await rm(join(directory, oldPath), { force: true })
+  await mkdir(join(directory, oldPath), { recursive: true })
+  regenerating = true
+  await expect(item.regenerate()).rejects.toThrow('committed')
+  const current = (await post.getFirstMedia('avatars'))!
+  expect(current.record.generated_conversions.thumb!.fileName).toBe('new.txt')
+  await expect(Storage.disk('public').get(current.record.generated_conversions.thumb!.path)).resolves.toBe('new')
+})
+
+it('exposes regeneration failure together with failed conversion restoration', async () => {
+  let regenerating = false
+  const primary = new Error('second conversion failed')
+  let thumbPath = ''
+  setMediaConversionExecutor({ async generate({ conversion: selected }) {
+    if (regenerating && selected.name === 'card') {
+      await rm(join(directory, thumbPath), { force: true })
+      await mkdir(join(directory, thumbPath), { recursive: true })
+      throw primary
+    }
+    return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: `${selected.name}.txt` }
+  } })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars'), conversion('card').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Failed restoration' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  const previous = item.record.generated_conversions
+  thumbPath = previous.thumb!.path
+  regenerating = true
+  const failure = await item.regenerate().catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(AggregateError)
+  if (!(failure instanceof AggregateError)) throw new Error('Expected aggregated regeneration failure')
+  expect(failure.errors[0]).toBe(primary)
+  expect(failure.errors[1]).toBeInstanceOf(Error)
+  expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
+})
+
+it('restores conversion bytes and metadata when enclosing regeneration rolls back', async () => {
+  let regenerating = false
+  setMediaConversionExecutor({ async generate() {
+    return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: 'thumb.txt' }
+  } })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Outer regeneration' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  const previous = item.record.generated_conversions
+  regenerating = true
+  await expect(DB.transaction(async () => {
+    await item.regenerate()
+    await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('new')
+    throw new Error('outer regeneration rollback')
+  })).rejects.toThrow('outer regeneration rollback')
+  await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('old')
+  expect(item.record.generated_conversions).toEqual(previous)
+  expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
+})
+
+it('retains regenerated conversions when queued regeneration dispatch fails after commit', async () => {
+  let regenerating = false
+  setMediaConversionExecutor({ async generate() {
+    return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: 'thumb.txt' }
+  } })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars'), conversion('card').performOnCollections('avatars').queued()],
+  })
+  const post = await ConvertedPost.create({ title: 'Regeneration dispatch' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  configureQueueRuntime({
+    config: {
+      default: 'database', failed: false,
+      connections: { database: { driver: 'database', connection: 'default', table: 'missing_jobs', queue: 'media' } },
+    },
+    ...createQueueDbRuntimeOptions(),
+  })
+  regenerating = true
+  await expect(item.regenerate()).rejects.toThrow('committed')
+  const current = (await post.getFirstMedia('avatars'))!
+  await expect(Storage.disk('public').get(current.record.generated_conversions.thumb!.path)).resolves.toBe('new')
+})

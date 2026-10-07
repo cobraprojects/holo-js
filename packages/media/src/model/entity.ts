@@ -3,6 +3,7 @@ import { getMediaDefinition } from '../registry'
 import { Media } from './Media'
 import { MediaAdder, type MediaSourceInput } from './adder'
 import { MediaItem } from './item'
+import { deleteMediaItems } from './mutation'
 import type { TableDefinition } from '@holo-js/db'
 
 type MediaEntityPrototype = Entity<TableDefinition> & {
@@ -35,9 +36,7 @@ export async function clearEntityMedia(
   }
 
   const rows = await query.get()
-  for (const row of rows) {
-    await new MediaItem(row, entity).delete()
-  }
+  await deleteMediaItems(rows.map(row => new MediaItem(row, entity)), entity)
 }
 
 function getOwnerKey(entity: Entity<TableDefinition>): string | null {
