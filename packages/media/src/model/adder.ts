@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import { readFile, realpath } from 'node:fs/promises'
@@ -8,8 +9,10 @@ import { tmpdir } from 'node:os'
 import { basename, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { Storage } from '@holo-js/storage/runtime'
-import type { Entity, TableDefinition } from '@holo-js/db'
+import type { Entity, ModelRecord, TableDefinition } from '@holo-js/db'
 import {
+  getMediaPathGenerator,
+  type MediaConversionExecutorSource,
   requireMediaDefinition,
   resolveMediaCollection,
 } from '../registry'
@@ -22,8 +25,17 @@ import {
   toBinaryContent,
   type BinaryContent,
 } from '../runtime/binary'
-import { attachMedia } from './mutation'
-import type { MediaItem } from './item'
+import type { NormalizedMediaCollectionDefinition } from '../definitions/collections'
+import type { NormalizedMediaDefinition } from '../definitions/config'
+import { dispatchQueuedMediaConversionsForModel } from '../queue'
+import { generateStoredConversions, resolveQueuedConversionNames } from './conversions'
+import { Media } from './Media'
+import { removeObsoleteFiles, runMediaMutation } from './mutation'
+import { MediaItem } from './item'
+
+type MediaOwner<TEntity extends Entity<TableDefinition>> = TEntity & {
+  getMedia(collectionName?: string): Promise<MediaItem[]>
+}
 
 export type MediaSourceInput
   = | string
@@ -710,4 +722,93 @@ export class MediaAdder<
       disk: this.state.disk ?? collection.disk ?? resolveImplicitDiskName(),
     })
   }
+}
+
+async function attachMedia<
+  TEntity extends Entity<TableDefinition>,
+  TCollectionName extends string,
+  TConversionName extends string,
+>(options: {
+  readonly owner: TEntity
+  readonly collectionName: TCollectionName
+  readonly collection: NormalizedMediaCollectionDefinition
+  readonly definition: NormalizedMediaDefinition
+  readonly source: Omit<MediaConversionExecutorSource, 'uuid'> & { readonly name: string }
+  readonly disk: string
+}): Promise<MediaItem<TCollectionName, TConversionName, TEntity>> {
+  const { owner, collection, source, disk } = options
+  const ownerDefinition = owner.getRepository().definition
+  const ownerId = String(owner.get(ownerDefinition.primaryKey as never))
+  const uuid = randomUUID()
+  const conversionsDisk = collection.conversionsDisk ?? disk
+  const path = getMediaPathGenerator().originalPath({ uuid, fileName: source.fileName, extension: source.extension, collection })
+  const obsolete: MediaItem[] = []
+  return await runMediaMutation({
+    committedMessage: '[Holo Media] Attachment remains committed; post-commit cleanup or conversion dispatch failed.',
+    afterRollback: () => { owner.forgetRelation('media') },
+    operation: async (mutation) => {
+      const existing = collection.singleFile
+        ? await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
+        : []
+      await mutation.put(disk, path, source.contents)
+      const generatedConversions = await generateStoredConversions({
+        definition: options.definition,
+        collection,
+        conversionsDisk,
+        source: { ...source, uuid },
+        mutation,
+      })
+      const max = await Media.query()
+        .where('model_type', ownerDefinition.morphClass)
+        .where('model_id', ownerId)
+        .where('collection_name', options.collectionName)
+        .max('order_column')
+      const media = await Media.create({
+        uuid,
+        model_type: ownerDefinition.morphClass,
+        model_id: ownerId,
+        collection_name: options.collectionName,
+        name: source.name,
+        file_name: source.fileName,
+        disk,
+        conversions_disk: conversionsDisk,
+        mime_type: source.mimeType ?? null,
+        extension: source.extension ?? null,
+        size: source.size,
+        path,
+        generated_conversions: generatedConversions,
+        order_column: (max ?? 0) + 1,
+      } as Partial<ModelRecord<typeof Media.definition.table>>)
+      for (const item of existing) await item.getEntity().delete()
+      owner.forgetRelation('media')
+      obsolete.push(...existing)
+      if (typeof collection.onlyKeepLatest === 'number') {
+        const items = await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
+        const overflow = items.slice(0, Math.max(0, items.length - collection.onlyKeepLatest))
+        for (const item of overflow) await item.getEntity().delete()
+        obsolete.push(...overflow)
+        owner.forgetRelation('media')
+      }
+      return new MediaItem<TCollectionName, TConversionName, TEntity>(media, owner)
+    },
+    afterCommit: [
+      async (item) => {
+        await removeObsoleteFiles(obsolete, [
+          { disk, path },
+          ...Object.values(item.record.generated_conversions).map(conversion => ({
+            disk: conversion.disk ?? conversionsDisk,
+            path: conversion.path,
+          })),
+        ])
+      },
+      async (item) => {
+        const media = item.getEntity()
+        await dispatchQueuedMediaConversionsForModel({
+          mediaId: media.get('id'),
+          conversionNames: resolveQueuedConversionNames({ definition: options.definition, collectionName: collection.name }),
+        }, async () => { await media.refresh() })
+      },
+    ],
+    afterEffects: () => { owner.forgetRelation('media') },
+  })
 }
