@@ -92,6 +92,7 @@ export async function removeObsoleteFiles(items: readonly MediaItem[], retained:
 }
 
 export async function deleteMediaItems(items: readonly MediaItem[], owner?: Entity<TableDefinition>): Promise<void> {
+  if (items.length === 0) return
   await runMediaMutation({
     committedMessage: '[Holo Media] Deletion remains committed; post-commit file cleanup failed.',
     operation: async () => {
