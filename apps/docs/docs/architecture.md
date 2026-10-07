@@ -77,7 +77,7 @@ Selected cursor results include only their selected fields, including after inse
 ## Approved ownership designs
 
 ::: info Pending implementation
-Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, and Realtime row-window orchestration are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, Realtime row-window orchestration, and Media attachment/replacement ownership are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
@@ -89,7 +89,7 @@ These changes deepen existing modules by concentrating behavior behind their int
 | Queue reserved job (implemented) | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
 | Authenticated session transition (implemented) | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
 | Realtime row window (implemented) | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
-| Media mutation | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
+| Media mutation (attachment/replacement implemented; regeneration/deletion pending) | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
 | Flux presence membership | Shared membership rules with native framework adapters | Preserve inference, per-event snapshots, and distinct first-match versus all-match removal policies |
 
 ### One-time auth token redemption
@@ -118,7 +118,16 @@ Developer-controlled other-device logout is documented in [Session And Cookies](
 
 Realtime keeps its existing internal interfaces and distinct window policies. Shared orchestration stays private; the refactor must preserve result correctness and query budgets.
 
-Media commitment means the enclosing database transaction has committed, not merely that a record save returned. Before commitment, failures trigger file compensation. After commitment, obsolete-file cleanup or queued dispatch failure retains the new record and files and reports that committed outcome. Native errors preserve individual causes; `AggregateError` preserves primary and compensation failures. Successful return types remain unchanged.
+The private Media mutation module owns attachment and replacement ordering, database commitment,
+file compensation, and post-commit outcomes. It uses the database's existing transaction hooks:
+record saves do not establish commitment until the enclosing transaction commits. Attachment
+failure and outer rollback compensate file writes; obsolete-file cleanup and queued dispatch run
+after commitment and retain committed records and new files when they fail.
+
+Native error causes retain individual failures, and `AggregateError` retains the primary transaction
+failure together with failed rollback compensation. The successful Media interface remains unchanged.
+Regeneration and explicit deletion ownership are pending; this delivered attachment behavior is
+recorded in [ADR-0011](https://github.com/cobraprojects/holo-js/blob/main/docs/adr/0011-media-mutation-commit-and-compensation.md).
 
 ### Flux adapter integration
 
