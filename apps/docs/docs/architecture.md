@@ -72,7 +72,7 @@ Run it through `bun run test:dependency-policy`.
 ## Approved ownership designs
 
 ::: info Pending implementation
-Optional capability lifetime ownership, email-verification redemption, and Queue finalization are implemented. Password-reset redemption and the remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+Optional capability lifetime ownership, email-verification redemption, Queue finalization, and authenticated session transitions are implemented. Password-reset redemption and the remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
@@ -82,7 +82,7 @@ These changes deepen existing modules by concentrating behavior behind their int
 | Auth token redemption (email verification implemented; password reset pending) | One-time claim and user mutation coordination | One winner per verification or reset token; participating database changes roll back together |
 | Optional capability lifetime (implemented) | Initialization, owned-resource disposal, and restoration | Continue cleanup after failures, collect errors, and preserve live external bindings |
 | Queue reserved job (implemented) | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
-| Authenticated session transition | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
+| Authenticated session transition (implemented) | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
 | Realtime row window | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
 | Media mutation | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
 | Flux presence membership | Shared membership rules with native framework adapters | Preserve inference, per-event snapshots, and distinct first-match versus all-match removal policies |
