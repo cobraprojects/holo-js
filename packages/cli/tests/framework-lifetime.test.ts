@@ -411,7 +411,7 @@ it('releases session signals when initial preparation fails', async () => {
   expect(process.listeners('SIGTERM')).toEqual(listeners.SIGTERM)
 })
 
-it('delivers cancellation to a project preparer and waits for it to settle', async () => {
+it.each(['loading', 'preparation'] as const)('honors shutdown during project preparer %s', async (phase) => {
   const root = await createProject()
   await writeFile(join(root, 'config/app.ts'), "export default { plugins: ['shutdown-plugin'] }")
   const pluginRoot = join(root, 'node_modules/shutdown-plugin')
@@ -420,27 +420,35 @@ it('delivers cancellation to a project preparer and waits for it to settle', asy
     name: 'shutdown-plugin', type: 'module', holo: { plugin: './plugin.mjs' },
   }))
   await writeFile(join(pluginRoot, 'plugin.mjs'), "export default { id: 'shutdown', contributes: { project: { prepare: './prepare.mjs' } } }")
-  await writeFile(join(pluginRoot, 'prepare.mjs'), `export default {
+  await writeFile(join(pluginRoot, 'prepare.mjs'), `${phase === 'loading' ? "process.emit('SIGTERM');\n" : ''}export default {
     apiVersion: 1,
     async prepare(context) {
       context.logger.info('preparation started')
-      await new Promise(resolve => context.signal.addEventListener('abort', resolve, { once: true }))
+      if (!context.signal.aborted) await new Promise(resolve => context.signal.addEventListener('abort', resolve, { once: true }))
       context.logger.info('preparation cancelled')
       return { kind: 'prepared' }
     }
   }`)
   const io = createIo(root)
   let output = ''
-  io.stdout.on('data', chunk => { output += String(chunk) })
+  const preparationStarted = new Promise<void>((resolvePromise) => {
+    io.stdout.on('data', (chunk) => {
+      output += String(chunk)
+      if (output.includes('preparation started')) resolvePromise()
+    })
+  })
   const listeners = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }
   const spawnProcess = vi.fn(spawn) as unknown as typeof spawn
   const createWatcher = vi.fn()
   const command = runProjectDevServer(io, root, spawnProcess, createWatcher)
   try {
-    await vi.waitFor(() => expect(output).toContain('preparation started'))
-    process.listeners('SIGTERM').find(listener => !listeners.SIGTERM.includes(listener))?.('SIGTERM')
+    if (phase === 'preparation') {
+      await preparationStarted
+      process.listeners('SIGTERM').find(listener => !listeners.SIGTERM.includes(listener))?.('SIGTERM')
+    }
     await expect(command).resolves.toBeUndefined()
-    expect(output).toContain('preparation cancelled')
+    if (phase === 'preparation') expect(output).toContain('preparation cancelled')
+    else expect(output).toBe('')
     expect(spawnProcess).not.toHaveBeenCalled()
     expect(createWatcher).not.toHaveBeenCalled()
     expect(process.listeners('SIGINT')).toEqual(listeners.SIGINT)

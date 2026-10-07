@@ -483,6 +483,7 @@ async function invokePreparer(
 
   let result
   try {
+    options.signal?.throwIfAborted()
     result = await preparer.preparer.prepare(context)
     if (isRecord(result) && result.kind === 'retry-full') {
       if (typeof result.reason !== 'string' || !result.reason.trim()) {
@@ -491,6 +492,7 @@ async function invokePreparer(
       if (run.kind !== 'incremental') {
         throw hostError('HOLO_PLUGIN_PREPARE_INVALID_RESULT', preparer, 'retry-full is valid only after an incremental run.')
       }
+      options.signal?.throwIfAborted()
       result = await preparer.preparer.prepare({
         ...context,
         run: { kind: 'full', command: 'dev', reason: 'plugin-requested' },
@@ -499,6 +501,9 @@ async function invokePreparer(
   } catch (error) {
     if (error instanceof HoloProjectPrepareError) {
       throw attributedError(preparer, error.failure)
+    }
+    if (options.signal?.aborted) {
+      throw hostError('HOLO_PLUGIN_PREPARE_COMMIT_FAILED', preparer, 'Project preparation was cancelled.')
     }
     throw hostError(
       'HOLO_PLUGIN_PREPARE_EXECUTION_FAILED',

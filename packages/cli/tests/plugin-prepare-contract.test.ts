@@ -513,15 +513,15 @@ describe('plugin project preparation contract', () => {
       .toBe('039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81')
   })
 
-  it('honors an aborted signal before committing artifacts or ownership', async () => {
+  it('honors an aborted signal before invoking preparation or committing artifacts', async () => {
     const root = await createProject()
     const controller = new AbortController()
     controller.abort()
-    let receivedSignal: AbortSignal | undefined
+    let preparationStarted = false
     mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
       apiVersion: 1,
-      prepare: (context) => {
-        receivedSignal = context.signal
+      prepare: () => {
+        preparationStarted = true
         return {
           kind: 'prepared',
           generatedArtifacts: [{ path: 'registry.ts', contents: 'registry' }],
@@ -536,10 +536,32 @@ describe('plugin project preparation contract', () => {
     })).rejects.toMatchObject({
       failure: { code: 'HOLO_PLUGIN_PREPARE_COMMIT_FAILED' },
     })
-    expect(receivedSignal).toBe(controller.signal)
+    expect(preparationStarted).toBe(false)
     await expectMissing(join(root, '.holo-js/generated/demo/registry.ts'))
     await expectMissing(join(root, '.holo-js/generated/.plugins/demo.json'))
     await expectMissing(join(root, 'app/route.ts'))
+  })
+
+  it('redacts unstructured preparer failures during cancellation', async () => {
+    const root = await createProject()
+    const controller = new AbortController()
+    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+      apiVersion: 1,
+      prepare: () => {
+        controller.abort()
+        throw new Error('sensitive credential')
+      },
+    })])
+
+    await expect(runFull(root, {
+      run: { kind: 'full', command: 'dev', reason: 'initial' },
+      signal: controller.signal,
+    })).rejects.toMatchObject({
+      failure: {
+        code: 'HOLO_PLUGIN_PREPARE_COMMIT_FAILED',
+        message: expect.not.stringContaining('sensitive credential'),
+      },
+    })
   })
 
   it('rolls back installed artifacts when preparation is aborted during commit', async () => {
