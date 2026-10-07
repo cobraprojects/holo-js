@@ -11049,12 +11049,7 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('error as svelteKitError')
     expect(generatedServerHooks).toContain('cause.name !== \'AuthorizationError\'')
     expect(generatedServerHooks).toContain('svelteKitError(cause.decision.status, cause.message)')
-    expect(generatedServerHooks).toContain('serializeHoloValidationException')
-    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.serializeValidationException(cause)')
-    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.mapValidationActionResponse(event, response)')
-    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.isApiEvent(event)')
-    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.rememberValidationActionFailure(input.event, validationPayload)')
-    expect(generatedServerHooks).toContain('export const handleError = holoHandleError')
+    expect(generatedServerHooks).toContain('export const handleError = holoHooks.handleError')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
 
     // Legacy .user.ts files are deleted, not left as empty artifacts.

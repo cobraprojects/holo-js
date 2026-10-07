@@ -1,5 +1,5 @@
 import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent, type SvelteKitCookieOptions } from '@holo-js/adapter-shared/sveltekit/request-context'
-import { error as svelteKitError } from '@sveltejs/kit'
+import { error as svelteKitError, type Handle, type HandleServerError } from '@sveltejs/kit'
 import {
   createHoloFrameworkAdapter,
   type HoloAdapterProject,
@@ -44,8 +44,12 @@ const svelteKitAdapter = createHoloFrameworkAdapter<SvelteKitHoloOptions>({
 })
 const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let validationExceptionThrowerRegistered = false
-const validationActionFailures = new WeakMap<object, SerializedValidationException>()
-const validationActionFailureKeys = new Map<string, SerializedValidationException>()
+type ValidationRequestState = {
+  active: boolean
+  payload?: SerializedValidationException
+}
+
+const validationRequests = new WeakMap<object, ValidationRequestState>()
 
 function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
@@ -241,53 +245,19 @@ function createValidationActionRedirectResponse(
   })
 }
 
-function getValidationActionFailureKey(event: SvelteKitRequestEvent): string | undefined {
-  if (!event.url) {
-    return undefined
-  }
-
-  return `${event.request.method?.toUpperCase() ?? 'GET'} ${event.url.href}`
-}
-
 function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedValidationException | undefined {
-  const key = getValidationActionFailureKey(event)
-  const eventPayload = validationActionFailures.get(event)
-  if (eventPayload) {
-    validationActionFailures.delete(event)
-    validationActionFailures.delete(event.request)
-    if (key) {
-      validationActionFailureKeys.delete(key)
-    }
-    return eventPayload
-  }
-
-  const requestPayload = validationActionFailures.get(event.request)
-  if (requestPayload) {
-    validationActionFailures.delete(event)
-    validationActionFailures.delete(event.request)
-    if (key) {
-      validationActionFailureKeys.delete(key)
-    }
-    return requestPayload
-  }
-
-  if (!key) {
-    return undefined
-  }
-
-  const keyedPayload = validationActionFailureKeys.get(key)
-  validationActionFailureKeys.delete(key)
-  return keyedPayload
+  const state = validationRequests.get(event.request)
+  const payload = state?.payload
+  if (state) state.payload = undefined
+  return payload
 }
 
 function rememberValidationActionFailure(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
+  const state = validationRequests.get(event.request)
+  if (state && !state.active) return
   flashValidationPayload(event, payload)
-  validationActionFailures.set(event, payload)
-  validationActionFailures.set(event.request, payload)
-  const key = getValidationActionFailureKey(event)
-  if (key) {
-    validationActionFailureKeys.set(key, payload)
-  }
+  if (state) state.payload = payload
+  else validationRequests.set(event.request, { active: true, payload })
 }
 
 function registerValidationExceptionThrower(): void {
@@ -435,6 +405,44 @@ export function runWithSvelteKitRequestEvent<TValue>(
   })
 }
 
+export function createSvelteKitHoloHooks(hooks: {
+  readonly handle: Handle
+  readonly handleError?: HandleServerError
+}): {
+  readonly handle: Handle
+  readonly handleError: HandleServerError
+} {
+  return {
+    handle: ({ event, resolve }) => runWithSvelteKitRequestEvent(event, async () => {
+      const state: ValidationRequestState = { active: true }
+      validationRequests.set(event.request, state)
+      try {
+        const response = await hooks.handle({ event, resolve })
+        return await mapValidationActionResponse(event, response)
+      } catch (error) {
+        const payload = serializeValidationException(error)
+        if (payload && isApiEvent(event)) {
+          return Response.json(payload, { status: payload.status })
+        }
+        throw error
+      } finally {
+        state.active = false
+        state.payload = undefined
+      }
+    }),
+    handleError: async (input) => {
+      const payload = serializeValidationException(input.error)
+      if (payload) {
+        const state = validationRequests.get(input.event.request)
+        if (state?.active) rememberValidationActionFailure(input.event, payload)
+        return payload
+      }
+      if (hooks.handleError) return hooks.handleError(input)
+      return { message: input.error instanceof Error ? input.error.message : 'Internal server error' }
+    },
+  }
+}
+
 export async function createSvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap>(
   options: SvelteKitHoloOptions = {},
 ): Promise<SvelteKitHoloProject<TCustom>> {
@@ -466,7 +474,6 @@ export const adapterSvelteKitInternals = {
   filterFlashValue,
   filterFlashValues,
   flashValidationPayload,
-  getValidationActionFailureKey,
   isPlainObject,
   isSensitiveFlashKey,
   isSerializedValidationException,
