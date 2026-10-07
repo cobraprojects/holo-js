@@ -2544,7 +2544,7 @@ export default defineSessionConfig({
       createdCorsConfig: true,
       createdUserModel: true,
     })
-    expect(initial.createdMigrationFiles).toHaveLength(7)
+    expect(initial.createdMigrationFiles).toHaveLength(8)
     expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('AUTH_GOOGLE_CLIENT_ID')
 
     await expect(projectInternals.installAuthIntoProject(projectRoot, { workos: true, clerk: true })).resolves.toEqual({
