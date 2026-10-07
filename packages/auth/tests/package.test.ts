@@ -524,6 +524,20 @@ class InMemoryTokenStore implements AuthTokenStore {
 }
 
 class InMemoryEmailVerificationTokenStore implements EmailVerificationTokenStore {
+  async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+    const stored = this.records.get(record.id)
+    if (!stored
+      || stored.provider !== record.provider
+      || stored.userId !== record.userId
+      || stored.email !== record.email
+      || stored.tokenHash !== record.tokenHash
+      || stored.createdAt.getTime() !== record.createdAt.getTime()
+      || stored.expiresAt.getTime() !== record.expiresAt.getTime()
+      || stored.expiresAt.getTime() <= Date.now()) return null
+    this.records.delete(record.id)
+    return operation()
+  }
+
   readonly records = new Map<string, EmailVerificationTokenRecord>()
 
   async create(record: EmailVerificationTokenRecord): Promise<void> {
@@ -2542,6 +2556,23 @@ describe('@holo-js/auth package runtime', () => {
     await expectAuthValidationError(() => verifyEmail(expired.plainTextToken), 'email_verification_token_expired')
   })
 
+  it('allows exactly one concurrent email verification redemption', async () => {
+    configureRuntime()
+    const created = unwrapAuthResult(await register({
+      name: 'Ava',
+      email: 'concurrent@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    }))
+    const token = await verification.create(created)
+    const results = await Promise.allSettled([
+      verifyEmail(token.plainTextToken),
+      verifyEmail(token.plainTextToken),
+    ])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+
   it('resends verification tokens by email without requiring an active session', async () => {
     const runtime = configureRuntime({
       emailVerificationRequired: true,
@@ -2697,7 +2728,7 @@ describe('@holo-js/auth package runtime', () => {
     ).resolves.toBe(true)
   })
 
-  it('does not verify email when verification token deletion fails', async () => {
+  it('does not verify email when verification token claiming fails', async () => {
     const runtime = configureRuntime()
     const created = unwrapAuthResult(await register({
       name: 'Ava',
@@ -2706,15 +2737,15 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     }))
     const token = await verification.create(created)
-    const deleteToken = runtime.emailVerificationTokenStore.delete
-    runtime.emailVerificationTokenStore.delete = async () => {
-      throw new Error('verification token delete failed')
+    const redeemToken = runtime.emailVerificationTokenStore.redeem
+    runtime.emailVerificationTokenStore.redeem = async () => {
+      throw new Error('verification token claim failed')
     }
 
     try {
-      await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token delete failed')
+      await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token claim failed')
     } finally {
-      runtime.emailVerificationTokenStore.delete = deleteToken
+      runtime.emailVerificationTokenStore.redeem = redeemToken
     }
 
     expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeNull()

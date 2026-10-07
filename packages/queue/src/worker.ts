@@ -13,7 +13,6 @@ import type {
   QueueWorkerRunOptions,
 } from './contracts'
 import { DEFAULT_QUEUE_NAME } from './config'
-import { persistFailedQueueJob } from './failed'
 import { getRegisteredQueueJob } from './registry'
 import { queueRuntimeInternals } from './runtime'
 
@@ -191,6 +190,7 @@ async function processReservedJob(
   let requestedReleaseDelay: number | undefined
   let requestedFailure: Error | undefined
   let action: 'release' | 'fail' | undefined
+  let handlerError: Error | undefined
 
   try {
     await runWithTimeout(
@@ -220,132 +220,65 @@ async function processReservedJob(
         executionState.timedOut = true
       },
     )
+  } catch (error) {
+    handlerError = normalizeHookError(error)
+  }
 
-    if (action === 'release') {
-      await driver.release(reserved, typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : undefined)
-      if (options.onJobReleased) {
-        await runWorkerHook(envelope.name, 'onJobReleased', async () => {
-          await options.onJobReleased?.({
-            ...event,
-            ...(typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : {}),
-          })
-        })
-      }
-      return {
-        kind: 'released',
-        ...(typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : {}),
-      }
+  const failure = handlerError instanceof QueueWorkerTimeoutError
+    ? handlerError
+    : requestedFailure ?? handlerError
+  let outcome: QueueWorkerProcessingOutcome
+
+  if (handlerError instanceof QueueWorkerTimeoutError) {
+    outcome = { kind: 'failed', error: handlerError }
+  } else if (action === 'release') {
+    outcome = {
+      kind: 'released',
+      ...(typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : {}),
+      ...(failure ? { error: failure } : {}),
     }
+  } else if (failure) {
+    outcome = action === 'fail' || event.attempt >= maxAttempts
+      ? { kind: 'failed', error: failure }
+      : {
+          kind: 'released',
+          delaySeconds: resolveRetryDelaySeconds(definition, event.attempt),
+          error: failure,
+        }
+  } else {
+    outcome = { kind: 'processed' }
+  }
 
-    if (action === 'fail') {
-      const failure = requestedFailure!
-      await persistFailedQueueJob(reserved, failure)
-      await driver.delete(reserved)
-      await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(envelope, failure, {
-        maxAttempts,
+  if (outcome.kind === 'released') {
+    await driver.release(reserved, typeof outcome.delaySeconds === 'number' ? { delaySeconds: outcome.delaySeconds } : undefined)
+    if (options.onJobReleased) {
+      await runWorkerHook(envelope.name, 'onJobReleased', async () => {
+        await options.onJobReleased?.({
+          ...event,
+          ...(typeof outcome.delaySeconds === 'number' ? { delaySeconds: outcome.delaySeconds } : {}),
+          ...(outcome.error ? { error: outcome.error } : {}),
+        })
       })
-      if (options.onJobFailed) {
-        await runWorkerHook(envelope.name, 'onJobFailed', async () => {
-          await options.onJobFailed?.({
-            ...event,
-            error: failure,
-          })
-        })
-      }
-      return {
-        kind: 'failed',
-        error: failure,
-      }
     }
-
+  } else if (outcome.kind === 'failed') {
+    await queueRuntimeInternals.getQueueRuntimeState().failedJobStore?.persistFailedJob(reserved, outcome.error)
+    await driver.delete(reserved)
+    await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(envelope, outcome.error, { maxAttempts })
+    if (options.onJobFailed) {
+      await runWorkerHook(envelope.name, 'onJobFailed', async () => {
+        await options.onJobFailed?.({ ...event, error: outcome.error })
+      })
+    }
+  } else {
     await driver.acknowledge(reserved)
     if (options.onJobProcessed) {
       await runWorkerHook(envelope.name, 'onJobProcessed', async () => {
         await options.onJobProcessed?.(event)
       })
     }
-    return { kind: 'processed' }
-  } catch (error) {
-    const resolvedError = error instanceof Error ? error : new Error(String(error))
-    const failure = resolvedError instanceof QueueWorkerTimeoutError
-      ? resolvedError
-      : requestedFailure ?? resolvedError
-
-    if (resolvedError instanceof QueueWorkerTimeoutError) {
-      await persistFailedQueueJob(reserved, failure)
-      await driver.delete(reserved)
-      await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(envelope, failure, {
-        maxAttempts,
-      })
-      if (options.onJobFailed) {
-        await runWorkerHook(envelope.name, 'onJobFailed', async () => {
-          await options.onJobFailed?.({
-            ...event,
-            error: failure,
-          })
-        })
-      }
-      return {
-        kind: 'failed',
-        error: failure,
-      }
-    }
-
-    if (action === 'release') {
-      await driver.release(reserved, typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : undefined)
-      if (options.onJobReleased) {
-        await runWorkerHook(envelope.name, 'onJobReleased', async () => {
-          await options.onJobReleased?.({
-            ...event,
-            ...(typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : {}),
-            error: failure,
-          })
-        })
-      }
-      return {
-        kind: 'released',
-        ...(typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : {}),
-        error: failure,
-      }
-    }
-
-    if (action === 'fail' || event.attempt >= maxAttempts) {
-      await persistFailedQueueJob(reserved, failure)
-      await driver.delete(reserved)
-      await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(envelope, failure, {
-        maxAttempts,
-      })
-      if (options.onJobFailed) {
-        await runWorkerHook(envelope.name, 'onJobFailed', async () => {
-          await options.onJobFailed?.({
-            ...event,
-            error: failure,
-          })
-        })
-      }
-      return {
-        kind: 'failed',
-        error: failure,
-      }
-    }
-
-    const delaySeconds = resolveRetryDelaySeconds(definition, event.attempt)
-    await driver.release(reserved, typeof delaySeconds === 'number' ? { delaySeconds } : undefined)
-    if (options.onJobReleased) {
-      await runWorkerHook(envelope.name, 'onJobReleased', async () => {
-        await options.onJobReleased?.({
-          ...event,
-          ...(typeof delaySeconds === 'number' ? { delaySeconds } : {}),
-          error: failure,
-        })
-      })
-    }
-    return {
-      kind: 'released',
-      ...(typeof delaySeconds === 'number' ? { delaySeconds } : {}),
-      error: failure,
-    }
   }
+
+  return outcome
 }
 
 function resolveWorkerStopReason(

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
-import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState } from '@holo-js/auth'
+import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState, EmailVerificationTokenStore, EmailVerificationTokenRecord } from '@holo-js/auth'
 import type {} from '@holo-js/auth/config'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/cache/config'
@@ -37,6 +37,7 @@ import {
   type DatabaseDriverFactory,
 } from '@holo-js/db'
 import { importBundledRuntimeModule, importOptionalRuntimeModule } from '../runtimeModule'
+import { createAuthRedemptionContext } from './authRedemption'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
@@ -61,6 +62,7 @@ import {
   normalizeMultiFactorCredentialRecord,
   normalizePasswordResetTokenRecord,
   normalizeStoredUserId,
+  serializeAuthTimestamp,
   serializeAccessTokenRecord,
   serializeEmailVerificationTokenRecord,
   serializeMultiFactorCredentialRecord,
@@ -561,12 +563,7 @@ type AuthModule = {
       delete(id: string): Promise<void>
       deleteByUserId(provider: string, userId: string | number): Promise<number>
     }
-    readonly emailVerificationTokens?: {
-      create(record: unknown): Promise<void>
-      findById(id: string): Promise<unknown | null>
-      delete(id: string): Promise<void>
-      deleteByUserId(provider: string, userId: string | number): Promise<number>
-    }
+    readonly emailVerificationTokens?: EmailVerificationTokenStore
     readonly passwordResetTokens?: {
       create(record: unknown): Promise<void>
       findById(id: string): Promise<unknown | null>
@@ -1707,8 +1704,8 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
         email_verified: value.emailVerified ? 1 : 0,
         profile: JSON.stringify(value.profile),
         tokens: JSON.stringify(value.tokens ?? {}),
-        created_at: value.linkedAt.toISOString(),
-        updated_at: value.updatedAt.toISOString(),
+        created_at: serializeAuthTimestamp(value.linkedAt, DB.connection().getDriver()),
+        updated_at: serializeAuthTimestamp(value.updatedAt, DB.connection().getDriver()),
       }
 
       if (existing && typeof existing.id !== 'undefined') {
@@ -1794,8 +1791,8 @@ function createCoreHostedIdentityStore(namespace: string): CoreHostedIdentitySto
       email: record.email ?? null,
       email_verified: record.emailVerified ? 1 : 0,
       profile: JSON.stringify(record.profile),
-      created_at: record.linkedAt.toISOString(),
-      updated_at: record.updatedAt.toISOString(),
+      created_at: serializeAuthTimestamp(record.linkedAt, DB.connection().getDriver()),
+      updated_at: serializeAuthTimestamp(record.updatedAt, DB.connection().getDriver()),
     }
   }
 
@@ -1851,6 +1848,7 @@ function createCoreHostedIdentityStore(namespace: string): CoreHostedIdentitySto
 
 function createCoreAuthStores<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
+  redemption = createAuthRedemptionContext(),
 ): {
   readonly tokens: {
     create(record: unknown): Promise<void>
@@ -1860,12 +1858,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     delete(id: string): Promise<void>
     deleteByUserId(provider: string, userId: string | number): Promise<number>
   }
-  readonly emailVerificationTokens: {
-    create(record: unknown): Promise<void>
-    findById(id: string): Promise<unknown | null>
-    delete(id: string): Promise<void>
-    deleteByUserId(provider: string, userId: string | number): Promise<number>
-  }
+  readonly emailVerificationTokens: EmailVerificationTokenStore
   readonly passwordResetTokens: {
     create(record: unknown): Promise<void>
     findById(id: string): Promise<unknown | null>
@@ -1899,7 +1892,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly createdAt: Date
           readonly lastUsedAt?: Date
           readonly expiresAt?: Date | null
-        }))
+        }, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const row = await DB.table('personal_access_tokens').find(id)
@@ -1923,7 +1916,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly createdAt: Date
           readonly lastUsedAt?: Date
           readonly expiresAt?: Date | null
-        })
+        }, DB.connection().getDriver())
         await DB.table('personal_access_tokens').where('id', String(payload.id)).update(payload)
       },
       async delete(id: string) {
@@ -1939,6 +1932,27 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
     }),
     emailVerificationTokens: Object.freeze({
+      async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+        return redemption.redeem(record.provider, async (connection) => {
+          const dialect = connection.getDialect().name
+          const deadline = dialect === 'sqlite'
+            ? "expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+            : dialect === 'postgres' ? "expires_at > (clock_timestamp() AT TIME ZONE 'UTC')" : 'expires_at > CURRENT_TIMESTAMP(3)'
+          const claimed = await new TableQueryBuilder('email_verification_tokens', connection)
+            .where('id', record.id)
+            .where('provider', record.provider)
+            .where('user_id', String(record.userId))
+            .where('email', record.email)
+            .where('token_hash', record.tokenHash)
+            .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
+            .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
+            .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
+            .unsafeWhere(deadline, [])
+            .whereNull('used_at')
+            .delete()
+          return claimed.affectedRows === 1
+        }, operation)
+      },
       async create(record: unknown) {
         await DB.table('email_verification_tokens').insert(serializeEmailVerificationTokenRecord(record as {
           readonly id: string
@@ -1948,7 +1962,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly tokenHash: string
           readonly createdAt: Date
           readonly expiresAt: Date
-        }))
+        }, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const row = await DB.table('email_verification_tokens')
@@ -1980,7 +1994,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           readonly createdAt: Date
           readonly expiresAt: Date
         }
-        await DB.table(value.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(value))
+        await DB.table(value.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(value, DB.connection().getDriver()))
       },
       async findById(id: string) {
         const tables = Array.from(new Set(
@@ -2041,7 +2055,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
       async save(record: unknown) {
         const value = record as Parameters<typeof serializeMultiFactorCredentialRecord>[0]
-        await DB.table('auth_multi_factor_credentials').insert(serializeMultiFactorCredentialRecord(value))
+        await DB.table('auth_multi_factor_credentials').insert(serializeMultiFactorCredentialRecord(value, DB.connection().getDriver()))
       },
       async delete(provider: string, userId: string | number) {
         await DB.table('auth_multi_factor_credentials')
@@ -2062,7 +2076,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           await new TableQueryBuilder('auth_multi_factor_credentials', transaction)
             .where('provider', provider)
             .where('user_id', String(userId))
-            .update({ last_used_counter: counter, updated_at: new Date().toISOString() })
+            .update({ last_used_counter: counter, updated_at: serializeAuthTimestamp(new Date(), DB.connection().getDriver()) })
           return Object.freeze({ lastUsedCounter: counter, recoveryCodeHashes: record.recoveryCodeHashes })
         })
       },
@@ -2081,7 +2095,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           await new TableQueryBuilder('auth_multi_factor_credentials', transaction)
             .where('provider', provider)
             .where('user_id', String(userId))
-            .update({ recovery_code_hashes: JSON.stringify(hashes), updated_at: new Date().toISOString() })
+            .update({ recovery_code_hashes: JSON.stringify(hashes), updated_at: serializeAuthTimestamp(new Date(), DB.connection().getDriver()) })
           return Object.freeze({ lastUsedCounter: record.lastUsedCounter, recoveryCodeHashes: Object.freeze(hashes) })
         })
       },
@@ -2095,7 +2109,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           : query.where('last_used_counter', verification.lastUsedCounter)
         const result = await query.update({
           recovery_code_hashes: JSON.stringify(recoveryCodeHashes),
-          updated_at: updatedAt.toISOString(),
+          updated_at: serializeAuthTimestamp(updatedAt, DB.connection().getDriver()),
         })
         return (result.affectedRows ?? 0) > 0
       },
@@ -2154,6 +2168,7 @@ async function resolveAuthProviderRuntime<TCustom extends HoloConfigMap>(
 async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
+  redemption = createAuthRedemptionContext(),
 ): Promise<Readonly<Record<string, unknown>>> {
   const providers = Object.entries(loadedConfig.auth.providers)
 
@@ -2307,6 +2322,8 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       })
     }
 
+    redemption.register(providerName, () => model.getRepository?.() ?? null)
+
     const saveAuthEntity = async (entity: unknown, values: Record<string, unknown>) => {
       const repository = typeof model.getRepository === 'function'
         ? model.getRepository()
@@ -2328,7 +2345,8 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
 
     const adapter = {
       async findById(id: string | number) {
-        const resolved = await model.find(id)
+        const repository = redemption.repository(providerName)
+        const resolved = repository ? await repository.find(id) : await model.find(id)
         /* v8 ignore next -- model.find() may return undefined in loose userland adapters; core normalizes it to null */
         return resolved ? markProviderUser(resolved, providerName) : null
       },
@@ -2396,9 +2414,15 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       async update(user: unknown, input: Readonly<Record<string, unknown>>) {
         const id = getEntityAttributes(user).id
         const values = await prepareAuthUpdateInput(user, input)
-        const existing = typeof model.find === 'function'
-          ? await model.find(id)
-          : null
+        const repository = redemption.repository(providerName)
+        if (repository) {
+          const existing = await repository.find(id)
+          if (!existing) return null
+          existing.forceFill(values)
+          return markProviderUser(await repository.saveEntity(existing, new Set(Object.keys(values))), providerName)
+        }
+
+        const existing = typeof model.find === 'function' ? await model.find(id) : null
         const persisted = existing ? await saveAuthEntity(existing, values) : null
 
         return markProviderUser(persisted ?? await model.update(id, values), providerName)
@@ -3089,14 +3113,16 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     const socialModule = authConfigUsesSocialProviders(loadedConfig)
       ? await loadSocialModule(true)
       : undefined
-    const authStores = createCoreAuthStores(loadedConfig)
+    const redemption = createAuthRedemptionContext()
+    const providers = await createCoreAuthProviders(projectRoot, loadedConfig, redemption)
+    const authStores = createCoreAuthStores(loadedConfig, redemption)
 
     authContext = options.authContext ?? createRequestAwareAuthContext(authModule.createAsyncAuthContext(), options.authRequest)
     authContext.setRequestAccessors?.(options.authRequest)
     authModule.configureAuthRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
-      providers: await createCoreAuthProviders(projectRoot, loadedConfig),
+      providers,
       tokens: authStores.tokens,
       emailVerificationTokens: authStores.emailVerificationTokens,
       passwordResetTokens: authStores.passwordResetTokens,

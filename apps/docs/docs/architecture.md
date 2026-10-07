@@ -44,6 +44,19 @@ Framework routing, rendering, and deployment output remain owned by the host fra
 
 Discovery converts canonical directories such as `server/models`, `server/db`, and `server/commands` into artifacts under `.holo-js/generated`. Adapters consume those registries instead of independently scanning application files.
 
+## Queue finalization ownership
+
+The Queue worker owns the outcome of a reserved job separately from adapter finalization.
+Handler errors determine retry, release, or terminal failure; acknowledgement and release each
+have one mutation path. Terminal finalization persists the failed job before deleting its
+reservation. Any adapter error stops `runQueueWorker` with the original error, without retrying
+the mutation or reclassifying it as a handler failure. Delivery may repeat according to driver
+reservation semantics.
+
+Completion hooks run before acknowledgement, and processed hooks follow successful
+acknowledgement. Timeout handling suppresses late lifecycle hooks without promising handler
+cancellation. See [Queue Workers](/queue/workers#delivery-and-finalization-failures).
+
 ## Architectural enforcement
 
 The repository architecture check rejects:
@@ -59,16 +72,16 @@ Run it through `bun run test:dependency-policy`.
 ## Approved ownership designs
 
 ::: info Pending implementation
-Optional capability lifetime ownership is implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+Optional capability lifetime ownership, email-verification redemption, and Queue finalization are implemented. Password-reset redemption and the remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
 
 | Module | Approved ownership | Behavior to preserve or establish |
 | --- | --- | --- |
-| Auth token redemption | One-time claim and user mutation coordination | One winner per verification or reset token; participating database changes roll back together |
+| Auth token redemption (email verification implemented; password reset pending) | One-time claim and user mutation coordination | One winner per verification or reset token; participating database changes roll back together |
 | Optional capability lifetime (implemented) | Initialization, owned-resource disposal, and restoration | Continue cleanup after failures, collect errors, and preserve live external bindings |
-| Queue reserved job | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
+| Queue reserved job (implemented) | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
 | Authenticated session transition | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
 | Realtime row window | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
 | Media mutation | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
@@ -76,11 +89,11 @@ These changes deepen existing modules by concentrating behavior behind their int
 
 ### One-time auth token redemption
 
-Verification and password-reset stores gain a required `redeem<TResult>(record, operation): Promise<TResult | null>` operation. It claims only a matching, unused, unexpired token and invokes the operation only for the winner. Unavailable claims return `null`; custom stores must implement the operation instead of assembling lookup and unconditional deletion.
+Email-verification stores use the required `redeem<TResult>(record, operation): Promise<TResult | null>` operation. It claims a matching, unused, unexpired token and invokes the operation only for the winner. Unavailable claims return `null`; custom stores implement this operation instead of assembling lookup and unconditional deletion.
 
-When core can prove that native user persistence and token persistence share the actual database context, the claim, password-reset sibling revocation, and user mutation participate in one transaction. For external providers or different database contexts, the claim commits before the user mutation; failed mutation leaves the claim and sibling revocations consumed. A fresh token is required after that failure.
+Core uses an operation-scoped native repository and actual database context identity to prove shared transaction participation. Participating failures roll back the claim and user update together. External providers and different database contexts consume the claim before mutation; failure requires a fresh token. See [Email Verification](/auth/email-verification#single-use-redemption).
 
-Single-use applies per token. Different reset tokens for the same email do not introduce an account-wide lock across external operations. Sibling revocation remains scoped to provider, email, and broker table. Reusable personal access tokens and browser sessions retain independent multi-device authentication.
+Password-reset redemption and its scoped sibling-revocation coordination remain approved pending implementation. The shared decision is recorded in ADR-0008. The approved reset design extends the same claim-before-mutation rule to password-reset stores, with sibling revocation scoped to provider, email, and broker table. Different reset tokens do not introduce an account-wide lock across external operations. Reusable personal access tokens and browser sessions retain independent multi-device authentication.
 
 ### Capability lifetime and Queue outcomes
 
@@ -109,3 +122,4 @@ The existing `fluxInternals` export gains generic `appendPresenceMember` and `re
 ### Verification through module interfaces
 
 Verification must protect concurrent token claims, transaction outcomes, continued cleanup after failures, Queue finalization errors, session failure recovery, and current-device preservation. Realtime tests retain real database checks for correct pages and bounded reads; Media tests verify file and record outcomes with local persistence. Native Flux adapter tests continue to exercise framework lifecycle behavior. Existing behavior tests remain valuable; redundant plumbing tests can be replaced when the deeper interface protects the same behavior.
+

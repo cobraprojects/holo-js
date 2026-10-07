@@ -2,8 +2,9 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createSchemaService, DB } from '@holo-js/db'
-import { authRuntimeInternals } from '../../auth/src'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { DatabaseContext, createDialect, ModelRepository, TableQueryBuilder, column, defineGeneratedTable, defineModel, createSchemaService, DB } from '@holo-js/db'
+import { configureAuthRuntime, authRuntimeInternals } from '../../auth/src'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
@@ -253,7 +254,22 @@ export default defineMailConfig({
   return root
 }
 
+async function createVerificationTokenTable(): Promise<void> {
+  await createSchemaService(DB.connection()).createTable('email_verification_tokens', table => {
+    table.string('id').primaryKey()
+    table.string('provider')
+    table.string('user_id')
+    table.string('email')
+    table.string('token_hash')
+    table.timestamps()
+    table.timestamp('expires_at')
+    table.timestamp('used_at').nullable()
+  })
+}
+
 afterEach(async () => {
+  Reflect.deleteProperty(globalThis, Symbol.for('holo-test-verification-model'))
+  vi.useRealTimers()
   vi.restoreAllMocks()
   resetFakeSentMails()
   await resetHoloRuntime()
@@ -3403,6 +3419,208 @@ export default {
     const identityRows = await DB.table('auth_identities').get<Record<string, unknown>>()
     expect(identityRows[0]?.user_id).toBe('user-1')
   })
+
+  it('allows one winner when verifying the same email concurrently with persisted tokens', async () => {
+    const root = await createProject({ auth: true })
+    await writeFile(join(root, 'server/models/User.ts'), `
+const user = { id: 1, email: 'ava@example.com', email_verified_at: null }
+export default {
+  async find() { return user },
+  async update(_id, values) { Object.assign(user, values); return user },
+}
+`, 'utf8')
+    const runtime = await createHolo(root, { envName: 'development' })
+    await runtime.initialize()
+    await createVerificationTokenTable()
+    const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
+    const results = await Promise.allSettled([
+      runtime.auth!.verification.consume(token.plainTextToken),
+      runtime.auth!.verification.consume(token.plainTextToken),
+    ])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  describe.each(['sqlite', 'postgres', 'mysql'] as const)('native %s verification persistence', (driver) => {
+    it.runIf(driver === 'sqlite' || !!process.env[`HOLO_AUTH_REDEMPTION_${driver.toUpperCase()}_DATABASE`])(
+      'rolls back verification and the user mutation together after a save failure', async () => {
+        const root = await createProject({ auth: true })
+        if (driver !== 'sqlite') {
+          await symlink(resolve(import.meta.dirname, `../../db-${driver}`), join(root, `node_modules/@holo-js/db-${driver}`))
+          const connection = driver === 'postgres'
+            ? { driver, host: '/tmp', username: 'postgres', database: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_DATABASE }
+            : { driver, host: '127.0.0.1', port: Number(process.env.HOLO_AUTH_REDEMPTION_MYSQL_PORT ?? 33183), username: 'root', database: process.env.HOLO_AUTH_REDEMPTION_MYSQL_DATABASE }
+          await writeFile(join(root, 'config/database.ts'), `
+    import { defineDatabaseConfig } from ${databaseEntry}
+    export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: ${JSON.stringify(connection)} } })
+    `, 'utf8')
+        }
+        let fail = true
+        let factoryActive = false
+        const userTable = defineGeneratedTable('verification_users', {
+          id: column.id(), email: column.string(), email_verified_at: column.timestamp().nullable(),
+        })
+        const User = defineModel(userTable, {
+          timestamps: false,
+          events: {
+            updated() {
+              factoryActive = false
+              if (fail) {
+                fail = false
+                throw new Error('native save failed')
+              }
+            },
+          },
+        })
+        const fixtureKey = Symbol.for('holo-test-verification-model')
+        const model = {
+          ...User,
+          getRepository() {
+            if (factoryActive) throw new Error('repository factory selected another mutation context')
+            factoryActive = true
+            return User.getRepository()
+          },
+        }
+        Object.defineProperty(globalThis, fixtureKey, { value: model, configurable: true })
+        await writeFile(join(root, 'server/models/User.ts'), `
+    export default globalThis[Symbol.for('holo-test-verification-model')]
+    export function prepareAuthUpdateInput(user, input) {
+      if (user.email_verified_at !== null) throw new Error('prior mutation was not rolled back')
+      return input
+    }
+    `, 'utf8')
+        const runtime = await createHolo(root, { envName: 'development' })
+        await runtime.initialize()
+        const schema = createSchemaService(DB.connection())
+        await schema.createTable('verification_users', table => {
+          table.id()
+          table.string('email')
+          table.timestamp('email_verified_at').nullable()
+        })
+        await DB.table('verification_users').insert({ id: 1, email: 'ava@example.com', email_verified_at: null })
+        await createVerificationTokenTable()
+        const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
+        await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('native save failed')
+        await expect(runtime.auth!.verification.consume(token.plainTextToken)).resolves.toMatchObject({
+          id: driver === 'postgres' ? '1' : 1, email: 'ava@example.com', email_verified_at: expect.anything(),
+        })
+        const databaseDeadline = new Date(Date.now() - 10_000)
+        vi.setSystemTime(Date.now() - 60_000)
+        const expired = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' }, { expiresAt: databaseDeadline })
+        await expect(runtime.auth!.verification.consume(expired.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
+        Reflect.deleteProperty(globalThis, fixtureKey)
+      },
+    )
+  })
+
+  it.each(['external', 'different connection', 'different context with the same name'] as const)(
+    'permanently consumes verification after a failed %s mutation', async (persistence) => {
+      const root = await createProject({ auth: true })
+      const adapter = persistence === 'external' ? undefined : createSQLiteAdapter({ filename: ':memory:' })
+      await adapter?.initialize()
+      try {
+        if (adapter) {
+          const connection = new DatabaseContext({
+            connectionName: persistence === 'different connection' ? 'users' : 'main',
+            adapter,
+            dialect: createDialect('sqlite'),
+          })
+          const userTable = defineGeneratedTable('isolated_verification_users', {
+            id: column.id(), email: column.string(), email_verified_at: column.timestamp().nullable(),
+          })
+          const User = defineModel(userTable, {
+            timestamps: false,
+            events: { updated() { throw new Error('provider mutation failed') } },
+          })
+          const repository = ModelRepository.from(User.definition, connection)
+          const model = {
+            ...User,
+            getRepository() { return repository },
+            find(id: number) { return repository.find(id) },
+          }
+          Object.defineProperty(globalThis, Symbol.for('holo-test-verification-model'), { value: model, configurable: true })
+          await writeFile(join(root, 'server/models/User.ts'), `
+export default globalThis[Symbol.for('holo-test-verification-model')]
+`, 'utf8')
+          await createSchemaService(connection).createTable('isolated_verification_users', table => {
+            table.id()
+            table.string('email')
+            table.timestamp('email_verified_at').nullable()
+          })
+          await new TableQueryBuilder('isolated_verification_users', connection)
+            .insert({ id: 1, email: 'ava@example.com', email_verified_at: null })
+        } else {
+          await writeFile(join(root, 'server/models/User.ts'), `
+const user = { id: 1, email: 'ava@example.com' }
+export default {
+  async find() { return user },
+  getRepository() {
+    return { async saveEntity() { throw new Error('provider mutation failed') } }
+  },
+  async update() { throw new Error('provider mutation failed') },
+}
+`, 'utf8')
+        }
+        const runtime = await createHolo(root, { envName: 'development' })
+        await runtime.initialize()
+        await createVerificationTokenTable()
+        const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
+        await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('provider mutation failed')
+        await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
+      } finally {
+        Reflect.deleteProperty(globalThis, Symbol.for('holo-test-verification-model'))
+        await adapter?.disconnect()
+      }
+    },
+  )
+
+  it.each(['changed identity', 'changed secret', 'already used', 'expires while claiming', 'database deadline has passed'] as const)(
+    'rejects verification when the looked-up token is %s', async (change) => {
+      const root = await createProject({ auth: true })
+      await writeFile(join(root, 'server/models/User.ts'), `
+const user = { id: 1, email: 'ava@example.com' }
+export default {
+  async find() { return user },
+  async update() { throw new Error('unavailable claim invoked mutation') },
+}
+`, 'utf8')
+      const runtime = await createHolo(root, { envName: 'development' })
+      await runtime.initialize()
+      await createVerificationTokenTable()
+      const databaseDeadline = new Date(Date.now() - 10_000)
+      if (change === 'database deadline has passed') vi.setSystemTime(Date.now() - 60_000)
+      const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' }, {
+        ...(change === 'database deadline has passed' ? { expiresAt: databaseDeadline } : {}),
+      })
+      const bindings = authRuntimeInternals.getRuntimeBindings()
+      const store = bindings.emailVerificationTokens!
+      configureAuthRuntime({
+        ...bindings,
+        emailVerificationTokens: {
+          ...store,
+          async findById(id) {
+            const record = await store.findById(id)
+            if (change !== 'expires while claiming' && change !== 'database deadline has passed') {
+              const payload = change === 'changed identity'
+                ? { email: 'someone-else@example.com' }
+                : change === 'changed secret' ? { token_hash: 'changed-secret' } : { used_at: new Date().toISOString() }
+              await DB.table('email_verification_tokens').where('id', id).update(payload)
+            }
+            return record
+          },
+          async redeem(record, operation) {
+            if (change === 'expires while claiming') vi.setSystemTime(record.expiresAt)
+            return store.redeem(record, operation)
+          },
+        },
+      })
+      try {
+        await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
 
   it('covers core auth store helpers, provider markers, and pending auth providers directly', async () => {
     const root = await createProject({
