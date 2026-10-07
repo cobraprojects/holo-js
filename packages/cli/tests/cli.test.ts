@@ -10045,7 +10045,7 @@ export default defineConfig({
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
-  it('regenerates ignored framework runner metadata during prepare', async () => {
+  it('regenerates framework runner metadata and managed routes on the first prepare', async () => {
     const projectRoot = await createTempDirectory()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
@@ -10069,8 +10069,11 @@ import { defineDatabaseConfig } from '@holo-js/db'
 export default defineDatabaseConfig({})
 `)
 
+    await writeProjectFile(projectRoot, 'app/storage/[[...path]]/route.ts', `export { GET, HEAD } from '../../../.holo-js/generated/next/storage-route'\n`)
+
     await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
 
+    expect((await stat(join(projectRoot, '.holo-js/generated/next/storage-route.ts'))).isFile()).toBe(true)
     expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
   }, 60_000)
