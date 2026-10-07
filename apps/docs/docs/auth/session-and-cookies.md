@@ -11,11 +11,11 @@ Different browsers or devices may maintain independent sessions for the same use
 
 ## Approved Other-Device Logout
 
-::: info Pending implementation
-Other-device logout, its durable revocation adapter, are approved designs, not current functionality.
+::: info Core persistence pending
+Standalone auth supports injected durable revocation stores. The default Core database adapter and scaffold migration remain pending.
 :::
 
-Developers will explicitly request logout of the current user's other browser authentication:
+Developers explicitly request logout of the current user's other browser authentication:
 
 ```ts
 await auth.logoutOtherDevices()
@@ -30,13 +30,41 @@ For Clerk and WorkOS, this invalidates existing Holo sessions, not upstream prov
 
 ### Durable revocation ownership
 
-Auth owns shared revocation state across database, file, and Redis session stores. A logical session identity survives physical session-ID rotation; revocation advances the user's authentication generation while retaining the current logical session. An already-revoked caller cannot make itself the survivor. Distinct identity checks are batched and reused within the request rather than scanning sessions.
+Auth owns shared revocation state across database, file, and Redis session stores. A logical session identity survives physical session-ID rotation; revocation advances the user's authentication generation while retaining the current logical session. An already-revoked caller cannot make itself the survivor. Distinct identity checks are batched without scanning sessions. A memory auth context belongs to one request. Asynchronous auth contexts and framework wrappers preserving their native accessors reuse reads within each request and refresh them on the next request. Custom contexts without built-in request ownership perform fresh batched reads to avoid retaining another request's state.
 
 Core will supply this state through an `auth_session_revocations` table keyed by `(provider, user_id)`, with integer `generation` and nullable string `retained_session_id`. New scaffolds will include its migration; existing applications adopting the adapter will need that migration.
 
-When the adapter is enabled, older authenticated browser payloads without a logical session identity and generation will require a fresh login, including those restored through remember cookies. Existing personal access tokens will remain valid. After adoption, ordinary login and rotation will continue to preserve authentication on other devices.
+When the adapter is enabled, older authenticated browser payloads without a logical session identity and generation require a fresh login, including those restored through remember cookies. Existing personal access tokens remain valid. After adoption, ordinary login and rotation continue to preserve authentication on other devices.
 
-Standalone auth will accept an optional `sessionRevocations` adapter in its runtime bindings. Requesting other-device logout without that adapter will fail explicitly. See [Approved Ownership Designs](/architecture#approved-ownership-designs) for the related transition and failure rules.
+Standalone auth accepts an optional `sessionRevocations` adapter in its runtime bindings. Requesting other-device logout without that adapter fails explicitly. See [Browser Session Revocation](/architecture#browser-session-revocation) for the related transition and failure rules.
+
+## Custom revocation adapters
+
+Inject an `AuthSessionRevocationStore` as `sessionRevocations` in `configureAuthRuntime`. Its state is durable and shared by every server handling the same users, independently of the selected session store.
+
+```ts
+interface AuthSessionIdentity {
+  readonly provider: string
+  readonly userId: string | number
+}
+
+interface AuthSessionRevocationState extends AuthSessionIdentity {
+  readonly generation: number
+  readonly retainedSessionId?: string
+}
+
+interface AuthSessionRevocationStore {
+  readMany(identities: readonly AuthSessionIdentity[]): Promise<readonly AuthSessionRevocationState[]>
+  revokeOthers(
+    identity: AuthSessionIdentity,
+    currentSession: { readonly id: string, readonly generation: number },
+  ): Promise<boolean>
+}
+```
+
+`readMany` returns the current state for each distinct requested identity. An absent durable row represents generation zero. `revokeOthers` atomically checks that the caller has the current generation or is the retained logical browser, then increments the generation and retains that browser. Return `false` for an invalid caller; failures reject. Never perform an unconditional upsert that permits an already-revoked caller to become the survivor.
+
+The `currentSession.id` is Auth's stable logical browser identity, which survives physical session rotation. Authentication accepts a payload with the current generation or the retained logical identity. Later legitimate login snapshots the current generation; it does not invalidate other browsers. Older payloads without this metadata fail authentication when the adapter is enabled. Without an adapter, ordinary session authentication continues and `logoutOtherDevices` fails explicitly.
 
 ## Complete payload rotation
 

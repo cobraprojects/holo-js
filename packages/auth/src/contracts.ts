@@ -304,6 +304,7 @@ export interface AuthBaseGuardFacade {
 }
 
 export interface AuthSessionOnlyFacade {
+  logoutOtherDevices(): Promise<void>
   readonly multiFactor: AuthMultiFactorFacade
   flash(key: string, value: unknown): Promise<void>
   take<TValue = unknown>(key: string): Promise<TValue | undefined>
@@ -648,7 +649,23 @@ export interface AuthRuntimeAuthorization {
   ): boolean | Promise<boolean>
 }
 
+export interface AuthSessionIdentity {
+  readonly provider: string
+  readonly userId: string | number
+}
+
+export interface AuthSessionRevocationState extends AuthSessionIdentity {
+  readonly generation: number
+  readonly retainedSessionId?: string
+}
+
+export interface AuthSessionRevocationStore {
+  readMany(identities: readonly AuthSessionIdentity[]): Promise<readonly AuthSessionRevocationState[]>
+  revokeOthers(identity: AuthSessionIdentity, currentSession: { readonly id: string, readonly generation: number }): Promise<boolean>
+}
+
 export interface AuthRuntimeBindings {
+  readonly sessionRevocations?: AuthSessionRevocationStore
   readonly config: HoloAuthConfig | NormalizedHoloAuthConfig
   readonly session: AuthSessionRuntime
   readonly providers: Readonly<Record<string, AuthProviderAdapter>>

@@ -167,3 +167,7 @@ export const verification: AuthEmailVerificationFacade = Object.freeze({
     return getAuthRuntime().verification.consume(plainTextToken)
   },
 })
+
+export async function logoutOtherDevices(): Promise<void> {
+  return getAuthRuntime().logoutOtherDevices()
+}

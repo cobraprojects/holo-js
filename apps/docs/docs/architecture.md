@@ -74,3 +74,10 @@ Run it through `bun run test:dependency-policy`.
 Email verification owns one atomic claim of the exact unused, unexpired token and invokes the user mutation only for the winner. Core uses an operation-scoped native repository and actual database context identity to prove shared transaction participation. Participating failures roll back the claim and user update together. External providers and different database contexts consume the claim before mutation; failure requires a fresh token. See [Email Verification](/auth/email-verification#single-use-redemption).
 
 Password-reset redemption and its scoped sibling-revocation coordination remain approved pending implementation. The shared decision is recorded in ADR-0008.
+
+
+## Browser Session Revocation
+
+Auth owns browser validity independently of the physical session store. Standalone applications may inject a durable `AuthSessionRevocationStore`; requesting other-device logout without it fails explicitly. Distinct provider/user identities are read together, with reuse scoped to native request ownership. A logical browser identity survives physical rotation and an atomic generation transition retains the current browser while invalidating the selected identity on other browsers' next authenticated request.
+
+This leaves unrelated identities and personal access tokens valid. Remember restoration and saved impersonation originals must pass the same validity check before trust. Applications own recent reauthentication policy. Hosted-provider revocation applies to Holo authentication; it does not revoke upstream Clerk or WorkOS sessions. Core's default database adapter and scaffold migration remain pending. See [Session And Cookies](/auth/session-and-cookies#custom-revocation-adapters) and ADR-0015.

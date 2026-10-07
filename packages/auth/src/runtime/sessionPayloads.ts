@@ -5,6 +5,7 @@ export type SerializedAuthUser = AuthenticatedAuthUser & {
 }
 
 export type SessionIdentityPayload = {
+  readonly revocation?: { readonly id: string, readonly generation: number }
   readonly guard: string
   readonly provider: string
   readonly userId: string | number
@@ -128,5 +129,8 @@ export function writeSessionPayloads(
 }
 
 export function stripImpersonation(payload: SessionAuthPayload): SessionIdentityPayload {
-  return toSessionIdentityPayload(payload.guard, payload.provider, payload.user)
+  return Object.freeze({
+    ...toSessionIdentityPayload(payload.guard, payload.provider, payload.user),
+    ...(payload.revocation ? { revocation: payload.revocation } : {}),
+  })
 }

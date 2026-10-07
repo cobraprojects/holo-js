@@ -25,6 +25,7 @@ declare global {
       guards: {
         readonly web: 'session'
         readonly admin: 'session'
+        readonly other: 'session'
         readonly api: 'token'
       }
     }
@@ -36,6 +37,17 @@ function redeemVerification(store: EmailVerificationTokenStore, record: EmailVer
 }
 
 describe('@holo-js/auth typing', () => {
+  it('exposes other-device logout only on precisely inferred session facades', () => {
+    type Default = typeof auth
+    type Web = ReturnType<typeof auth.guard<'web'>>
+    type Admin = ReturnType<typeof auth.guard<'admin'>>
+    type Api = ReturnType<typeof auth.guard<'api'>>
+    expectTypeOf<Default['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
+    expectTypeOf<Web['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
+    expectTypeOf<Admin['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
+    expectTypeOf<'logoutOtherDevices' extends keyof Api ? true : false>().toEqualTypeOf<false>()
+  })
+
   it('preserves the concrete verification redemption callback result', () => {
     expectTypeOf<ReturnType<typeof redeemVerification>>().toEqualTypeOf<Promise<{ status: 'verified', userId: number } | null>>()
   })

@@ -1,6 +1,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { AuthenticatedAuthUser, AuthRuntimeContext } from '../contracts'
 
+const requestScopes = new WeakMap<AuthRuntimeContext, () => object>()
+const asyncRequestScopes = new WeakMap<AuthRuntimeContext['getSessionId'], () => object>()
+
+export function authRequestScope(context: AuthRuntimeContext): object | undefined {
+  return requestScopes.get(context)?.() ?? asyncRequestScopes.get(context.getSessionId)?.()
+}
+
 export type MemoryAuthContext = AuthRuntimeContext & {
   readonly sessionIds: Map<string, string>
   readonly cachedUsers: Map<string, AuthenticatedAuthUser | null>
@@ -32,7 +39,7 @@ export function createMemoryAuthContext(): MemoryAuthContext {
   const accessTokens = new Map<string, string>()
   const rememberTokens = new Map<string, string>()
 
-  return {
+  const context: MemoryAuthContext = {
     sessionIds,
     cachedUsers,
     accessTokens,
@@ -46,6 +53,8 @@ export function createMemoryAuthContext(): MemoryAuthContext {
     getRememberToken: guardName => rememberTokens.get(guardName),
     setRememberToken: (guardName, token) => setMapValue(rememberTokens, guardName, token),
   }
+  requestScopes.set(context, () => context)
+  return context
 }
 
 export function createAsyncAuthContext(): AsyncAuthContext {
@@ -59,7 +68,7 @@ export function createAsyncAuthContext(): AsyncAuthContext {
     return existing
   }
 
-  return {
+  const context: AsyncAuthContext = {
     activate() {
       if (!storage.getStore()) {
         storage.enterWith(createMemoryAuthContext())
@@ -77,4 +86,7 @@ export function createAsyncAuthContext(): AsyncAuthContext {
     getRememberToken: guardName => resolveContext().getRememberToken(guardName),
     setRememberToken: (guardName, token) => resolveContext().setRememberToken(guardName, token),
   }
+  requestScopes.set(context, () => resolveContext())
+  asyncRequestScopes.set(context.getSessionId, () => resolveContext())
+  return context
 }

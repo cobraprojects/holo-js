@@ -1,3 +1,4 @@
+import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
 import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
 import { isAuthError } from './contracts'
@@ -155,6 +156,7 @@ type ErasedAuthProviderAdapter = {
 
 type RuntimeBindings = {
   readonly config: ReturnType<typeof normalizeAuthConfig>
+  readonly sessionRevocations?: AuthRuntimeBindings['sessionRevocations']
   readonly session: AuthRuntimeBindings['session']
   readonly providers: Readonly<Record<string, ErasedAuthProviderAdapter>>
   readonly tokens?: AuthTokenStore
@@ -210,6 +212,7 @@ function getRuntimeBindings(): RuntimeBindings {
 
 function getExposedRuntimeBindings(): {
   readonly config: RuntimeBindings['config']
+  readonly sessionRevocations?: AuthRuntimeBindings['sessionRevocations']
   readonly session: AuthRuntimeBindings['session']
   readonly providers: AuthRuntimeBindings['providers']
   readonly tokens?: AuthTokenStore
@@ -380,7 +383,8 @@ async function hydrateGuardContextFromRequest(guardName: string): Promise<void> 
       bindings.context.setRememberToken?.(guardName, rememberToken)
       if (!bindings.context.getSessionId(guardName)) {
         const rememberedSession = await bindings.session.consumeRememberMeToken?.(rememberToken)
-        const payload = readSessionPayload(rememberedSession, guardName)
+        const payloads = rememberedSession ? await filterRevokedSessionPayloads(bindings, rememberedSession) : null
+        const payload = payloads?.[guardName]
         if (rememberedSession && payload?.guard === guardName) {
           bindings.context.setSessionId(guardName, rememberedSession.id)
           bindings.context.setCachedUser(
@@ -824,6 +828,36 @@ async function resolveCurrentAccessTokenForGuard(guardName: string): Promise<Aut
   return createCurrentAccessTokenHandle(guardName, record)
 }
 
+async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: AuthSessionRecord): Promise<SessionAuthPayloadMap | null> {
+  const payloads = readSessionPayloads(record)
+  if (!payloads || !bindings.sessionRevocations) return payloads
+  const valid = await validSessionPayloads(bindings.sessionRevocations, bindings.context, payloads)
+  if (Object.keys(valid).length === Object.keys(payloads).length) return valid
+  if (!Object.keys(valid).length) await bindings.session.invalidate(record.id, { store: record.store })
+  else await writeExistingSession(bindings, record, writeSessionPayloads(record.data, valid))
+  for (const name of Object.keys(payloads)) {
+    if (name in valid) continue
+    const boundSessionId = bindings.context.getSessionId(name)
+    if (boundSessionId && boundSessionId !== record.id) continue
+    bindings.context.setSessionId(name)
+    bindings.context.setCachedUser(name, null)
+    bindings.context.setRememberToken?.(name)
+  }
+  return valid
+}
+
+async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
+  const bindings = getRuntimeBindings()
+  if (!bindings.sessionRevocations) throwAuthError('runtime_unconfigured', 'Other-device logout requires a durable session revocation store.')
+  await hydrateGuardContextFromRequest(guardName)
+  const state = await readGuardSessionState(guardName, true)
+  const metadata = state?.payload.revocation
+  if (!state || !metadata || state.payload.multiFactorChallengeExpiresAt) throwAuthError('auth_user_missing', 'Other-device logout requires valid browser authentication.')
+  const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
+  clearSessionRevocationReads(bindings.context)
+  if (!retained) throwAuthError('auth_user_missing', 'This browser authentication has already been revoked.')
+}
+
 async function resolveUserFromGuard(
   guardName: string,
   options: { readonly fresh?: boolean } = {},
@@ -858,7 +892,8 @@ async function resolveUserFromGuard(
   }
 
   const record = await bindings.session.touch(sessionId)
-  const payload = readSessionPayload(record, guardName)
+  const payloads = record ? await filterRevokedSessionPayloads(bindings, record) : null
+  const payload = payloads?.[guardName]
   if (!record || !payload || payload.guard !== guardName) {
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
@@ -1309,6 +1344,7 @@ async function loginUsingIdForGuard(
 
 async function readGuardSessionState(
   guardName: string,
+  touch = false,
 ): Promise<{
   readonly sessionId: string
   readonly record: AuthSessionRecord
@@ -1321,12 +1357,14 @@ async function readGuardSessionState(
     return null
   }
 
-  const record = await bindings.session.read(sessionId)
+  const record = touch
+    ? await bindings.session.touch(sessionId)
+    : await bindings.session.read(sessionId)
   if (!record) {
     return null
   }
 
-  const payloads = readSessionPayloads(record)
+  const payloads = await filterRevokedSessionPayloads(bindings, record)
   const payload = payloads?.[guardName]
   if (!payloads || !payload) {
     return null
@@ -1720,9 +1758,17 @@ async function stopImpersonatingForGuard(guardName: string): Promise<Authenticat
   }
 
   const nextPayloads = { ...state.payloads }
-  const original = state.payload.impersonation.original
-  if (original) {
-    nextPayloads[guardName] = toSessionPayload(original.guard, original.provider, original.user)
+  const storedOriginal = state.payload.impersonation.original
+  const restoredPayload = storedOriginal ? {
+    ...toSessionPayload(storedOriginal.guard, storedOriginal.provider, storedOriginal.user),
+    ...(storedOriginal.revocation ? { revocation: storedOriginal.revocation } : {}),
+  } : undefined
+  const validOriginal = restoredPayload && bindings.sessionRevocations
+    ? (await validSessionPayloads(bindings.sessionRevocations, bindings.context, { [guardName]: restoredPayload }))[guardName]
+    : restoredPayload
+  const original = validOriginal ? storedOriginal : undefined
+  if (original && validOriginal) {
+    nextPayloads[guardName] = validOriginal
   } else {
     delete nextPayloads[guardName]
   }
@@ -1975,8 +2021,13 @@ async function establishSessionForUser(
         || bindings.context.getSessionId(name) === existingSession.id
       ))
     : []
-  const sessionPayload = options.payload
-    ?? toSessionPayload(options.guard, options.provider, user)
+  const revocation = bindings.sessionRevocations
+    ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider: options.provider, userId: user.id }, existingPayloads)
+    : undefined
+  const sessionPayload = {
+    ...(options.payload ?? toSessionPayload(options.guard, options.provider, user)),
+    ...(revocation ? { revocation } : {}),
+  }
   const sessionPayloads = {
     ...existingPayloads,
     [options.guard]: sessionPayload,
@@ -2540,6 +2591,9 @@ function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthToke
 
   return Object.freeze({
     ...base,
+    logoutOtherDevices() {
+      return logoutOtherDevicesForGuard(guardName)
+    },
     multiFactor: createMultiFactorFacade(guardName),
     flash(key: string, value: unknown) {
       return flashForGuard(guardName, key, value)
@@ -2586,6 +2640,7 @@ export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
   getAuthRuntimeState().bindings = {
     config,
     session: bindings.session,
+    sessionRevocations: bindings.sessionRevocations,
     providers: bindings.providers,
     tokens: bindings.tokens,
     emailVerificationTokens: bindings.emailVerificationTokens,
@@ -2606,6 +2661,9 @@ export function getAuthRuntime(): AuthRuntimeFacade {
   const multiFactor = createMultiFactorFacade(getDefaultGuardName())
 
   const facade: AuthFacade = {
+    logoutOtherDevices() {
+      return logoutOtherDevicesForGuard(getDefaultGuardName())
+    },
     multiFactor,
     check() {
       return checkForGuard(getDefaultGuardName())
