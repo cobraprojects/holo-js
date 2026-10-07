@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mysqlClient = {
@@ -6,6 +7,7 @@ const mysqlClient = {
   release: vi.fn(),
 }
 const mysqlPool = {
+  pool: new EventEmitter(),
   end: vi.fn(async () => {}),
   getConnection: vi.fn(async () => mysqlClient),
   query: vi.fn(async (sql: string, bindings: unknown[]) => [[{ sql, bindings }], []] as const),
@@ -19,6 +21,7 @@ vi.mock('mysql2/promise', () => ({
 describe('concrete driver default factories', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mysqlPool.pool.removeAllListeners()
   })
 
   it('adapts the native MySQL pool and leased clients', async () => {
@@ -26,6 +29,8 @@ describe('concrete driver default factories', () => {
     const adapter = createMySQLAdapter({ uri: 'mysql://localhost/application' })
 
     await adapter.initialize()
+    mysqlPool.pool.emit('connection', mysqlClient)
+    expect(mysqlClient.query).toHaveBeenCalledWith("SET time_zone = '+00:00'")
     await expect(adapter.query('SELECT ?', [1])).resolves.toEqual({
       rowCount: 1,
       rows: [{ bindings: [1], sql: 'SELECT ?' }],
@@ -37,7 +42,7 @@ describe('concrete driver default factories', () => {
       })
     await adapter.disconnect()
 
-    expect(createMySQLPool).toHaveBeenCalledWith({ uri: 'mysql://localhost/application' })
+    expect(createMySQLPool).toHaveBeenCalledWith({ uri: 'mysql://localhost/application', timezone: 'Z' })
     expect(mysqlPool.query).toHaveBeenCalledWith('SELECT ?', [1])
     expect(mysqlClient.query).toHaveBeenCalledWith('SELECT ?', [2])
     expect(mysqlClient.release).toHaveBeenCalledTimes(1)
