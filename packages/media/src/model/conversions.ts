@@ -266,26 +266,16 @@ export async function regenerateMediaEntityConversions(options: {
       options.owner?.forgetRelation('media')
       return generatedConversions
     },
-    afterCommit: async (generatedConversions) => {
-      const failures: unknown[] = []
-      try {
-        await deleteObsoleteConversions(current, generatedConversions, conversionsDisk, requested)
-      } catch (error) {
-        failures.push(error)
-      }
-      if (!options.includeQueued) {
-        try {
-          await dispatchQueuedMediaConversionsForModel({
-            mediaId: media.get('id'),
-            conversionNames: resolveQueuedConversionNames({ definition, collectionName, requestedConversions: requested }),
-          }, async () => { await media.refresh() })
-        } catch (error) {
-          failures.push(error)
-        }
-      }
-      options.owner?.forgetRelation('media')
-      if (failures.length === 1) throw failures[0]
-      if (failures.length > 1) throw new AggregateError(failures, '[Holo Media] Post-commit effects failed.')
-    },
+    afterCommit: [
+      async (generatedConversions) => { await deleteObsoleteConversions(current, generatedConversions, conversionsDisk, requested) },
+      async () => {
+        if (options.includeQueued) return
+        await dispatchQueuedMediaConversionsForModel({
+          mediaId: media.get('id'),
+          conversionNames: resolveQueuedConversionNames({ definition, collectionName, requestedConversions: requested }),
+        }, async () => { await media.refresh() })
+      },
+    ],
+    afterEffects: () => { options.owner?.forgetRelation('media') },
   })
 }

@@ -45,24 +45,44 @@ export class MediaMutation {
 export async function runMediaMutation<TResult>(options: {
   readonly operation: (mutation: MediaMutation) => Promise<TResult>
   readonly afterRollback?: () => Promise<void> | void
-  readonly afterCommit?: (result: TResult) => Promise<void>
+  readonly afterCommit?: readonly ((result: TResult) => Promise<void>)[]
+  readonly afterEffects?: () => void
   readonly committedMessage: string
 }): Promise<TResult> {
   const mutation = new MediaMutation()
   return await DB.writeTransaction(async (transaction) => {
-    transaction.afterRollback(() => mutation.compensate())
-    if (options.afterRollback) transaction.afterRollback(options.afterRollback)
+    transaction.afterRollback(async () => {
+      const failures: unknown[] = []
+      try {
+        await mutation.compensate()
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        await options.afterRollback?.()
+      } catch (error) {
+        failures.push(error)
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new AggregateError(failures, '[Holo Media] Rollback restoration failed.')
+    })
     const result = await options.operation(mutation)
-    const afterCommit = options.afterCommit
-    if (afterCommit) {
-      transaction.afterCommit(async () => {
+    transaction.afterCommit(async () => {
+      const failures: unknown[] = []
+      for (const effect of options.afterCommit ?? []) {
         try {
-          await afterCommit(result)
-        } catch (cause) {
-          throw new Error(options.committedMessage, { cause })
+          await effect(result)
+        } catch (error) {
+          failures.push(error)
         }
-      })
-    }
+      }
+      options.afterEffects?.()
+      if (failures.length === 0) return
+      const cause = failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, '[Holo Media] Post-commit effects failed.')
+      throw new Error(options.committedMessage, { cause })
+    })
     return result
   })
 }
@@ -100,7 +120,7 @@ export async function deleteMediaItems(items: readonly MediaItem[], owner?: Enti
       owner?.forgetRelation('media')
     },
     afterRollback: () => { owner?.forgetRelation('media') },
-    afterCommit: async () => { await removeObsoleteFiles(items, []) },
+    afterCommit: [async () => { await removeObsoleteFiles(items, []) }],
   })
 }
 
@@ -171,32 +191,24 @@ export async function attachMedia<
       }
       return new MediaItem<TCollectionName, TConversionName, TEntity>(media, owner)
     },
-    afterCommit: async (item) => {
-      const media = item.getEntity()
-      const generatedConversions = item.record.generated_conversions
-      const failures: unknown[] = []
-      try {
+    afterCommit: [
+      async (item) => {
         await removeObsoleteFiles(obsolete, [
           { disk, path },
-          ...Object.values(generatedConversions).map(conversion => ({
+          ...Object.values(item.record.generated_conversions).map(conversion => ({
             disk: conversion.disk ?? conversionsDisk,
             path: conversion.path,
           })),
         ])
-      } catch (error) {
-        failures.push(error)
-      }
-      try {
+      },
+      async (item) => {
+        const media = item.getEntity()
         await dispatchQueuedMediaConversionsForModel({
           mediaId: media.get('id'),
           conversionNames: resolveQueuedConversionNames({ definition: options.definition, collectionName: collection.name }),
         }, async () => { await media.refresh() })
-      } catch (error) {
-        failures.push(error)
-      }
-      owner.forgetRelation('media')
-      if (failures.length === 1) throw failures[0]
-      if (failures.length > 1) throw new AggregateError(failures, '[Holo Media] Post-commit effects failed.')
-    },
+      },
+    ],
+    afterEffects: () => { owner.forgetRelation('media') },
   })
 }

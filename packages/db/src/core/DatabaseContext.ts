@@ -568,7 +568,7 @@ export class DatabaseContext {
     const failures: unknown[] = []
 
     while (callbacks.length > 0) {
-      const callback = callbacks.shift()!
+      const callback = (type === 'afterRollback' ? callbacks.pop() : callbacks.shift())!
       try {
         await connectionAsyncContext.run({
           connectionName: callbackConnection.getConnectionName(),

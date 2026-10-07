@@ -18,3 +18,9 @@ failure or enclosing rollback. Obsolete conversions are removed only after commi
 deletion commits the record removal before removing its stored files; a cleanup failure retains the
 deletion and reports commitment. These paths use the same private mutation owner and compensation
 policy, including visible failed restoration. Queued regeneration dispatch runs after commitment.
+
+Rollback callbacks run in reverse registration order so repeated writes unwind to the enclosing
+transaction's original files. Each Media rollback callback restores its files before refreshing
+its record and invalidating its owner relation, and preserves both failures if restoration and
+refresh fail. Commit callbacks retain registration order. Applications using database rollback
+callbacks must account for their reverse ordering.

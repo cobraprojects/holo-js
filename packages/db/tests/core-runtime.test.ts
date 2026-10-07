@@ -1192,8 +1192,8 @@ describe('new core runtime slice', () => {
       'commit:root-after',
       'rollback:nested-immediate',
       'commit:outer-skipped',
-      'rollback:outer-final',
       'rollback:nested-merged',
+      'rollback:outer-final',
     ])
   })
 

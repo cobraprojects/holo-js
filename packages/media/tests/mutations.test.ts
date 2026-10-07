@@ -291,6 +291,33 @@ it('restores conversion bytes and metadata when enclosing regeneration rolls bac
   expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
 })
 
+it('restores original conversion bytes after repeated regeneration and enclosing rollback', async () => {
+  let contents = 'original conversion'
+  setMediaConversionExecutor({ async generate() {
+    return { contents: Buffer.from(contents), fileName: 'thumb.txt' }
+  } })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Repeated regeneration' })
+  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+  const previous = item.record.generated_conversions
+  await expect(DB.transaction(async () => {
+    contents = 'intermediate conversion'
+    await item.regenerate()
+    await DB.transaction(async () => {
+      contents = 'final conversion'
+      await item.regenerate()
+    })
+    await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('final conversion')
+    throw new Error('outer repeated regeneration rollback')
+  })).rejects.toThrow('outer repeated regeneration rollback')
+  await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('original conversion')
+  expect(item.record.generated_conversions).toEqual(previous)
+  expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
+})
+
 it('retains regenerated conversions when queued regeneration dispatch fails after commit', async () => {
   let regenerating = false
   setMediaConversionExecutor({ async generate() {
