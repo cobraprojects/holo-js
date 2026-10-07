@@ -1,23 +1,13 @@
-import { resolve } from 'node:path'
+import { createMigrationFiles } from './migration-creation'
 import { loadConfigDirectory } from '@holo-js/config'
 import type { NormalizedQueueDatabaseConnectionConfig } from '@holo-js/queue'
 import { normalizeMigrationSlug } from '@holo-js/db'
-import {
-  ensureProjectConfig,
-  loadGeneratedProjectRegistry,
-  makeProjectRelativePath,
-  prepareProjectDiscovery,
-  resolveDefaultArtifactPath,
-  writeTextFile,
-} from './project'
-import { runProjectPrepare } from './dev'
 import {
   getRegistryMigrationSlug,
   hasRegisteredCreateTableMigration,
   hasRegisteredMigrationSlug,
   nextMigrationTemplate,
 } from './migrations'
-import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
 
 export const DEFAULT_DATABASE_QUEUE_TABLE = 'jobs'
@@ -115,60 +105,29 @@ export async function runQueueTableCommand(
   io: IoStreams,
   projectRoot: string,
 ): Promise<void> {
-  const project = await ensureProjectConfig(projectRoot)
-  const registry = await loadGeneratedProjectRegistry(projectRoot)
-    ?? await prepareProjectDiscovery(projectRoot, project.config)
-  const queueConfig = await loadQueueConfig(projectRoot)
-  const migrationsDir = resolve(projectRoot, project.config.paths.migrations)
-  const createdFiles: string[] = []
-  const tableNames = resolveDatabaseQueueTables(queueConfig)
-
-  for (const tableName of tableNames) {
-    const migrationName = normalizeQueueMigrationName(tableName)
-    if (hasRegisteredMigrationSlug(registry, migrationName) || hasRegisteredCreateTableMigration(registry, tableName)) {
-      throw new Error(`A migration for table "${tableName}" already exists.`)
-    }
-  }
-
-  for (const tableName of tableNames) {
-    const migrationTemplate = await nextMigrationTemplate(normalizeQueueMigrationName(tableName), migrationsDir)
-    const migrationFilePath = resolveDefaultArtifactPath(projectRoot, project.config.paths.migrations, migrationTemplate.fileName)
-    await writeTextFile(migrationFilePath, renderQueueTableMigration(tableName))
-    createdFiles.push(migrationFilePath)
-  }
-
-  await runProjectPrepare(projectRoot)
-
-  for (const filePath of createdFiles) {
-    writeLine(io.stdout, `Created migration: ${makeProjectRelativePath(projectRoot, filePath)}`)
-  }
+  await createMigrationFiles(projectRoot, async () => {
+    const queueConfig = await loadQueueConfig(projectRoot)
+    return resolveDatabaseQueueTables(queueConfig).map(tableName => ({
+      name: normalizeQueueMigrationName(tableName),
+      tableNames: [tableName],
+      contents: renderQueueTableMigration(tableName),
+    }))
+  }, { io, prepare: true })
 }
 
 export async function runQueueFailedTableCommand(
   io: IoStreams,
   projectRoot: string,
 ): Promise<void> {
-  const project = await ensureProjectConfig(projectRoot)
-  const registry = await loadGeneratedProjectRegistry(projectRoot)
-    ?? await prepareProjectDiscovery(projectRoot, project.config)
-  const queueConfig = await loadQueueConfig(projectRoot)
-  const tableName = queueConfig.failed === false ? DEFAULT_FAILED_JOBS_TABLE : queueConfig.failed.table
-  const migrationName = normalizeQueueMigrationName(tableName)
-
-  if (hasRegisteredMigrationSlug(registry, migrationName) || hasRegisteredCreateTableMigration(registry, tableName)) {
-    throw new Error(`A migration for table "${tableName}" already exists.`)
-  }
-
-  const migrationTemplate = await nextMigrationTemplate(
-    migrationName,
-    resolve(projectRoot, project.config.paths.migrations),
-  )
-  const migrationFilePath = resolveDefaultArtifactPath(projectRoot, project.config.paths.migrations, migrationTemplate.fileName)
-
-  await writeTextFile(migrationFilePath, renderFailedJobsTableMigration(tableName))
-  await runProjectPrepare(projectRoot)
-
-  writeLine(io.stdout, `Created migration: ${makeProjectRelativePath(projectRoot, migrationFilePath)}`)
+  await createMigrationFiles(projectRoot, async () => {
+    const queueConfig = await loadQueueConfig(projectRoot)
+    const tableName = queueConfig.failed === false ? DEFAULT_FAILED_JOBS_TABLE : queueConfig.failed.table
+    return [{
+      name: normalizeQueueMigrationName(tableName),
+      tableNames: [tableName],
+      contents: renderFailedJobsTableMigration(tableName),
+    }]
+  }, { io, prepare: true })
 }
 
 export const queueMigrationInternals = {

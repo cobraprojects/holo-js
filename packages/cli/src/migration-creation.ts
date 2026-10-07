@@ -40,7 +40,7 @@ async function withMigrationCreationLock<TResult>(projectRoot: string, callback:
 }
 
 async function createdTableNames(path: string): Promise<string[]> {
-  const source = await transform(await readFile(path, 'utf8'), { loader: 'ts', minifyWhitespace: true, legalComments: 'none' })
+  const source = await transform(await readFile(path, 'utf8'), { loader: 'ts', minifySyntax: true, minifyWhitespace: true, legalComments: 'none' })
   const tokens = source.code.match(/"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]/g) ?? []
   const names: string[] = []
   for (const [position, token] of tokens.entries()) {
@@ -58,7 +58,7 @@ export async function createMigrationFiles(
   options: { readonly io?: IoStreams, readonly prepare?: boolean } = {},
 ): Promise<string[]> {
   const root = await realpath(projectRoot)
-  return withMigrationCreationLock(root, async () => {
+  const created = await withMigrationCreationLock(root, async () => {
     const project = await ensureProjectConfig(root)
     const registry = await loadGeneratedProjectRegistry(root) ?? await prepareProjectDiscovery(root, project.config)
     const migrationsDir = resolve(root, project.config.paths.migrations)
@@ -107,13 +107,14 @@ export async function createMigrationFiles(
       await Promise.all(owned.map(path => rm(path, { force: true })))
       throw error
     }
-    if (options.io) {
-      for (const path of owned) writeLine(options.io.stdout, `Created migration: ${makeProjectRelativePath(root, path)}`)
-    }
-    if (options.prepare && owned.length > 0) {
-      const { runProjectPrepare } = await import('./dev')
-      await runProjectPrepare(root)
-    }
     return owned
   })
+  if (options.io) {
+    for (const path of created) writeLine(options.io.stdout, `Created migration: ${makeProjectRelativePath(root, path)}`)
+  }
+  if (options.prepare && created.length > 0) {
+    const { runProjectPrepare } = await import('./dev')
+    await runProjectPrepare(root)
+  }
+  return created
 }

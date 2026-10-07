@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { createMigrationFiles } from './migration-creation'
 import {
   CACHE_DATABASE_TABLE_DEFINITIONS,
   DEFAULT_CACHE_DATABASE_LOCK_TABLE as CACHE_DB_DEFAULT_LOCK_TABLE,
@@ -9,21 +9,11 @@ import {
 import { loadConfigDirectory } from '@holo-js/config'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
-  ensureProjectConfig,
-  loadGeneratedProjectRegistry,
-  makeProjectRelativePath,
-  prepareProjectDiscovery,
-  resolveDefaultArtifactPath,
-  writeTextFile,
-} from './project'
-import { runProjectPrepare } from './dev'
-import {
   getRegistryMigrationSlug,
   hasRegisteredCreateTableMigration,
   hasRegisteredMigrationSlug,
   nextMigrationTemplate,
 } from './migrations'
-import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
 
 export const DEFAULT_CACHE_DATABASE_TABLE = CACHE_DB_DEFAULT_TABLE
@@ -175,56 +165,15 @@ export async function runCacheTableCommand(
   io: IoStreams,
   projectRoot: string,
 ): Promise<void> {
-  const project = await ensureProjectConfig(projectRoot)
-  const registry = await loadGeneratedProjectRegistry(projectRoot)
-    ?? await prepareProjectDiscovery(projectRoot, project.config)
-  const cacheConfig = await loadCacheConfig(projectRoot)
-  const migrationsDir = resolve(projectRoot, project.config.paths.migrations)
-  const createdFiles: string[] = []
-  const resolvedTables = resolveDatabaseCacheTables(cacheConfig)
-  const seenPhysicalTables = new Set<string>()
-  const seenSlugs = new Map<string, string>()
-
-  for (const { table, lockTable } of resolvedTables) {
-    const migrationName = normalizeCacheMigrationName(table)
-    const previousTable = seenSlugs.get(migrationName)
-    if (
-      table === lockTable
-      || seenPhysicalTables.has(table)
-      || seenPhysicalTables.has(lockTable)
-      || (previousTable && previousTable !== table)
-    ) {
-      throw new Error(`A migration for cache tables "${table}" and "${lockTable}" already exists.`)
-    }
-
-    seenPhysicalTables.add(table)
-    seenPhysicalTables.add(lockTable)
-    seenSlugs.set(migrationName, table)
-  }
-
-  for (const { table, lockTable } of resolvedTables) {
-    const migrationName = normalizeCacheMigrationName(table)
-    if (
-      hasRegisteredMigrationSlug(registry, migrationName)
-      || hasRegisteredCreateTableMigration(registry, table)
-      || hasRegisteredCreateTableMigration(registry, lockTable)
-    ) {
-      throw new Error(`A migration for cache tables "${table}" and "${lockTable}" already exists.`)
-    }
-  }
-
-  for (const { table, lockTable } of resolvedTables) {
-    const migrationTemplate = await nextMigrationTemplate(normalizeCacheMigrationName(table), migrationsDir)
-    const migrationFilePath = resolveDefaultArtifactPath(projectRoot, project.config.paths.migrations, migrationTemplate.fileName)
-    await writeTextFile(migrationFilePath, renderCacheTableMigration(table, lockTable))
-    createdFiles.push(migrationFilePath)
-  }
-
-  await runProjectPrepare(projectRoot)
-
-  for (const filePath of createdFiles) {
-    writeLine(io.stdout, `Created migration: ${makeProjectRelativePath(projectRoot, filePath)}`)
-  }
+  await createMigrationFiles(projectRoot, async () => {
+    const cacheConfig = await loadCacheConfig(projectRoot)
+    return resolveDatabaseCacheTables(cacheConfig).map(({ table, lockTable }) => ({
+      name: normalizeCacheMigrationName(table),
+      tableNames: [table, lockTable],
+      contents: renderCacheTableMigration(table, lockTable),
+      conflictMessage: `A migration for cache tables "${table}" and "${lockTable}" already exists.`,
+    }))
+  }, { io, prepare: true })
 }
 
 export const cacheMigrationInternals = {
