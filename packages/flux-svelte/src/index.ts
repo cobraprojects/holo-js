@@ -1,6 +1,7 @@
 import { onDestroy } from 'svelte'
 import { readable, writable, type Readable } from 'svelte/store'
 import {
+  fluxInternals,
   getFluxClient,
   type FluxClient,
   type FluxConnectionStatus,
@@ -85,30 +86,6 @@ type FluxPresenceSubscriptionWithChange<
   TMember,
 > = ReturnType<FluxClient<TManifest>['presence']> & {
   readonly members: readonly TMember[]
-}
-
-function memberKey<TMember>(member: TMember): string {
-  return JSON.stringify(member) ?? String(member)
-}
-
-function appendPresenceMember<TMember>(
-  members: readonly TMember[],
-  member: TMember,
-): readonly TMember[] {
-  return Object.freeze([...members, member])
-}
-
-function removePresenceMember<TMember>(
-  members: readonly TMember[],
-  member: TMember,
-): readonly TMember[] {
-  const key = memberKey(member)
-  const index = members.findIndex(candidate => Object.is(candidate, member) || memberKey(candidate) === key)
-  if (index < 0) {
-    return members
-  }
-
-  return Object.freeze(members.filter((_, candidateIndex) => candidateIndex !== index))
 }
 
 function resolveClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
@@ -253,7 +230,7 @@ export function useFluxPresence<
 
     let nextMembers: readonly TResolvedMember[] = []
     members.update((currentMembers) => {
-      nextMembers = appendPresenceMember(currentMembers, member as TResolvedMember)
+      nextMembers = fluxInternals.appendPresenceMember(currentMembers, member as TResolvedMember)
       return nextMembers
     })
     callbacks.onHere?.(nextMembers)
@@ -264,7 +241,7 @@ export function useFluxPresence<
 
     let nextMembers: readonly TResolvedMember[] = []
     members.update((currentMembers) => {
-      nextMembers = removePresenceMember(currentMembers, member as TResolvedMember)
+      nextMembers = fluxInternals.removePresenceMember(currentMembers, member as TResolvedMember)
       return nextMembers
     })
     callbacks.onHere?.(nextMembers)

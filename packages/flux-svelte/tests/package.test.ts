@@ -188,13 +188,29 @@ describe('@holo-js/flux-svelte package surface', () => {
     joining({ id: 'present' })
     leaving({ id: 'missing' })
     leaving(undefined)
-    expect(get(presence.members)).toEqual([{ id: 'present' }])
+    const beforeUnknownLeave = get(presence.members)
+    leaving({ id: 'absent' })
+    expect(get(presence.members)).toBe(beforeUnknownLeave)
+    const storeSnapshots: Array<readonly unknown[]> = []
+    const unsubscribe = presence.members.subscribe(nextMembers => storeSnapshots.push(nextMembers))
+    joining(undefined)
+    joining(undefined)
+    leaving(undefined)
+    expect(storeSnapshots).toEqual([
+      [{ id: 'present' }],
+      [{ id: 'present' }, undefined],
+      [{ id: 'present' }, undefined, undefined],
+      [{ id: 'present' }, undefined],
+    ])
+    unsubscribe()
+    expect(get(presence.members)).toEqual([{ id: 'present' }, undefined])
+    expect(Object.isFrozen(get(presence.members))).toBe(true)
 
     presence.stopListening()
     here([{ id: 'ignored' }])
     joining({ id: 'ignored' })
     leaving({ id: 'present' })
-    expect(get(presence.members)).toEqual([{ id: 'present' }])
+    expect(get(presence.members)).toEqual([{ id: 'present' }, undefined])
   })
 
   it('removes connection status listeners when the store unsubscribes', async () => {

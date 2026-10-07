@@ -860,6 +860,15 @@ describe('@holo-js/flux package surface', () => {
           data: JSON.stringify({ id: 'ord_1' }),
         }),
       })
+      for (const event of ['pusher_internal:member_added', 'pusher_internal:member_added', 'pusher_internal:member_removed']) {
+        sockets[0]!.emit('message', {
+          data: JSON.stringify({
+            event,
+            channel: 'presence-chat.1',
+            data: { member: { id: 'duplicate' } },
+          }),
+        })
+      }
       await second.sendWhisper('typing.start', { editing: true })
       await connector.disconnect()
 
@@ -886,7 +895,7 @@ describe('@holo-js/flux package surface', () => {
         },
       ])
       expect(received).toEqual([{ second: { id: 'ord_1' } }])
-      expect(memberSnapshots).toEqual([[]])
+      expect(memberSnapshots).toEqual([[], [{ id: 'duplicate' }], [{ id: 'duplicate' }, { id: 'duplicate' }], []])
       expect(transitions).toEqual(['connecting', 'connected', 'disconnected'])
     } finally {
       Object.defineProperty(globalThis, 'WebSocket', {
