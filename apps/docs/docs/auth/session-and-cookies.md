@@ -11,7 +11,7 @@ Different browsers or devices may maintain independent sessions for the same use
 
 ## Approved Other-Device Logout
 
-::: info Core persistence pending
+::: info Durable revocation persistence
 Core automatically binds durable database revocation persistence when Auth is configured. Standalone auth supports injected durable revocation stores.
 :::
 

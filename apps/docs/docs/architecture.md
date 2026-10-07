@@ -76,8 +76,8 @@ Realtime owns shared mutation metadata, projection checks, relation hydration, a
 Selected cursor results include only their selected fields, including after inserts and updates. Hidden-field updates leave visible results unchanged. Patching preserves unaffected projected rows where possible and shares cached reads across patch targets. Unsupported shapes fall back to the original query rather than widening an optimized fetch or returning an incomplete result. See [Realtime pagination](./realtime/index.md#pagination).
 ## Approved ownership designs
 
-::: info Pending implementation
-Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, Realtime row-window orchestration, Media mutation ownership, and Flux presence membership are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+::: info Implemented ownership
+Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, authenticated session transitions, Realtime row-window orchestration, Media mutation ownership, Flux presence membership, and explicit browser and token revocation are implemented. The sections below describe their delivered interfaces and failure guarantees.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.

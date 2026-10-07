@@ -232,7 +232,7 @@ The operation derives the provider, user, and retained token from the authentica
 
 Token-guard `logout()` revokes only its current token before clearing request identity. Creating tokens and logging in on another device preserve existing tokens. Revoking all tokens remains a separate explicit operation.
 
-Custom `AuthTokenStore` adapters must extend `deleteByUserId` with optional `{ exceptId?: string }` options. Existing calls without that option retain their all-token behavior. Missing, invalid, expired, or incorrectly selected bearer tokens reject the operation without revoking other tokens. Browser device revocation remains a separate pending feature.
+Custom `AuthTokenStore` adapters must extend `deleteByUserId` with optional `{ exceptId?: string }` options. Existing calls without that option retain their all-token behavior. Missing, invalid, expired, or incorrectly selected bearer tokens reject the operation without revoking other tokens. Browser device revocation uses the separate [other-device logout](/auth/session-and-cookies#approved-other-device-logout) operation.
 
 ## Revoking All Tokens For A User
 
