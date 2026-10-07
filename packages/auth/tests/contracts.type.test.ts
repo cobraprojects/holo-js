@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
+import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
 import clientAuth, { type provider as clientProvider, type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
@@ -50,6 +50,12 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<Web['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
     expectTypeOf<Admin['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
     expectTypeOf<'logoutOtherDevices' extends keyof Api ? true : false>().toEqualTypeOf<false>()
+  })
+
+  it('retains concrete token revocation options and counts', () => {
+    expectTypeOf<AuthTokenFacade['revokeOthers']>().parameters.toEqualTypeOf<[options?: { readonly guard?: string }]>()
+    expectTypeOf<AuthTokenFacade['revokeOthers']>().returns.toEqualTypeOf<Promise<number>>()
+    expectTypeOf<AuthTokenStore['deleteByUserId']>().parameters.toEqualTypeOf<[provider: string, userId: string | number, options?: { readonly exceptId?: string }]>()
   })
 
   it('preserves the concrete password reset redemption callback result', () => {

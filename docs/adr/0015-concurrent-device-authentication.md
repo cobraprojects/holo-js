@@ -1,6 +1,6 @@
 # Permit concurrent device authentication with explicit revocation
 
-Standalone browser revocation is implemented through the injectable Auth adapter. Core default persistence and scaffold migration remain pending.
+Implementation status: personal access token independence, `tokens.revokeOthers`, current-token logout, and standalone browser revocation through the injectable Auth adapter are delivered. Core default browser revocation persistence and scaffold migration remain pending.
 
 A user may maintain multiple independent personal access tokens and browser sessions, following Sanctum's concurrent-token model and Laravel's browser-session behavior. Logging in or issuing a token does not revoke authentication on other devices; developers may explicitly request revocation of other authentication credentials while retaining the current one. We chose developer-controlled revocation over implicit single-device authentication so ordinary login and session transitions do not disrupt unrelated devices.
 

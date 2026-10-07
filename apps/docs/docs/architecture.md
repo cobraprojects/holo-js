@@ -72,14 +72,14 @@ Run it through `bun run test:dependency-policy`.
 ## Approved ownership designs
 
 ::: info Pending implementation
-Optional capability lifetime ownership, email-verification redemption, Queue finalization, and authenticated session transitions are implemented. Password-reset redemption and the remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+Optional capability lifetime ownership, email-verification and password-reset redemption, Queue finalization, and authenticated session transitions are implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
 :::
 
 These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
 
 | Module | Approved ownership | Behavior to preserve or establish |
 | --- | --- | --- |
-| Auth token redemption (email verification implemented; password reset pending) | One-time claim and user mutation coordination | One winner per verification or reset token; participating database changes roll back together |
+| Auth token redemption (implemented) | One-time claim and user mutation coordination | One winner per verification or reset token; participating database changes roll back together |
 | Optional capability lifetime (implemented) | Initialization, owned-resource disposal, and restoration | Continue cleanup after failures, collect errors, and preserve live external bindings |
 | Queue reserved job (implemented) | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
 | Authenticated session transition (implemented) | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
@@ -89,11 +89,11 @@ These changes deepen existing modules by concentrating behavior behind their int
 
 ### One-time auth token redemption
 
-Email-verification stores use the required `redeem<TResult>(record, operation): Promise<TResult | null>` operation. It claims a matching, unused, unexpired token and invokes the operation only for the winner. Unavailable claims return `null`; custom stores implement this operation instead of assembling lookup and unconditional deletion.
+Email-verification and password-reset stores use the required `redeem<TResult>(record, operation): Promise<TResult | null>` operation. It claims a matching, unused, unexpired token and invokes the operation only for the winner. Unavailable claims return `null`; custom stores implement this operation instead of assembling lookup and unconditional deletion.
 
 Core uses an operation-scoped native repository and actual database context identity to prove shared transaction participation. Participating failures roll back the claim and user update together. External providers and different database contexts consume the claim before mutation; failure requires a fresh token. See [Email Verification](/auth/email-verification#single-use-redemption).
 
-Password-reset redemption and its scoped sibling-revocation coordination remain approved pending implementation. The shared decision is recorded in ADR-0008. The approved reset design extends the same claim-before-mutation rule to password-reset stores, with sibling revocation scoped to provider, email, and broker table. Different reset tokens do not introduce an account-wide lock across external operations. Reusable personal access tokens and browser sessions retain independent multi-device authentication.
+Password-reset redemption applies the same single-winner claim and persistence guarantees. Sibling revocation is scoped to provider, email, and broker table and runs before user mutation: a proven shared transaction rolls all three back on failure, while external providers retain the claim and revocations. See [Password Reset](/auth/password-reset#single-use-redemption) and ADR-0008. Different reset tokens do not introduce an account-wide lock across external operations. Reusable personal access tokens and browser sessions retain independent multi-device authentication.
 
 ### Capability lifetime and Queue outcomes
 

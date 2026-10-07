@@ -748,6 +748,7 @@ function createEmailVerificationRedirectRoute(user: AuthUser): string {
 
 async function authenticateAccessTokenRecord(
   plainTextToken: string,
+  provider?: string,
 ): Promise<{
   readonly token: PersonalAccessTokenRecord
   readonly user: SerializedAuthUser
@@ -759,7 +760,7 @@ async function authenticateAccessTokenRecord(
 
   const tokenStore = ensureTokenStore()
   const tokenRecord = await tokenStore.findById(parsed.id)
-  if (!tokenRecord || !verifyTokenSecret(parsed.secret, tokenRecord.tokenHash) || isTokenExpired(tokenRecord)) {
+  if (!tokenRecord || (provider !== undefined && tokenRecord.provider !== provider) || !verifyTokenSecret(parsed.secret, tokenRecord.tokenHash) || isTokenExpired(tokenRecord)) {
     return null
   }
 
@@ -821,9 +822,12 @@ async function resolveCurrentAccessTokenForGuard(guardName: string): Promise<Aut
   }
 
   const record = await ensureTokenStore().findById(parsed.id)
-  if (!record || !verifyTokenSecret(parsed.secret, record.tokenHash) || isTokenExpired(record)) {
+  if (!record || record.provider !== guard.provider || !verifyTokenSecret(parsed.secret, record.tokenHash) || isTokenExpired(record)) {
     return null
   }
+
+  const { adapter } = getProviderAdapter(guard.provider)
+  if (!await adapter.findById(record.userId)) return null
 
   return createCurrentAccessTokenHandle(guardName, record)
 }
@@ -874,7 +878,7 @@ async function resolveUserFromGuard(
       return null
     }
 
-    const authenticated = await authenticateAccessTokenRecord(token)
+    const authenticated = await authenticateAccessTokenRecord(token, guard.provider)
     if (!authenticated) {
       bindings.context.setAccessToken?.(guardName)
       bindings.context.setCachedUser(guardName, null)
@@ -1797,6 +1801,8 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   const guard = getGuardConfig(guardName)
 
   if (guard.driver === 'token') {
+    const current = await resolveCurrentAccessTokenForGuard(guardName)
+    await current?.delete()
     bindings.context.setAccessToken?.(guardName)
     bindings.context.setCachedUser(guardName, null)
     return Object.freeze({
@@ -2473,6 +2479,14 @@ function createTokenFacade(): AuthTokenFacade {
       const guardName = options.guard ?? getRuntimeBindings().config.defaults.guard
       const current = await resolveCurrentAccessTokenForGuard(guardName)
       await current?.delete()
+    },
+    async revokeOthers(options: { readonly guard?: string } = {}): Promise<number> {
+      const guardName = options.guard ?? getRuntimeBindings().config.defaults.guard
+      const current = await resolveCurrentAccessTokenForGuard(guardName)
+      if (!current) {
+        throw new Error('[@holo-js/auth] Revoking other personal access tokens requires a valid current token guard.')
+      }
+      return ensureTokenStore().deleteByUserId(current.provider, current.userId, { exceptId: current.id })
     },
     async revokeAll(user: unknown, options: { readonly guard?: string } = {}): Promise<number> {
       const tokenStore = ensureTokenStore()

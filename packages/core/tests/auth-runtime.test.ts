@@ -4001,6 +4001,21 @@ export default {
       name: 'mobile',
       expiresAt: new Date('2026-01-03T00:00:00.000Z'),
     })
+    for (const [id, provider, userId] of [
+      ['token-sibling', 'users', 'user-1'],
+      ['token-other-provider', 'admins', 'user-1'],
+      ['token-other-user', 'users', 'user-2'],
+    ]) {
+      await stores.tokens.create({
+        id, provider, userId, name: 'device', abilities: ['*'], tokenHash: `sha256$${id}`,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'), expiresAt: null,
+      })
+    }
+    await expect(stores.tokens.deleteByUserId('users', 'user-1', { exceptId: 'token-1' })).resolves.toBe(1)
+    await expect(stores.tokens.findById('token-1')).resolves.toMatchObject({ id: 'token-1' })
+    await expect(stores.tokens.findById('token-sibling')).resolves.toBeNull()
+    await expect(stores.tokens.findById('token-other-provider')).resolves.toMatchObject({ provider: 'admins' })
+    await expect(stores.tokens.findById('token-other-user')).resolves.toMatchObject({ userId: 'user-2' })
     await expect(stores.tokens.deleteByUserId('users', 'user-1')).resolves.toBe(1)
     await stores.tokens.create({
       id: 'token-2',
