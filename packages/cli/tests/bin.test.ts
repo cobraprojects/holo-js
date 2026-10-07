@@ -28,14 +28,13 @@ vi.mock('../src/cli', () => ({
 }))
 
 const packageDir = resolve(import.meta.dirname, '..')
-const repoRoot = resolve(packageDir, '../..')
 const tempBuildRoots: string[] = []
 let packageBuildPromise: Promise<{ packageRoot: string, binEntries: CliBinEntries }> | null = null
 const originalArgv = process.argv
 const originalExitCode = process.exitCode
 
 async function createTempBuildRoot(): Promise<string> {
-  const baseDir = resolve(repoRoot, '.vitest-builds')
+  const baseDir = resolve(packageDir, '.vitest-builds')
   await mkdir(baseDir, { recursive: true })
   const root = await mkdtemp(join(baseDir, 'cli-bin-'))
   tempBuildRoots.push(root)
