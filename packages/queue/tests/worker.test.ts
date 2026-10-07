@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   QueueDriverFactory,
+  QueueFailedJobStore,
   QueueJobEnvelope,
   QueueJsonValue,
   QueueReserveInput,
@@ -40,6 +41,7 @@ type FakeAsyncDriverState = {
   released: Array<{ job: QueueReservedJob<QueueJsonValue>, delaySeconds?: number }>
   deleted: QueueReservedJob<QueueJsonValue>[]
   clearCalls: Array<readonly string[] | undefined>
+  failure?: { readonly operation: 'acknowledge' | 'release' | 'delete', readonly error: Error }
 }
 
 function createReservedJob(
@@ -102,15 +104,24 @@ function createFakeAsyncDriverFactory(
         },
         async acknowledge(job) {
           state.acknowledged.push(job as QueueReservedJob<QueueJsonValue>)
+          if (state.failure?.operation === 'acknowledge') {
+            throw state.failure.error
+          }
         },
         async release(job, options) {
           state.released.push({
             job: job as QueueReservedJob<QueueJsonValue>,
             ...(typeof options?.delaySeconds === 'number' ? { delaySeconds: options.delaySeconds } : {}),
           })
+          if (state.failure?.operation === 'release') {
+            throw state.failure.error
+          }
         },
         async delete(job) {
           state.deleted.push(job as QueueReservedJob<QueueJsonValue>)
+          if (state.failure?.operation === 'delete') {
+            throw state.failure.error
+          }
         },
       }
     },
@@ -130,6 +141,76 @@ function registerNamedJob<TPayload extends QueueJsonValue, TResult>(
 }
 
 describe('@holo-js/queue worker runtime', () => {
+  it.each(['acknowledge', 'release', 'persist', 'delete'] as const)(
+    'stops on %s failure without reclassifying or repeating finalization',
+    async (operation) => {
+      const adapterError = new Error(`${operation} unavailable`)
+      const state: FakeAsyncDriverState = {
+        reserveQueue: [createReservedJob(`jobs.adapter-failure-${operation}`)],
+        reserveInputs: [],
+        acknowledged: [],
+        released: [],
+        deleted: [],
+        clearCalls: [],
+        ...(operation === 'persist' ? {} : { failure: { operation, error: adapterError } }),
+      }
+      const persisted: Error[] = []
+      const events: string[] = []
+      const failedJobStore: QueueFailedJobStore = {
+        async persistFailedJob(_reserved, error) {
+          persisted.push(error)
+          if (operation === 'persist') {
+            throw adapterError
+          }
+          return null
+        },
+        async listFailedJobs() { return [] },
+        async retryFailedJobs() { return 0 },
+        async forgetFailedJob() { return false },
+        async flushFailedJobs() { return 0 },
+      }
+      configureQueueRuntime({
+        config: {
+          default: 'redis',
+          failed: false,
+          connections: { redis: { driver: 'redis' } },
+        },
+        redisConfig: sharedRedisConfig,
+        driverFactories: [createFakeAsyncDriverFactory('redis', state)],
+        failedJobStore,
+      })
+      const handlerError = new Error('explicit terminal failure')
+      registerNamedJob(`jobs.adapter-failure-${operation}`, {
+        async handle(_payload, context) {
+          if (operation === 'release') {
+            await context.release(4)
+          } else if (operation === 'persist' || operation === 'delete') {
+            try {
+              await context.fail(handlerError)
+            } catch {
+              return
+            }
+          }
+        },
+        async onCompleted() { events.push('completed') },
+        async onFailed() { events.push('failed') },
+      })
+
+      await expect(runQueueWorker({
+        once: true,
+        async onJobProcessed() { events.push('processed') },
+        async onJobReleased() { events.push('released') },
+        async onJobFailed() { events.push('worker-failed') },
+      })).rejects.toBe(adapterError)
+      expect(state.reserveInputs).toHaveLength(1)
+      expect(state.acknowledged).toHaveLength(operation === 'acknowledge' ? 1 : 0)
+      expect(state.released).toHaveLength(operation === 'release' ? 1 : 0)
+      expect(persisted).toEqual(operation === 'persist' || operation === 'delete' ? [handlerError] : [])
+      expect(state.deleted).toHaveLength(operation === 'delete' ? 1 : 0)
+      expect(events).toEqual(operation === 'acknowledge' ? ['completed'] : [])
+    },
+  )
+
   it('processes async jobs, emits hooks, and clears named queues', async () => {
     const state: FakeAsyncDriverState = {
       reserveQueue: [
@@ -145,7 +226,9 @@ describe('@holo-js/queue worker runtime', () => {
       deleted: [],
       clearCalls: [],
     }
-    const onJobProcessed = vi.fn()
+    const onJobProcessed = vi.fn(() => {
+      expect(state.acknowledged).toHaveLength(1)
+    })
     const onIdle = vi.fn()
 
     configureQueueRuntime({
@@ -172,6 +255,9 @@ describe('@holo-js/queue worker runtime', () => {
         expect(context.queue).toBe('critical')
         expect(context.attempt).toBe(1)
         expect(context.maxAttempts).toBe(3)
+      },
+      async onCompleted() {
+        expect(state.acknowledged).toEqual([])
       },
     })
 

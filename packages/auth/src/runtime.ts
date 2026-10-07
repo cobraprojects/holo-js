@@ -744,6 +744,7 @@ function createEmailVerificationRedirectRoute(user: AuthUser): string {
 
 async function authenticateAccessTokenRecord(
   plainTextToken: string,
+  provider?: string,
 ): Promise<{
   readonly token: PersonalAccessTokenRecord
   readonly user: SerializedAuthUser
@@ -755,7 +756,7 @@ async function authenticateAccessTokenRecord(
 
   const tokenStore = ensureTokenStore()
   const tokenRecord = await tokenStore.findById(parsed.id)
-  if (!tokenRecord || !verifyTokenSecret(parsed.secret, tokenRecord.tokenHash) || isTokenExpired(tokenRecord)) {
+  if (!tokenRecord || (provider !== undefined && tokenRecord.provider !== provider) || !verifyTokenSecret(parsed.secret, tokenRecord.tokenHash) || isTokenExpired(tokenRecord)) {
     return null
   }
 
@@ -817,9 +818,12 @@ async function resolveCurrentAccessTokenForGuard(guardName: string): Promise<Aut
   }
 
   const record = await ensureTokenStore().findById(parsed.id)
-  if (!record || !verifyTokenSecret(parsed.secret, record.tokenHash) || isTokenExpired(record)) {
+  if (!record || record.provider !== guard.provider || !verifyTokenSecret(parsed.secret, record.tokenHash) || isTokenExpired(record)) {
     return null
   }
+
+  const { adapter } = getProviderAdapter(guard.provider)
+  if (!await adapter.findById(record.userId)) return null
 
   return createCurrentAccessTokenHandle(guardName, record)
 }
@@ -840,7 +844,7 @@ async function resolveUserFromGuard(
       return null
     }
 
-    const authenticated = await authenticateAccessTokenRecord(token)
+    const authenticated = await authenticateAccessTokenRecord(token, guard.provider)
     if (!authenticated) {
       bindings.context.setAccessToken?.(guardName)
       bindings.context.setCachedUser(guardName, null)
@@ -959,15 +963,44 @@ async function multiFactorRateLimit(provider: string, userId: string | number): 
   })
 }
 
+async function invalidateSessionAuthentication(
+  bindings: RuntimeBindings,
+  sessionId: string,
+  guardNames: readonly string[],
+  store?: string,
+): Promise<void> {
+  const failures: unknown[] = []
+  try {
+    await bindings.session.invalidate(sessionId, { store })
+  } catch (error) {
+    failures.push(error)
+  }
+  for (const guardName of new Set(guardNames)) {
+    for (const clear of [
+      () => bindings.context.setSessionId(guardName),
+      () => bindings.context.setCachedUser(guardName, null),
+      () => bindings.context.setRememberToken?.(guardName),
+    ]) {
+      try {
+        clear()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+  }
+  if (failures.length > 1) throw new AggregateError(failures, 'Failed to clear session authentication.')
+  if (failures.length === 1) throw failures[0]
+}
+
 async function invalidateMultiFactorChallenge(
   guardName: string,
   sessionId: string,
   bindings: RuntimeBindings,
 ): Promise<void> {
-  await bindings.session.invalidate(sessionId)
-  bindings.context.setSessionId(guardName)
-  bindings.context.setCachedUser(guardName, null)
-  bindings.context.setRememberToken?.(guardName)
+  const sharedGuards = Object.entries(bindings.config.guards)
+    .filter(([name, guard]) => guard.driver === 'session' && bindings.context.getSessionId(name) === sessionId)
+    .map(([name]) => name)
+  await invalidateSessionAuthentication(bindings, sessionId, [...sharedGuards, guardName])
 }
 
 async function establishLoginSessionForUser(
@@ -994,7 +1027,11 @@ async function establishLoginSessionForUser(
   try {
     await challengeSession.flash(established.sessionId, multiFactorChallengeLeaseKey(options.guard), true)
   } catch (error) {
-    await invalidateMultiFactorChallenge(options.guard, established.sessionId, bindings)
+    try {
+      await invalidateMultiFactorChallenge(options.guard, established.sessionId, bindings)
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Failed to invalidate a multi-factor challenge after establishment failed.')
+    }
     throw error
   }
   return Object.freeze({
@@ -1476,6 +1513,13 @@ async function completeMultiFactorChallenge(
       payload: toSessionPayload(guardName, state.payload.provider, state.payload.user),
     })
   } catch (error) {
+    let formerSession: AuthSessionRecord | null
+    try {
+      formerSession = await bindings.session.read(state.sessionId)
+    } catch (readError) {
+      throw new AggregateError([error, readError], 'Failed to inspect a multi-factor challenge after session establishment failed.')
+    }
+    if (!formerSession) throw error
     try {
       await challengeSession.flash(state.sessionId, leaseKey, true)
     } catch (restoreError) {
@@ -1488,6 +1532,7 @@ async function completeMultiFactorChallenge(
           'Failed to recover a multi-factor challenge after session establishment failed.',
         )
       }
+      throw new AggregateError([error, restoreError], 'Failed to recover a multi-factor challenge after session establishment failed.')
     }
     throw error
   }
@@ -1710,6 +1755,8 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   const guard = getGuardConfig(guardName)
 
   if (guard.driver === 'token') {
+    const current = await resolveCurrentAccessTokenForGuard(guardName)
+    await current?.delete()
     bindings.context.setAccessToken?.(guardName)
     bindings.context.setCachedUser(guardName, null)
     return Object.freeze({
@@ -1900,12 +1947,7 @@ async function rotateSessionWithData(
   if (!bindings.session.rotate) {
     throw new Error('[@holo-js/auth] Existing auth sessions require state-preserving session rotation.')
   }
-  const rotated = await bindings.session.rotate(session.id, { store: session.store })
-  return bindings.session.create({
-    id: rotated.id,
-    store: rotated.store,
-    data,
-  })
+  return bindings.session.rotate(session.id, { store: session.store, data, renewLifetime: true })
 }
 
 async function establishSessionForUser(
@@ -1965,48 +2007,58 @@ async function establishSessionForUser(
     ? await rotateSessionWithData(bindings, existingSession, nextSessionData)
     : await bindings.session.create({ data: nextSessionData })
 
-  if (existingSession) {
-    for (const guardName of sharedGuardNames) {
-      bindings.context.setSessionId(guardName, session.id)
+  try {
+    if (existingSession) {
+      for (const guardName of sharedGuardNames) {
+        bindings.context.setSessionId(guardName, session.id)
+      }
     }
+
+    bindings.context.setSessionId(options.guard, session.id)
+    bindings.context.setCachedUser(options.guard, user)
+    let rememberToken: string | undefined
+    if (options.remember) {
+      rememberToken = await bindings.session.issueRememberMeToken(session.id)
+      bindings.context.setRememberToken?.(options.guard, rememberToken)
+    } else if (preserveRememberSession) {
+      rememberToken = await bindings.session.issueRememberMeToken(session.id)
+      bindings.context.setRememberToken?.(options.guard, rememberToken)
+    } else {
+      bindings.context.setRememberToken?.(options.guard)
+    }
+
+    const cookies = [
+      bindings.session.sessionCookie(session.id),
+      ...(rememberToken ? [bindings.session.rememberMeCookie(rememberToken)] : []),
+      ...(!rememberToken && shouldClearRememberCookie
+        ? [forgetDefaultRememberCookie(bindings)].filter((cookie): cookie is string => typeof cookie === 'string')
+        : []),
+    ]
+    await appendResponseCookies(bindings, cookies)
+
+    return Object.freeze({
+      guard: options.guard,
+      provider: resolveSessionPayloadProvider(sessionPayload),
+      user,
+      sessionId: session.id,
+      rememberToken,
+      cookies: Object.freeze(cookies),
+      ...(isEmailVerificationRequired() && !hasVerifiedEmail(user as unknown as Readonly<Record<string, unknown>>)
+        ? {
+            emailVerificationRequired: true,
+            emailVerificationRoute: createEmailVerificationRedirectRoute(user),
+          }
+        : {}),
+    })
+  } catch (error) {
+    try {
+      await invalidateSessionAuthentication(bindings, session.id, [...sharedGuardNames, options.guard], session.store)
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Failed to clean up an authenticated session transition.')
+    }
+    throw error
   }
 
-  bindings.context.setSessionId(options.guard, session.id)
-  bindings.context.setCachedUser(options.guard, user)
-  let rememberToken: string | undefined
-  if (options.remember) {
-    rememberToken = await bindings.session.issueRememberMeToken(session.id)
-    bindings.context.setRememberToken?.(options.guard, rememberToken)
-  } else if (preserveRememberSession) {
-    rememberToken = await bindings.session.issueRememberMeToken(session.id)
-    bindings.context.setRememberToken?.(options.guard, rememberToken)
-  } else {
-    bindings.context.setRememberToken?.(options.guard)
-  }
-
-  const cookies = [
-    bindings.session.sessionCookie(session.id),
-    ...(rememberToken ? [bindings.session.rememberMeCookie(rememberToken)] : []),
-    ...(!rememberToken && shouldClearRememberCookie
-      ? [forgetDefaultRememberCookie(bindings)].filter((cookie): cookie is string => typeof cookie === 'string')
-      : []),
-  ]
-  await appendResponseCookies(bindings, cookies)
-
-  return Object.freeze({
-    guard: options.guard,
-    provider: resolveSessionPayloadProvider(sessionPayload),
-    user,
-    sessionId: session.id,
-    rememberToken,
-    cookies: Object.freeze(cookies),
-    ...(isEmailVerificationRequired() && !hasVerifiedEmail(user as unknown as Readonly<Record<string, unknown>>)
-      ? {
-          emailVerificationRequired: true,
-          emailVerificationRoute: createEmailVerificationRedirectRoute(user),
-        }
-      : {}),
-  })
 }
 
 function toPlainTextTokenResult(
@@ -2167,10 +2219,12 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }
 
-        await store.delete(record.id)
-        const updated = await updateUserRecord(record.provider, record.userId, {
+        const updated = await store.redeem(record, () => updateUserRecord(record.provider, record.userId, {
           email_verified_at: new Date(),
-        })
+        }))
+        if (!updated) {
+          throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
+        }
         return updated
       }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure))
     },
@@ -2304,32 +2358,23 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }
 
-    const { adapter } = getProviderAdapter(record.provider)
-    const user = await adapter.findByCredentials({
-      email: record.email,
-    })
-    if (!user) {
-      throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
-        provider: record.provider,
-        email: record.email,
-      })
-    }
-
     const password = await getRuntimeBindings().passwordHasher.hash(input.password)
-    const userId = requireUserId(
-      adapter,
-      user,
-      '[@holo-js/auth] Password reset token user is invalid.',
-    )
-    await store.delete(record.id, {
-      table: record.table,
+    const updated = await store.redeem(record, async () => {
+      await store.deleteByEmail(record.provider, record.email, { table: record.table })
+      const { adapter } = getProviderAdapter(record.provider)
+      const user = await adapter.findByCredentials({ email: record.email })
+      if (!user) {
+        throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
+          provider: record.provider,
+          email: record.email,
+        })
+      }
+      const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
+      return updateUserRecord(record.provider, userId, { password })
     })
-    await store.deleteByEmail(record.provider, record.email, {
-      table: record.table,
-    })
-    const updated = await updateUserRecord(record.provider, userId, {
-      password,
-    })
+    if (!updated) {
+      throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
+    }
     return updated
   }, EXPECTED_PASSWORD_RESET_CONSUME_ERRORS, error => createPasswordResetConsumeFailure(error, input))
 }
@@ -2383,6 +2428,14 @@ function createTokenFacade(): AuthTokenFacade {
       const guardName = options.guard ?? getRuntimeBindings().config.defaults.guard
       const current = await resolveCurrentAccessTokenForGuard(guardName)
       await current?.delete()
+    },
+    async revokeOthers(options: { readonly guard?: string } = {}): Promise<number> {
+      const guardName = options.guard ?? getRuntimeBindings().config.defaults.guard
+      const current = await resolveCurrentAccessTokenForGuard(guardName)
+      if (!current) {
+        throw new Error('[@holo-js/auth] Revoking other personal access tokens requires a valid current token guard.')
+      }
+      return ensureTokenStore().deleteByUserId(current.provider, current.userId, { exceptId: current.id })
     },
     async revokeAll(user: unknown, options: { readonly guard?: string } = {}): Promise<number> {
       const tokenStore = ensureTokenStore()

@@ -452,6 +452,7 @@ export type RowPatchContext = {
   readonly selectionResultKeys: readonly string[]
   readonly usesExactQueryIdAsProjectedIdentity: boolean
   readonly valueKeys: readonly string[]
+  readonly relationKeys?: readonly string[]
 }
 
 export type QueryRowPatchContext = {
@@ -464,6 +465,7 @@ export type QueryRowPatchContext = {
   readonly selectionColumns: readonly string[]
   readonly selectionResultKeys: readonly string[]
   readonly usesExactQueryIdAsProjectedIdentity: boolean
+  readonly relationKeys?: readonly string[]
 }
 
 export type UpdateRowPatchContext = RowPatchContext
