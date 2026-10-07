@@ -8,6 +8,7 @@ export interface HoloRuntimeState<TRuntime, TSecurityRedisAdapter, TSessionRedis
 }
 
 export type OptionalSubsystemRuntimeBindings<TSecurityRedisAdapter, TSessionRedisAdapter> = Readonly<{
+  readonly liveBindings: ReadonlyMap<string, unknown>
   readonly mail?: unknown
   readonly notifications?: unknown
   readonly broadcast?: unknown
@@ -49,7 +50,20 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityRedisAdapter, TSe
   > => {
     const state = getRuntimeState()
     const runtime = globalThis as OptionalRuntimeGlobals
+    const host = globalThis as typeof globalThis & Record<string, unknown>
+    const liveBindings = new Map<string, unknown>()
+    for (const key of [
+      '__holoAuthRuntime__', '__holoSessionRuntime__', '__holoQueueRuntime__',
+      '__holoCacheRuntime__', '__holoCacheQueryBridge__', '__holoDbQueryCacheBridge__',
+      '__holoAuthorizationRuntime__',
+      '__holoJsAuthWorkosRuntime', '__holoJsAuthClerkRuntime', '__holoAuthSocialBindings__',
+      '__holoStorageRuntimeBindings__',
+    ]) {
+      const value = key === '__holoSessionRuntime__' && state.sessionRedisAdapters ? undefined : host[key]
+      liveBindings.set(key, value && typeof value === 'object' ? { ...value } : value)
+    }
     return Object.freeze({
+      liveBindings,
       ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
       ...(runtime.__holoNotificationsRuntime__?.bindings
         ? { notifications: runtime.__holoNotificationsRuntime__.bindings }
@@ -57,23 +71,14 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityRedisAdapter, TSe
       ...(runtime.__holoBroadcastRuntime__?.bindings
         ? { broadcast: runtime.__holoBroadcastRuntime__.bindings }
         : {}),
-      ...(state.sessionRedisAdapters
-        ? { session: Object.freeze({ sessionRedisAdapters: state.sessionRedisAdapters }) }
-        : {}),
       ...(
         runtime.__holoSecurityRuntime__?.bindings
-        || state.securityRedisAdapter
+        && state.securityRateLimitStoreManaged !== true
         || typeof state.securityRateLimitStoreManaged !== 'undefined'
           ? {
               security: Object.freeze({
-                ...(runtime.__holoSecurityRuntime__?.bindings
+                ...(runtime.__holoSecurityRuntime__?.bindings && state.securityRateLimitStoreManaged !== true
                   ? { bindings: runtime.__holoSecurityRuntime__.bindings }
-                  : {}),
-                ...(state.securityRedisAdapter
-                  ? { securityRedisAdapter: state.securityRedisAdapter }
-                  : {}),
-                ...(typeof state.securityRateLimitStoreManaged !== 'undefined'
-                  ? { securityRateLimitStoreManaged: state.securityRateLimitStoreManaged }
                   : {}),
               }),
             }
@@ -87,6 +92,11 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityRedisAdapter, TSe
   ): void => {
     const state = getRuntimeState()
     const runtime = globalThis as OptionalRuntimeGlobals
+    const host = globalThis as typeof globalThis & Record<string, unknown>
+    for (const [key, value] of bindings.liveBindings) {
+      if (typeof value === 'undefined') delete host[key]
+      else host[key] = value
+    }
 
     if (bindings.mail || runtime.__holoMailRuntime__) {
       runtime.__holoMailRuntime__ ??= {}

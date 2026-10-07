@@ -55,3 +55,57 @@ The repository architecture check rejects:
 - abstraction-package dependencies on concrete drivers
 
 Run it through `bun run test:dependency-policy`.
+
+## Approved ownership designs
+
+::: info Pending implementation
+Optional capability lifetime ownership is implemented. The remaining designs below are approved for future implementation; their new interfaces and failure guarantees remain pending.
+:::
+
+These changes deepen existing modules by concentrating behavior behind their interfaces. Existing framework-native request, cookie, redirect, and navigation ownership remains with each framework adapter.
+
+| Module | Approved ownership | Behavior to preserve or establish |
+| --- | --- | --- |
+| Auth token redemption | One-time claim and user mutation coordination | One winner per verification or reset token; participating database changes roll back together |
+| Optional capability lifetime (implemented) | Initialization, owned-resource disposal, and restoration | Continue cleanup after failures, collect errors, and preserve live external bindings |
+| Queue reserved job | Outcome selection and one finalization path | Adapter finalization failures stop the worker without becoming handler retries |
+| Authenticated session transition | Complete payload rotation, shared guards, and recovery | Preserve lifetime renewal, private flash state, and remember policy; fail closed after transition failure |
+| Realtime row window | Shared patch preparation and mutation orchestration | Preserve ordering, page contents, structural sharing, bounded fetching, and avoided query reruns |
+| Media mutation | File compensation and record commitment | Compensate before transaction commitment; retain committed results after cleanup or dispatch failure |
+| Flux presence membership | Shared membership rules with native framework adapters | Preserve inference, per-event snapshots, and distinct first-match versus all-match removal policies |
+
+### One-time auth token redemption
+
+Verification and password-reset stores gain a required `redeem<TResult>(record, operation): Promise<TResult | null>` operation. It claims only a matching, unused, unexpired token and invokes the operation only for the winner. Unavailable claims return `null`; custom stores must implement the operation instead of assembling lookup and unconditional deletion.
+
+When core can prove that native user persistence and token persistence share the actual database context, the claim, password-reset sibling revocation, and user mutation participate in one transaction. For external providers or different database contexts, the claim commits before the user mutation; failed mutation leaves the claim and sibling revocations consumed. A fresh token is required after that failure.
+
+Single-use applies per token. Different reset tokens for the same email do not introduce an account-wide lock across external operations. Sibling revocation remains scoped to provider, email, and broker table. Reusable personal access tokens and browser sessions retain independent multi-device authentication.
+
+### Capability lifetime and Queue outcomes
+
+Core's private capability lifetime modules use the existing kernel lifecycle. Disposal and rollback continue after individual failures, close only Holo-owned resources, and restore prior live bindings for every capability Holo changes. A single disposal failure retains its original error; multiple failures produce an `AggregateError`, and failed startup includes both initialization and rollback failures. Queue asynchronous shutdown closes all owned drivers and resets its state even when closure fails. Closed resources are not restored. Asynchronous error reporting from synchronous Queue configuration and reset is outside this change.
+
+Queue handler retry rules remain intact. Acknowledgement, release, or terminal persistence failures reject the worker with the original adapter error; finalization does not re-enter handler retry logic. Job completion hooks still precede acknowledgement, while worker processed hooks follow successful acknowledgement.
+
+### Authenticated session transitions
+
+Session rotation gains optional `data` and `renewLifetime` fields. Auth supplies the complete next payload with lifetime renewal through the existing store rotation operation; ordinary rotation retains its defaults. Auth rejects stores that cannot perform the required state-preserving rotation.
+
+If remember-token issuance or cookie delivery fails after persistence, invalidate the new session and clear every affected guard's request identity while keeping the old identifier invalidated. Report cleanup failures alongside the original failure. Other devices remain authenticated.
+
+Developer-controlled other-device logout is documented in [Session And Cookies](/auth/session-and-cookies). Independent token revocation is documented in [Personal Access Tokens](/auth/personal-access-tokens).
+
+### Realtime and Media outcomes
+
+Realtime keeps its existing internal interfaces and distinct window policies. Shared orchestration stays private; the refactor must preserve result correctness and query budgets.
+
+Media commitment means the enclosing database transaction has committed, not merely that a record save returned. Before commitment, failures trigger file compensation. After commitment, obsolete-file cleanup or queued dispatch failure retains the new record and files and reports that committed outcome. Native errors preserve individual causes; `AggregateError` preserves primary and compensation failures. Successful return types remain unchanged.
+
+### Flux adapter integration
+
+The existing `fluxInternals` export gains generic `appendPresenceMember` and `removePresenceMember` methods taking a readonly member array and one member and returning a readonly array of the same inferred member type. Comparison stays private. Framework adapters remove the first matching member, while core removal retains its all-match policy; native effects, refs, stores, and cleanup stay with each adapter.
+
+### Verification through module interfaces
+
+Verification must protect concurrent token claims, transaction outcomes, continued cleanup after failures, Queue finalization errors, session failure recovery, and current-device preservation. Realtime tests retain real database checks for correct pages and bounded reads; Media tests verify file and record outcomes with local persistence. Native Flux adapter tests continue to exercise framework lifecycle behavior. Existing behavior tests remain valuable; redundant plumbing tests can be replaced when the deeper interface protects the same behavior.
