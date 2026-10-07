@@ -132,6 +132,26 @@ describe('model chunking', () => {
     expect(logs.filter(log => log.kind === 'query').map(log => log.rowCount)).toEqual([3, 3, 1])
   })
 
+  it('preserves duplicate values when a declared table has no primary key', async () => {
+    await adapter.execute('CREATE TABLE unkeyed_items (id INTEGER NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO unkeyed_items VALUES (1, 'First'), (1, 'Second'), (2, 'Third')")
+    const unkeyed = defineGeneratedTable('unkeyed_items', { id: column.integer(), name: column.string() })
+    const names: string[] = []
+    await DB.table(unkeyed).orderBy('id').chunk(1, rows => {
+      names.push(...rows.map(row => row.name))
+    })
+    expect(names).toEqual(['First', 'Second', 'Third'])
+  })
+
+  it('traverses declared tables without an id column in the requested order', async () => {
+    await adapter.execute('CREATE TABLE unkeyed_names (name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO unkeyed_names VALUES ('Third'), ('First'), ('Second')")
+    const unkeyed = defineGeneratedTable('unkeyed_names', { name: column.string() })
+    const names: string[] = []
+    for await (const row of DB.table(unkeyed).orderBy('name').lazy(1)) names.push(row.name)
+    expect(names).toEqual(['First', 'Second', 'Third'])
+  })
+
   it('stops ordinary model chunks after callback refusal', async () => {
     const batches: string[][] = []
     await Item.orderBy('id', 'desc').chunk(2, records => {
