@@ -370,6 +370,9 @@ export async function syncManagedDriverDependencies(
   const cachePackageInstalled = typeof dependencies['@holo-js/cache'] !== 'undefined'
     || typeof devDependencies['@holo-js/cache'] !== 'undefined'
   const cacheDesired = cacheConfigured || cachePackageInstalled
+  const mediaPackageInstalled = typeof dependencies['@holo-js/media'] !== 'undefined'
+    || typeof devDependencies['@holo-js/media'] !== 'undefined'
+  const mediaDesired = mediaConfigured || mediaPackageInstalled
   const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
 
   requiredPackages.add('@holo-js/core')
@@ -424,7 +427,7 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/mail')
   }
 
-  if (mediaConfigured) {
+  if (mediaDesired) {
     requiredPackages.add('@holo-js/media')
   }
 
