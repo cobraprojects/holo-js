@@ -27,3 +27,5 @@ runWithSvelteKitRequestEvent<TValue>(
 ```
 
 The request types retain the existing structural shapes. These entry points are implemented in the shared adapter package.
+
+Verification must cover overlapping and nested asynchronous requests, exceptions, cleanup, both initialization orders, standalone auth, and native Node and Edge storage. Callback return inference and structural request compatibility must remain precise.
