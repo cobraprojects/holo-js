@@ -26,4 +26,4 @@ runWithSvelteKitRequestEvent<TValue>(
 ): TValue
 ```
 
-The request types retain the existing structural shapes. These entry points are approved for implementation and do not exist yet.
+The request types retain the existing structural shapes. These entry points are implemented in the shared adapter package.

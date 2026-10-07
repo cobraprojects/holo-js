@@ -12,7 +12,7 @@ export type SvelteKitRequestEvent = {
   }
 }
 
-export type SvelteKitCookieOptions = {
+type SvelteKitCookieOptions = {
   path: string
   domain?: string
   maxAge?: number

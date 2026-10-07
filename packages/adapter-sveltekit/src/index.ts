@@ -1,4 +1,4 @@
-import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent, type SvelteKitCookieOptions } from '@holo-js/adapter-shared/sveltekit/request-context'
+import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import { error as svelteKitError, type Handle, type HandleServerError } from '@sveltejs/kit'
 import {
   createHoloFrameworkAdapter,
@@ -18,6 +18,8 @@ export {
 export type SvelteKitHoloOptions = HoloFrameworkOptions
 
 export type SvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap> = HoloAdapterProject<TCustom>
+
+type SvelteKitCookieOptions = Parameters<SvelteKitRequestEvent['cookies']['set']>[2]
 
 type ParsedResponseCookie = {
   readonly name: string
