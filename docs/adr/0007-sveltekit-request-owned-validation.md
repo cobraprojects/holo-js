@@ -14,6 +14,6 @@ createSvelteKitHoloHooks(hooks: {
 }
 ```
 
-`Handle` and `HandleServerError` are native SvelteKit types. The existing generic `runWithSvelteKitRequestEvent` interface remains unchanged. The factory is approved for implementation and does not exist yet.
+`Handle` and `HandleServerError` are native SvelteKit types. The existing generic `runWithSvelteKitRequestEvent` interface remains unchanged. The factory is implemented in the SvelteKit adapter.
 
 Verification must cover overlapping requests to the same URL, native tracing event clones that preserve request identity, HTML and JSON action responses, ordinary error-hook delegation, and cleanup on failure. Fatal errors reported after the request handler unwinds must not leave retained validation payloads or assume an active request scope.
