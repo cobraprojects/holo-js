@@ -67,7 +67,7 @@ describe('model chunking', () => {
 
   it.each(['chunkById', 'chunkByIdDesc'] as const)('stops table %s retrieval after a callback refuses the next batch', async method => {
     const batches: number[][] = []
-    await DB.table('chunk_items')[method](2, rows => {
+    await DB.table(table)[method](2, rows => {
       batches.push(rows.map(row => Number(row.id)))
       return false
     })
@@ -139,6 +139,16 @@ describe('model chunking', () => {
     const names: string[] = []
     await DB.table(unkeyed).orderBy('id').chunk(1, rows => {
       names.push(...rows.map(row => row.name))
+    })
+    expect(names).toEqual(['First', 'Second', 'Third'])
+  })
+
+  it('preserves duplicate id values when a string table has no registered schema', async () => {
+    await adapter.execute('CREATE TABLE unregistered_items (id INTEGER NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO unregistered_items VALUES (1, 'First'), (1, 'Second'), (2, 'Third')")
+    const names: string[] = []
+    await DB.table('unregistered_items').orderBy('id').chunk(1, rows => {
+      names.push(...rows.map(row => String(row.name)))
     })
     expect(names).toEqual(['First', 'Second', 'Third'])
   })

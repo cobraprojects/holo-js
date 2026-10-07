@@ -48,7 +48,6 @@ export async function* queryBatches<
   const hasPrimaryKey = plan.source.table !== undefined
     ? Object.values(plan.source.table.columns).some(column => column.primaryKey)
     : traversal.primaryKey !== undefined
-      || (idColumn ? idColumn === `${tableName}.id` : plan.orderBy.some(order => order.kind === 'column' && (order.column === 'id' || order.column === `${tableName}.id`)))
   const bounded = hasPrimaryKey && !requiresRowNullOrder && !plan.distinct && plan.joins.length === 0 && plan.groupBy.length === 0 && plan.unions.length === 0
     && !plan.selections.some(selection => selection.kind === 'aggregate' || selection.kind === 'raw')
     && (traversal.fallbackOrder === 'database' || plan.orderBy.every(order => order.kind === 'column'))
