@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/adapter-shared/next/request-context': resolve(__dirname, '../adapter-shared/src/next/request-context.node.ts'),
       '@holo-js/adapter-shared/client': resolve(__dirname, '../adapter-shared/src/client.ts'),
       '@holo-js/adapter-shared/build': resolve(__dirname, '../adapter-shared/src/build.ts'),
       '@holo-js/adapter-shared': resolve(__dirname, '../adapter-shared/src/index.ts'),
