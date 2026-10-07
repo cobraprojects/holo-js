@@ -11,12 +11,12 @@ describe.each(['postgres', 'mysql'] as const)('%s schema mutation outcomes', dia
     const tableName = `holo_outcomes_${randomUUID().replaceAll('-', '')}`
     const indexName = `${tableName}_id`
     const adapter = dialect === 'postgres'
-      ? createPostgresAdapter({ config: { host: '/tmp', user: 'postgres', database: 'postgres' } })
+      ? createPostgresAdapter({ config: { host: process.env.HOLO_POSTGRES_HOST ?? '/tmp', port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432), user: 'postgres', database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres' } })
       : createMySQLAdapter({ config: {
-          host: '127.0.0.1',
+          host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
           port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
           user: 'root',
-          database: 'mysql',
+          database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
         } })
     const db = createDatabase({ adapter, dialect: createDialect(dialect) })
     const schema = createSchemaService(db)

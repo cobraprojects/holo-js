@@ -8,6 +8,13 @@ import { createPostgresAdapter } from '../src'
 
 const runLivePostgres = process.env.HOLO_POSTGRES_INTEGRATION === '1' ? it : it.skip
 
+const livePostgresConfig = {
+  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+  user: 'postgres',
+  database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+}
+
 describe('@holo-js/db-postgres', () => {
   it('creates the configured database when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => ({
@@ -229,7 +236,7 @@ describe('@holo-js/db-postgres', () => {
   runLivePostgres('chunks grouped projections without selecting the primary key', async () => {
     const tableName = `holo_grouped_chunks_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
-      config: { host: '127.0.0.1', port: 5432, user: 'postgres', database: 'postgres' },
+      config: livePostgresConfig,
     })
     const Item = defineModel(defineGeneratedTable(tableName, { id: column.id(), active: column.boolean() }), { timestamps: false })
     configureDB(createConnectionManager({
@@ -257,7 +264,7 @@ describe('@holo-js/db-postgres', () => {
   ]))('chunks $operation model results selecting $selection in ascending ID order', async ({ operation, selection, attribute }) => {
     const tableName = `holo_union_chunks_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
-      config: { host: '127.0.0.1', port: 5432, user: 'postgres', database: 'postgres' },
+      config: livePostgresConfig,
     })
     const Item = defineModel(defineGeneratedTable(tableName, { id: column.id() }), { timestamps: false })
     configureDB(createConnectionManager({
@@ -283,12 +290,7 @@ describe('@holo-js/db-postgres', () => {
   runLivePostgres('runs queries against a local Postgres server through the public adapter', async () => {
     const tableName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 5432,
-        user: 'postgres',
-        database: 'postgres',
-      },
+      config: livePostgresConfig,
     })
 
     try {
@@ -314,18 +316,11 @@ describe('@holo-js/db-postgres', () => {
     const databaseName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const tableName = 'users'
     const admin = createPostgresAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 5432,
-        user: 'postgres',
-        database: 'postgres',
-      },
+      config: livePostgresConfig,
     })
     const adapter = createPostgresAdapter({
       config: {
-        host: '127.0.0.1',
-        port: 5432,
-        user: 'postgres',
+        ...livePostgresConfig,
         database: databaseName,
       },
     })

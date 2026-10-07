@@ -14,14 +14,22 @@ import { createMySQLAdapter } from '../src'
 
 const runLiveMySql = process.env.HOLO_MYSQL_INTEGRATION === '1' ? it : it.skip
 
+const liveMySqlConfig = {
+  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
+  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
+  user: 'root',
+  database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
+}
+
 describe('@holo-js/db-mysql', () => {
   runLiveMySql.each(['create', 'add', 'compiled-add'] as const)('enforces constrained foreign keys when using %s columns', async (operation) => {
     const databaseName = `holo_foreign_keys_${randomUUID().replaceAll('-', '_')}`
     const admin = createMySQLAdapter({
-      config: { host: '127.0.0.1', port: 3306, user: 'root', database: 'mysql' },
+      config: liveMySqlConfig,
     })
     const adapter = createMySQLAdapter({
-      config: { host: '127.0.0.1', port: 3306, user: 'root', database: databaseName },
+      config: { ...liveMySqlConfig,
+        database: databaseName, },
     })
     const schema = createSchemaService(createDatabase({ adapter, dialect: createDialect('mysql') }))
 
@@ -288,12 +296,7 @@ describe('@holo-js/db-mysql', () => {
   runLiveMySql('runs queries against a local MySQL server through the public adapter', async () => {
     const tableName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const adapter = createMySQLAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 3306,
-        user: 'root',
-        database: 'mysql',
-      },
+      config: liveMySqlConfig,
     })
 
     try {
@@ -319,18 +322,11 @@ describe('@holo-js/db-mysql', () => {
     const databaseName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const tableName = 'users'
     const admin = createMySQLAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 3306,
-        user: 'root',
-        database: 'mysql',
-      },
+      config: liveMySqlConfig,
     })
     const adapter = createMySQLAdapter({
       config: {
-        host: '127.0.0.1',
-        port: 3306,
-        user: 'root',
+        ...liveMySqlConfig,
         database: databaseName,
       },
     })
@@ -372,18 +368,11 @@ describe('@holo-js/db-mysql', () => {
       },
     })
     const admin = createMySQLAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 3306,
-        user: 'root',
-        database: 'mysql',
-      },
+      config: liveMySqlConfig,
     })
     const adapter = createMySQLAdapter({
       config: {
-        host: '127.0.0.1',
-        port: 3306,
-        user: 'root',
+        ...liveMySqlConfig,
         database: databaseName,
       },
     })
