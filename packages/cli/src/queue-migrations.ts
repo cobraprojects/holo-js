@@ -14,6 +14,7 @@ export const DEFAULT_DATABASE_QUEUE_TABLE = 'jobs'
 export const DEFAULT_FAILED_JOBS_TABLE = 'failed_jobs'
 
 export async function loadQueueConfig(projectRoot: string) {
+  await import('@holo-js/queue/config')
   return (await loadConfigDirectory(projectRoot)).queue
 }
 

@@ -79,7 +79,8 @@ export async function createMigrationFiles(
       const normalizedTables = tableNames.map(normalizeMigrationSlug)
       const duplicate = slugs.has(slug)
         || new Set(normalizedTables).size !== normalizedTables.length
-        || tableNames.some((name, position) => tables.has(normalizedTables[position]!) || hasRegisteredCreateTableMigration(registry, name))
+        || normalizedTables.some(name => tables.has(name))
+        || tableNames.some(name => hasRegisteredCreateTableMigration(registry, name))
       if (duplicate) {
         if (entry.skipIfExists) continue
         throw new Error(entry.conflictMessage ?? (tableNames.length > 0

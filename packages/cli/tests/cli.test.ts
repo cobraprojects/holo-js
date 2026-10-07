@@ -8934,6 +8934,7 @@ export default {
   })
 
   it('runs generator internals in-process', async () => {
+    await import('@holo-js/queue/config')
     const modelProjectRoot = await createTempProject()
     tempDirs.push(modelProjectRoot)
     await linkWorkspaceDb(modelProjectRoot)

@@ -1,4 +1,3 @@
-import '@holo-js/queue/config'
 import type * as FsPromises from 'node:fs/promises'
 import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

@@ -406,6 +406,7 @@ export async function runMakeMigration(
   if (createTable && alterTable) throw new Error('Use either "--create" or "--table", not both.')
   await createMigrationFiles(projectRoot, () => [{
     name: requestedName,
+    ...(!createTable ? { conflictMessage: `A migration named "${normalizeMigrationSlug(requestedName)}" already exists.` } : {}),
     ...(createTable ? { tableNames: [createTable], templateOptions: { kind: 'create_table', tableName: createTable } } : {}),
     ...(alterTable ? { tableNames: [], templateOptions: { kind: 'alter_table', tableName: alterTable } } : {}),
   }], { io, prepare: true })
