@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
-import { join } from 'node:path'
+import { loadConfigDirectory } from '@holo-js/config'
+import { Storage } from '@holo-js/storage/runtime'
+import '@holo-js/storage/config'
+import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
@@ -44,6 +47,30 @@ async function createSymlinkedStorageDirectory(): Promise<{
 }
 
 describe('@holo-js/core storage runtime optional imports', () => {
+  it('uses local storage without initializing an unused S3 disk', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-local-'))
+    tempDirs.push(root)
+    await mkdir(join(root, 'config'))
+    await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
+      defaultDisk: 'local',
+      disks: {
+        local: { driver: 'local', root: join(root, 'storage') },
+        s3: { driver: 's3' },
+      },
+    })}\n`)
+    const loadedConfig = await loadConfigDirectory(root, { preferCache: false })
+
+    try {
+      await configurePlainNodeStorageRuntime(resolve(import.meta.dirname, '../../..'), loadedConfig)
+      await Storage.disk('local').put('message.txt', 'Local storage is available')
+      await expect(readFile(join(root, 'storage/message.txt'), 'utf8')).resolves.toBe('Local storage is available')
+      await expect(Storage.disk('local').get('message.txt')).resolves.toBe('Local storage is available')
+      await expect(Storage.disk('s3').put('message.txt', 'Missing credentials')).rejects.toThrow('accessKeyId')
+    } finally {
+      await resetOptionalStorageRuntime()
+    }
+  })
+
   it('rejects streamed writes through a symlinked storage parent', async () => {
     const { backend, outside } = await createSymlinkedStorageDirectory()
     if (!backend.setItemStream) throw new Error('The file storage backend must support streamed writes.')

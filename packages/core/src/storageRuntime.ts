@@ -415,13 +415,13 @@ function createFileStorageBackend(root: string): StorageBackend {
 }
 
 /* v8 ignore start -- S3 backend behavior is covered in the split storage-s3 package */
-async function createS3StorageBackend(projectRoot: string, disk: RuntimeDiskConfig): Promise<StorageBackend> {
+async function createS3StorageBackendFactory(projectRoot: string, disk: RuntimeDiskConfig): Promise<() => StorageBackend> {
   const storageS3 = await importOptionalModule<StorageS3Module>('@holo-js/storage-s3', projectRoot)
   if (!storageS3) {
     throw new Error('[@holo-js/core] Storage config references an s3 disk but @holo-js/storage-s3 is not installed.')
   }
 
-  return storageS3.default({
+  return () => storageS3.default({
     bucket: disk.bucket,
     region: disk.region,
     endpoint: disk.endpoint,
@@ -450,12 +450,13 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
     disks: loadedConfig.storage.disks,
   })
   const backends = new Map<string, StorageBackend>()
+  const factories = new Map<string, () => StorageBackend>()
 
   for (const [diskName, disk] of Object.entries(normalizedStorage.disks)) {
-    const backend = disk.driver === 's3'
-      ? await createS3StorageBackend(projectRoot, disk)
-      : createFileStorageBackend(resolve(projectRoot, disk.root as string))
-    backends.set(diskName, backend)
+    const factory = disk.driver === 's3'
+      ? await createS3StorageBackendFactory(projectRoot, disk)
+      : () => createFileStorageBackend(resolve(projectRoot, disk.root as string))
+    factories.set(diskName, factory)
   }
 
   storageRuntime.configureStorageRuntime({
@@ -466,13 +467,17 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
     getStorage: (base: string) => {
       const diskName = base.replace(/^holo:/, '')
       const backend = backends.get(diskName)
+      if (backend) return backend
+      const factory = factories.get(diskName)
       /* v8 ignore start -- the public storage runtime rejects unknown disks before reaching this internal guard */
-      if (!backend) {
+      if (!factory) {
         throw new Error(`[Holo Storage] Disk "${diskName}" backend is not configured.`)
       }
       /* v8 ignore stop */
 
-      return backend
+      const created = factory()
+      backends.set(diskName, created)
+      return created
     },
   })
 }
