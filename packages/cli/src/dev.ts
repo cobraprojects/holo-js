@@ -915,9 +915,10 @@ export async function runProjectDevServer(
       if (syncFramework || watchRootsChanged) {
         watchedPathSnapshots = await collectWatchedPathSnapshots(projectRoot, project, pluginWatches)
       }
-      serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
+      const nextServerArgs = await resolveServerArguments(projectRoot, passthroughArgs)
       session.signal.throwIfAborted()
       await refreshNonRecursiveWatchers?.()
+      serverArgs = nextServerArgs
     }
 
     await prepareDiscovery(true)
@@ -1052,6 +1053,12 @@ export async function runProjectDevServer(
       }
 
       if (result.restartRequested) {
+        for (;;) {
+          const pendingClassification = classifyEvents
+          await pendingClassification
+          await pendingPrepare
+          if (pendingClassification === classifyEvents && !pendingPrepare) break
+        }
         continue
       }
 

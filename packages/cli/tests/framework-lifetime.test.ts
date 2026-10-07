@@ -39,7 +39,146 @@ function createChild(): ChildProcess {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await Promise.all(tempDirs.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
+
+it.each([
+  { closureFirst: true, args: [], expectedPort: '4300' },
+  { closureFirst: false, args: [], expectedPort: '4300' },
+  { closureFirst: true, args: ['--port=3000'], expectedPort: undefined },
+  { closureFirst: true, args: [], expectedPort: '4200', failLast: true },
+])('coalesces preparation before replacement with closureFirst=$closureFirst, args=$args and failLast=$failLast', async ({ closureFirst, args, expectedPort, failLast }) => {
+  vi.stubEnv('PORT', undefined)
+  const root = await createProject()
+  await writeFile(join(root, '.env'), 'PORT=4100\n')
+  const children: ChildProcess[] = []
+  const launches: string[][] = []
+  const spawnProcess = vi.fn((_command: string, serverArgs: readonly string[]) => {
+    const child = createChild()
+    children.push(child)
+    launches.push([...serverArgs])
+    return child
+  }) as unknown as typeof spawn
+  let observeChange: WatchListener<string> | undefined
+  const createWatcher = ((_path: string, _options: { recursive?: boolean }, callback: WatchListener<string>) => {
+    observeChange = callback
+    return { close() {} }
+  }) as unknown as typeof watch
+  let preparationCount = 0
+  let releasePreparation = () => {}
+  const preparation = new Promise<void>(resolvePromise => { releasePreparation = resolvePromise })
+  const prepare = async () => {
+    preparationCount++
+    if (preparationCount === 3) {
+      await preparation
+      await writeFile(join(root, '.env'), 'PORT=4200\n')
+    }
+    if (preparationCount === 4) {
+      await writeFile(join(root, '.env'), failLast ? 'PORT=invalid\n' : 'PORT=4300\n')
+    }
+  }
+  const io = createIo(root)
+  let errors = ''
+  io.stderr.on('data', chunk => { errors += String(chunk) })
+  const run = runProjectDevServer(io, root, spawnProcess, createWatcher, prepare, args)
+  try {
+    await vi.waitFor(() => expect(children).toHaveLength(1))
+    const first = children[0]!
+    observeChange?.('change', 'config/app.ts')
+    await vi.waitFor(() => expect(first.kill).toHaveBeenCalledOnce())
+    observeChange?.('change', '.env')
+    await vi.waitFor(() => expect(preparationCount).toBe(3))
+    if (closureFirst) {
+      first.emit('close', 0)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(children).toHaveLength(1)
+    }
+    observeChange?.('rename', 'config/database.ts')
+    releasePreparation()
+    await vi.waitFor(() => expect(preparationCount).toBe(4))
+    if (!closureFirst) {
+      await new Promise(resolve => setImmediate(resolve))
+      expect(children).toHaveLength(1)
+      first.emit('close', 0)
+    }
+    await vi.waitFor(() => expect(children).toHaveLength(2))
+    expect(launches[1]?.slice(args.length ? -args.length : -2)).toEqual(expectedPort ? ['--port', expectedPort] : args)
+    expect(errors).toBe(failLast ? 'PORT must be an integer between 0 and 65535.\n' : '')
+    if (failLast) await writeFile(join(root, '.env'), 'PORT=4300\n')
+    observeChange?.('change', 'config/app.ts')
+    await vi.waitFor(() => expect(children[1]?.kill).toHaveBeenCalledOnce())
+    children[1]?.emit('close', 0)
+    await vi.waitFor(() => expect(children).toHaveLength(3))
+    children[2]?.emit('close', 0)
+    await run
+  } finally {
+    releasePreparation()
+    for (const child of children) child.emit('close', 0)
+    await run.catch(() => undefined)
+  }
+})
+
+it.each(['active', 'closed'] as const)('does not restart a %s framework run when preparation fails', async (state) => {
+  const root = await createProject()
+  await mkdir(join(root, '.holo-js/framework'), { recursive: true })
+  await writeFile(join(root, '.holo-js/framework/run.mjs'), "process.on('SIGTERM', () => process.exit(0)); console.log('ready'); setInterval(() => {}, 1000)")
+  const io = createIo(root)
+  let output = ''
+  let errors = ''
+  io.stdout.on('data', chunk => { output += String(chunk) })
+  io.stderr.on('data', chunk => { errors += String(chunk) })
+  const children: ChildProcess[] = []
+  const spawnProcess = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args)
+    children.push(child)
+    return child
+  }) as typeof spawn
+  let observeChange: WatchListener<string> | undefined
+  const createWatcher = ((_path: string, _options: { recursive?: boolean }, callback: WatchListener<string>) => {
+    observeChange = callback
+    return { close() {} }
+  }) as unknown as typeof watch
+  let preparationCount = 0
+  let releasePreparation = () => {}
+  const preparation = new Promise<void>(resolvePromise => { releasePreparation = resolvePromise })
+  const prepare = async () => {
+    preparationCount++
+    if (preparationCount > 1) {
+      await preparation
+      throw new Error('preparation failed')
+    }
+  }
+  const run = runProjectDevServer(io, root, spawnProcess, createWatcher, prepare, ['--port=3000'])
+  let completed = false
+  const completion = run.then(() => { completed = true })
+  try {
+    await vi.waitFor(() => expect(output).toContain('ready'))
+    observeChange?.('change', 'config/app.ts')
+    await vi.waitFor(() => expect(preparationCount).toBe(2))
+    const first = children[0]!
+    if (state === 'closed') {
+      const closed = new Promise<void>(resolvePromise => first.once('close', () => resolvePromise()))
+      first.kill('SIGTERM')
+      await closed
+    }
+    releasePreparation()
+    if (state === 'active') {
+      await vi.waitFor(() => expect(errors).toContain('preparation failed'))
+      expect(completed).toBe(false)
+      expect(first.exitCode).toBeNull()
+      expect(first.signalCode).toBeNull()
+      first.kill('SIGTERM')
+    }
+    await completion
+    expect(children).toHaveLength(1)
+  } finally {
+    releasePreparation()
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }
+    await run.catch(() => undefined)
+  }
 })
 
 describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
