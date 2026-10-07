@@ -81,6 +81,17 @@ declare module '../src' {
 }
 
 describe('type system contracts', () => {
+  it('preserves literal hidden attributes in model metadata', () => {
+    const table = defineTable('hidden_users', { id: column.id(), password: column.string() })
+    const direct = defineModel(table, { hidden: ['password'] })
+    const fromTable = defineModelFromTable(table, { hidden: ['password'] })
+    const built = defineModel('hidden_built_users', builder => builder.id().string('password'), { hidden: ['password'] })
+
+    expectTypeOf(direct.definition.hidden).toEqualTypeOf<readonly string[] & readonly ['password']>()
+    expectTypeOf(fromTable.definition.hidden).toEqualTypeOf<readonly string[] & readonly ['password']>()
+    expectTypeOf(built.definition.hidden).toEqualTypeOf<readonly string[] & readonly ['password']>()
+    expectTypeOf(direct.preventLazyLoading().definition.hidden).toEqualTypeOf<readonly string[] & readonly ['password']>()
+  })
   it('exports every relation definition type from the public package barrel', () => {
     expectTypeOf<HasOneRelationDefinition>().toMatchTypeOf<{ readonly kind: 'hasOne' }>()
     expectTypeOf<HasOneOfManyRelationDefinition>().toMatchTypeOf<{ readonly kind: 'hasOneOfMany' }>()

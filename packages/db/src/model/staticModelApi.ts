@@ -20,6 +20,7 @@ import type {
   ModelAttributeKey,
   ModelColumnName,
   ModelRecord,
+  ModelDefinition,
   ModelReference,
   ModelScopesDefinition,
   ModelScopeMethods,
@@ -147,18 +148,20 @@ export type StaticModelApi<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
   TRelations extends RelationMap = RelationMap,
+  THidden extends readonly string[] = readonly string[],
 > = ModelReference<TTable, TScopes, TRelations>
   & ModelScopeMethods<TTable, TScopes, TRelations>
   & StaticModelQueryForwarders<TTable, TRelations>
   & {
+  readonly definition: ModelDefinition<TTable, TScopes, TRelations> & { readonly hidden: Readonly<THidden> }
   query(): ModelQueryBuilder<TTable, TRelations>
   newQuery(): ModelQueryBuilder<TTable, TRelations>
   newModelQuery(): ModelQueryBuilder<TTable, TRelations>
   newQueryWithoutScopes(): ModelQueryBuilder<TTable, TRelations>
   newQueryWithoutRelationships(): ModelQueryBuilder<TTable, TRelations>
-  preventLazyLoading(value?: boolean): StaticModelApi<TTable, TScopes, TRelations>
-  preventAccessingMissingAttributes(value?: boolean): StaticModelApi<TTable, TScopes, TRelations>
-  automaticallyEagerLoadRelationships(value?: boolean): StaticModelApi<TTable, TScopes, TRelations>
+  preventLazyLoading(value?: boolean): StaticModelApi<TTable, TScopes, TRelations, THidden>
+  preventAccessingMissingAttributes(value?: boolean): StaticModelApi<TTable, TScopes, TRelations, THidden>
+  automaticallyEagerLoadRelationships(value?: boolean): StaticModelApi<TTable, TScopes, TRelations, THidden>
   withoutEvents<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
   unguarded<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
   find(value: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations> | undefined>
@@ -225,7 +228,7 @@ export type StaticModelApi<
   firstOrNew(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations>>
-  resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations>
+  resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations, THidden>
   make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>
   getRepository(): ModelRepository<TTable>
   getConnectionName(): string | undefined

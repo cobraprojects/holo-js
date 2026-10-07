@@ -144,28 +144,31 @@ export function defineModel<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
+  const THidden extends readonly string[] = readonly string[],
 >(
   table: TTable,
-  options?: DefineModelOptions<TTable, TScopes, TRelations>,
-): StaticModelApi<TTable, TScopes, TRelations>
+  options?: DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden },
+): StaticModelApi<TTable, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TColumns extends ColumnShapeInput,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
+  const THidden extends readonly string[] = readonly string[],
 >(
   tableName: TName,
   builder: (table: TableDefinitionBuilder<TName, EmptyColumnShape>) => ModelTableBuilderResult<TName, TColumns>,
-  options?: DefineModelOptions<BoundTableDefinition<TName, TColumns>, TScopes, TRelations>,
-): StaticModelApi<BoundTableDefinition<TName, TColumns>, TScopes, TRelations>
+  options?: DefineModelOptions<BoundTableDefinition<TName, TColumns>, TScopes, TRelations> & { readonly hidden?: THidden },
+): StaticModelApi<BoundTableDefinition<TName, TColumns>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
+  const THidden extends readonly string[] = readonly string[],
 >(
   tableName: TName,
-  options?: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations>,
-): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations>
+  options?: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations> & { readonly hidden?: THidden },
+): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations, THidden>
 export function defineModel(
   tableOrName: string | TableDefinition,
   builderOrOptions?:
@@ -194,10 +197,11 @@ export function defineModelFromTable<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
+  const THidden extends readonly string[] = readonly string[],
 >(
   table: TTable,
-  options?: DefineModelOptions<TTable, TScopes, TRelations>,
-): StaticModelApi<TTable, TScopes, TRelations>
+  options?: DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden },
+): StaticModelApi<TTable, TScopes, TRelations, THidden>
 export function defineModelFromTable(
   table: TableDefinition,
   options?: DefineModelOptions<TableDefinition>,
