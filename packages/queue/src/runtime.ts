@@ -694,8 +694,16 @@ function resetQueueRuntimeState(state: RuntimeQueueState): void {
 
 export async function shutdownQueueRuntime(): Promise<void> {
   const state = getQueueRuntimeState()
-  await closeQueueDrivers(state.drivers.values())
-  resetQueueRuntimeState(state)
+  const drivers = [...new Set(state.drivers.values())]
+  state.drivers.clear()
+  try {
+    const results = await Promise.allSettled(drivers.map(async driver => driver.close()))
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'Queue drivers failed to close.')
+  } finally {
+    resetQueueRuntimeState(state)
+  }
 }
 
 export function resetQueueRuntime(): void {

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { Pool, type PoolConfig, type QueryResult } from 'pg'
+import { Pool, types, type PoolConfig, type QueryResult } from 'pg'
 import type {
   DatabaseDriverFactory,
   DriverAdapter,
@@ -115,7 +115,15 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined
-      : config => new Pool(config))
+      : config => new Pool({
+          ...config,
+          types: config?.types ?? {
+            getTypeParser(oid: number, format: 'text' | 'binary' = 'text') {
+              if (oid === 1114 && format === 'text') return (value: string) => new Date(`${value}Z`)
+              return types.getTypeParser(oid, format)
+            },
+          },
+        }))
     this.config = options.config ?? (options.connectionString ? { connectionString: options.connectionString } as TConfig : undefined)
     this.connected = !!(options.client || options.pool)
   }
