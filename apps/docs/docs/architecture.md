@@ -55,3 +55,16 @@ The repository architecture check rejects:
 - abstraction-package dependencies on concrete drivers
 
 Run it through `bun run test:dependency-policy`.
+
+## Media attachment ownership
+
+The private Media mutation module owns attachment and replacement ordering, database commitment,
+file compensation, and post-commit outcomes. It uses the database's existing transaction hooks:
+record saves do not establish commitment until the enclosing transaction commits. Attachment
+failure and outer rollback compensate file writes; obsolete-file cleanup and queued dispatch run
+after commitment and retain committed records and new files when they fail.
+
+Native error causes retain individual failures, and `AggregateError` retains the primary transaction
+failure together with failed rollback compensation. The successful Media interface remains unchanged.
+Regeneration and explicit deletion ownership are pending; this delivered attachment behavior is
+recorded in [ADR-0011](https://github.com/cobraprojects/holo-js/blob/main/docs/adr/0011-media-mutation-commit-and-compensation.md).
