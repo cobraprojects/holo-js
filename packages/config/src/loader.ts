@@ -10,9 +10,7 @@ import {
   normalizeAppConfig,
 } from './defaults'
 import {
-  configureEnvRuntime,
-  loadEnvironment,
-  resolveAppEnvironment,
+  configEvaluationInternals,
   resolveEnvPlaceholders,
 } from './env'
 import { composeRegisteredConfig, configRegistryInternals } from './registry'
@@ -155,54 +153,24 @@ async function collectConfigEntries(configDir: string): Promise<Array<{ configNa
 
 async function collectRawConfig(
   configDir: string,
-  environmentValues: Readonly<Record<string, string>>,
   options: {
-    captureEnvPlaceholders?: boolean
     onlyConfigNames?: readonly ConfigFileName[]
   } = {},
 ): Promise<{ rawConfig: RawConfigMap, loadedFiles: readonly string[] }> {
   const rawConfig: RawConfigMap = {}
   const loadedFiles: string[] = []
   const configEntries = await collectConfigEntries(configDir)
-  const allowedConfigNames = options.onlyConfigNames
-    ? new Set(options.onlyConfigNames)
-    : undefined
+  const entriesByName = new Map(configEntries.map(entry => [entry.configName, entry]))
+  const selectedEntries = options.onlyConfigNames
+    ? [...new Set(options.onlyConfigNames)].flatMap((name) => {
+        const entry = entriesByName.get(name)
+        return entry ? [entry] : []
+      })
+    : configEntries
 
-  const previousEnvEntries = new Map<string, string | undefined>()
-
-  try {
-    configureEnvRuntime(environmentValues, {
-      mode: options.captureEnvPlaceholders ? 'capture' : 'resolve',
-    })
-    for (const [key, value] of Object.entries(environmentValues)) {
-      previousEnvEntries.set(key, process.env[key])
-      process.env[key] = value
-    }
-    previousEnvEntries.set('HOLO_CAPTURE_ENV', process.env.HOLO_CAPTURE_ENV)
-    if (options.captureEnvPlaceholders) {
-      process.env.HOLO_CAPTURE_ENV = '1'
-    } else {
-      Reflect.deleteProperty(process.env, 'HOLO_CAPTURE_ENV')
-    }
-
-    for (const entry of configEntries) {
-      if (allowedConfigNames && !allowedConfigNames.has(entry.configName)) {
-        continue
-      }
-
-      rawConfig[entry.configName] = resolveConfigExport(await importConfigModule(entry.filePath))
-      loadedFiles.push(entry.filePath)
-    }
-  } finally {
-    configureEnvRuntime(undefined)
-    for (const [key, value] of previousEnvEntries) {
-      if (typeof value === 'string') {
-        process.env[key] = value
-        continue
-      }
-
-      Reflect.deleteProperty(process.env, key)
-    }
+  for (const entry of selectedEntries) {
+    rawConfig[entry.configName] = resolveConfigExport(await importConfigModule(entry.filePath))
+    loadedFiles.push(entry.filePath)
   }
 
   return {
@@ -357,13 +325,12 @@ export async function writeConfigCache(
 ): Promise<string> {
   const root = resolve(projectRoot)
   const configDir = join(root, 'config')
-  const environment = await loadEnvironment({
+  const { environment, rawConfig, loadedFiles } = await configEvaluationInternals.evaluate({
     cwd: root,
-    envName: options.envName,
-    processEnv: options.processEnv,
-  })
-  const { rawConfig, loadedFiles } = await collectRawConfig(configDir, environment.values, {
+    ...options,
     captureEnvPlaceholders: true,
+  }, async (environment) => {
+    return { environment, ...await collectRawConfig(configDir) }
   })
   const {
     cacheableConfig,
@@ -407,58 +374,43 @@ export async function loadConfigDirectory<TCustom extends HoloConfigMap = HoloCo
 ): Promise<LoadedHoloConfig<TCustom>> {
   const root = resolve(projectRoot)
   const configDir = join(root, 'config')
-  const envName = options.envName
-    ? resolveAppEnvironment({ ...options.processEnv, HOLO_ENV: options.envName })
-    : resolveAppEnvironment(options.processEnv)
-  const preferCache = options.preferCache ?? envName === 'production'
-  if (preferCache) {
-    const cached = await readConfigCache(root)
-    if (cached?.environment.name === envName) {
-      const environment = await loadEnvironment({
-        cwd: root,
-        envName,
-        processEnv: options.processEnv,
-      })
-      const deferredConfigNames = getDeferredConfigNames(cached)
-      let rawConfig = cached.config
-      let loadedFiles = cached.configFiles
-      const cachedConfigNames = getNormalizerConfigNames(cached)
-        .filter(name => !deferredConfigNames.includes(name))
-      if (cachedConfigNames.length > 0) {
-        await collectRawConfig(configDir, environment.values, {
-          onlyConfigNames: cachedConfigNames,
-        })
-      }
-
-      if (deferredConfigNames.length > 0) {
-        const live = await collectRawConfig(configDir, environment.values, {
-          onlyConfigNames: deferredConfigNames,
-        })
-        rawConfig = {
-          ...cached.config,
-          ...live.rawConfig,
-        }
-        loadedFiles = mergeLoadedFiles(cached.configFiles, live.loadedFiles, deferredConfigNames)
-      }
-
-      return normalizeLoadedConfig<TCustom>(rawConfig, {
-        environment,
-        loadedFiles,
-      })
-    }
-  }
-
-  const environment = await loadEnvironment({
+  const { environment, rawConfig, loadedFiles } = await configEvaluationInternals.evaluate({
     cwd: root,
-    envName,
+    envName: options.envName,
     processEnv: options.processEnv,
-  })
-  const { rawConfig, loadedFiles } = await collectRawConfig(configDir, environment.values)
+  }, async (environment) => {
+    const preferCache = options.preferCache ?? environment.name === 'production'
+    const cached = preferCache ? await readConfigCache(root) : undefined
+    if (cached?.environment.name !== environment.name) {
+      return { environment, ...await collectRawConfig(configDir) }
+    }
 
-  return normalizeLoadedConfig<TCustom>(rawConfig, {
-    environment,
-    loadedFiles,
+    const deferredConfigNames = getDeferredConfigNames(cached)
+    const deferredNames = new Set(deferredConfigNames)
+    const evaluationNames = [
+      ...getNormalizerConfigNames(cached).filter(name => !deferredNames.has(name)),
+      ...deferredConfigNames,
+    ]
+    if (evaluationNames.length === 0) {
+      return { environment, rawConfig: cached.config, loadedFiles: cached.configFiles }
+    }
+
+    const live = await collectRawConfig(configDir, { onlyConfigNames: evaluationNames })
+    return {
+      environment,
+      rawConfig: {
+        ...cached.config,
+        ...Object.fromEntries(Object.entries(live.rawConfig).filter(([name]) => deferredNames.has(name))),
+      },
+      loadedFiles: mergeLoadedFiles(
+        cached.configFiles,
+        live.loadedFiles.filter(filePath => deferredNames.has(getConfigName(basename(filePath)))),
+        deferredConfigNames,
+      ),
+    }
   })
+
+  return normalizeLoadedConfig<TCustom>(rawConfig, { environment, loadedFiles })
 }
 
 export function defineConfig<TConfig extends object>(config: TConfig): DefineConfigValue<TConfig> {

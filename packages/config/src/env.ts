@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { basename, join, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { LoadedEnvironment, HoloAppEnv } from './types'
@@ -21,6 +22,8 @@ type EnvPlaceholder = {
 type EnvRuntimeState = {
   values?: Readonly<Record<string, string>>
   mode: EnvRuntimeMode
+  pendingEvaluation: Promise<void>
+  evaluationContext: AsyncLocalStorage<{ active: boolean }>
 }
 
 function parseEnvFile(contents: string): Record<string, string> {
@@ -143,6 +146,8 @@ function getEnvRuntimeState(): EnvRuntimeState {
 
   runtime.__holoEnvRuntime__ ??= {
     mode: 'resolve',
+    pendingEvaluation: Promise.resolve(),
+    evaluationContext: new AsyncLocalStorage(),
   }
 
   return runtime.__holoEnvRuntime__
@@ -156,6 +161,62 @@ export function configureEnvRuntime(
   state.values = values
   state.mode = options.mode ?? 'resolve'
 }
+
+async function evaluateConfig<TValue>(
+  options: LoadEnvironmentOptions & { captureEnvPlaceholders?: boolean },
+  evaluate: (environment: LoadedEnvironment) => Promise<TValue>,
+): Promise<TValue> {
+  const state = getEnvRuntimeState()
+  if (state.evaluationContext.getStore()?.active) {
+    throw new Error('Holo config cannot be loaded from an active config evaluation.')
+  }
+
+  const evaluation = state.pendingEvaluation.then(async () => {
+    const context = { active: true }
+    try {
+      return await state.evaluationContext.run(context, async () => {
+        const environment = await loadEnvironment({
+          ...options,
+          processEnv: { ...(options.processEnv ?? process.env) },
+        })
+        const previousRuntime = { values: state.values, mode: state.mode }
+        const previousEntries = new Map(
+          [...new Set([...Object.keys(environment.values), 'HOLO_CAPTURE_ENV'])]
+            .map(key => [key, process.env[key]] as const),
+        )
+
+        try {
+          configureEnvRuntime(environment.values, {
+            mode: options.captureEnvPlaceholders ? 'capture' : 'resolve',
+          })
+          Object.assign(process.env, environment.values)
+          if (options.captureEnvPlaceholders) {
+            process.env.HOLO_CAPTURE_ENV = '1'
+          } else {
+            Reflect.deleteProperty(process.env, 'HOLO_CAPTURE_ENV')
+          }
+
+          return await evaluate(environment)
+        } finally {
+          configureEnvRuntime(previousRuntime.values, { mode: previousRuntime.mode })
+          for (const [key, value] of previousEntries) {
+            if (value === undefined) {
+              Reflect.deleteProperty(process.env, key)
+            } else {
+              process.env[key] = value
+            }
+          }
+        }
+      })
+    } finally {
+      context.active = false
+    }
+  })
+  state.pendingEvaluation = evaluation.then(() => undefined, () => undefined)
+  return evaluation
+}
+
+export const configEvaluationInternals = { evaluate: evaluateConfig }
 
 function coerceEnvScalar<TValue extends EnvScalar>(
   runtimeValue: string,

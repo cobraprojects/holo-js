@@ -7,6 +7,42 @@ import { expect, it, onTestFinished } from 'vitest'
 
 const execute = promisify(execFile)
 
+it('isolates overlapping config imports in one process and restores the ambient environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-config-overlap-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+  const entry = resolve(import.meta.dirname, '../src/index.ts')
+  for (const owner of ['first', 'second']) {
+    await mkdir(join(root, owner, 'config'), { recursive: true })
+    await writeFile(join(root, owner, 'config/services.mjs'), `
+import { env } from ${JSON.stringify(entry)}
+const before = [env('CONFIG_OWNER'), process.env.CONFIG_OWNER]
+await new Promise(resolve => setTimeout(resolve, 20))
+export default { before, after: [env('CONFIG_OWNER'), process.env.CONFIG_OWNER] }
+`)
+  }
+  const worker = join(root, 'worker.ts')
+  await writeFile(worker, `
+import { loadConfigDirectory } from ${JSON.stringify(entry)}
+process.env.CONFIG_OWNER = 'ambient'
+const loaded = await Promise.all(['first', 'second'].map(owner => loadConfigDirectory(
+  ${JSON.stringify(root)} + '/' + owner,
+  { preferCache: false, processEnv: { CONFIG_OWNER: owner } },
+)))
+process.stdout.write(JSON.stringify({
+  values: loaded.map(config => config.custom.services),
+  ambient: process.env.CONFIG_OWNER,
+}))
+`)
+  const { stdout } = await execute('bun', [worker], { env: { ...process.env, VITEST: 'true' } })
+  expect(JSON.parse(stdout)).toEqual({
+    values: [
+      { before: ['first', 'first'], after: ['first', 'first'] },
+      { before: ['second', 'second'], after: ['second', 'second'] },
+    ],
+    ambient: 'ambient',
+  })
+})
+
 it('loads one project independently in parallel processes without losing environment values', async () => {
   const root = await mkdtemp(join(tmpdir(), 'holo-config-parallel-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))

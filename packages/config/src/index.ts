@@ -20,6 +20,7 @@ export {
   useConfig,
 } from './access'
 export {
+  configEvaluationInternals,
   configureEnvRuntime,
   env,
   isEnvPlaceholder,

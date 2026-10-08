@@ -1,8 +1,7 @@
 import { resolve } from 'node:path'
 import {
-  configureEnvRuntime,
+  configEvaluationInternals,
   loadConfigDirectory,
-  loadEnvironment,
   resolveEnvPlaceholders,
 } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
@@ -96,36 +95,10 @@ async function loadQueueConfigFile(
   projectRoot: string,
   queueConfigPath: string,
 ): Promise<HoloQueueConfig | undefined> {
-  const environment = await loadEnvironment({
-    cwd: projectRoot,
-    processEnv: process.env,
-  })
-  const previousEnvEntries = new Map<string, string | undefined>()
-
-  try {
-    configureEnvRuntime(environment.values)
-    for (const [key, value] of Object.entries(environment.values)) {
-      previousEnvEntries.set(key, process.env[key])
-      process.env[key] = value
-    }
-
+  return configEvaluationInternals.evaluate({ cwd: projectRoot }, async (environment) => {
     const rawQueueConfig = resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
-    if (!rawQueueConfig) {
-      return undefined
-    }
-
-    return resolveEnvPlaceholders(rawQueueConfig, environment.values)
-  } finally {
-    configureEnvRuntime(undefined)
-    for (const [key, value] of previousEnvEntries) {
-      if (typeof value === 'string') {
-        process.env[key] = value
-        continue
-      }
-
-      Reflect.deleteProperty(process.env, key)
-    }
-  }
+    return rawQueueConfig ? resolveEnvPlaceholders(rawQueueConfig, environment.values) : undefined
+  })
 }
 
 function queueConnectionUsesDriver(

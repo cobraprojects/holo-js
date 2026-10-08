@@ -3,9 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
+  configEvaluationInternals,
   loadConfigDirectory,
   holoAppDefaults,
-  loadEnvironment,
   normalizeAppConfig,
 } from '@holo-js/config'
 import {
@@ -61,30 +61,8 @@ type ProjectConfigImportState = {
   readonly nonce: number
 }
 
-type ProjectSourceConfig = {
-  readonly app: Awaited<ReturnType<typeof loadConfigDirectory>>['app']
-  readonly database: Awaited<ReturnType<typeof loadConfigDirectory>>['database']
-}
-
 const projectConfigImportStates = new Map<string, ProjectConfigImportState>()
-let projectConfigImportLock = Promise.resolve()
 let projectConfigImportNonce = 0
-
-async function withProjectConfigImportLock<TValue>(callback: () => Promise<TValue>): Promise<TValue> {
-  const previousLock = projectConfigImportLock
-  let releaseLock = (): void => {}
-  projectConfigImportLock = new Promise<void>((resolveLock) => {
-    releaseLock = resolveLock
-  })
-
-  await previousLock
-
-  try {
-    return await callback()
-  } finally {
-    releaseLock()
-  }
-}
 
 function hashProjectConfigImportInputs(
   fileContents: string,
@@ -125,55 +103,19 @@ async function importProjectConfigFile<TConfig extends object>(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<TConfig> {
-  return withProjectConfigImportLock(async () => {
-    const previousEnvEntries = new Map<string, string | undefined>()
-    const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
-    const configExtension = extname(filePath)
-    const bundled = configExtension === '.ts' || configExtension === '.mts'
-      ? await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
-      : undefined
-    const resolvedImportUrl = bundled
-      ? `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
-      : importUrl
+  const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
+  const configExtension = extname(filePath)
+  const bundled = configExtension === '.ts' || configExtension === '.mts'
+    ? await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
+    : undefined
+  const resolvedImportUrl = bundled
+    ? `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
+    : importUrl
 
-    try {
-      for (const [key, value] of Object.entries(environmentValues)) {
-        previousEnvEntries.set(key, process.env[key])
-        process.env[key] = value
-      }
-
-      return resolveConfigExport<TConfig>(await import(resolvedImportUrl))
-    } finally {
-      for (const [key, value] of previousEnvEntries) {
-        if (typeof value === 'string') {
-          process.env[key] = value
-          continue
-        }
-
-        Reflect.deleteProperty(process.env, key)
-      }
-
-      await bundled?.cleanup()
-    }
-  })
-}
-
-async function loadCachedProjectSourceConfig(
-  projectRoot: string,
-  environmentName: string,
-): Promise<ProjectSourceConfig | undefined> {
-  const cachePath = join(projectRoot, '.holo-js/generated/config-cache.json')
-  if (environmentName !== 'production' || !(await pathExists(cachePath))) {
-    return undefined
-  }
-
-  const loaded = await loadConfigDirectory(projectRoot, {
-    processEnv: process.env,
-  })
-
-  return {
-    app: loaded.app,
-    database: loaded.database,
+  try {
+    return resolveConfigExport<TConfig>(await import(resolvedImportUrl))
+  } finally {
+    await bundled?.cleanup()
   }
 }
 
@@ -193,17 +135,26 @@ export async function loadProjectConfig(
   }
 
   const databaseConfigPath = await resolveFirstExistingPath(projectRoot, DATABASE_CONFIG_FILE_NAMES)
-  const environment = await loadEnvironment({
-    cwd: projectRoot,
-    processEnv: process.env,
+  const evaluated = await configEvaluationInternals.evaluate({ cwd: projectRoot }, async (environment) => {
+    const cachePath = join(projectRoot, '.holo-js/generated/config-cache.json')
+    if (environment.name === 'production' && await pathExists(cachePath)) {
+      return { environment, source: undefined }
+    }
+
+    return {
+      environment,
+      source: {
+        app: normalizeAppConfig(await importProjectConfigFile(projectRoot, appConfigPath, environment.values)),
+        database: normalizeDatabaseConfig(databaseConfigPath
+          ? await importProjectConfigFile(projectRoot, databaseConfigPath, environment.values)
+          : undefined),
+      },
+    }
   })
-  const cachedConfig = await loadCachedProjectSourceConfig(projectRoot, environment.name)
-  const app = cachedConfig?.app
-    ?? normalizeAppConfig(await importProjectConfigFile(projectRoot, appConfigPath, environment.values))
-  const database = cachedConfig?.database
-    ?? normalizeDatabaseConfig(databaseConfigPath
-      ? await importProjectConfigFile(projectRoot, databaseConfigPath, environment.values)
-      : undefined)
+  const { app, database } = evaluated.source ?? await loadConfigDirectory(projectRoot, {
+    envName: evaluated.environment.name,
+    processEnv: evaluated.environment.values,
+  })
   const baseConfig = normalizeHoloProjectConfig({
     paths: app.paths,
     models: app.models,
