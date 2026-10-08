@@ -3,6 +3,8 @@ import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { collectPackageManifestFailures } from './validate-dependency-version-policy.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const dependencySections = [
   'dependencies',
@@ -88,7 +90,7 @@ export function resolveCatalogRangesInManifest(manifest, catalog) {
     }
 
     for (const [packageName, version] of Object.entries(section)) {
-      if (version !== 'catalog:') {
+      if (version !== 'catalog:' && version !== 'workspace:*') {
         continue
       }
 
@@ -110,6 +112,9 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
   if (!isObject(catalog)) {
     throw new Error('Root package.json is missing workspaces.catalog.')
   }
+
+  const failures = await collectPackageManifestFailures(root)
+  if (failures.length > 0) throw new Error(failures.join('\n'))
 
   const packageManifestPaths = await listPackageManifestPaths(root)
   const originalManifests = new Map()

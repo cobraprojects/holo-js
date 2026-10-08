@@ -145,6 +145,9 @@ export const tokens: AuthTokenFacade = Object.freeze({
   revoke(options?: { readonly guard?: string }) {
     return getAuthRuntime().tokens.revoke(options)
   },
+  revokeOthers(options?: { readonly guard?: string }) {
+    return getAuthRuntime().tokens.revokeOthers(options)
+  },
   revokeAll(authenticatedUser: unknown, options?: { readonly guard?: string }) {
     return getAuthRuntime().tokens.revokeAll(authenticatedUser, options)
   },
@@ -167,3 +170,7 @@ export const verification: AuthEmailVerificationFacade = Object.freeze({
     return getAuthRuntime().verification.consume(plainTextToken)
   },
 })
+
+export async function logoutOtherDevices(): Promise<void> {
+  return getAuthRuntime().logoutOtherDevices()
+}

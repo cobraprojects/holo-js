@@ -157,6 +157,23 @@ export async function POST(request: Request) {
 
 The verification flow marks the local user as verified and invalidates the token.
 
+## Single-use Redemption
+
+Verification claims the exact unused token before changing the user. Overlapping requests for the same token have one winner; stale records and tokens that expire before the claim are rejected. The secret is validated before claiming.
+
+Core coordinates the claim and native user update in one write transaction when both participate in the same actual database context. A failed participating update rolls back both. External providers and users on a different database context consume the claim before updating the user; a failed update requires a fresh verification token. Matching connection names alone do not establish shared persistence. Database rollback does not undo external effects performed by hooks or observers.
+
+Custom `EmailVerificationTokenStore` implementations retain `create`, `findById`, `delete`, and `deleteByUserId`, and must implement:
+
+```ts
+redeem<TResult>(
+  record: EmailVerificationTokenRecord,
+  operation: () => Promise<TResult>,
+): Promise<TResult | null>
+```
+
+The store must atomically claim only the matching unused, unexpired record, including its identity and secret hash. It invokes `operation` only after winning the claim and preserves the callback's inferred result. Return `null` when the record has changed, expired, or already been claimed. Lookup followed by unconditional deletion cannot provide this guarantee.
+
 ## Resending Verification Emails
 
 The verify page can submit an email address to request a fresh verification email. Validate the resend payload, then pass
@@ -252,6 +269,13 @@ if (!current?.email_verified_at) {
   return Response.json({ message: 'Email verification required.' }, { status: 403 })
 }
 ```
+
+Verification and password-reset redemption for external providers or different database contexts must
+run outside a caller-owned token-storage transaction. Core rejects such redemption before claiming
+the token, revoking reset siblings, or invoking the provider; Auth propagates the existing
+native `TransactionError`. The token remains available for a later attempt outside the
+transaction. Proven shared native persistence still participates in the enclosing transaction and
+rolls the claim and user mutation back together on failure.
 
 ## Related Guides
 

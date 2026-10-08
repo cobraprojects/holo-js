@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import type * as FsPromisesModule from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
@@ -2365,7 +2366,7 @@ export default defineAppConfig({
     expect(result.stdout).toContain('created config/security.ts')
     expect(result.stdout).toContain('created config/cors.ts')
     expect(result.stdout).toContain('created server/models/User.ts')
-    expect(result.stdout).toContain('created 7 auth migrations')
+    expect(result.stdout).toContain('created 8 auth migrations')
 
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -2380,11 +2381,23 @@ export default defineAppConfig({
     expect(await readFile(join(projectRoot, 'config/security.ts'), 'utf8')).toContain('defineSecurityConfig')
     expect(await readFile(join(projectRoot, 'config/cors.ts'), 'utf8')).toContain('defineCorsConfig')
     expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\']')
-    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(7)
+    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(8)
 
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    const database = new DatabaseSync(join(projectRoot, 'data/database.sqlite'))
+    try {
+      const insert = database.prepare('INSERT INTO auth_session_revocations (provider, user_id) VALUES (?, ?)')
+      insert.run('users', '1')
+      insert.run('admins', '1')
+      expect(() => insert.run('users', '1')).toThrow('UNIQUE constraint failed')
+    } finally {
+      database.close()
+    }
   }, 90000)
 
 
@@ -2531,7 +2544,7 @@ export default defineSessionConfig({
       createdCorsConfig: true,
       createdUserModel: true,
     })
-    expect(initial.createdMigrationFiles).toHaveLength(7)
+    expect(initial.createdMigrationFiles).toHaveLength(8)
     expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('AUTH_GOOGLE_CLIENT_ID')
 
     await expect(projectInternals.installAuthIntoProject(projectRoot, { workos: true, clerk: true })).resolves.toEqual({
@@ -2773,6 +2786,7 @@ module.exports = {
       'create_password_reset_tokens',
       'create_email_verification_tokens',
       'create_auth_multi_factor_credentials',
+      'create_auth_session_revocations',
     ] as const) {
       const timestamp = `2026_01_01_00000${index + 1}`
       await writeProjectFile(
@@ -6543,6 +6557,7 @@ export default defineMigration({
 })
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
@@ -6612,6 +6627,7 @@ export const migrations = [defineMigration({
 })]
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
     expect(migrated.stdout).toContain('2026_07_29_000001_create_plugin_roles')
@@ -6659,6 +6675,7 @@ export default defineMigration({
 })
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
@@ -6734,6 +6751,7 @@ export default defineMigration({
 })
 `)
 
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
@@ -10027,7 +10045,7 @@ export default defineConfig({
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
-  it('regenerates ignored framework runner metadata during prepare', async () => {
+  it('regenerates framework runner metadata and managed routes on the first prepare', async () => {
     const projectRoot = await createTempDirectory()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
@@ -10051,8 +10069,11 @@ import { defineDatabaseConfig } from '@holo-js/db'
 export default defineDatabaseConfig({})
 `)
 
+    await writeProjectFile(projectRoot, 'app/storage/[[...path]]/route.ts', `export { GET, HEAD } from '../../../.holo-js/generated/next/storage-route'\n`)
+
     await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
 
+    expect((await stat(join(projectRoot, '.holo-js/generated/next/storage-route.ts'))).isFile()).toBe(true)
     expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
   }, 60_000)

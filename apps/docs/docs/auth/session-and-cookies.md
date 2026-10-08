@@ -7,6 +7,96 @@ Session auth in Holo is powered by `@holo-js/session`.
 Session state stores the authenticated user for session guards and handles remember-me cookies and cookie
 serialization. The session package is public, so it can be used by auth or by your own application code directly.
 
+Different browsers or devices may maintain independent sessions for the same user. Normal login and rotation affect the current browser's authentication rather than signing out other devices.
+
+## Approved Other-Device Logout
+
+::: info Durable revocation persistence
+Core automatically binds durable database revocation persistence when Auth is configured. Standalone auth supports injected durable revocation stores.
+:::
+
+Developers explicitly request logout of the current user's other browser authentication:
+
+```ts
+await auth.logoutOtherDevices()
+await auth.guard('web').logoutOtherDevices()
+```
+
+These are alternatives for the default session guard and a selected session guard. The operation requires a valid authenticated browser session and retains that browser's authentication. Applications control any recent-password or hosted reauthentication requirement before calling it. Registered token guards do not expose this method.
+
+Other browsers lose the selected provider/user identity on their next authenticated request, including remember-cookie restoration. Unrelated identities in a shared browser session remain valid. Personal access tokens remain valid too; their [other-token revocation](/auth/personal-access-tokens#revoking-other-tokens) is separate.
+
+For Clerk and WorkOS, this invalidates existing Holo sessions, not upstream provider sessions. A still-valid upstream session may authenticate again. The existing `logoutAll` continues to mean guards in the current request, not every device.
+
+### Durable revocation ownership
+
+Auth owns shared revocation state across database, file, and Redis session stores. A logical session identity survives physical session-ID rotation; revocation advances the user's authentication generation while retaining the current logical session. An already-revoked caller cannot make itself the survivor. Distinct identity checks are batched without scanning sessions. A memory auth context belongs to one request. Asynchronous auth contexts and framework wrappers preserving their native accessors reuse reads within each request and refresh them on the next request. Custom contexts without built-in request ownership perform fresh batched reads to avoid retaining another request's state.
+
+Core stores this state in `auth_session_revocations`, keyed by the composite primary key `(provider, user_id)`, with string identifiers, integer `generation`, and nullable string `retained_session_id`. New Auth scaffolds include its migration. Existing applications must apply the migration before deploying this Auth integration. The MySQL migration requires MySQL 8.0.17 or later and uses an exact binary collation so case or trailing-space differences never merge identities. Database persistence failures propagate explicitly, including a missing table. This applies equally to database, file, and Redis sessions.
+
+### Existing application rollout
+
+Add this migration using the existing migration workflow, then run `npx holo migrate` before deploying the updated application:
+
+```ts
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ db }) {
+    const stringType = db.getDialect().name === 'mysql'
+      ? 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin'
+      : 'VARCHAR(255)'
+    await db.executeCompiled({
+      sql: `CREATE TABLE auth_session_revocations (provider ${stringType} NOT NULL, user_id ${stringType} NOT NULL, generation INTEGER NOT NULL DEFAULT 0, retained_session_id ${stringType}, PRIMARY KEY (provider, user_id))`,
+      source: 'schema',
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('auth_session_revocations')
+  },
+})
+```
+
+Users with authenticated browser or remember payloads from before adoption must sign in again. Core rejects missing revocation metadata and never infers a generation for an old authenticated payload. Personal access tokens remain valid. No session-store cleanup or enumeration is required for this rollout.
+
+When the adapter is enabled, older authenticated browser payloads without a logical session identity and generation require a fresh login, including those restored through remember cookies. Existing personal access tokens remain valid. After adoption, ordinary login and rotation continue to preserve authentication on other devices.
+
+Standalone auth accepts an optional `sessionRevocations` adapter in its runtime bindings. Requesting other-device logout without that adapter fails explicitly. See [Browser Session Revocation](/architecture#browser-session-revocation) for the related transition and failure rules.
+
+## Custom revocation adapters
+
+Inject an `AuthSessionRevocationStore` as `sessionRevocations` in `configureAuthRuntime`. Its state is durable and shared by every server handling the same users, independently of the selected session store.
+
+```ts
+interface AuthSessionIdentity {
+  readonly provider: string
+  readonly userId: string | number
+}
+
+interface AuthSessionRevocationState extends AuthSessionIdentity {
+  readonly generation: number
+  readonly retainedSessionId?: string
+}
+
+interface AuthSessionRevocationStore {
+  readMany(identities: readonly AuthSessionIdentity[]): Promise<readonly AuthSessionRevocationState[]>
+  revokeOthers(
+    identity: AuthSessionIdentity,
+    currentSession: { readonly id: string, readonly generation: number },
+  ): Promise<boolean>
+}
+```
+
+`readMany` returns the current state for each distinct requested identity. An absent durable row must return an explicit state with generation zero; omitting a requested identity fails authentication rather than assuming zero. `revokeOthers` atomically checks that the caller has the current generation or is the retained logical browser, then increments the generation and retains that browser. Return `false` for an invalid caller; failures reject. Never perform an unconditional upsert that permits an already-revoked caller to become the survivor.
+
+The `currentSession.id` is Auth's stable logical browser identity, which survives physical session rotation. Authentication accepts a payload with the current generation or the retained logical identity. Later legitimate login snapshots the current generation; it does not invalidate other browsers. Older payloads without this metadata fail authentication when the adapter is enabled. Without an adapter, ordinary session authentication continues and `logoutOtherDevices` fails explicitly.
+
+## Complete payload rotation
+
+Rotation accepts `data?: SessionRecord['data']` and `renewLifetime?: boolean`. Auth rotates with the complete next payload and lifetime renewal while preserving private flash state and current remember-token policy. Ordinary rotation retains its current defaults. Enabling lifetime renewal resets the session timestamps and clears its existing remember hash; Auth reissues a remember token when required by the transition.
+
+If a transition fails after persistence, its new session is invalidated and affected request identities cleared. The previous identifier remains invalidated, and other devices remain authenticated.
+
 ## Configuration
 
 ```ts
@@ -560,3 +650,5 @@ Use `@holo-js/session` directly when:
 - you are building flows such as carts, onboarding state, checkout progress, or temporary wizard state
 
 Use `@holo-js/auth` on top of it when the concern is user authentication rather than raw session management.
+
+Auth requires a native store `rotate` operation for complete payload transitions and rejects unsupported stores before mutation. Framework adapters own native request isolation and cookie transport. Persistence and browser cookies are not one transaction, and file stores do not guarantee crash atomicity across multiple files. If invalidation also fails, the thrown aggregate preserves both failures and request authentication is still cleared.

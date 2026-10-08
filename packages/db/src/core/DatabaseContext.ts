@@ -385,7 +385,11 @@ export class DatabaseContext {
         throw error
       }
 
-      await tx?._flushTransactionCallbacks('afterRollback')
+      try {
+        await tx?._flushTransactionCallbacks('afterRollback')
+      } catch (compensationError) {
+        throw new AggregateError([error, compensationError], 'Transaction failed and rollback compensation failed.')
+      }
       await this._logger?.onTransactionRollback?.({ ...entry, error })
       throw error
     }
@@ -483,7 +487,11 @@ export class DatabaseContext {
         throw rollbackError
       }
       rollbackSchemaMutationScope(tx)
-      await tx._flushTransactionCallbacks('afterRollback')
+      try {
+        await tx._flushTransactionCallbacks('afterRollback')
+      } catch (compensationError) {
+        throw new AggregateError([error, compensationError], 'Transaction failed and rollback compensation failed.')
+      }
       await this._logger?.onTransactionRollback?.({ ...entry, error })
       throw error
     }
@@ -557,27 +565,28 @@ export class DatabaseContext {
     const callbackConnection = this._scope.kind === 'root'
       ? this
       : this._createChildContext({ kind: 'root', depth: 0 })
-    let firstError: unknown
+    const failures: unknown[] = []
 
     while (callbacks.length > 0) {
-      const callback = callbacks.shift()!
+      const callback = (type === 'afterRollback' ? callbacks.pop() : callbacks.shift())!
       try {
         await connectionAsyncContext.run({
           connectionName: callbackConnection.getConnectionName(),
           connection: callbackConnection,
         }, () => callback())
       } catch (error) {
-        firstError ??= error
+        failures.push(error)
         if (type === 'afterCommit') {
           break
         }
       }
     }
 
-    if (!firstError) {
+    if (failures.length === 0) {
       return
     }
 
+    const firstError = failures.length === 1 ? failures[0] : new AggregateError(failures, 'Rollback callbacks failed.')
     const message = firstError instanceof Error ? firstError.message : String(firstError)
     throw new TransactionError(
       `Connection "${this._connectionName}" failed while running ${type} callbacks via driver "${this._driver}": ${message}`,

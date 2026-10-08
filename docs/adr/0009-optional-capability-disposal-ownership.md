@@ -1,0 +1,7 @@
+# Continue disposal after optional capability failures
+
+Optional capability disposal and initialization rollback use the existing lifecycle module to continue cleanup after individual failures and report the collected failures in dependency-aware order. Cleanup closes only resources Holo owns and restores externally supplied bindings; we chose explicit capability lifetime ownership over one sequential cleanup operation because an early failure must not prevent later resource disposal. Initial scope is disposal and rollback ownership, with reconfiguration included only where the same ownership rules apply.
+
+Private capability lifetime modules in core restore prior live bindings for every optional capability Holo changes, including Auth and Session. Previously active resources remain externally owned, newly acquired resources are disposed by their Holo lifetime, and closed resources are never restored. Existing lifecycle and shutdown interfaces remain unchanged; asynchronous teardown reporting from synchronous Queue configuration and reset is outside this scope.
+
+A single disposal failure is rethrown unchanged. Multiple disposal failures and startup failures accompanied by cleanup failures use `AggregateError` to preserve every original error. Queue asynchronous shutdown releases every owned driver and clears owned state in `finally`; synchronous configure/reset teardown retains its existing semantics.

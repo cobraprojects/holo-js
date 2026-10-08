@@ -1,3 +1,13 @@
+import { column, normalizeDialectWriteValue } from '@holo-js/db'
+
+const authTimestampColumn = column.timestamp().toDefinition({ name: 'timestamp' })
+
+export function serializeAuthTimestamp(value: Date, driver: string): string {
+  return driver === 'mysql'
+    ? String(normalizeDialectWriteValue('mysql', authTimestampColumn, value.toISOString()))
+    : value.toISOString()
+}
+
 export function normalizeDateValue(value: unknown): Date {
   return value instanceof Date ? value : new Date(String(value))
 }
@@ -42,7 +52,7 @@ export function normalizeAccessTokenRecord(row: Record<string, unknown>): Access
   })
 }
 
-export function serializeAccessTokenRecord(record: AccessTokenRecord): Record<string, unknown> {
+export function serializeAccessTokenRecord(record: AccessTokenRecord, driver = 'sqlite'): Record<string, unknown> {
   return {
     id: record.id,
     provider: record.provider,
@@ -50,10 +60,10 @@ export function serializeAccessTokenRecord(record: AccessTokenRecord): Record<st
     name: record.name,
     abilities: JSON.stringify(record.abilities),
     token_hash: record.tokenHash,
-    created_at: record.createdAt.toISOString(),
-    last_used_at: record.lastUsedAt?.toISOString() ?? null,
-    expires_at: record.expiresAt?.toISOString() ?? null,
-    updated_at: new Date().toISOString(),
+    created_at: serializeAuthTimestamp(record.createdAt, driver),
+    last_used_at: record.lastUsedAt ? serializeAuthTimestamp(record.lastUsedAt, driver) : null,
+    expires_at: record.expiresAt ? serializeAuthTimestamp(record.expiresAt, driver) : null,
+    updated_at: serializeAuthTimestamp(new Date(), driver),
   }
 }
 
@@ -79,17 +89,17 @@ export function normalizeEmailVerificationTokenRecord(row: Record<string, unknow
   })
 }
 
-export function serializeEmailVerificationTokenRecord(record: EmailVerificationTokenRecord): Record<string, unknown> {
+export function serializeEmailVerificationTokenRecord(record: EmailVerificationTokenRecord, driver = 'sqlite'): Record<string, unknown> {
   return {
     id: record.id,
     provider: record.provider,
     user_id: String(record.userId),
     email: record.email,
     token_hash: record.tokenHash,
-    created_at: record.createdAt.toISOString(),
-    expires_at: record.expiresAt.toISOString(),
+    created_at: serializeAuthTimestamp(record.createdAt, driver),
+    expires_at: serializeAuthTimestamp(record.expiresAt, driver),
     used_at: null,
-    updated_at: new Date().toISOString(),
+    updated_at: serializeAuthTimestamp(new Date(), driver),
   }
 }
 
@@ -115,16 +125,16 @@ export function normalizePasswordResetTokenRecord(row: Record<string, unknown>):
   })
 }
 
-export function serializePasswordResetTokenRecord(record: PasswordResetTokenRecord): Record<string, unknown> {
+export function serializePasswordResetTokenRecord(record: PasswordResetTokenRecord, driver = 'sqlite'): Record<string, unknown> {
   return {
     id: record.id,
     provider: record.provider,
     email: record.email,
     token_hash: record.tokenHash,
-    created_at: record.createdAt.toISOString(),
-    expires_at: record.expiresAt.toISOString(),
+    created_at: serializeAuthTimestamp(record.createdAt, driver),
+    expires_at: serializeAuthTimestamp(record.expiresAt, driver),
     used_at: null,
-    updated_at: new Date().toISOString(),
+    updated_at: serializeAuthTimestamp(new Date(), driver),
   }
 }
 
@@ -155,14 +165,14 @@ export function normalizeMultiFactorCredentialRecord(row: Record<string, unknown
   })
 }
 
-export function serializeMultiFactorCredentialRecord(record: MultiFactorCredentialRecord): Record<string, unknown> {
+export function serializeMultiFactorCredentialRecord(record: MultiFactorCredentialRecord, driver = 'sqlite'): Record<string, unknown> {
   return {
     provider: record.provider,
     user_id: String(record.userId),
     encrypted_secret: record.encryptedSecret,
     recovery_code_hashes: JSON.stringify(record.recoveryCodeHashes),
     last_used_counter: record.lastUsedCounter,
-    enabled_at: record.enabledAt.toISOString(),
-    updated_at: record.updatedAt.toISOString(),
+    enabled_at: serializeAuthTimestamp(record.enabledAt, driver),
+    updated_at: serializeAuthTimestamp(record.updatedAt, driver),
   }
 }

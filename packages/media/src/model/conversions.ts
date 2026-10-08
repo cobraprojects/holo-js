@@ -1,5 +1,5 @@
 import { Storage } from '@holo-js/storage/runtime'
-import { connectionAsyncContext, type Entity, type TableDefinition } from '@holo-js/db'
+import type { Entity, TableDefinition } from '@holo-js/db'
 import {
   getMediaConversionExecutor,
   getMediaPathGenerator,
@@ -15,6 +15,8 @@ import {
   toBinaryContent,
 } from '../runtime/binary'
 import type { GeneratedMediaConversions, Media } from './Media'
+import { type MediaMutation, runMediaMutation, removeStoredFiles } from './mutation'
+import { dispatchQueuedMediaConversionsForModel } from '../queue'
 import type {
   NormalizedMediaCollectionDefinition,
 } from '../definitions/collections'
@@ -22,77 +24,6 @@ import type { NormalizedMediaDefinition } from '../definitions/config'
 
 type MediaEntity = Entity<typeof Media.definition.table>
 type MediaOwnerEntity = Entity<TableDefinition>
-type StoredFileSnapshot = {
-  readonly disk: string
-  readonly path: string
-  readonly contents: Uint8Array | null
-}
-
-function getActiveTransaction() {
-  const active = connectionAsyncContext.getActive()?.connection
-  if (!active || active.getScope().kind === 'root') {
-    return undefined
-  }
-
-  return active
-}
-
-function registerStorageWriteRollback(snapshot: StoredFileSnapshot): void {
-  const active = getActiveTransaction()
-  if (!active) {
-    return
-  }
-
-  active.afterRollback(async () => {
-    await restoreStoredFileSnapshot(snapshot)
-  })
-}
-
-async function restoreStoredFileSnapshot(snapshot: StoredFileSnapshot): Promise<void> {
-  if (snapshot.contents) {
-    await Storage.disk(snapshot.disk).put(snapshot.path, snapshot.contents)
-    return
-  }
-
-  await Storage.disk(snapshot.disk).delete(snapshot.path)
-}
-
-async function restoreStoredFileSnapshots(snapshots: readonly StoredFileSnapshot[]): Promise<void> {
-  for (const snapshot of [...snapshots].reverse()) {
-    /* v8 ignore next -- cleanup failures are intentionally swallowed. */
-    await restoreStoredFileSnapshot(snapshot).catch(() => undefined)
-  }
-}
-
-async function putFileWithRollbackRestore(
-  disk: string,
-  path: string,
-  contents: Uint8Array,
-): Promise<StoredFileSnapshot> {
-  const previous = await Storage.disk(disk).getBytes(path)
-  await Storage.disk(disk).put(path, contents)
-  const snapshot = {
-    disk,
-    path,
-    contents: previous,
-  }
-  registerStorageWriteRollback(snapshot)
-  return snapshot
-}
-
-async function deleteFileWithRollbackRestore(
-  disk: string,
-  path: string,
-): Promise<void> {
-  const previous = await Storage.disk(disk).getBytes(path)
-  await Storage.disk(disk).delete(path)
-  registerStorageWriteRollback({
-    disk,
-    path,
-    contents: previous,
-  })
-}
-
 function fallbackCollectionDefinition(
   collectionName: string,
 ): NormalizedMediaCollectionDefinition {
@@ -203,6 +134,7 @@ export async function generateStoredConversions(options: {
   readonly conversionsDisk: string
   readonly requestedConversions?: string | readonly string[]
   readonly includeQueued?: boolean
+  readonly mutation: MediaMutation
 }): Promise<GeneratedMediaConversions> {
   const requested = normalizeRequestedConversions(options.requestedConversions)
   const matchingConversions = resolveMatchingConversions(
@@ -218,45 +150,39 @@ export async function generateStoredConversions(options: {
 
   const generatedConversions = Object.create(null) as Record<string, StoredMediaConversion>
   const executor = getMediaConversionExecutor()
-  const writtenSnapshots: StoredFileSnapshot[] = []
 
-  try {
-    for (const conversion of matchingConversions) {
-      const generated = await executor.generate({
-        source: options.source,
-        collection: options.collection,
-        conversion,
-      })
+  for (const conversion of matchingConversions) {
+    const generated = await executor.generate({
+      source: options.source,
+      collection: options.collection,
+      conversion,
+    })
 
-      if (!generated) {
-        continue
-      }
-
-      const generatedFileName = sanitizeFileName(generated.fileName ?? options.source.fileName)
-      const conversionPath = getMediaPathGenerator().conversionPath({
-        uuid: options.source.uuid,
-        fileName: options.source.fileName,
-        extension: options.source.extension,
-        collection: options.collection,
-        conversion,
-        generatedFileName,
-      })
-      const targetDisk = generated.disk ?? options.conversionsDisk
-      const conversionMimeType = inferMimeType(generatedFileName, generated.mimeType)
-      const conversionContents = await toBinaryContent(generated.contents)
-
-      writtenSnapshots.push(await putFileWithRollbackRestore(targetDisk, conversionPath, conversionContents))
-      generatedConversions[conversion.name] = Object.freeze({
-        path: conversionPath,
-        disk: targetDisk,
-        fileName: generatedFileName,
-        mimeType: conversionMimeType,
-        size: getContentSize(conversionContents),
-      })
+    if (!generated) {
+      continue
     }
-  } catch (error) {
-    await restoreStoredFileSnapshots(writtenSnapshots)
-    throw error
+
+    const generatedFileName = sanitizeFileName(generated.fileName ?? options.source.fileName)
+    const conversionPath = getMediaPathGenerator().conversionPath({
+      uuid: options.source.uuid,
+      fileName: options.source.fileName,
+      extension: options.source.extension,
+      collection: options.collection,
+      conversion,
+      generatedFileName,
+    })
+    const targetDisk = generated.disk ?? options.conversionsDisk
+    const conversionMimeType = inferMimeType(generatedFileName, generated.mimeType)
+    const conversionContents = await toBinaryContent(generated.contents)
+
+    await options.mutation.put(targetDisk, conversionPath, conversionContents)
+    generatedConversions[conversion.name] = Object.freeze({
+      path: conversionPath,
+      disk: targetDisk,
+      fileName: generatedFileName,
+      mimeType: conversionMimeType,
+      size: getContentSize(conversionContents),
+    })
   }
 
   return Object.freeze(generatedConversions)
@@ -268,25 +194,14 @@ async function deleteObsoleteConversions(
   fallbackDisk: string,
   requested?: readonly string[],
 ): Promise<void> {
-  for (const [name, conversion] of Object.entries(current)) {
-    if (requested?.length && !requested.includes(name)) {
-      continue
-    }
-
-    if (!conversion?.path) {
-      continue
-    }
-
+  const obsolete = Object.entries(current).filter(([name, conversion]) => {
+    if ((requested?.length && !requested.includes(name)) || !conversion?.path) return false
     const nextConversion = next[name]
-    if (
-      nextConversion?.path === conversion.path
-      && nextConversion.disk === (conversion.disk ?? fallbackDisk)
-    ) {
-      continue
-    }
+    return nextConversion?.path !== conversion.path
+      || (nextConversion.disk ?? fallbackDisk) !== (conversion.disk ?? fallbackDisk)
+  }).map(([, conversion]) => ({ disk: conversion.disk ?? fallbackDisk, path: conversion.path }))
+  await removeStoredFiles(obsolete)
 
-    await deleteFileWithRollbackRestore(conversion.disk ?? fallbackDisk, conversion.path)
-  }
 }
 
 export async function regenerateMediaEntityConversions(options: {
@@ -322,33 +237,45 @@ export async function regenerateMediaEntityConversions(options: {
       )
     : {}
 
-  const regenerated = await generateStoredConversions({
-    definition,
-    collection,
-    conversionsDisk,
-    requestedConversions: requested,
-    includeQueued: options.includeQueued === true,
-    source: {
-      uuid: String(media.get('uuid')),
-      fileName: String(media.get('file_name')),
-      extension: media.get('extension') ?? undefined,
-      mimeType: media.get('mime_type') ?? undefined,
-      size: sourceContents.byteLength,
-      contents: sourceContents,
+  return await runMediaMutation({
+    committedMessage: '[Holo Media] Regeneration remains committed; post-commit cleanup or conversion dispatch failed.',
+    afterRollback: async () => {
+      options.owner?.forgetRelation('media')
+      await media.refresh()
     },
+    operation: async (mutation) => {
+      const regenerated = await generateStoredConversions({
+        definition,
+        collection,
+        conversionsDisk,
+        requestedConversions: requested,
+        includeQueued: options.includeQueued === true,
+        mutation,
+        source: {
+          uuid: String(media.get('uuid')),
+          fileName: String(media.get('file_name')),
+          extension: media.get('extension') ?? undefined,
+          mimeType: media.get('mime_type') ?? undefined,
+          size: sourceContents.byteLength,
+          contents: sourceContents,
+        },
+      })
+      const generatedConversions = Object.freeze({ ...nextBase, ...regenerated })
+      media.forceFill({ generated_conversions: generatedConversions })
+      await media.save()
+      options.owner?.forgetRelation('media')
+      return generatedConversions
+    },
+    afterCommit: [
+      async (generatedConversions) => { await deleteObsoleteConversions(current, generatedConversions, conversionsDisk, requested) },
+      async () => {
+        if (options.includeQueued) return
+        await dispatchQueuedMediaConversionsForModel({
+          mediaId: media.get('id'),
+          conversionNames: resolveQueuedConversionNames({ definition, collectionName, requestedConversions: requested }),
+        }, async () => { await media.refresh() })
+      },
+    ],
+    afterEffects: () => { options.owner?.forgetRelation('media') },
   })
-
-  const generatedConversions = Object.freeze({
-    ...nextBase,
-    ...regenerated,
-  }) as GeneratedMediaConversions
-
-  media.forceFill({
-    generated_conversions: generatedConversions,
-  } as never)
-  await media.save()
-  await deleteObsoleteConversions(current, generatedConversions, conversionsDisk, requested)
-  options.owner?.forgetRelation('media')
-
-  return generatedConversions
 }

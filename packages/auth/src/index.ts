@@ -1,5 +1,5 @@
 import { getAuthRuntime, hashPassword, needsPasswordRehash, resendEmailVerification, sendEmailVerification, verifyPassword } from './runtime'
-import { check, currentAccessToken, findUserById, flash, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, multiFactor, provider, refreshUser, register, requestPasswordReset, resetPassword, stopImpersonating, take, tokens, user, verification, verifyEmail } from './facade'
+import { check, currentAccessToken, findUserById, flash, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, logoutOtherDevices, multiFactor, provider, refreshUser, register, requestPasswordReset, resetPassword, stopImpersonating, take, tokens, user, verification, verifyEmail } from './facade'
 import type { AuthFacade } from './contracts'
 
 export { AUTH_ERROR_CODES, AuthError, isAuthError } from './contracts'
@@ -42,6 +42,7 @@ export {
   loginUsing,
   loginUsingId,
   logout,
+  logoutOtherDevices,
   multiFactor,
   provider,
   refreshUser,
@@ -134,6 +135,9 @@ export type {
   AuthRuntimeBindings,
   AuthRuntimeAuthorization,
   AuthRuntimeContext,
+  AuthSessionIdentity,
+  AuthSessionRevocationState,
+  AuthSessionRevocationStore,
   AuthUserLike,
   CurrentAuthResponse,
   EmailVerificationTokenRecord,
@@ -168,6 +172,7 @@ const auth: AuthFacade = Object.freeze({
   impersonateById,
   impersonation,
   logout,
+  logoutOtherDevices,
   multiFactor,
   needsPasswordRehash,
   register,

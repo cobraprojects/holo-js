@@ -416,3 +416,25 @@ Not implemented yet:
 - responsive images
 - HTML helpers
 - a custom-properties presentation layer
+
+## Mutation commitment and failures
+
+Attachments and single-file replacements coordinate their records in a database write transaction.
+When an enclosing transaction rolls back, Media compensates the original and generated file writes
+and the prior records remain available. Returning from an attachment inside a transaction does not
+mean that the enclosing transaction has committed.
+
+Prior replacement and overflow files are removed after the enclosing transaction commits. Queued
+conversions are dispatched after that same commit. If cleanup or dispatch fails, the attachment
+rejects with an error explaining that its new record and files remain committed. Inspect native
+`Error.cause` for the underlying failure. Primary and compensation failures are retained together
+through `AggregateError`; compensation failures are not silently ignored.
+
+Regeneration follows the same transaction ownership: overwritten conversions are restored on
+pre-commit failure or outer rollback, and obsolete conversions are removed after commitment.
+Cleanup or queued-dispatch failures retain the regenerated record and files. Deletion commits the
+record removal before removing files; cleanup failure reports that deletion remains committed.
+An enclosing rollback retains the record and files. Storage and database failures cannot promise
+universal atomicity, and failed restoration remains visible with the primary error.
+
+Successful Media return types are unchanged. All mutation paths are delivered under [ADR-0011](https://github.com/cobraprojects/holo-js/blob/main/docs/adr/0011-media-mutation-commit-and-compensation.md).

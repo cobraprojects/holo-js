@@ -17,6 +17,8 @@ guards: {
 
 Tokens are created in plain text once, hashed at rest, and validated on each incoming request.
 
+A user may hold multiple independent tokens for different devices or integrations. Issuing another token does not revoke existing tokens. These credentials remain reusable until expiry or explicit revocation; one-time verification and password-reset token redemption is a separate flow.
+
 ## Token Login
 
 Use the token guard's normal `login()` method when a user submits credentials and the response should be a bearer token
@@ -215,6 +217,22 @@ await tokens.revoke({ guard: 'api' })
 ```
 
 This revokes the currently authenticated token for the selected token guard.
+
+Token-guard `logout()` revokes its verified current token before clearing request identity. Other tokens and browser authentication remain usable. If token deletion fails, logout rejects and preserves the current request identity.
+
+## Revoking Other Tokens
+
+Developers can revoke other personal access tokens while retaining the verified token used for the current request:
+
+```ts
+const revokedCount = await tokens.revokeOthers({ guard: 'api' })
+```
+
+The operation derives the provider, user, and retained token from the authenticated request. It deletes the user's other tokens in one conditional operation and returns the number revoked. It does not affect browser sessions. Without an explicit guard, it uses the configured default guard, which must authenticate a valid personal access token.
+
+Token-guard `logout()` revokes only its current token before clearing request identity. Creating tokens and logging in on another device preserve existing tokens. Revoking all tokens remains a separate explicit operation.
+
+Custom `AuthTokenStore` adapters must extend `deleteByUserId` with optional `{ exceptId?: string }` options. Existing calls without that option retain their all-token behavior. Missing, invalid, expired, or incorrectly selected bearer tokens reject the operation without revoking other tokens. Browser device revocation uses the separate [other-device logout](/auth/session-and-cookies#approved-other-device-logout) operation.
 
 ## Revoking All Tokens For A User
 

@@ -123,6 +123,10 @@ export async function runProjectPrepare(
 
 export async function prepareProjectSchema(projectRoot: string): Promise<Awaited<ReturnType<typeof ensureProjectConfig>>> {
   const project = await ensureProjectConfig(projectRoot)
+  const { framework } = await discoverFrameworkPreparation(projectRoot)
+  if (framework) {
+    await writeTextFile(resolve(projectRoot, '.holo-js/framework/project.json'), `${JSON.stringify({ framework: framework.id }, null, 2)}\n`)
+  }
   await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
   await prepareProjectDiscovery(projectRoot, project.config)
   return project

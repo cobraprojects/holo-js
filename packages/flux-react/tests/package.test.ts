@@ -193,6 +193,9 @@ describe('@holo-js/flux-react package surface', () => {
 
         wrapped = Object.freeze({
           ...subscription,
+          get members() {
+            return subscription.members
+          },
           here(callback: Parameters<typeof subscription.here>[0]) {
             subscription.here(callback)
             return wrapped
@@ -268,7 +271,12 @@ describe('@holo-js/flux-react package surface', () => {
     expect(statusSnapshots.at(-1)).toBe('idle')
     expect(bareStatusSnapshots.at(-1)).toBe('idle')
     presenceControls!.stopListening()
+    debug.updatePresenceMembers('chat.1', [{ id: 'paused' }])
+    await act(async () => undefined)
+    expect(presenceSnapshots.at(-1)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
     presenceControls!.listen()
+    await act(async () => undefined)
+    expect(presenceSnapshots.at(-1)).toEqual([{ id: 'paused' }])
 
     await act(async () => {
       await client.connect()
@@ -363,9 +371,14 @@ describe('@holo-js/flux-react package surface', () => {
       },
     }) as typeof baseClient
     const snapshots: Array<readonly { id: string }[]> = []
+    const observations: Array<readonly { id: string }[]> = []
 
     function Probe() {
-      const presence = useFluxPresence<{ id: string }>('chat.custom', {}, { client })
+      const presence = useFluxPresence<{ id: string }>('chat.custom', {
+        onHere(nextMembers) {
+          observations.push(nextMembers)
+        },
+      }, { client })
 
       useEffect(() => {
         snapshots.push(presence.members)
@@ -387,17 +400,22 @@ describe('@holo-js/flux-react package surface', () => {
     members = [{ id: 'user_1' }]
     for (const callback of joiningCallbacks) {
       callback({ id: 'user_1' })
+      callback({ id: 'user_1' })
     }
     await act(async () => undefined)
 
-    expect(snapshots.at(-1)).toEqual([{ id: 'user_1' }])
+    expect(observations).toEqual([[], [{ id: 'user_1' }], [{ id: 'user_1' }, { id: 'user_1' }]])
+    expect(snapshots.at(-1)).toEqual([{ id: 'user_1' }, { id: 'user_1' }])
     for (const callback of leavingCallbacks) {
       callback({ id: 'user_1' })
       callback({ id: 'missing' })
     }
     await act(async () => undefined)
 
-    expect(snapshots.at(-1)).toEqual([])
+    expect(snapshots.at(-1)).toEqual([{ id: 'user_1' }])
+    expect(observations.at(-1)).toEqual([{ id: 'user_1' }])
+    expect(observations[1]).toEqual([{ id: 'user_1' }])
+    const observationCount = observations.length
     await act(async () => {
       renderer!.unmount()
     })
@@ -411,7 +429,8 @@ describe('@holo-js/flux-react package surface', () => {
       callback({ id: 'inactive' })
     }
 
-    expect(snapshots.at(-1)).toEqual([])
+    expect(snapshots.at(-1)).toEqual([{ id: 'user_1' }])
+    expect(observations).toHaveLength(observationCount)
   })
 
   it('registers explicit unmount callbacks when provided', async () => {

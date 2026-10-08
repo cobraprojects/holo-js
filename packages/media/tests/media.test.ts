@@ -1072,7 +1072,7 @@ describe('@holo-js/media', () => {
     await expect(Storage.disk(media.record.disk).missing(media.record.path)).resolves.toBe(true)
   })
 
-  it('keeps the model and its media when attachment cleanup fails', async () => {
+  it('retains model and media deletion when postcommit file cleanup fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -1088,11 +1088,11 @@ describe('@holo-js/media', () => {
     }).toMediaCollection())
     storageState.failDelete(second.record.disk, second.record.path)
 
-    await expect(post.delete()).rejects.toThrow(`delete failed for ${second.record.disk}`)
+    await expect(post.delete()).rejects.toThrow('committed')
 
-    await expect(Post.find(post.id)).resolves.not.toBeUndefined()
-    expect(await Media.query().count()).toBe(2)
-    await expect(Storage.disk(first.record.disk).exists(first.record.path)).resolves.toBe(true)
+    await expect(Post.find(post.id)).resolves.toBeUndefined()
+    expect(await Media.query().count()).toBe(0)
+    await expect(Storage.disk(first.record.disk).exists(first.record.path)).resolves.toBe(false)
     await expect(Storage.disk(second.record.disk).exists(second.record.path)).resolves.toBe(true)
   })
 
@@ -1669,7 +1669,7 @@ describe('@holo-js/media', () => {
     expect(media[0]?.record.path).toBe(firstPath)
   })
 
-  it('restores deleted single-file media when queued dispatch fails outside transactions', async () => {
+  it('retains committed replacement when queued dispatch fails outside transactions', async () => {
     const queueHarness = createAsyncQueueHarness()
     configureQueueRuntime({
       config: {
@@ -1714,16 +1714,13 @@ describe('@holo-js/media', () => {
     await expect(post.addMedia({
       contents: Buffer.from('second'),
       fileName: 'second.jpg',
-    }).toMediaCollection('avatars')).rejects.toThrow('failed to enqueue replacement')
-
-    const storedPaths = [...storageState.getDiskStore('public').keys()]
-    expect(storedPaths).toEqual([firstPath])
-    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(firstPath!)!)).toBe('first')
+    }).toMediaCollection('avatars')).rejects.toThrow('committed')
 
     const media = await post.getMedia('avatars')
     expect(media).toHaveLength(1)
-    expect(media[0]?.fileName).toBe('first.jpg')
-    expect(media[0]?.record.path).toBe(firstPath)
+    expect(media[0]?.fileName).toBe('second.jpg')
+    expect(storageState.getDiskStore('public').has(firstPath!)).toBe(false)
+    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(media[0]!.record.path)!)).toBe('second')
   })
 
   it('preserves the existing single-file media when replacement conversion fails', async () => {
@@ -1773,7 +1770,7 @@ describe('@holo-js/media', () => {
     expect(storageState.getDiskStore('public').has(firstPath!)).toBe(true)
   })
 
-  it('rolls back the new single-file media when deleting the previous file fails', async () => {
+  it('retains committed single-file media when deleting the previous file fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -1798,18 +1795,18 @@ describe('@holo-js/media', () => {
     await expect(post.addMedia({
       contents: Buffer.from('second'),
       fileName: 'second.jpg',
-    }).toMediaCollection('avatars')).rejects.toThrow('delete failed for public:')
+    }).toMediaCollection('avatars')).rejects.toThrow('committed')
 
     const items = await post.getMedia('avatars')
     expect(items).toHaveLength(1)
-    expect(items[0]?.fileName).toBe('first.jpg')
+    expect(items[0]?.fileName).toBe('second.jpg')
 
     const storedPaths = [...storageState.getDiskStore('public').keys()]
-    expect(storedPaths).toHaveLength(1)
-    expect(storedPaths[0]).toContain('first.jpg')
+    expect(storedPaths).toHaveLength(2)
+    expect(storedPaths.some(path => path.includes('second.jpg'))).toBe(true)
   })
 
-  it('restores earlier legacy single-file rows when a later cleanup delete fails', async () => {
+  it('retains committed replacement when later legacy file cleanup fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -1854,16 +1851,16 @@ describe('@holo-js/media', () => {
     await expect(post.addMedia({
       contents: Buffer.from('replacement'),
       fileName: 'replacement.txt',
-    }).toMediaCollection('avatars')).rejects.toThrow('delete failed for public:')
+    }).toMediaCollection('avatars')).rejects.toThrow('committed')
 
     const items = await post.getMedia('avatars')
-    expect(items.map(item => item.fileName)).toEqual(['first.txt', 'second.txt'])
-    expect(storageState.getDiskStore('public').has('media/avatar-1/original/first.txt')).toBe(true)
+    expect(items.map(item => item.fileName)).toEqual(['replacement.txt'])
+    expect(storageState.getDiskStore('public').has('media/avatar-1/original/first.txt')).toBe(false)
     expect(storageState.getDiskStore('public').has('media/avatar-2/original/second.txt')).toBe(true)
-    expect([...storageState.getDiskStore('public').keys()].some(path => path.includes('replacement.txt'))).toBe(false)
+    expect([...storageState.getDiskStore('public').keys()].some(path => path.includes('replacement.txt'))).toBe(true)
   })
 
-  it('cleans up new conversions when single-file replacement cleanup fails', async () => {
+  it('retains new conversions when committed replacement cleanup fails', async () => {
     setMediaConversionExecutor({
       async generate({ conversion }) {
         return {
@@ -1894,7 +1891,6 @@ describe('@holo-js/media', () => {
       fileName: 'first.jpg',
     }).toMediaCollection('avatars')
 
-    const beforeFailure = [...storageState.getDiskStore('public').keys()]
     const existing = await post.getFirstMedia('avatars')
     expect(existing).not.toBeNull()
     storageState.failDelete('public', existing!.record.path)
@@ -1902,14 +1898,17 @@ describe('@holo-js/media', () => {
     await expect(post.addMedia({
       contents: Buffer.from('second'),
       fileName: 'second.jpg',
-    }).toMediaCollection('avatars')).rejects.toThrow('delete failed for public:')
+    }).toMediaCollection('avatars')).rejects.toThrow('committed')
 
     const storedPaths = [...storageState.getDiskStore('public').keys()]
-    expect(storedPaths).toEqual(beforeFailure)
-    expect(storedPaths.some(path => path.includes('second.jpg'))).toBe(false)
+    expect(storedPaths).toHaveLength(3)
+    expect(storedPaths.some(path => path.includes('second.jpg'))).toBe(true)
+    const current = await post.getFirstMedia('avatars')
+    expect(current?.fileName).toBe('second.jpg')
+    expect(storageState.getDiskStore('public').has(current!.record.generated_conversions!.thumb!.path)).toBe(true)
   })
 
-  it('preserves the original media row when a conversion delete fails during item deletion', async () => {
+  it('retains committed deletion when conversion file cleanup fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -1943,14 +1942,14 @@ describe('@holo-js/media', () => {
     expect(thumbPath).toBeTruthy()
     storageState.failDelete('public', thumbPath!)
 
-    await expect(media.delete()).rejects.toThrow('delete failed for public:')
+    await expect(media.delete()).rejects.toThrow('committed')
 
-    expect(storageState.getDiskStore('public').has(media.record.path)).toBe(true)
+    expect(storageState.getDiskStore('public').has(media.record.path)).toBe(false)
     expect(storageState.getDiskStore('public').has(thumbPath!)).toBe(true)
-    expect(await Media.query().count()).toBe(1)
+    expect(await Media.query().count()).toBe(0)
   })
 
-  it('rolls back overflow deletions when onlyKeepLatest cleanup fails mid-stream', async () => {
+  it('retains committed latest media when overflow cleanup fails', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -2014,14 +2013,14 @@ describe('@holo-js/media', () => {
 
     await expect(
       post.addMedia({ contents: Buffer.from('4'), fileName: 'four.txt' }).toMediaCollection('gallery'),
-    ).rejects.toThrow('delete failed for public:')
+    ).rejects.toThrow('committed')
 
     const items = await post.getMedia('gallery')
-    expect(items.map(item => item.fileName)).toEqual(['one.txt', 'two.txt', 'three.txt'])
-    expect(storageState.getDiskStore('public').has('media/gallery-1/original/one.txt')).toBe(true)
+    expect(items.map(item => item.fileName)).toEqual(['four.txt'])
+    expect(storageState.getDiskStore('public').has('media/gallery-1/original/one.txt')).toBe(false)
     expect(storageState.getDiskStore('public').has('media/gallery-2/original/two.txt')).toBe(true)
-    expect(storageState.getDiskStore('public').has('media/gallery-3/original/three.txt')).toBe(true)
-    expect([...storageState.getDiskStore('public').keys()].some(path => path.includes('four.txt'))).toBe(false)
+    expect(storageState.getDiskStore('public').has('media/gallery-3/original/three.txt')).toBe(false)
+    expect([...storageState.getDiskStore('public').keys()].some(path => path.includes('four.txt'))).toBe(true)
   })
 
   it('cleans up uploaded files when conversion generation fails', async () => {
@@ -2993,7 +2992,7 @@ describe('@holo-js/media', () => {
         fileName: 'hero.jpg',
         mimeType: 'image/jpeg',
       }).toMediaCollection('images')
-    })).rejects.toThrow('failed to enqueue job')
+    })).rejects.toThrow('committed')
 
     expect(await DB.table('media').get()).toHaveLength(1)
     expect(generate).toHaveBeenCalledTimes(1)

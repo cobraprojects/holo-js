@@ -1,4 +1,9 @@
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
+import { mkdtempSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createFileSessionStore } from '../../session/src'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
 import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, logout, provider, resetAuthRuntime } from '../../auth/src'
@@ -21,21 +26,7 @@ import {
 
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
-type SessionRecord = {
-  readonly id: string
-  readonly store: string
-  readonly data: Readonly<Record<string, unknown>>
-  readonly createdAt: Date
-  readonly lastActivityAt: Date
-  readonly expiresAt: Date
-  readonly rememberTokenHash?: string
-}
 
-type SessionStore = {
-  read(sessionId: string): Promise<SessionRecord | null>
-  write(record: SessionRecord): Promise<void>
-  delete(sessionId: string): Promise<void>
-}
 
 type UserRecord = {
   id: number
@@ -83,17 +74,12 @@ function resolveFetchMockUrl(input: FetchMockInput): string {
   return input
 }
 
-class InMemorySessionStore implements SessionStore {
-  readonly records = new Map<string, SessionRecord>()
-  async read(sessionId: string): Promise<SessionRecord | null> {
-    return this.records.get(sessionId) ?? null
-  }
-  async write(record: SessionRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-  async delete(sessionId: string): Promise<void> {
-    this.records.delete(sessionId)
-  }
+const sessionDirectories: string[] = []
+
+function createSessionStore() {
+  const directory = mkdtempSync(join(tmpdir(), 'holo-hosted-auth-session-'))
+  sessionDirectories.push(directory)
+  return { store: createFileSessionStore(directory), path: directory }
 }
 
 class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
@@ -340,16 +326,15 @@ function configureRuntime(options: {
     status?: 301 | 302 | 303 | 307 | 308
   }[]
 } = {}) {
-  const sessionStore = new InMemorySessionStore()
+  const { store: sessionStore, path: sessionPath } = createSessionStore()
   configureSessionRuntime({
     config: {
-      driver: 'database',
+      driver: 'file',
       stores: {
-        database: {
-          name: 'database',
-          driver: 'database',
-          connection: 'main',
-          table: 'sessions',
+        file: {
+          name: 'file',
+          driver: 'file',
+          path: sessionPath,
         },
       },
       cookie: {
@@ -366,7 +351,7 @@ function configureRuntime(options: {
       rememberMeLifetime: 43200,
     },
     stores: {
-      database: sessionStore,
+      file: sessionStore,
     },
   })
 
@@ -461,13 +446,14 @@ function configureRuntime(options: {
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
   resetClerkAuthRuntime()
   resetAuthRuntime()
   resetSessionRuntime()
   vi.doUnmock('@clerk/backend')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  await Promise.all(sessionDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
 function encodeBase64Url(value: string): string {
@@ -1930,8 +1916,7 @@ describe('@holo-js/auth-clerk', () => {
       sessionId: firstSessionId,
       cookies: [],
     })
-    expect(runtime.sessionStore.records.size).toBe(1)
-    expect(firstSessionId ? runtime.sessionStore.records.has(firstSessionId) : false).toBe(true)
+    expect(firstSessionId ? await runtime.sessionStore.read(firstSessionId) : null).not.toBeNull()
   })
 
   it('does not reuse Holo sessions with mismatched auth or Clerk identities', async () => {
@@ -1945,10 +1930,10 @@ describe('@holo-js/auth-clerk', () => {
     }))
     const firstId = first?.authSession?.sessionId
     const firstCookie = first?.authSession?.cookies[0]?.split(';', 1)[0]
-    const firstRecord = firstId ? runtime.sessionStore.records.get(firstId) : undefined
+    const firstRecord = firstId ? await runtime.sessionStore.read(firstId) : undefined
     if (!firstId || !firstCookie || !firstRecord) throw new Error('Expected initial Holo session.')
     const firstPayload = firstRecord.data.auth as Record<string, unknown>
-    runtime.sessionStore.records.set(firstId, { ...firstRecord, data: { auth: { ...firstPayload, provider: 'admins' } } })
+    await runtime.sessionStore.write({ ...firstRecord, data: { auth: { ...firstPayload, provider: 'admins' } } })
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     const second = await authenticate(new Request('https://app.test/me', {
       headers: { authorization: 'Bearer mismatch-token', cookie: firstCookie },
@@ -1957,10 +1942,10 @@ describe('@holo-js/auth-clerk', () => {
 
     const secondId = second?.authSession?.sessionId
     const secondCookie = second?.authSession?.cookies[0]?.split(';', 1)[0]
-    const secondRecord = secondId ? runtime.sessionStore.records.get(secondId) : undefined
+    const secondRecord = secondId ? await runtime.sessionStore.read(secondId) : undefined
     if (!secondId || !secondCookie || !secondRecord) throw new Error('Expected replacement Holo session.')
     const secondPayload = secondRecord.data.auth as Record<string, unknown>
-    runtime.sessionStore.records.set(secondId, {
+    await runtime.sessionStore.write({
       ...secondRecord,
       data: { auth: { ...secondPayload, clerk: { provider: 'other', sessionId: 'clerk-session' } } },
     })
@@ -1972,10 +1957,10 @@ describe('@holo-js/auth-clerk', () => {
 
     const thirdId = third?.authSession?.sessionId
     const thirdCookie = third?.authSession?.cookies[0]?.split(';', 1)[0]
-    const thirdRecord = thirdId ? runtime.sessionStore.records.get(thirdId) : undefined
+    const thirdRecord = thirdId ? await runtime.sessionStore.read(thirdId) : undefined
     if (!thirdId || !thirdCookie || !thirdRecord) throw new Error('Expected second replacement Holo session.')
     const { clerk: _clerk, ...standardPayload } = thirdRecord.data.auth as Record<string, unknown>
-    runtime.sessionStore.records.set(thirdId, { ...thirdRecord, data: { auth: standardPayload } })
+    await runtime.sessionStore.write({ ...thirdRecord, data: { auth: standardPayload } })
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     const fourth = await authenticate(new Request('https://app.test/me', {
       headers: { authorization: 'Bearer mismatch-token', cookie: thirdCookie },
@@ -2016,9 +2001,9 @@ describe('@holo-js/auth-clerk', () => {
   ] as const)('ignores malformed Clerk logout metadata %#', async (clerk) => {
     const runtime = configureRuntime()
     const now = new Date()
-    runtime.sessionStore.records.set('malformed-session', {
+    await runtime.sessionStore.write({
       id: 'malformed-session',
-      store: 'database',
+      store: 'file',
       data: {
         auth: {
           guard: 'web',
@@ -2269,20 +2254,19 @@ describe('@holo-js/auth-clerk', () => {
   })
 
   it('fails when Clerk sync needs to persist changes without adapter.update()', async () => {
-    const sessionStore = new InMemorySessionStore()
+    const { store: sessionStore, path: sessionPath } = createSessionStore()
     const usersProvider = new SnapshotProviderAdapter()
     const adminsProvider = new InMemoryProviderAdapter()
     const identityStore = new InMemoryIdentityStore()
 
     configureSessionRuntime({
       config: {
-        driver: 'database',
+        driver: 'file',
         stores: {
-          database: {
-            name: 'database',
-            driver: 'database',
-            connection: 'main',
-            table: 'sessions',
+          file: {
+            name: 'file',
+            driver: 'file',
+            path: sessionPath,
           },
         },
         cookie: {
@@ -2299,7 +2283,7 @@ describe('@holo-js/auth-clerk', () => {
         rememberMeLifetime: 43200,
       },
       stores: {
-        database: sessionStore,
+        file: sessionStore,
       },
     })
 

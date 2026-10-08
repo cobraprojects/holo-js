@@ -2,6 +2,13 @@
 
 Password reset tokens let the application issue one-time credentials for resetting local passwords.
 
+Verification and password-reset redemption for external providers or different database contexts must
+run outside a caller-owned token-storage transaction. Core rejects such redemption before claiming
+the token, revoking reset siblings, or invoking the provider; Auth propagates the existing
+native `TransactionError`. The token remains available for a later attempt outside the
+transaction. Proven shared native persistence still participates in the enclosing transaction and
+rolls the claim and user mutation back together on failure.
+
 ## Introduction
 
 Password reset uses the configured broker and local provider:
@@ -80,8 +87,38 @@ const resetUser = await resetPassword({
 The thrown `ValidationException` targets the submitted auth fields directly, such as `token`, `password`, and
 `passwordConfirmation`. Successful calls return the updated user.
 
-The reset flow verifies the token, hashes the new password, updates the local user record, and invalidates the used
-token.
+The reset flow validates the secret and claims the exact unused token while it is still unexpired. Only one
+concurrent request can use a token. Before updating the user, it revokes sibling tokens for the same provider and
+email in that broker's configured table. Other providers, emails, and broker tables remain unaffected.
+
+When Core proves that the native user repository and token store share the same database context, the claim,
+sibling revocation, and password mutation run in one transaction. A failed mutation rolls them all back, allowing
+the valid token to be retried. A repository factory resolves once for that operation and retains its own lifetime
+across separate operations.
+
+With an external provider or a different database context, the claim and sibling revocation finish before the
+password update. If that update fails, the tokens remain consumed: request a fresh reset token. A failed claim or
+sibling revocation never invokes the password mutation. Different reset tokens do not hold an account-wide lock
+across external provider updates.
+
+## Custom Token Stores
+
+Custom `PasswordResetTokenStore` implementations retain `create`, `findById`, `findLatestByEmail`, `delete`, and
+`deleteByEmail`, and must implement:
+
+```ts
+redeem<TResult>(
+  record: PasswordResetTokenRecord,
+  operation: () => Promise<TResult>,
+): Promise<TResult | null>
+```
+
+Validate the supplied record's identity, provider, email, broker table, hash, timestamps, and unused state when
+claiming it, including expiry at mutation time. Return `null` when no matching claim is available; invoke the
+asynchronous operation only for the winning claim and preserve its inferred result. Never substitute a lookup
+followed by unconditional deletion. Auth revokes siblings within the operation before updating the user. Shared
+transaction participation requires actual persistence wiring; the callback alone does not make an external
+provider transactional. These single-use rules do not apply to personal access tokens or browser sessions.
 
 ## Broker Selection
 
