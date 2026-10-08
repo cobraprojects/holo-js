@@ -16,7 +16,6 @@ import type * as SocialFeature from '@holo-js/auth-social'
 import type * as WorkosFeature from '@holo-js/auth-workos'
 import type * as ClerkFeature from '@holo-js/auth-clerk'
 import type { SessionRuntimeFacade, SessionStore } from '@holo-js/session'
-import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { AuthFacade, AuthHostedIdentityStore, AuthLogoutResult, AuthMultiFactorVerificationState, EmailVerificationTokenStore, EmailVerificationTokenRecord, PasswordResetTokenStore, PasswordResetTokenRecord } from '@holo-js/auth'
@@ -103,13 +102,10 @@ import {
 import { createCoreNotificationStore } from './notificationPersistence'
 import { createCoreDatabaseSessionAdapter } from './sessionPersistence'
 import {
-  createAuthActionUrl,
-  createAuthEmailHtml,
-  createAuthMailDeliveryHook,
   createCoreNotificationMailSender,
   createNotificationMailText,
-  formatAuthEmailExpiration,
 } from './authMailDelivery'
+import { createAuthMailDeliveryHook, createAuthNotificationsDeliveryHook, createCoreAuthDeliveryHook } from './authDelivery'
 import { createOptionalFeatureModuleLoader } from './optionalFeatureLoader'
 import {
   authConfigUsesClerkProviders,
@@ -262,26 +258,6 @@ type NotificationsModule = Pick<typeof NotificationsFeature,
   | 'notifyUsing'
   | 'resetNotificationsRuntime'
 >
-
-type AuthEmailVerificationNotification = {
-  readonly email: string
-  readonly name?: string
-  readonly url: string
-  readonly expiresAt: Date
-}
-
-type AuthPasswordResetNotification = {
-  readonly email: string
-  readonly url: string
-  readonly expiresAt: Date
-}
-
-type AuthNotificationModule = {
-  readonly default?: unknown
-  readonly notification?: unknown
-  readonly emailVerificationNotification?: unknown
-  readonly passwordResetNotification?: unknown
-}
 
 type BroadcastModule = Pick<typeof BroadcastFeature,
   | 'configureBroadcastRuntime'
@@ -726,211 +702,6 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   sessionModule: SessionModule,
 ): Promise<Readonly<Record<string, SessionStore>>> {
   return (await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)).stores
-}
-
-const AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS = [
-  'server/notifications/auth/email-verification.ts',
-  'server/notifications/auth/email-verification.mts',
-  'server/notifications/auth/email-verification.js',
-  'server/notifications/auth/email-verification.mjs',
-  'server/notifications/auth/email-verification.cts',
-  'server/notifications/auth/email-verification.cjs',
-] as const
-
-const AUTH_PASSWORD_RESET_NOTIFICATION_PATHS = [
-  'server/notifications/auth/password-reset.ts',
-  'server/notifications/auth/password-reset.mts',
-  'server/notifications/auth/password-reset.js',
-  'server/notifications/auth/password-reset.mjs',
-  'server/notifications/auth/password-reset.cts',
-  'server/notifications/auth/password-reset.cjs',
-] as const
-
-function resolveExistingProjectFile(projectRoot: string | undefined, candidates: readonly string[]): string | undefined {
-  if (!projectRoot) {
-    return undefined
-  }
-
-  return candidates.find(candidate => existsSync(resolve(projectRoot, candidate)))
-}
-
-function resolveAuthNotification(
-  module: AuthNotificationModule,
-  exportName: 'emailVerificationNotification' | 'passwordResetNotification',
-  filePath: string,
-): NotificationsFeature.NotificationDefinition {
-  const notification = module[exportName] ?? module.notification ?? module.default
-  if (!isAuthNotificationDefinition(notification)) {
-    throw new Error(
-      `[@holo-js/core] Auth notification file "${filePath}" must export a notification definition.`,
-    )
-  }
-
-  return notification
-}
-
-function isAuthNotificationDefinition(notification: unknown): notification is NotificationsFeature.NotificationDefinition {
-  if (!notification || typeof notification !== 'object') {
-    return false
-  }
-
-  const candidate = notification as {
-    readonly via?: unknown
-    readonly build?: unknown
-  }
-  if (typeof candidate.via !== 'function' || !candidate.build || typeof candidate.build !== 'object') {
-    return false
-  }
-
-  return Object.values(candidate.build).some(factory => typeof factory === 'function')
-}
-
-async function loadProjectAuthNotification(
-  projectRoot: string | undefined,
-  candidates: readonly string[],
-  exportName: 'emailVerificationNotification' | 'passwordResetNotification',
-): Promise<NotificationsFeature.NotificationDefinition | undefined> {
-  const filePath = resolveExistingProjectFile(projectRoot, candidates)
-  if (!filePath) {
-    return undefined
-  }
-
-  const module = await importRuntimeModule(projectRoot!, filePath) as AuthNotificationModule
-  return resolveAuthNotification(module, exportName, filePath)
-}
-
-function createAuthNotificationsDeliveryHook(
-  notificationsModule: NotificationsModule,
-  appUrl: string,
-  projectRoot?: string,
-): {
-  sendEmailVerification(input: {
-    readonly provider: string
-    readonly user: unknown
-    readonly email: string
-    readonly token: {
-      readonly id: string
-      readonly plainTextToken: string
-      readonly expiresAt: Date
-    }
-    readonly route: string
-  }): Promise<void>
-  sendPasswordReset(input: {
-    readonly broker: string
-    readonly provider: string
-    readonly email: string
-    readonly token: {
-      readonly id: string
-      readonly plainTextToken: string
-      readonly expiresAt: Date
-    }
-    readonly route: string
-  }): Promise<void>
-} {
-  return Object.freeze({
-    async sendEmailVerification(input): Promise<void> {
-      const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
-        ? (input.user as { name?: string }).name?.trim()
-        : undefined
-      const actionUrl = createAuthActionUrl(appUrl, input.route, input.token.plainTextToken)
-      const authNotification: AuthEmailVerificationNotification = Object.freeze({
-        email: input.email,
-        ...(recipientName ? { name: recipientName } : {}),
-        url: actionUrl,
-        expiresAt: input.token.expiresAt,
-      })
-      const projectNotification = await loadProjectAuthNotification(
-        projectRoot,
-        AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS,
-        'emailVerificationNotification',
-      )
-      const lines = [
-        'Confirm your account to finish signing in.',
-        `This verification link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
-      ] as const
-      const action = {
-        label: 'Verify email address',
-        url: actionUrl,
-      } as const
-      const notification = projectNotification ?? notificationsModule.defineNotification({
-        type: 'auth.email-verification',
-        via() {
-          return ['email']
-        },
-        build: {
-          email() {
-            return {
-              subject: 'Verify your email address',
-              ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
-              lines,
-              action,
-              html: createAuthEmailHtml({
-                subject: 'Verify your email address',
-                ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
-                lines,
-                action,
-              }),
-              metadata: {
-                provider: input.provider,
-                tokenId: input.token.id,
-              },
-            }
-          },
-        },
-      })
-
-      await notificationsModule
-        .notify(authNotification, notification)
-    },
-    async sendPasswordReset(input): Promise<void> {
-      const actionUrl = createAuthActionUrl(appUrl, input.route, input.token.plainTextToken)
-      const authNotification: AuthPasswordResetNotification = Object.freeze({
-        email: input.email,
-        url: actionUrl,
-        expiresAt: input.token.expiresAt,
-      })
-      const projectNotification = await loadProjectAuthNotification(
-        projectRoot,
-        AUTH_PASSWORD_RESET_NOTIFICATION_PATHS,
-        'passwordResetNotification',
-      )
-      const lines = [
-        'Click the link below to choose a new password.',
-        `This reset link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
-      ] as const
-      const action = {
-        label: 'Reset password',
-        url: actionUrl,
-      } as const
-      const notification = projectNotification ?? notificationsModule.defineNotification({
-        type: 'auth.password-reset',
-        via() {
-          return ['email']
-        },
-        build: {
-          email() {
-            return {
-              subject: 'Reset your password',
-              lines,
-              action,
-              html: createAuthEmailHtml({
-                subject: 'Reset your password',
-                lines,
-                action,
-              }),
-              metadata: {
-                provider: input.provider,
-                tokenId: input.token.id,
-              },
-            }
-          },
-        },
-      })
-
-      await notificationsModule
-        .notify(authNotification, notification)
-    },
-  })
 }
 
 function createCoreNotificationBroadcaster(
@@ -2622,6 +2393,13 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     const providers = await createCoreAuthProviders(projectRoot, loadedConfig, redemption)
     const authStores = createCoreAuthStores(loadedConfig, redemption)
 
+    const delivery = createCoreAuthDeliveryHook({
+      appUrl: loadedConfig.app.url,
+      projectRoot,
+      notifications: notificationsModule,
+      mail: mailModule,
+      notificationsMailer: notificationsRuntimeBindings?.mailer,
+    })
     authContext = options.authContext ?? createRequestAwareAuthContext(authModule.createAsyncAuthContext(), options.authRequest)
     authContext.setRequestAccessors?.(options.authRequest)
     authModule.authRuntimeInternals.configureRuntime({
@@ -2634,11 +2412,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       passwordResetTokens: authStores.passwordResetTokens,
       multiFactor: authStores.multiFactor,
       multiFactorEncryptionKey: loadedConfig.app.key,
-      ...(notificationsModule && (mailModule || notificationsRuntimeBindings?.mailer)
-        ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule, loadedConfig.app.url, projectRoot) }
-        : mailModule
-          ? { delivery: createAuthMailDeliveryHook(mailModule, loadedConfig.app.url) }
-          : {}),
+      ...(delivery ? { delivery } : {}),
       context: authContext,
       ...(authorizationModule
         ? {
