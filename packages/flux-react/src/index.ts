@@ -1,60 +1,19 @@
 import { useEffect, useMemo, useReducer, useRef, useSyncExternalStore } from 'react'
-import { fluxInternals, getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
+import { fluxInternals, getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxManifestTypes, type FluxListenerControls } from '@holo-js/flux'
 import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
-type ManifestEventName<TManifest extends GeneratedBroadcastManifest>
-  = TManifest['events'][number]['name'] & string
-type ManifestChannelPattern<TManifest extends GeneratedBroadcastManifest>
-  = TManifest['channels'][number]['pattern'] & string
-type ManifestChannelEntryByPattern<
-  TManifest extends GeneratedBroadcastManifest,
-  TPattern extends string,
-> = Extract<TManifest['channels'][number], { pattern: TPattern }>
-type ManifestPresenceMember<
-  TManifest extends GeneratedBroadcastManifest,
-  TPattern extends string,
-> = Extract<ManifestChannelEntryByPattern<TManifest, TPattern>, { member: unknown }> extends { member: infer TMember }
-  ? TMember
-  : BroadcastJsonObject
-type ManifestEventNamesForPattern<
-  TManifest extends GeneratedBroadcastManifest,
-  TPattern extends string,
-> = TManifest['events'][number] extends infer TEvent
-  ? TEvent extends {
-    readonly name: infer TName
-    readonly channels: readonly { readonly pattern: infer TEventPattern }[]
-  }
-    ? TPattern extends TEventPattern & string
-      ? TName & string
-      : never
-    : never
-  : never
-type ManifestSubscriptionEventName<
-  TManifest extends GeneratedBroadcastManifest,
-  TChannel extends string,
-> = string extends ManifestEventName<TManifest>
-  ? string
-  : TChannel extends ManifestChannelPattern<TManifest>
-    ? ManifestEventNamesForPattern<TManifest, TChannel>
-    : never
 type ManifestHookChannel<TManifest extends GeneratedBroadcastManifest>
-  = string extends ManifestChannelPattern<TManifest>
-    ? string
-    : ManifestChannelPattern<TManifest>
+  = FluxManifestTypes<TManifest>['channelPattern']
 type ManifestHookEvent<
   TManifest extends GeneratedBroadcastManifest,
   TChannel extends string,
   TEvent extends string,
-> = TEvent & ManifestSubscriptionEventName<TManifest, TChannel>
+> = TEvent & FluxManifestTypes<TManifest, TChannel>['adapterEvent']
 type ManifestHookPresenceMember<
   TMember,
   TManifest extends GeneratedBroadcastManifest,
   TChannel extends string,
-> = unknown extends TMember
-  ? string extends ManifestChannelPattern<TManifest>
-    ? BroadcastJsonObject
-    : ManifestPresenceMember<TManifest, TChannel>
-  : TMember
+> = FluxManifestTypes<TManifest, TChannel, TMember>['adapterPresenceMember']
 
 export interface FluxHookOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> {
   readonly client?: FluxClient<TManifest>

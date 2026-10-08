@@ -2,7 +2,7 @@ import { describe, expectTypeOf, it } from 'vitest'
 import type { Readable } from 'svelte/store'
 import type { FluxConnectionStatus } from '@holo-js/flux'
 import { createFluxClient, fluxInternals } from '@holo-js/flux'
-import type { BroadcastJsonObject, GeneratedBroadcastManifest } from '@holo-js/broadcast'
+import type { BroadcastDefinition, BroadcastJsonObject, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 import {
   useFlux,
   useFluxConnectionStatus,
@@ -13,19 +13,26 @@ import {
   useFluxPublic,
 } from '../src'
 
+declare module '@holo-js/broadcast' {
+  interface HoloBroadcastRegistry {
+    readonly 'flux.svelte.orders.updated': BroadcastDefinition<'flux.svelte.orders.updated', { orderId: string, status: 'pending' | 'shipped' }>
+    readonly 'flux.svelte.orders.shipped': BroadcastDefinition<'flux.svelte.orders.shipped', { orderId: string, shippedAt: string }>
+  }
+}
+
 describe('@holo-js/flux-svelte typing', () => {
   it('supports single and multi-event typed helper usage', () => {
     const manifest = {
       version: 1,
       generatedAt: '2026-01-01T00:00:00.000Z' as string,
       events: [{
-        name: 'orders.updated',
+        name: 'flux.svelte.orders.updated',
         channels: [{
           type: 'private',
           pattern: 'orders.{orderId}',
         }],
       }, {
-        name: 'orders.shipped',
+        name: 'flux.svelte.orders.shipped',
         channels: [{
           type: 'private',
           pattern: 'orders.{orderId}',
@@ -43,16 +50,19 @@ describe('@holo-js/flux-svelte typing', () => {
       version: 1,
       generatedAt: '2026-01-01T00:00:00.000Z',
       events: [{
-        name: 'chat.message',
+        name: 'flux.svelte.chat.message',
         channels: [{
           type: 'presence',
           pattern: 'chat.{roomId}',
         }],
       }, {
-        name: 'orders.updated',
+        name: 'flux.svelte.orders.updated',
         channels: [{
           type: 'private',
           pattern: 'orders.{orderId}',
+        }, {
+          type: 'presence',
+          pattern: 'chat.{roomId}',
         }],
       }],
       channels: [{
@@ -86,20 +96,20 @@ describe('@holo-js/flux-svelte typing', () => {
       connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
     })
 
-    const generic = useFlux('orders.{orderId}', 'orders.updated', payload => {
-      expectTypeOf(payload).toExtend<Record<string, unknown>>()
+    const generic = useFlux('orders.{orderId}', 'flux.svelte.orders.updated', payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ orderId: string, status: 'pending' | 'shipped' }>()
     }, { client })
-    const genericMany = useFlux('orders.{orderId}', ['orders.updated', 'orders.shipped'], payload => {
-      expectTypeOf(payload).toExtend<Record<string, unknown>>()
+    const genericMany = useFlux('orders.{orderId}', ['flux.svelte.orders.updated', 'flux.svelte.orders.shipped'], payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ orderId: string, status: 'pending' | 'shipped' } | { orderId: string, shippedAt: string }>()
     }, { client })
-    const pub = useFluxPublic('orders.{orderId}', 'orders.updated', payload => {
-      expectTypeOf(payload).toExtend<Record<string, unknown>>()
+    const pub = useFluxPublic('orders.{orderId}', 'flux.svelte.orders.updated', payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ orderId: string, status: 'pending' | 'shipped' }>()
     }, { client })
-    const priv = useFluxPrivate('orders.{orderId}', 'orders.shipped', payload => {
-      expectTypeOf(payload).toExtend<Record<string, unknown>>()
+    const priv = useFluxPrivate('orders.{orderId}', 'flux.svelte.orders.shipped', payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ orderId: string, shippedAt: string }>()
     }, { client })
-    const model = useFluxModel('orders.{orderId}', 'orders.updated', payload => {
-      expectTypeOf(payload).toExtend<Record<string, unknown>>()
+    const model = useFluxModel('orders.{orderId}', 'flux.svelte.orders.updated', payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ orderId: string, status: 'pending' | 'shipped' }>()
     }, { client })
     const presence = useFluxPresence('chat.{roomId}', {
       onHere(members) {
@@ -132,12 +142,25 @@ describe('@holo-js/flux-svelte typing', () => {
     expectTypeOf(defaultPresence.members).toEqualTypeOf<Readable<readonly BroadcastJsonObject[]>>()
     expectTypeOf(status).toEqualTypeOf<Readable<FluxConnectionStatus>>()
 
+    useFlux('chat.{roomId}', 'flux.svelte.orders.updated', payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ orderId: string, status: 'pending' | 'shipped' }>()
+      // @ts-expect-error payload is inferred from the registered event definition
+      const shippedAt: string = payload.shippedAt
+      void shippedAt
+    }, { client: presenceClient })
+    const presenceWithoutMember = useFluxPresence('orders.{orderId}', {
+      onHere(members) {
+        expectTypeOf(members).toEqualTypeOf<readonly unknown[]>()
+      },
+    }, { client })
+    expectTypeOf(presenceWithoutMember.members).toEqualTypeOf<Readable<readonly unknown[]>>()
+
     // @ts-expect-error event exists in the manifest but is not emitted on orders.{orderId}
-    useFlux('orders.{orderId}', 'chat.message', (_payload: BroadcastJsonObject) => undefined, { client: presenceClient })
+    useFlux('orders.{orderId}', 'flux.svelte.chat.message', (_payload: BroadcastJsonObject) => undefined, { client: presenceClient })
     // @ts-expect-error event is not present in the selected manifest client
-    useFlux('orders.{orderId}', 'orders.deleted', (_payload: BroadcastJsonObject) => undefined, { client })
+    useFlux('orders.{orderId}', 'flux.svelte.orders.deleted', (_payload: BroadcastJsonObject) => undefined, { client })
     // @ts-expect-error generated manifest clients only accept known channel patterns
-    useFlux('orders.1', 'orders.updated', (_payload: BroadcastJsonObject) => undefined, { client })
+    useFlux('orders.1', 'flux.svelte.orders.updated', (_payload: BroadcastJsonObject) => undefined, { client })
     // @ts-expect-error presence members are inferred from known manifest channel patterns
     useFluxPresence('chat.1', {}, { client: presenceClient })
 
