@@ -296,6 +296,22 @@ Requires a matching `...Confirmation` field, such as `password` and `passwordCon
 field.string().required().confirmed()
 ```
 
+Place `confirmed()` after a transform when you want to compare the transformed value. The matching
+confirmation field should apply the same normalization:
+
+```ts
+import { field, schema } from '@holo-js/validation'
+
+const passwords = schema({
+  password: field.string().transform(value => value.trim()).confirmed(),
+  passwordConfirmation: field.string().transform(value => value.trim()),
+})
+```
+
+When `confirmed()` comes before a transform, it compares the value at that step with the confirmation
+input. After a transform, it compares with the declared confirmation field's parsed output. Inside an
+array of objects, each item compares with its own confirmation field.
+
 ### `before(date, message?)`
 
 Requires a date before another date.
@@ -386,15 +402,46 @@ field.date().afterOrToday()
 
 ### `transform(fn)`
 
-Transforms the validated value.
+Transforms the value at this step in the chain. The returned value becomes the input to subsequent
+rules and the inferred output type. Each transform runs once per value that reaches it.
 
 ```ts
-field.string().transform(value => value.trim())
+field.string()
+  .transform(value => value.trim())
+  .custom(value => value.startsWith('holo_') || 'Must start with holo_.')
 ```
+
+Here, the custom validator receives the trimmed string. Moving `custom()` before `transform()` makes
+it validate the untrimmed string instead.
+
+A failed custom validator prevents later transforms from running. Rules following a skipped transform
+are also skipped, because they expect its output. Validation rules before that transform can still
+report additional errors.
+
+Array items are validated before a transform on the containing array. If a child custom validator or
+confirmation check fails, the parent transform does not run. Filtering or reordering in a parent
+transform therefore cannot remove those failures; their error paths refer to the submitted indexes.
+
+```ts
+import { field, schema, validate } from '@holo-js/validation'
+
+const tags = schema({
+  tags: field.array(
+    field.string().custom(value => value !== 'blocked' || 'This tag is blocked.'),
+  ).transform(values => values.filter(value => value !== 'blocked')),
+})
+
+await validate({ tags: ['blocked', 'allowed'] }, tags)
+```
+
+This throws a validation exception for `tags.0`; the array transform never runs. If some items should
+be excluded from validation entirely, filter the input before calling `validate()`.
 
 ### `custom(fn, message?)`
 
-Adds a synchronous custom validator. Return `true` for success or a string message for failure.
+Adds a synchronous custom validator. It receives the value at its position in the chain, including
+any preceding transforms. Return `true` for success, `false` for the default or supplied message, or a
+string for a specific failure message.
 
 ```ts
 field.string().custom(value => value.startsWith('holo_') || 'Must start with holo_.')
@@ -402,7 +449,8 @@ field.string().custom(value => value.startsWith('holo_') || 'Must start with hol
 
 ### `customAsync(fn, message?)`
 
-Adds an asynchronous custom validator. Return `true` for success or a string message for failure.
+Adds an asynchronous custom validator with the same value and return conventions as `custom()`.
+Validation awaits each callback; callbacks within a schema run serially in field and array-item order.
 
 ```ts
 field.string().customAsync(async (value) => {
