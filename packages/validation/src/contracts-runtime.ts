@@ -4,7 +4,6 @@ import {
   type FormLikeValidationInput,
   type InferSchemaData,
   type InferValidationSchemaData,
-  type PostValidationContext,
   type SchemaInputShape,
   type StandardSchemaV1Issue,
   type StandardSchemaV1Result,
@@ -26,12 +25,7 @@ import {
   parseByteSize,
 } from './contracts-support'
 
-import { createExecutionNode, type CompiledSchema, type ExecutionNode, type FieldExecution } from './contracts-execution'
-
-type RuntimePostValidationContext = PostValidationContext & {
-  readonly inputParent?: unknown
-  readonly rawInputParent?: unknown
-}
+import { checkFieldConfirmations, createExecutionNode, resolveRuleMessage, type CompiledSchema, type ExecutionNode, type FieldExecution } from './contracts-execution'
 
 function resolveDateRuleValue(value: unknown): Date | undefined {
   /* v8 ignore next 8 -- public rule builders normalize Date arguments to ISO strings before runtime resolution */
@@ -89,10 +83,6 @@ function prependIssue(
   issues[key].unshift(message)
 }
 
-function resolveRuleMessage(rule: FieldRule | undefined, fallback: string): string {
-  return rule?.message ?? fallback
-}
-
 function formatByteSizeLimit(value: number | string, bytes: number): string {
   if (typeof value === 'number') {
     return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`
@@ -106,84 +96,36 @@ function getRule(definition: FieldDefinition, name: FieldRule['name']): FieldRul
   return definition.rules.find(rule => rule.name === name)
 }
 
-function hasRuleBefore(definition: FieldDefinition, selectedRule: FieldRule, name: FieldRule['name']): boolean {
-  const selectedRuleIndex = definition.rules.indexOf(selectedRule)
-  return definition.rules.slice(0, selectedRuleIndex).some(rule => rule.name === name)
-}
-
 function hasOwnProperty(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key)
 }
 
-function resolveConfirmationParent(context: RuntimePostValidationContext, confirmationKey: string, useOutputParent: boolean): unknown {
-  if (useOutputParent && isPlainObject(context.parent) && hasOwnProperty(context.parent, confirmationKey)) {
-    return context.parent
-  }
-
-  if (isPlainObject(context.inputParent) && hasOwnProperty(context.inputParent, confirmationKey)) {
-    return context.inputParent
-  }
-
-  return context.rawInputParent
-}
-
-async function applyFieldChecks(
+function applyFieldChecks(
   execution: FieldExecution,
-  context: RuntimePostValidationContext,
   issues: Record<string, string[]>,
-): Promise<void> {
+): void {
+  const path = execution.node.path
   const { definition, shapeValue: shapeRuleValue } = execution
   const requiredRule = getRule(definition, 'required')
   if (requiredRule && execution.requiredMissing) {
-    delete issues[toIssuePath(context.path) || '_root']
-    prependIssue(issues, context.path, resolveRuleMessage(requiredRule, 'This field is required.'))
+    delete issues[toIssuePath(path) || '_root']
+    prependIssue(issues, path, resolveRuleMessage(requiredRule, 'This field is required.'))
     return
   }
 
   if (!execution.baseValid || shapeRuleValue === undefined || shapeRuleValue === null) return
 
-  const captured = new Map(execution.checks.map(check => [check.rule, check.value]))
   for (const rule of definition.rules) {
-    if ((rule.name === 'custom' || rule.name === 'customAsync' || rule.name === 'confirmed') && !captured.has(rule)) continue
-    const orderedRuleValue = captured.get(rule)
     switch (rule.name) {
-      case 'custom': {
-        const validator = rule.args[0]
-        if (typeof validator === 'function') {
-          const result = validator(orderedRuleValue)
-          if (result === false) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, 'Validation failed.'))
-          } else if (typeof result === 'string' && result.trim()) {
-            pushIssue(issues, context.path, result)
-          }
-        } else if (validator === 'image') {
-          const rawMimeType = (orderedRuleValue as WebFileLike).type
-          const mimeType = typeof rawMimeType === 'string' ? rawMimeType : ''
-          if (!mimeType.toLowerCase().startsWith('image/')) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, 'The selected file must be an image.'))
-          }
-        }
-        break
-      }
+      case 'custom':
       case 'customAsync': {
-        const validator = rule.args[0]
-        if (typeof validator === 'function') {
-          const result = await validator(orderedRuleValue)
-          if (result === false) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, 'Validation failed.'))
-          } else if (typeof result === 'string' && result.trim()) {
-            pushIssue(issues, context.path, result)
-          }
-        }
+        const message = execution.customIssues.get(rule)
+        if (message !== undefined) pushIssue(issues, path, message)
         break
       }
       case 'confirmed': {
-        const confirmationKey = `${context.key}Confirmation`
-        const parent = resolveConfirmationParent(context, confirmationKey, hasRuleBefore(definition, rule, 'transform'))
-        if (parent !== null && isPlainObject(parent)) {
-          if (parent[confirmationKey] !== orderedRuleValue) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field does not match its confirmation.'))
-          }
+        if (execution.confirmationResults.get(rule) === false) {
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field does not match its confirmation.'))
         }
         break
       }
@@ -200,7 +142,7 @@ async function applyFieldChecks(
       case 'afterOrToday': {
         const dateValue = shapeRuleValue instanceof Date ? shapeRuleValue : resolveDateRuleValue(shapeRuleValue)
         if (!dateValue) {
-          pushIssue(issues, context.path, 'This field must be a valid date.')
+          pushIssue(issues, path, 'This field must be a valid date.')
           break
         }
 
@@ -209,39 +151,39 @@ async function applyFieldChecks(
         const todayEnd = endOfToday()
 
         if (rule.name === 'before' && targetDate && !(dateValue.getTime() < targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be before ${targetDate.toISOString()}.`))
+          pushIssue(issues, path, resolveRuleMessage(rule, `This field must be before ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'after' && targetDate && !(dateValue.getTime() > targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be after ${targetDate.toISOString()}.`))
+          pushIssue(issues, path, resolveRuleMessage(rule, `This field must be after ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'beforeOrEqual' && targetDate && !(dateValue.getTime() <= targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be before or equal to ${targetDate.toISOString()}.`))
+          pushIssue(issues, path, resolveRuleMessage(rule, `This field must be before or equal to ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'afterOrEqual' && targetDate && !(dateValue.getTime() >= targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be after or equal to ${targetDate.toISOString()}.`))
+          pushIssue(issues, path, resolveRuleMessage(rule, `This field must be after or equal to ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'today' && !isSameLocalDay(dateValue, todayStart)) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be today.'))
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field must be today.'))
         }
 
         if (rule.name === 'beforeToday' && !(dateValue.getTime() < todayStart.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be before today.'))
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field must be before today.'))
         }
 
         if ((rule.name === 'todayOrBefore' || rule.name === 'beforeOrToday') && !(dateValue.getTime() <= todayEnd.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be today or before.'))
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field must be today or before.'))
         }
 
         if (rule.name === 'afterToday' && !(dateValue.getTime() > todayEnd.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be after today.'))
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field must be after today.'))
         }
 
         if ((rule.name === 'todayOrAfter' || rule.name === 'afterOrToday') && !(dateValue.getTime() >= todayStart.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be today or after.'))
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field must be today or after.'))
         }
 
         break
@@ -252,7 +194,7 @@ async function applyFieldChecks(
           const rawLimit = rule.args[0] as number | string
           const limit = parseByteSize(rawLimit)
           if (fileSize > limit) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, `The selected file must be ${formatByteSizeLimit(rawLimit, limit)} or smaller.`))
+            pushIssue(issues, path, resolveRuleMessage(rule, `The selected file must be ${formatByteSizeLimit(rawLimit, limit)} or smaller.`))
           }
         }
         break
@@ -260,7 +202,7 @@ async function applyFieldChecks(
       case 'size': {
         if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number' && typeof rule.args[0] === 'number') {
           if ((shapeRuleValue as WebFileLike).size !== rule.args[0]) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, `The selected file must be exactly ${formatByteSizeLimit(rule.args[0], rule.args[0])}.`))
+            pushIssue(issues, path, resolveRuleMessage(rule, `The selected file must be exactly ${formatByteSizeLimit(rule.args[0], rule.args[0])}.`))
           }
         }
         break
@@ -281,25 +223,22 @@ function valueAtPath(value: unknown, path: readonly string[]): unknown {
   return current
 }
 
-async function applyExecutionChecks(
+function applyExecutionChecks(
   node: ExecutionNode,
-  output: unknown,
   rawInput: unknown,
   issues: Record<string, string[]>,
-): Promise<void> {
+): void {
   if (node.field) {
-    const parentPath = node.path.slice(0, -1)
-    await applyFieldChecks(node.field, {
-      root: output,
-      parent: node.parent?.field ? node.parent.field.shapeValue : node.parent?.output ?? null,
-      inputParent: node.parent?.field ? node.parent.field.inputValue : node.parent?.input ?? null,
-      rawInputParent: node.path.length ? valueAtPath(rawInput, parentPath) : null,
-      key: node.path.at(-1) ?? '_value',
-      path: node.path,
-    }, issues)
+    checkFieldConfirmations(
+      node.field,
+      node.parent?.field ? node.parent.field.shapeValue : node.parent?.output,
+      node.parent?.field ? node.parent.field.inputValue : node.parent?.input,
+      node.path.length ? valueAtPath(rawInput, node.path.slice(0, -1)) : undefined,
+    )
+    applyFieldChecks(node.field, issues)
   }
   for (const child of node.children) {
-    await applyExecutionChecks(child, output, rawInput, issues)
+    applyExecutionChecks(child, rawInput, issues)
   }
 }
 
@@ -317,7 +256,7 @@ async function runValidation(
     appendIssues(issues, result.issues)
   }
 
-  await applyExecutionChecks(execution, result.output, rawInput, issues)
+  applyExecutionChecks(execution, rawInput, issues)
 
   return { success: Object.keys(issues).length === 0, output: result.output, issues }
 }

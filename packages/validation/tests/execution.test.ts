@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { field, safeParse, schema } from '../src'
 
 describe('Validation rule execution', () => {
+  it('checks mutable transform output before a later transform changes it', async () => {
+    const definition = field.string()
+      .transform(() => ({ count: 0 }))
+      .custom(value => value.count === 0)
+      .transform(value => {
+        value.count = 1
+        return value
+      })
+
+    expect(await definition['~standard'].validate('value')).toEqual({ value: { count: 1 } })
+  })
+
   it('uses the same transformed value for output and following custom rules', async () => {
     let sequence = 0
     const definition = schema({
@@ -17,6 +29,33 @@ describe('Validation rule execution', () => {
       expect(result.data.value).toEqual({ value: 'Ava', sequence: 1 })
     }
     expect(sequence).toBe(1)
+  })
+
+  it('awaits serial child checks before parent callbacks and mutable transforms', async () => {
+    const events: string[] = []
+    const definition = schema({
+      rows: field.array(field.string()
+        .transform(value => ({ value, count: 0 }))
+        .customAsync(async value => {
+          events.push(`start:${value.value}`)
+          await Promise.resolve()
+          events.push(`end:${value.value}`)
+          return value.count === 0
+        }))
+        .custom(() => { events.push('parent'); return true })
+        .transform(values => {
+          events.push('transform')
+          for (const value of values) value.count = 1
+          return values
+        }),
+      tail: field.string().custom(() => { events.push('tail'); return true }),
+    })
+
+    const result = await safeParse({ rows: ['first', 'second'], tail: 'tail' }, definition)
+
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.data.rows).toEqual([{ value: 'first', count: 1 }, { value: 'second', count: 1 }])
+    expect(events).toEqual(['start:first', 'end:first', 'start:second', 'end:second', 'parent', 'transform', 'tail'])
   })
 
   it('applies defaults before transforms and custom rules through Standard Schema', async () => {
@@ -137,6 +176,28 @@ describe('Validation rule execution', () => {
     if (reorderedResult.valid) expect(reorderedResult.data.rows.map(value => value.password)).toEqual(['second', 'first'])
     expect(reshapedResult.valid).toBe(true)
     if (reshapedResult.valid) expect(reshapedResult.data.rows.records).toEqual([{ password: 'second', passwordConfirmation: 'second' }])
+  })
+
+  it('checks completed row confirmations before ancestor transforms mutate them', async () => {
+    const definition = schema({
+      rows: field.array({
+        password: field.string().transform(value => value.trim()).confirmed(),
+        passwordConfirmation: field.string().transform(value => value.trim()),
+      }).transform(rows => {
+        for (const row of rows) row.passwordConfirmation = 'changed'
+        return rows
+      }),
+    })
+
+    const matching = await safeParse({ rows: [{ password: ' secret ', passwordConfirmation: ' secret ' }] }, definition)
+    expect(matching.valid).toBe(true)
+    if (matching.valid) expect(matching.data.rows).toEqual([{ password: 'secret', passwordConfirmation: 'changed' }])
+
+    const mismatching = await safeParse({ rows: [{ password: ' changed ', passwordConfirmation: ' different ' }] }, definition)
+    expect(mismatching.valid).toBe(false)
+    expect(mismatching.errors.flatten()).toEqual({
+      'rows.0.password': ['This field does not match its confirmation.'],
+    })
   })
 
   it('checks confirmation inside nested arrays supplied by defaults', async () => {
