@@ -37,7 +37,7 @@ describe('SvelteKit scaffold workspace assets', () => {
         root: project,
         configFile: join(project, 'vite.config.ts'),
         logLevel: 'silent',
-        server: { host: '127.0.0.1', port: 0, strictPort: true },
+        server: { host: '127.0.0.1' },
       })
       try {
         await server.listen()

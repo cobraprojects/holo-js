@@ -55,7 +55,7 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     this['~standard'] = {
       version: 1,
       vendor: 'holo-js',
-      validate: createFieldStandardValidate<TOutput>(field.definition, () => makeCompiledFieldSchema(field.definition)),
+      validate: createFieldStandardValidate<TOutput>(field.definition, node => makeCompiledFieldSchema(field.definition, node)),
       types: undefined as unknown as StandardSchemaV1Types<unknown, TOutput>,
     }
   }
@@ -283,7 +283,7 @@ export function defineSchema<TShape extends SchemaInputShape>(
     '~standard': {
       version: 1 as const,
       vendor: 'holo-js',
-      validate: createSchemaStandardValidate(fields, () => resolveCompiledSchema(fields)),
+      validate: createSchemaStandardValidate(fields, node => resolveCompiledSchema(fields, node)),
       types: undefined as unknown as StandardSchemaV1Types<unknown, InferSchemaData<TShape>>,
     },
   }) as ValidationSchema<TShape>

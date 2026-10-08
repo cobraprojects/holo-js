@@ -24,6 +24,7 @@ export default defineConfig({
       '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
       '@holo-js/auth': resolve(__dirname, '../auth/src/index.ts'),
       '@holo-js/broadcast/auth': resolve(__dirname, '../broadcast/src/auth.ts'),
+      '@holo-js/broadcast/client-config': resolve(__dirname, '../broadcast/src/client-config.ts'),
       '@holo-js/broadcast': resolve(__dirname, '../broadcast/src/index.ts'),
       '@holo-js/cache': resolve(__dirname, '../cache/src/index.ts'),
       '@holo-js/mail': resolve(__dirname, '../mail/src/index.ts'),

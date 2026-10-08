@@ -107,16 +107,16 @@ function compileShape(node: ts.ObjectLiteralExpression, fieldName: string, runti
       const nested = compileShape(property.initializer, fieldName, runtime, `${path}[${JSON.stringify(key)}]`)
       if (!nested) return undefined
       fields.push(`${JSON.stringify(key)}: ${nested.fields}`)
-      schemas.push(`${JSON.stringify(key)}: ${nested.code}`)
+      schemas.push(`${JSON.stringify(key)}: ((parentExecution) => ${nested.code})(${runtime}.createExecutionNode(parentExecution, ${JSON.stringify(key)}))`)
       continue
     }
     const field = compileField(property.initializer, fieldName, runtime, `${path}[${JSON.stringify(key)}].definition`)
     if (!field) return undefined
     const rules = field.definition.rules.map(rule => `Object.freeze({name: ${JSON.stringify(rule.name)}, args: Object.freeze(${JSON.stringify(rule.args)})${rule.message ? `, message: ${JSON.stringify(rule.message)}` : ''}})`)
     fields.push(`${JSON.stringify(key)}: Object.freeze({kind: 'field', definition: Object.freeze({kind: ${JSON.stringify(field.definition.kind)}, item: undefined, ${field.definition.sensitive ? 'sensitive: true,' : ''} rules: Object.freeze([${rules.join(',')}])})})`)
-    schemas.push(`${JSON.stringify(key)}: ${field.code}`)
+    schemas.push(`${JSON.stringify(key)}: ${runtime}.createCompiledFieldSchema(${path}[${JSON.stringify(key)}].definition, ${field.code}, ${runtime}.createExecutionNode(parentExecution, ${JSON.stringify(key)}))`)
   }
-  return { fields: `Object.freeze({${fields.join(',')}})`, code: `${runtime}.objectAsync({${schemas.join(',')}})` }
+  return { fields: `Object.freeze({${fields.join(',')}})`, code: `${runtime}.createShapeExecutionSchema(${runtime}.objectAsync({${schemas.join(',')}}), parentExecution)` }
 }
 
 export function compileBrowserValidation(source: string, fileName = 'schema.tsx'): string | undefined {
@@ -152,7 +152,7 @@ export function compileBrowserValidation(source: string, fileName = 'schema.tsx'
       if (!shape || !ts.isObjectLiteralExpression(shape)) continue
       const compiled = compileShape(shape, fieldName, runtime)
       if (!compiled) continue
-      const code = `(() => { const fields = ${compiled.fields}; const compiled = ${compiled.code}; return Object.freeze({kind: 'schema', fields, '~standard': {version: 1, vendor: 'holo-js', validate: ${runtime}.createSchemaStandardValidate(fields, () => compiled), types: undefined}}) })()`
+      const code = `(() => { const fields = ${compiled.fields}; return Object.freeze({kind: 'schema', fields, '~standard': {version: 1, vendor: 'holo-js', validate: ${runtime}.createSchemaStandardValidate(fields, parentExecution => ${compiled.code}), types: undefined}}) })()`
       replacements.push({ start: call.getStart(file), end: call.end, code })
     }
   }

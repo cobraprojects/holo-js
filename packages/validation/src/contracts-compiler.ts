@@ -3,6 +3,8 @@ import { exactSizeAction, minAction, maxAction, asPipeItem, stringSchema, number
 import type { FieldRule, FieldDefinition, SchemaInputShape, SupportedRuleFamily, WebFileLike } from './contracts-types'
 import { isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
 
+import { createExecutionNode, createFieldExecutionSchema, createShapeExecutionSchema, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
+
 function getRule(definition: FieldDefinition, name: SupportedRuleFamily): FieldRule | undefined {
   return definition.rules.find(rule => rule.name === name)
 }
@@ -11,16 +13,27 @@ function hasRule(definition: FieldDefinition, name: SupportedRuleFamily): boolea
   return definition.rules.some(rule => rule.name === name)
 }
 
-function makeCompiledArrayItemSchema(item: FieldDefinition['item']): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
-  if (!item) return v.unknown()
-  if (isFieldDefinition(item)) {
-    return makeCompiledFieldSchema(item)
-  }
+type SchemaPlan = CompiledSchema | ((node: ExecutionNode) => CompiledSchema)
 
-  return v.objectAsync(compileSchemaShape(item))
+const deferredRules = new Set<SupportedRuleFamily>([
+  'required', 'confirmed', 'custom', 'customAsync', 'before', 'after', 'beforeOrEqual',
+  'afterOrEqual', 'today', 'beforeToday', 'todayOrBefore', 'beforeOrToday', 'afterToday',
+  'todayOrAfter', 'afterOrToday',
+])
+
+function makeCompiledArrayItemSchema(plan: SchemaPlan, parent: ExecutionNode): CompiledSchema {
+  if (typeof plan !== 'function') return plan
+  return {
+    ...v.unknown(),
+    async: true,
+    async '~run'(dataset, config) {
+      const node = createExecutionNode(parent, String(parent.children.length))
+      return plan(node)['~run'](dataset, config)
+    },
+  }
 }
 
-function makeBaseSchema(definition: FieldDefinition): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
+function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
   switch (definition.kind) {
     case 'string':
       return stringSchema()
@@ -32,14 +45,32 @@ function makeBaseSchema(definition: FieldDefinition): v.BaseSchema<unknown, unkn
       return dateSchema()
     case 'file':
       return v.custom<WebFileLike>(value => isWebFileLike(value), 'The selected file must be a file.')
-    case 'array':
-      return v.arrayAsync(makeCompiledArrayItemSchema(definition.item) as v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>>, 'This field must be a list.')
+    case 'array': {
+      if (!executionFor) throw new Error('Validation array execution is missing.')
+      const item = definition.item
+      const plan: SchemaPlan = !item ? v.unknown() : isFieldDefinition(item)
+        ? compileFieldPlan(item)
+        : compileShapePlan(item)
+      return {
+        ...v.unknown(),
+        async: true,
+        async '~run'(dataset, config) {
+          const node = executionFor(dataset).node
+          return v.arrayAsync(makeCompiledArrayItemSchema(plan, node), 'This field must be a list.')['~run'](dataset, config)
+        },
+      }
+    }
   }
 }
 
-export function makeCompiledFieldSchema(definition: FieldDefinition): v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> {
-  let schema: v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> = makeBaseSchema(definition)
+function compileFieldPipeline(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution): v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> {
   const actions: (v.PipeItem<unknown, unknown, v.BaseIssue<unknown>> | v.PipeItemAsync<unknown, unknown, v.BaseIssue<unknown>>)[] = []
+  if (executionFor) actions.push(v.rawCheck(({ dataset, addIssue }) => {
+    const execution = executionFor(dataset)
+    execution.shapeValue = dataset.value
+    execution.baseValid = dataset.typed
+    if (execution.requiredMissing) addIssue({ message: 'This field is required.' })
+  }))
 
   for (const rule of definition.rules) {
     switch (rule.name) {
@@ -80,6 +111,17 @@ export function makeCompiledFieldSchema(definition: FieldDefinition): v.BaseSche
         actions.push(asPipeItem(v.check((input: unknown) => allowed.has(input), rule.message ?? 'This field must be one of the allowed values.')))
         break
       }
+      case 'custom':
+      case 'customAsync':
+      case 'confirmed':
+        if (!executionFor) throw new Error('Validation rule execution is missing.')
+        actions.push(v.rawCheck(({ dataset }) => {
+          const execution = executionFor(dataset)
+          if (dataset.typed && !execution.requiredMissing) {
+            execution.checks.push({ rule, value: dataset.value })
+          }
+        }))
+        break
       case 'transform':
         if (typeof rule.args[0] === 'function') {
           actions.push(asPipeItem(v.transform(rule.args[0] as (input: unknown) => unknown)))
@@ -90,38 +132,58 @@ export function makeCompiledFieldSchema(definition: FieldDefinition): v.BaseSche
     }
   }
 
-  if (actions.length > 0) {
-    schema = v.pipeAsync(schema as v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>, ...actions)
-  }
+  let schema: v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> = v.pipeAsync(makeBaseSchema(definition, executionFor), ...actions)
 
   const defaultRule = getRule(definition, 'default')
   const hasNullable = hasRule(definition, 'nullable')
   const hasOptional = hasRule(definition, 'optional') || typeof defaultRule !== 'undefined'
 
   if (hasNullable) {
-    schema = v.nullable(schema as v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>, defaultRule?.args[0] as never)
+    schema = v.nullableAsync(schema, defaultRule?.args[0])
   }
 
   if (hasOptional) {
-    schema = v.optional(schema as v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>>, defaultRule?.args[0] as never)
+    schema = v.optionalAsync(schema, defaultRule?.args[0])
   }
 
   return schema
 }
 
-function compileSchemaShape(shape: SchemaInputShape): v.ObjectEntries {
-  return Object.fromEntries(
-    Object.entries(shape).map(([key, value]) => {
-      if (isValidationFieldBuilderLike(value) || isValidationField(value)) {
-        return [key, makeCompiledFieldSchema(normalizeFieldBuilder(value).definition)]
-      }
+function compileFieldPlan(definition: FieldDefinition): SchemaPlan {
+  const needsExecution = definition.kind === 'array'
+    || definition.rules.some(rule => deferredRules.has(rule.name)
+      || (definition.kind === 'file' && (rule.name === 'max' || rule.name === 'size')))
+  if (!needsExecution) return compileFieldPipeline(definition)
 
-      return [key, v.objectAsync(compileSchemaShape(value as SchemaInputShape))]
-    }),
-  )
+  const executions = new WeakMap<object, FieldExecution>()
+  const compiled = compileFieldPipeline(definition, dataset => {
+    const execution = executions.get(dataset)
+    if (!execution) throw new Error('Validation field execution is missing.')
+    return execution
+  })
+  return node => createFieldExecutionSchema(definition, node, (execution, dataset) => {
+    executions.set(dataset, execution)
+    return compiled
+  })
 }
 
-export function resolveCompiledSchema(fields: SchemaInputShape): v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
-  return v.objectAsync(compileSchemaShape(fields))
+export function makeCompiledFieldSchema(definition: FieldDefinition, node = createExecutionNode()): CompiledSchema {
+  const plan = compileFieldPlan(definition)
+  return typeof plan === 'function' ? plan(node) : plan
 }
 
+function compileShapePlan(shape: SchemaInputShape): (node: ExecutionNode) => CompiledSchema {
+  const entries = Object.entries(shape).map(([key, value]) => {
+    const plan = isValidationFieldBuilderLike(value) || isValidationField(value)
+      ? compileFieldPlan(normalizeFieldBuilder(value).definition)
+      : compileShapePlan(value as SchemaInputShape)
+    return { key, plan }
+  })
+  return parent => createShapeExecutionSchema(v.objectAsync(Object.fromEntries(
+    entries.map(({ key, plan }) => [key, typeof plan === 'function' ? plan(createExecutionNode(parent, key)) : plan]),
+  )), parent)
+}
+
+export function resolveCompiledSchema(fields: SchemaInputShape, node = createExecutionNode()): CompiledSchema {
+  return compileShapePlan(fields)(node)
+}

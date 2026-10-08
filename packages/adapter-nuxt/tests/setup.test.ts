@@ -100,6 +100,7 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       const tempRootNodeModules = join(buildRoot, 'node_modules')
       const tempRootTypes = join(tempRootNodeModules, '@types')
       const tempNodeModulesRoot = join(buildRoot, 'node_modules/@holo-js')
+      const optionalCorePackages = ['queue-redis', 'authorization', 'auth-social', 'auth-workos', 'auth-clerk']
 
       await symlink(resolve(repoRoot, 'tsconfig.json'), join(buildRoot, 'tsconfig.json'))
       await mkdir(tempRootNodeModules, { recursive: true })
@@ -181,6 +182,17 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(resolve(packageDir, '../core/node_modules/esbuild'), join(corePackageRoot, 'node_modules', 'esbuild'))
 
       await mkdir(tempNodeModulesRoot, { recursive: true })
+      for (const packageName of optionalCorePackages) {
+        const source = resolve(packageDir, `../${packageName}`)
+        const target = join(buildRoot, 'packages', packageName)
+        await linkInstalledDependenciesForPackage({
+          repoRoot,
+          nodeModulesRoot: tempRootNodeModules,
+          packageJsonPath: join(source, 'package.json'),
+        })
+        await provisionTempPackage(source, target)
+        await symlink(target, join(tempNodeModulesRoot, packageName))
+      }
       await symlink(dbPackageRoot, join(tempNodeModulesRoot, 'db'))
       await symlink(kernelPackageRoot, join(tempNodeModulesRoot, 'kernel'))
       await symlink(adapterSharedPackageRoot, join(tempNodeModulesRoot, 'adapter-shared'))
@@ -217,6 +229,9 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await runPackageBuild(resolve(packageDir, '../session/node_modules/.bin/tsup'), [], sessionPackageRoot)
       await runPackageBuild(resolve(packageDir, '../broadcast/node_modules/.bin/tsup'), [], broadcastPackageRoot)
       await runPackageBuild(resolve(packageDir, '../events/node_modules/.bin/tsup'), [], eventsPackageRoot)
+      for (const packageName of optionalCorePackages) {
+        await runPackageBuild(resolve(packageDir, `../${packageName}/node_modules/.bin/tsup`), [], join(buildRoot, 'packages', packageName))
+      }
       await runPackageBuild(resolve(packageDir, '../core/node_modules/.bin/tsup'), [], corePackageRoot)
       await runPackageBuild(resolve(packageDir, 'node_modules/.bin/nuxt-module-build'), ['build'], adapterPackageRoot)
 

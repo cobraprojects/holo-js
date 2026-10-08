@@ -1,8 +1,6 @@
 import * as v from 'valibot'
 import {
-  type FieldBuilderInput,
   type FieldDefinition,
-  type FieldKind,
   type FormLikeValidationInput,
   type InferSchemaData,
   type InferValidationSchemaData,
@@ -21,16 +19,14 @@ import {
   coerceFieldValue,
   coerceShapeInput,
   createErrorBag,
-  isFieldDefinition,
   isPlainObject,
   issuesToFlat,
-  normalizeFieldBuilder,
   normalizeFormData,
   normalizeRequestInput,
   parseByteSize,
 } from './contracts-support'
 
-type CompiledSchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>>
+import { createExecutionNode, type CompiledSchema, type ExecutionNode, type FieldExecution } from './contracts-execution'
 
 type RuntimePostValidationContext = PostValidationContext & {
   readonly inputParent?: unknown
@@ -110,83 +106,9 @@ function getRule(definition: FieldDefinition, name: FieldRule['name']): FieldRul
   return definition.rules.find(rule => rule.name === name)
 }
 
-function hasRule(definition: FieldDefinition, name: FieldRule['name']): boolean {
-  return definition.rules.some(rule => rule.name === name)
-}
-
 function hasRuleBefore(definition: FieldDefinition, selectedRule: FieldRule, name: FieldRule['name']): boolean {
   const selectedRuleIndex = definition.rules.indexOf(selectedRule)
   return definition.rules.slice(0, selectedRuleIndex).some(rule => rule.name === name)
-}
-
-function isMissingValue(value: unknown, kind: FieldKind): boolean {
-  if (typeof value === 'undefined' || value === null) {
-    return true
-  }
-
-  if (kind === 'string') {
-    return typeof value === 'string' && value.trim().length === 0
-  }
-
-  if (kind === 'array') {
-    return Array.isArray(value) && value.length === 0
-  }
-
-  return false
-}
-
-function collectRequiredMissingPaths(
-  shape: SchemaInputShape,
-  data: Record<string, unknown>,
-  path: readonly string[] = [],
-  target = new Set<string>(),
-): Set<string> {
-  for (const [key, value] of Object.entries(shape)) {
-    const isFieldLike = isPlainObject(value)
-      && ('field' in value || (typeof value.kind === 'string' && value.kind === 'field' && 'definition' in value))
-    const nextPath = [...path, key]
-
-    if (isFieldLike) {
-      const fieldDef = normalizeFieldBuilder(value as unknown as FieldBuilderInput).definition
-      if (getRule(fieldDef, 'required') && isMissingValue(data[key], fieldDef.kind)) {
-        target.add(toIssuePath(nextPath))
-      }
-      if (fieldDef.kind === 'array' && fieldDef.item && Array.isArray(data[key])) {
-        for (const [index, item] of (data[key] as unknown[]).entries()) {
-          const itemPath = [...nextPath, String(index)]
-          if (isFieldDefinition(fieldDef.item)) {
-            if (getRule(fieldDef.item, 'required') && isMissingValue(item, fieldDef.item.kind)) {
-              target.add(toIssuePath(itemPath))
-            }
-          } else {
-            collectRequiredMissingPaths(fieldDef.item, item as Record<string, unknown>, itemPath, target)
-          }
-        }
-      }
-      continue
-    }
-
-    collectRequiredMissingPaths(value as SchemaInputShape, data[key] as Record<string, unknown>, nextPath, target)
-  }
-
-  return target
-}
-
-function resolveShapeRuleValue(definition: FieldDefinition, outputValue: unknown, inputValue: unknown): unknown {
-  if (!hasRule(definition, 'transform')) {
-    return outputValue
-  }
-
-  if (getRule(definition, 'default') && isMissingValue(inputValue, definition.kind)) {
-    return outputValue
-  }
-
-  return inputValue
-}
-
-function applyTransformRule(value: unknown, rule: FieldRule): unknown {
-  const transformer = rule.args[0]
-  return typeof transformer === 'function' ? transformer(value) : value
 }
 
 function hasOwnProperty(value: Record<string, unknown>, key: string): boolean {
@@ -205,31 +127,26 @@ function resolveConfirmationParent(context: RuntimePostValidationContext, confir
   return context.rawInputParent
 }
 
-async function applyPostFieldRules(
-  definition: FieldDefinition,
-  value: unknown,
-  inputValue: unknown,
+async function applyFieldChecks(
+  execution: FieldExecution,
   context: RuntimePostValidationContext,
   issues: Record<string, string[]>,
 ): Promise<void> {
-  const shapeRuleValue = resolveShapeRuleValue(definition, value, inputValue)
-  let orderedRuleValue = shapeRuleValue
+  const { definition, shapeValue: shapeRuleValue } = execution
   const requiredRule = getRule(definition, 'required')
-  if (requiredRule && isMissingValue(shapeRuleValue, definition.kind)) {
+  if (requiredRule && execution.requiredMissing) {
+    delete issues[toIssuePath(context.path) || '_root']
     prependIssue(issues, context.path, resolveRuleMessage(requiredRule, 'This field is required.'))
     return
   }
 
-  if (typeof shapeRuleValue === 'undefined' || shapeRuleValue === null) {
-    return
-  }
+  if (!execution.baseValid || shapeRuleValue === undefined || shapeRuleValue === null) return
 
+  const captured = new Map(execution.checks.map(check => [check.rule, check.value]))
   for (const rule of definition.rules) {
+    if ((rule.name === 'custom' || rule.name === 'customAsync' || rule.name === 'confirmed') && !captured.has(rule)) continue
+    const orderedRuleValue = captured.get(rule)
     switch (rule.name) {
-      case 'transform': {
-        orderedRuleValue = applyTransformRule(orderedRuleValue, rule)
-        break
-      }
       case 'custom': {
         const validator = rule.args[0]
         if (typeof validator === 'function') {
@@ -354,102 +271,55 @@ async function applyPostFieldRules(
   }
 }
 
-async function applyPostFieldRulesRecursively(
-  definition: FieldDefinition,
-  value: unknown,
-  inputValue: unknown,
-  context: RuntimePostValidationContext,
-  issues: Record<string, string[]>,
-): Promise<void> {
-  await applyPostFieldRules(definition, value, inputValue, context, issues)
-
-  if (definition.kind !== 'array' || !definition.item || !Array.isArray(value)) {
-    return
+function valueAtPath(value: unknown, path: readonly string[]): unknown {
+  let current = value
+  for (const key of path) {
+    if (Array.isArray(current)) current = current[Number(key)]
+    else if (isPlainObject(current) && hasOwnProperty(current, key)) current = current[key]
+    else return undefined
   }
-
-  const inputItems = Array.isArray(inputValue) ? inputValue : /* v8 ignore next */ value
-
-  for (const [index, item] of value.entries()) {
-    const key = String(index)
-    const nextPath = [...context.path, key]
-
-    if (isFieldDefinition(definition.item)) {
-      await applyPostFieldRulesRecursively(definition.item, item, inputItems[index], {
-        root: context.root,
-        parent: value,
-        inputParent: inputValue,
-        rawInputParent: context.rawInputParent,
-        key,
-        path: nextPath,
-      }, issues)
-      continue
-    }
-
-    await applyPostValidation(definition.item, item, context.root, issues, nextPath, inputItems[index])
-  }
+  return current
 }
 
-async function applyPostValidation(
-  shape: SchemaInputShape,
-  data: unknown,
-  root: unknown,
-  issues: Record<string, string[]>,
-  path: readonly string[] = [],
-  inputData: unknown = data,
-  rawInputData: unknown = inputData,
-): Promise<void> {
-  const current = isPlainObject(data) ? data : /* v8 ignore next */ {}
-  const inputCurrent = isPlainObject(inputData) ? inputData : /* v8 ignore next */ current
-  const rawInputCurrent = isPlainObject(rawInputData) ? rawInputData : inputCurrent
-
-  for (const [key, value] of Object.entries(shape)) {
-    const isFieldLike = isPlainObject(value)
-      && ('field' in value || (typeof value.kind === 'string' && value.kind === 'field' && 'definition' in value))
-    if (isFieldLike) {
-      const fieldDef = normalizeFieldBuilder(value as unknown as FieldBuilderInput)
-      const nextPath = [...path, key]
-      const nextValue = current[key]
-      await applyPostFieldRulesRecursively(fieldDef.definition, nextValue, inputCurrent[key], {
-        root,
-        parent: current,
-        inputParent: inputCurrent,
-        rawInputParent: rawInputCurrent,
-        key,
-        path: nextPath,
-      }, issues)
-      continue
-    }
-
-    await applyPostValidation(value as SchemaInputShape, current[key], root, issues, [...path, key], inputCurrent[key], rawInputCurrent[key])
-  }
-}
-
-async function runSchemaValidation(
-  fields: SchemaInputShape,
+async function applyExecutionChecks(
+  node: ExecutionNode,
+  output: unknown,
   rawInput: unknown,
-  compile: () => CompiledSchema,
+  issues: Record<string, string[]>,
+): Promise<void> {
+  if (node.field) {
+    const parentPath = node.path.slice(0, -1)
+    await applyFieldChecks(node.field, {
+      root: output,
+      parent: node.parent?.field ? node.parent.field.shapeValue : node.parent?.output ?? null,
+      inputParent: node.parent?.field ? node.parent.field.inputValue : node.parent?.input ?? null,
+      rawInputParent: node.path.length ? valueAtPath(rawInput, parentPath) : null,
+      key: node.path.at(-1) ?? '_value',
+      path: node.path,
+    }, issues)
+  }
+  for (const child of node.children) {
+    await applyExecutionChecks(child, output, rawInput, issues)
+  }
+}
+
+async function runValidation(
+  coerced: unknown,
+  rawInput: unknown,
+  compile: (node: ExecutionNode) => CompiledSchema,
 ): Promise<{ success: boolean; output: unknown; issues: Record<string, string[]> }> {
-  const coerced = coerceShapeInput(fields, rawInput)
-  const compiled = compile()
+  const execution = createExecutionNode()
+  const compiled = compile(execution)
   const result = await v.safeParseAsync(compiled, coerced)
   const issues: Record<string, string[]> = {}
-  const requiredMissingPaths = collectRequiredMissingPaths(fields, coerced)
 
   if (!result.success) {
     appendIssues(issues, result.issues)
-    for (const path of requiredMissingPaths) {
-      delete issues[path]
-    }
   }
 
-  const postTarget = result.success ? result.output : coerced
-  await applyPostValidation(fields, postTarget, postTarget, issues, [], coerced, rawInput)
+  await applyExecutionChecks(execution, result.output, rawInput, issues)
 
-  if (Object.keys(issues).length > 0) {
-    return { success: false, output: postTarget, issues }
-  }
-
-  return { success: true, output: result.success ? result.output : /* v8 ignore next */ coerced, issues }
+  return { success: Object.keys(issues).length === 0, output: result.output, issues }
 }
 
 export function flatToStandardIssues(flat: Record<string, string[]>): StandardSchemaV1Issue[] {
@@ -467,10 +337,10 @@ export function flatToStandardIssues(flat: Record<string, string[]>): StandardSc
 
 export function createSchemaStandardValidate<TShape extends SchemaInputShape>(
   fields: TShape,
-  compile: () => CompiledSchema,
+  compile: (node: ExecutionNode) => CompiledSchema,
 ): (value: unknown) => Promise<StandardSchemaV1Result<InferSchemaData<TShape>>> {
   return async (value: unknown) => {
-    const result = await runSchemaValidation(fields, value, compile)
+    const result = await runValidation(coerceShapeInput(fields, value), value, compile)
     if (!result.success) {
       return { issues: flatToStandardIssues(result.issues) }
     }
@@ -478,55 +348,12 @@ export function createSchemaStandardValidate<TShape extends SchemaInputShape>(
   }
 }
 
-async function runFieldValidation(
-  definition: FieldDefinition,
-  rawInput: unknown,
-  compile: () => CompiledSchema,
-): Promise<{ success: boolean; output: unknown; issues: Record<string, string[]> }> {
-  const coerced = coerceFieldValue(definition, rawInput)
-  const compiled = compile()
-  const result = await v.safeParseAsync(compiled, coerced)
-  const issues: Record<string, string[]> = {}
-
-  if (!result.success) {
-    appendIssues(issues, result.issues)
-    if (getRule(definition, 'required') && isMissingValue(coerced, definition.kind)) {
-      delete issues._root
-    }
-  }
-
-  const postTarget = result.success ? result.output : coerced
-  await applyStandaloneFieldPostRules(definition, postTarget, coerced, issues)
-
-  if (Object.keys(issues).length > 0) {
-    return { success: false, output: postTarget, issues }
-  }
-
-  return { success: true, output: result.success ? result.output : /* v8 ignore next */ coerced, issues }
-}
-
-async function applyStandaloneFieldPostRules(
-  definition: FieldDefinition,
-  value: unknown,
-  inputValue: unknown,
-  issues: Record<string, string[]>,
-): Promise<void> {
-  await applyPostFieldRulesRecursively(definition, value, inputValue, {
-    root: value,
-    parent: null,
-    inputParent: null,
-    rawInputParent: null,
-    key: '_value',
-    path: [],
-  }, issues)
-}
-
 export function createFieldStandardValidate<TOutput>(
   definition: FieldDefinition,
-  compile: () => CompiledSchema,
+  compile: (node: ExecutionNode) => CompiledSchema,
 ): (value: unknown) => Promise<StandardSchemaV1Result<TOutput>> {
   return async (value: unknown) => {
-    const result = await runFieldValidation(definition, value, compile)
+    const result = await runValidation(coerceFieldValue(definition, value), value, compile)
     if (!result.success) {
       return { issues: flatToStandardIssues(result.issues) }
     }
