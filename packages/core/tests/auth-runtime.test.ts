@@ -3661,6 +3661,47 @@ export default {
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
   })
 
+  it('rolls back verification when the native user disappears before its update', async () => {
+    const root = await createProject({ auth: true })
+    const User = defineModel(defineGeneratedTable('disappearing_verification_users', {
+      id: column.id(), email: column.string(), email_verified_at: column.timestamp().nullable(),
+    }), { timestamps: false })
+    Object.defineProperty(globalThis, Symbol.for('holo-test-verification-model'), { value: User, configurable: true })
+    await writeFile(join(root, 'server/models/User.ts'), `
+export default globalThis[Symbol.for('holo-test-verification-model')]
+let deleteUser = true
+export async function prepareAuthUpdateInput(user, input) {
+  if (deleteUser) {
+    deleteUser = false
+    await user.delete()
+  }
+  return input
+}
+`, 'utf8')
+    const runtime = await createHolo(root, { envName: 'development' })
+    await runtime.initialize()
+    await createSchemaService(DB.connection()).createTable('disappearing_verification_users', table => {
+      table.id()
+      table.string('email')
+      table.timestamp('email_verified_at').nullable()
+    })
+    await DB.table('disappearing_verification_users').insert({ id: 1, email: 'ava@example.com', email_verified_at: null })
+    await createVerificationTokenTable()
+    const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
+
+    await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('record not found')
+    await expect(DB.table('disappearing_verification_users').find(1)).resolves.toMatchObject({
+      id: 1, email_verified_at: null,
+    })
+    await expect(DB.table('email_verification_tokens').where('id', token.id).first()).resolves.toMatchObject({
+      used_at: null,
+    })
+    await expect(runtime.auth!.verification.consume(token.plainTextToken)).resolves.toMatchObject({
+      id: 1, email: 'ava@example.com', email_verified_at: expect.anything(),
+    })
+    await expect(runtime.auth!.verification.consume(token.plainTextToken)).rejects.toThrow('verification link')
+  })
+
   describe.each(['sqlite', 'postgres', 'mysql'] as const)('native %s verification persistence', (driver) => {
     it.runIf(driver === 'sqlite' || !!process.env[`HOLO_AUTH_REDEMPTION_${driver.toUpperCase()}_DATABASE`])(
       'rolls back verification and the user mutation together after a save failure', async () => {
@@ -4027,7 +4068,7 @@ export default {
       ['token-sibling', 'users', 'user-1'],
       ['token-other-provider', 'admins', 'user-1'],
       ['token-other-user', 'users', 'user-2'],
-    ]) {
+    ] as const) {
       await stores.tokens.create({
         id, provider, userId, name: 'device', abilities: ['*'], tokenHash: `sha256$${id}`,
         createdAt: new Date('2026-01-01T00:00:00.000Z'), expiresAt: null,

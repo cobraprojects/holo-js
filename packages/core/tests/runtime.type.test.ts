@@ -1,5 +1,7 @@
-import { describe, it } from 'vitest'
-import type { HoloRuntime } from '../src/portable'
+import { describe, expectTypeOf, it } from 'vitest'
+import { type HoloRuntime, holoRuntimeInternals } from '../src/portable'
+import type { HoloAdapterProjectAccessors } from '../src/adapter'
+import type { LoadedHoloConfig } from '@holo-js/config'
 
 type CustomConfig = {
   services: {
@@ -10,6 +12,40 @@ type CustomConfig = {
 }
 
 describe('@holo-js/core runtime typing', () => {
+  it('infers concrete session records through runtime and framework accessors', () => {
+    const rotateSession = async (runtime: HoloRuntime) => {
+      const record = await runtime.session?.rotate('session-id', {
+        data: { userId: 'user-1' },
+        renewLifetime: true,
+      })
+      return record?.expiresAt
+    }
+    const createSession = async (accessors: HoloAdapterProjectAccessors) => {
+      const session = await accessors.getSession()
+      const record = await session?.create({ name: 'message', value: { text: 'hello' } })
+      return record?.id
+    }
+
+    expectTypeOf(rotateSession).returns.toEqualTypeOf<Promise<Date | undefined>>()
+    expectTypeOf(createSession).returns.toEqualTypeOf<Promise<string | undefined>>()
+  })
+
+  it('infers concrete token and multi-factor records from core persistence', () => {
+    const readToken = async (config: LoadedHoloConfig) => {
+      const stores = holoRuntimeInternals.createCoreAuthStores(config)
+      const token = await stores.tokens.findById('token-id')
+      return token?.abilities
+    }
+    const readRecoveryCodes = async (config: LoadedHoloConfig) => {
+      const stores = holoRuntimeInternals.createCoreAuthStores(config)
+      const credential = await stores.multiFactor.find('users', 'user-1')
+      return credential?.recoveryCodeHashes
+    }
+
+    expectTypeOf(readToken).returns.toEqualTypeOf<Promise<readonly string[] | undefined>>()
+    expectTypeOf(readRecoveryCodes).returns.toEqualTypeOf<Promise<readonly string[] | undefined>>()
+  })
+
   it('preserves inference for runtime config accessors', () => {
     type ServicesResult = HoloRuntime<CustomConfig> extends {
       useConfig: (key: 'services') => infer TResult

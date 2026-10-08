@@ -1,3 +1,4 @@
+import type * as AuthFeature from '@holo-js/auth'
 import { column, normalizeDialectWriteValue } from '@holo-js/db'
 
 const authTimestampColumn = column.timestamp().toDefinition({ name: 'timestamp' })
@@ -25,17 +26,7 @@ export function normalizeStoredUserId(value: unknown): string | number {
   return typeof value === 'number' ? value : String(value)
 }
 
-export type AccessTokenRecord = {
-  readonly id: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly name: string
-  readonly abilities: readonly string[]
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly lastUsedAt?: Date
-  readonly expiresAt?: Date | null
-}
+export type AccessTokenRecord = AuthFeature.PersonalAccessTokenRecord
 
 export function normalizeAccessTokenRecord(row: Record<string, unknown>): AccessTokenRecord {
   const abilities = normalizeJsonValue(row.abilities)
@@ -67,15 +58,7 @@ export function serializeAccessTokenRecord(record: AccessTokenRecord, driver = '
   }
 }
 
-export type EmailVerificationTokenRecord = {
-  readonly id: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly email: string
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly expiresAt: Date
-}
+export type EmailVerificationTokenRecord = AuthFeature.EmailVerificationTokenRecord
 
 export function normalizeEmailVerificationTokenRecord(row: Record<string, unknown>): EmailVerificationTokenRecord {
   return Object.freeze({
@@ -103,15 +86,7 @@ export function serializeEmailVerificationTokenRecord(record: EmailVerificationT
   }
 }
 
-export type PasswordResetTokenRecord = {
-  readonly id: string
-  readonly provider: string
-  readonly email: string
-  readonly table?: string
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly expiresAt: Date
-}
+export type PasswordResetTokenRecord = AuthFeature.PasswordResetTokenRecord
 
 export function normalizePasswordResetTokenRecord(row: Record<string, unknown>): PasswordResetTokenRecord {
   return Object.freeze({
@@ -138,15 +113,7 @@ export function serializePasswordResetTokenRecord(record: PasswordResetTokenReco
   }
 }
 
-export type MultiFactorCredentialRecord = {
-  readonly provider: string
-  readonly userId: string | number
-  readonly encryptedSecret: string
-  readonly recoveryCodeHashes: readonly string[]
-  readonly lastUsedCounter: number | null
-  readonly enabledAt: Date
-  readonly updatedAt: Date
-}
+export type MultiFactorCredentialRecord = AuthFeature.AuthMultiFactorCredentialRecord
 
 export function normalizeMultiFactorCredentialRecord(row: Record<string, unknown>): MultiFactorCredentialRecord {
   const recoveryCodeHashes = normalizeJsonValue(row.recovery_code_hashes)

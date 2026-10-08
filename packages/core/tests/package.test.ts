@@ -5,18 +5,11 @@ import { describe, expect, it } from 'vitest'
 describe('@holo-js/core package boundaries', () => {
   it('keeps queue and storage support optional in the published surface', async () => {
     const packageJsonPath = resolve(import.meta.dirname, '../package.json')
-    const runtimeSourcePath = resolve(import.meta.dirname, '../src/portable/holo.ts')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
       dependencies?: Record<string, string>
       peerDependencies?: Record<string, string>
       peerDependenciesMeta?: Record<string, { optional?: boolean }>
     }
-    const runtimeSource = await readFile(runtimeSourcePath, 'utf8')
-
-    expect(runtimeSource).not.toContain("from '@holo-js/queue'")
-    expect(runtimeSource).not.toContain('ReadonlyMap<string, unknown>')
-    expect(runtimeSource).toContain("readonly mode: 'async' | 'sync'")
-    expect(runtimeSource).toContain('readonly driver: string')
     const optionalRuntimePackages = [
       '@holo-js/auth',
       '@holo-js/auth-clerk',
@@ -30,6 +23,7 @@ describe('@holo-js/core package boundaries', () => {
       '@holo-js/notifications',
       '@holo-js/queue',
       '@holo-js/queue-db',
+      '@holo-js/queue-redis',
       '@holo-js/security',
       '@holo-js/session',
       '@holo-js/storage',

@@ -1,3 +1,4 @@
+import type { QueueDriverFactory } from '@holo-js/queue'
 import { resolve } from 'node:path'
 import type { LoadedHoloConfig } from '@holo-js/config'
 import {
@@ -7,18 +8,7 @@ import {
   type LoadedHoloPluginDefinition,
 } from '@holo-js/kernel'
 
-export type CoreQueueDriverFactory = {
-  readonly driver: string
-  create(...parameters: readonly unknown[]): unknown
-}
-
-export type CoreCachePluginDriverRegistry = {
-  readonly size: number
-  get(name: string): unknown
-  has(name: string): boolean
-  entries(): IterableIterator<[string, unknown]>
-  [Symbol.iterator](): IterableIterator<[string, unknown]>
-}
+export type CoreQueueDriverFactory = QueueDriverFactory
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return !!value && typeof value === 'object' && !Array.isArray(value)

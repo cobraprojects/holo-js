@@ -52,6 +52,7 @@
     "@holo-js/notifications": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/queue-db": "catalog:",
+    "@holo-js/queue-redis": "catalog:",
     "@holo-js/security": "catalog:",
     "@holo-js/session": "catalog:",
     "@holo-js/storage": "catalog:"
@@ -96,6 +97,9 @@
     "@holo-js/queue-db": {
       "optional": true
     },
+    "@holo-js/queue-redis": {
+      "optional": true
+    },
     "@holo-js/security": {
       "optional": true
     },
@@ -118,6 +122,7 @@
     "@holo-js/mail": "catalog:",
     "@holo-js/notifications": "catalog:",
     "@holo-js/queue-db": "catalog:",
+    "@holo-js/queue-redis": "workspace:*",
     "@holo-js/session": "catalog:",
     "@holo-js/storage": "catalog:",
     "@holo-js/storage-s3": "catalog:",

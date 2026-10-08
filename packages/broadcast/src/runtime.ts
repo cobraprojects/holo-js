@@ -645,7 +645,7 @@ class PendingDispatch implements PendingBroadcastDispatch<BroadcastSendResult> {
   }
 }
 
-export function configureBroadcastRuntime(bindings?: BroadcastRuntimeBindings): void {
+export function configureBroadcastRuntime(bindings?: RuntimeBindingsWithProjectRoot): void {
   const state = getRuntimeState()
   if (!bindings) {
     state.bindings = undefined
@@ -654,7 +654,7 @@ export function configureBroadcastRuntime(bindings?: BroadcastRuntimeBindings): 
     return
   }
 
-  const { projectRoot, plugins, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  const { projectRoot, plugins, ...runtimeBindings } = bindings
   state.bindings = runtimeBindings
   const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
   state.projectRoot = normalizedProjectRoot

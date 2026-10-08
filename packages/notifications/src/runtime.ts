@@ -875,7 +875,7 @@ export interface NotificationRuntimeFacade {
   deleteNotifications(query: NotificationQuery, ids: readonly string[]): Promise<number>
 }
 
-export function configureNotificationsRuntime(bindings?: NotificationRuntimeBindings): void {
+export function configureNotificationsRuntime(bindings?: RuntimeBindingsWithProjectRoot): void {
   const state = getRuntimeState()
   if (!bindings) {
     state.bindings = undefined
@@ -884,7 +884,7 @@ export function configureNotificationsRuntime(bindings?: NotificationRuntimeBind
     return
   }
 
-  const { projectRoot, plugins, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  const { projectRoot, plugins, ...runtimeBindings } = bindings
   state.bindings = runtimeBindings
   const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
   state.projectRoot = normalizedProjectRoot

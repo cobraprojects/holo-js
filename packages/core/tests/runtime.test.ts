@@ -75,6 +75,7 @@ import {
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig } from '@holo-js/session'
 import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig } from '@holo-js/auth'
 import { useStorage } from '@holo-js/storage/runtime'
+import * as sessionModule from '@holo-js/session'
 import { holoStorageDefaults, normalizeStorageConfig } from '@holo-js/storage'
 
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
@@ -3715,7 +3716,7 @@ export default defineSessionConfig({
     }
   })
 
-  it('returns only the session stores from the managed-session helper', async () => {
+  it('creates usable file session stores relative to the project root', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/session.ts'), `
@@ -3737,24 +3738,23 @@ export default defineSessionConfig({
       processEnv: process.env,
     })
 
-    const stores = await holoRuntimeInternals.createCoreSessionStores(root, loadedConfig, {
-      configureSessionRuntime: vi.fn(),
-      createDatabaseSessionStore: vi.fn(),
-      createFileSessionStore: vi.fn((path: string) => ({
-        read: vi.fn(async (sessionId: string) => ({ id: sessionId, path })),
-        write: vi.fn(async () => {}),
-        delete: vi.fn(async () => {}),
-      })),
-      createRedisSessionStore: vi.fn(),
-      getSessionRuntime: vi.fn(),
-      resetSessionRuntime: vi.fn(),
-    })
-
-    expect(Object.keys(stores)).toEqual(['file'])
-    await expect(stores.file?.read('abc')).resolves.toEqual({
+    const stores = await holoRuntimeInternals.createCoreSessionStores(root, loadedConfig, sessionModule)
+    const fileStore = stores.file
+    if (!fileStore) throw new Error('File session store is missing')
+    const now = new Date()
+    const record = {
       id: 'abc',
-      path: expect.stringContaining('/storage/framework/sessions'),
-    })
+      store: 'file',
+      data: { message: 'persisted' },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    }
+    await fileStore.write(record)
+    await expect(fileStore.read(record.id)).resolves.toEqual(record)
+    await expect(readFile(join(root, 'storage/framework/sessions/abc.json'), 'utf8')).resolves.toBeDefined()
+    await fileStore.delete(record.id)
+    await expect(fileStore.read(record.id)).resolves.toBeNull()
   })
 
   it('closes managed redis session adapters during subsystem reset', async () => {

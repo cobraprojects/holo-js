@@ -247,7 +247,7 @@ describe('@holo-js/core authorization boot integration', () => {
       holoRuntimeInternals.resolveAuthorizationDefinitionExport({
         default: { name: 'default' },
         named: namedDefinition,
-      }, undefined, value => value === namedDefinition),
+      }, undefined, (value): value is typeof namedDefinition => value === namedDefinition),
     ).toBe(namedDefinition)
 
     await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(

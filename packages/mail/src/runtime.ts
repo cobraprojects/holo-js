@@ -1547,7 +1547,7 @@ function resolveMailInput(
   return normalizeMailDefinition(mergeMailDefinitionInputs(mail, overrides))
 }
 
-export function configureMailRuntime(bindings?: MailRuntimeBindings): void {
+export function configureMailRuntime(bindings?: RuntimeBindingsWithProjectRoot): void {
   const state = getRuntimeState()
   if (!bindings) {
     state.bindings = undefined
@@ -1556,7 +1556,7 @@ export function configureMailRuntime(bindings?: MailRuntimeBindings): void {
     return
   }
 
-  const { projectRoot, plugins, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  const { projectRoot, plugins, ...runtimeBindings } = bindings
   state.bindings = runtimeBindings
   const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
   state.projectRoot = normalizedProjectRoot
