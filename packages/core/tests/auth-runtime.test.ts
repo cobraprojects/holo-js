@@ -1050,7 +1050,7 @@ export default class Admin extends AdminEntity {
 
     await runtime.initialize()
 
-    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Readonly<Record<string, unknown>>): Promise<unknown>
     }
@@ -2137,7 +2137,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
-    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       findByCredentials(credentials: Record<string, unknown>): Promise<unknown | null>
     }
@@ -2184,7 +2184,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
-    const fallbackProviders = await holoRuntimeInternals.createCoreAuthProviders(fallbackRoot, fallbackRuntime.loadedConfig)
+    const fallbackProviders = (await holoRuntimeInternals.createCoreAuthPersistence(fallbackRoot, fallbackRuntime.loadedConfig)).providers
     const fallbackUsers = fallbackProviders.users as {
       findByCredentials(credentials: Record<string, unknown>): Promise<unknown | null>
     }
@@ -2232,7 +2232,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
-    const chainedProviders = await holoRuntimeInternals.createCoreAuthProviders(chainedRoot, chainedRuntime.loadedConfig)
+    const chainedProviders = (await holoRuntimeInternals.createCoreAuthPersistence(chainedRoot, chainedRuntime.loadedConfig)).providers
     const chainedUsers = chainedProviders.users as {
       findByCredentials(credentials: Record<string, unknown>): Promise<unknown | null>
     }
@@ -2276,7 +2276,7 @@ export default {
       preferCache: false,
     })
 
-    await expect(holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)).rejects.toThrow('missing-dependency')
+    await expect(holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).rejects.toThrow('missing-dependency')
   })
 
   it('filters hosted-auth profile writes and honors model auth input hooks', async () => {
@@ -2379,7 +2379,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
-    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Record<string, unknown>): Promise<Record<string, unknown>>
       update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -2461,7 +2461,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
-    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Record<string, unknown>): Promise<Record<string, unknown>>
       update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -2537,7 +2537,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
-    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Record<string, unknown>): Promise<Record<string, unknown>>
       update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -3972,7 +3972,7 @@ export default {
       table.unique(['provider', 'user_id'], 'auth_mfa_provider_user_unique')
     })
 
-    const stores = holoRuntimeInternals.createCoreAuthStores(runtime.loadedConfig)
+    const stores = await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)
     await stores.multiFactor.save({
       provider: 'users',
       userId: 'user-mfa',
@@ -4192,7 +4192,7 @@ export default {
 export default undefined
 export const holoModelPendingSchema = true
 `, 'utf8')
-    const pendingProviders = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const pendingProviders = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const pendingAdapter = pendingProviders.users as {
       findById(id: string | number): Promise<unknown>
       findByCredentials(credentials: Record<string, unknown>): Promise<unknown>
@@ -4308,7 +4308,7 @@ export const holoModelPendingSchema = true
     expect(updatedIdentityRows).toHaveLength(1)
     expect(updatedIdentityRows[0]?.guard).toBe('admin')
 
-    const stores = holoRuntimeInternals.createCoreAuthStores(runtime.loadedConfig)
+    const stores = await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)
     await DB.table('personal_access_tokens').insert({
       id: 'token-invalid',
       provider: 'users',

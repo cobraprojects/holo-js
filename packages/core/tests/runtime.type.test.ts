@@ -32,18 +32,36 @@ describe('@holo-js/core runtime typing', () => {
 
   it('infers concrete token and multi-factor records from core persistence', () => {
     const readToken = async (config: LoadedHoloConfig) => {
-      const stores = holoRuntimeInternals.createCoreAuthStores(config)
+      const stores = await holoRuntimeInternals.createCoreAuthPersistence('/project', config)
       const token = await stores.tokens.findById('token-id')
       return token?.abilities
     }
     const readRecoveryCodes = async (config: LoadedHoloConfig) => {
-      const stores = holoRuntimeInternals.createCoreAuthStores(config)
+      const stores = await holoRuntimeInternals.createCoreAuthPersistence('/project', config)
       const credential = await stores.multiFactor.find('users', 'user-1')
       return credential?.recoveryCodeHashes
     }
 
     expectTypeOf(readToken).returns.toEqualTypeOf<Promise<readonly string[] | undefined>>()
     expectTypeOf(readRecoveryCodes).returns.toEqualTypeOf<Promise<readonly string[] | undefined>>()
+
+    const redeemVerification = async (config: LoadedHoloConfig) => {
+      const persistence = await holoRuntimeInternals.createCoreAuthPersistence('/project', config)
+      const record = await persistence.emailVerificationTokens.findById('verification-id')
+      if (!record) return null
+      return persistence.emailVerificationTokens.redeem(record, async () => ({ verified: true as const }))
+    }
+    const redeemReset = async (config: LoadedHoloConfig) => {
+      const persistence = await holoRuntimeInternals.createCoreAuthPersistence('/project', config)
+      const record = await persistence.passwordResetTokens.findById('reset-id')
+      if (!record) return null
+      return persistence.passwordResetTokens.redeem(record, async () => ({ passwordChanged: true as const }))
+    }
+
+    expectTypeOf(redeemVerification).returns.toEqualTypeOf<Promise<{ verified: true } | null>>()
+    expectTypeOf(redeemReset).returns.toEqualTypeOf<Promise<{ passwordChanged: true } | null>>()
+    expectTypeOf(redeemVerification).returns.not.toEqualTypeOf<Promise<{ passwordChanged: true } | null>>()
+    expectTypeOf(redeemReset).returns.not.toEqualTypeOf<Promise<{ verified: true } | null>>()
   })
 
   it('preserves inference for runtime config accessors', () => {
