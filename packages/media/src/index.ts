@@ -54,6 +54,7 @@ export {
 export {
   createDefaultMediaConversionExecutor,
   defaultMediaConversionExecutor,
+  mediaRuntimeInternals,
 } from './runtime/image'
 export {
   getMediaConversionExecutor,

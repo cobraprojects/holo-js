@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { Storage } from '@holo-js/storage/runtime'
+import { createPublicStorageResponse } from '@holo-js/storage'
 import '@holo-js/storage/config'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
 import { join, resolve } from 'node:path'
@@ -47,6 +48,33 @@ async function createSymlinkedStorageDirectory(): Promise<{
 }
 
 describe('@holo-js/core storage runtime optional imports', () => {
+  it('serves private local files through facade URLs signed by the discovered application key', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-signed-local-'))
+    tempDirs.push(root)
+    await mkdir(join(root, 'config'))
+    await writeFile(join(root, 'config/app.mjs'), `export default ${JSON.stringify({ url: 'https://app.test', key: 'native-private-storage-test-key' })}\n`)
+    await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
+      defaultDisk: 'local',
+      disks: { local: { driver: 'local', visibility: 'private', root: join(root, 'storage') } },
+    })}\n`)
+    const loadedConfig = await loadConfigDirectory(root, { preferCache: false })
+    try {
+      await configurePlainNodeStorageRuntime(resolve(import.meta.dirname, '../../..'), loadedConfig)
+      await Storage.put('attachment.txt', 'Private persisted attachment')
+      expect(() => Storage.url('attachment.txt')).toThrow('private')
+      const url = Storage.temporaryUrl('attachment.txt', { expiresIn: 60 })
+      const response = await createPublicStorageResponse(root, loadedConfig.storage, new Request(url), loadedConfig.app.key)
+      expect(response.status).toBe(200)
+      await expect(response.text()).resolves.toBe('Private persisted attachment')
+      const unsigned = new URL(url)
+      unsigned.search = ''
+      const rejected = await createPublicStorageResponse(root, loadedConfig.storage, new Request(unsigned), loadedConfig.app.key)
+      expect(rejected.status).toBe(404)
+    } finally {
+      await resetOptionalStorageRuntime()
+    }
+  })
+
   it('uses local storage without initializing an unused S3 disk', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-local-'))
     tempDirs.push(root)

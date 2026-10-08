@@ -1,564 +1,95 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HoloStorageRuntimeConfig } from '@holo-js/storage'
-import type { H3Event } from 'h3'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createApp, toWebHandler } from 'h3'
+import { resetHoloRuntime } from '@holo-js/core'
+import { Storage } from '@holo-js/storage/runtime'
+import { configureHoloRuntimeConfig, holo, resetHoloRuntimeConfig } from '../src/runtime/composables'
+import storageHandler from '../src/runtime/server/routes/storage'
 
-const readFile = vi.fn()
-const open = vi.fn()
-const realpath = vi.fn()
-const stat = vi.fn()
-const setResponseHeader = vi.fn()
+const roots = new Set<string>()
 
-vi.mock('node:fs/promises', () => ({
-  open,
-  realpath,
-  stat,
-}))
+async function project() {
+  const root = await mkdtemp(join(tmpdir(), 'holo-nuxt-storage-'))
+  roots.add(root)
+  await mkdir(join(root, 'config'))
+  await writeFile(join(root, 'config/app.mjs'), `export default ${JSON.stringify({ url: 'https://app.test', key: 'native-nuxt-storage-test-signing-key' })}\n`)
+  await writeFile(join(root, 'config/database.mjs'), `export default ${JSON.stringify({
+    defaultConnection: 'default',
+    connections: { default: { driver: 'sqlite', url: ':memory:' } },
+  })}\n`)
+  await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
+    defaultDisk: 'local',
+    routePrefix: '/storage',
+    disks: {
+      local: { driver: 'local', visibility: 'private', root: './runtime-private' },
+      public: { driver: 'public', visibility: 'public', root: './runtime-public' },
+      assets: { driver: 'public', visibility: 'public', root: './runtime-assets' },
+    },
+  })}\n`)
+  configureHoloRuntimeConfig({ holo: { appEnv: 'test', appDebug: false, projectRoot: root } })
+  const app = createApp()
+  app.use(storageHandler)
+  return { root, request: toWebHandler(app) }
+}
 
-vi.mock('#imports', () => ({
-  useRuntimeConfig: () => ({ holoStorage: runtimeConfig }),
-}))
-vi.mock('h3', () => ({
-  createError: (input: { statusCode: number, statusMessage: string }) => (
-    Reflect.get(globalThis, 'createError') as (value: typeof input) => Error
-  )(input),
-  defineEventHandler: (handler: unknown) => handler,
-  getRequestURL: (event: unknown) => (
-    Reflect.get(globalThis, 'getRequestURL') as (value: unknown) => URL
-  )(event),
-  setResponseHeader: (event: unknown, name: string, value: string) => (
-    Reflect.get(globalThis, 'setResponseHeader') as (target: unknown, key: string, header: string) => void
-  )(event, name, value),
-}))
-vi.stubGlobal('defineEventHandler', (handler: unknown) => handler)
-vi.stubGlobal('createError', (input: { statusCode: number, statusMessage: string }) => {
-  const error = new Error(input.statusMessage)
-  ;(error as Error & { statusCode?: number }).statusCode = input.statusCode
-  return error
+afterEach(async () => {
+  await resetHoloRuntime()
+  resetHoloRuntimeConfig()
+  await Promise.all([...roots].map(root => rm(root, { recursive: true, force: true })))
+  roots.clear()
 })
-vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/test.txt'))
-vi.stubGlobal('setResponseHeader', setResponseHeader)
 
-const {
-  default: storageHandler,
-  resolvePublicStorageRequest,
-} = await import('../src/runtime/server/routes/storage.get')
-
-const runtimeConfig: HoloStorageRuntimeConfig = {
-  defaultDisk: 'public',
-  diskNames: ['public', 'assets', 'private'],
-  routePrefix: '/storage',
-  disks: {
-    public: {
-      name: 'public',
-      driver: 'public',
-      visibility: 'public',
-      root: './storage/app/public',
-    },
-    assets: {
-      name: 'assets',
-      driver: 'public',
-      visibility: 'public',
-      root: './storage/assets',
-    },
-    private: {
-      name: 'private',
-      driver: 'local',
-      visibility: 'private',
-      root: './storage/app',
-    },
-  },
-}
-
-function createReadError(code: string): Error & { code: string } {
-  const error = new Error(code) as Error & { code: string }
-  error.code = code
-  return error
-}
-
-type MockFileIdentity = {
-  dev: number
-  ino: number
-}
-
-function createMockFileHandle(
-  path: string,
-  identity: MockFileIdentity = { dev: 1, ino: 1 },
-) {
-  return {
-    close: vi.fn(async () => undefined),
-    readFile: vi.fn(async () => readFile(path)),
-    stat: vi.fn(async () => identity),
-  }
-}
-
-describe('public storage route resolution', () => {
-  beforeEach(() => {
-    open.mockReset()
-    readFile.mockReset()
-    realpath.mockReset()
-    realpath.mockImplementation(async (path: string) => path)
-    stat.mockReset()
-    stat.mockResolvedValue({ dev: 1, ino: 1 })
-    open.mockImplementation(async (path: string) => createMockFileHandle(path))
-    setResponseHeader.mockReset()
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/test.txt'))
-  })
-
-  it('resolves the default public disk at the bare route prefix', () => {
-    const resolved = resolvePublicStorageRequest(runtimeConfig, '/avatars/user-1.png')
-
-    expect(resolved?.disk.name).toBe('public')
-    expect(resolved?.absolutePath).toContain('/storage/app/public/avatars/user-1.png')
-  })
-
-  it('resolves the default public disk first for colliding named-disk prefixes', () => {
-    const resolved = resolvePublicStorageRequest(runtimeConfig, '/assets/avatars/user-2.png')
-
-    expect(resolved?.disk.name).toBe('public')
-    expect(resolved?.absolutePath).toContain('/storage/app/public/assets/avatars/user-2.png')
-  })
-
-  it('resolves named public disks when no default public disk is configured', () => {
-    const resolved = resolvePublicStorageRequest({
-      ...runtimeConfig,
-      disks: {
-        ...runtimeConfig.disks,
-        public: {
-          ...runtimeConfig.disks.public!,
-          visibility: 'private',
-        },
-      },
-    }, '/assets/avatars/user-2.png')
-
-    expect(resolved?.disk.name).toBe('assets')
-    expect(resolved?.absolutePath).toContain('/storage/assets/avatars/user-2.png')
-  })
-
-  it('falls back to the default public disk when a named disk prefix misses on disk', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/assets/logo.png')) {
-        throw createReadError('ENOENT')
-      }
-
-      if (path.endsWith('/storage/assets/logo.png')) {
-        return Buffer.from('named-logo')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
-    expect(readFile.mock.calls.map(call => call[0])).toEqual([
-      expect.stringContaining('/storage/app/public/assets/logo.png'),
-      expect.stringContaining('/storage/assets/logo.png'),
-    ])
-  })
-
-  it('serves named public disks from the reserved route namespace without probing the default disk', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/__holo/assets/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/assets/logo.png')) {
-        return Buffer.from('named-logo')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
-    expect(readFile).toHaveBeenCalledTimes(1)
-    expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/assets/logo.png'))
-  })
-
-  it('serves default public disk files under the reserved namespace when no named disk matches', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/__holo/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/__holo/logo.png')) {
-        return Buffer.from('default-logo')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('default-logo'))
-    expect(readFile).toHaveBeenCalledTimes(1)
-    expect(readFile).toHaveBeenCalledWith(
-      expect.stringContaining('/storage/app/public/__holo/logo.png'),
-    )
-  })
-
-  it('returns not found for reserved namespace requests when the named disk file is missing', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/__holo/assets/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/assets/logo.png')) {
-        throw createReadError('ENOENT')
-      }
-
-      if (path.endsWith('/storage/app/public/__holo/assets/logo.png')) {
-        return Buffer.from('wrong-disk')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-    expect(readFile).toHaveBeenCalledTimes(1)
-    expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/assets/logo.png'))
-  })
-
-  it('prefers the default public disk when a named disk collides with an existing public path', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/assets/logo.png')) {
-        return Buffer.from('public-logo')
-      }
-
-      if (path.endsWith('/storage/assets/logo.png')) {
-        return Buffer.from('named-logo')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('public-logo'))
-    expect(readFile).toHaveBeenCalledTimes(1)
-    expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/app/public/assets/logo.png'))
-  })
-
-  it('returns a not-found error when no route can be resolved', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/'))
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-  })
-
-  it('does not fall back to a different disk when the primary read fails for a non-missing error', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/assets/logo.png')) {
-        throw createReadError('EACCES')
-      }
-
-      if (path.endsWith('/storage/assets/logo.png')) {
-        return Buffer.from('named-logo')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({ code: 'EACCES' })
-    expect(readFile).toHaveBeenCalledTimes(1)
-    expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/app/public/assets/logo.png'))
-  })
-
-  it('reads from a named public disk when the default public disk is unavailable', async () => {
-    const originalVisibility = runtimeConfig.disks.public?.visibility
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.txt'))
-    runtimeConfig.disks.public!.visibility = 'private'
-    readFile.mockResolvedValue(Buffer.from('named-logo'))
-
-    try {
-      await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
-      expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/assets/logo.txt'))
-    } finally {
-      runtimeConfig.disks.public!.visibility = originalVisibility ?? 'public'
+describe('native Nuxt storage route', () => {
+  it('boots discovered public disks and forwards file, HEAD and missing-file responses through H3', async () => {
+    const { root, request } = await project()
+    await mkdir(join(root, 'runtime-public', 'assets'), { recursive: true })
+    await mkdir(join(root, 'runtime-assets'), { recursive: true })
+    await mkdir(join(root, 'runtime-private'), { recursive: true })
+    await writeFile(join(root, 'runtime-public', 'assets', 'item.txt'), 'Default public file')
+    await writeFile(join(root, 'runtime-assets', 'item.txt'), 'Named public file')
+    await writeFile(join(root, 'runtime-public', 'download.svg'), '<svg></svg>')
+    await writeFile(join(root, 'runtime-private', 'secret.txt'), 'Private file')
+    await symlink(join(root, 'runtime-private', 'secret.txt'), join(root, 'runtime-public', 'escape.txt'))
+    const response = await request(new Request('https://app.test/storage/assets/item.txt'))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('content-length')).toBe(String(Buffer.byteLength('Default public file')))
+    await expect(response.text()).resolves.toBe('Default public file')
+    const named = await request(new Request('https://app.test/storage/__holo/assets/item.txt'))
+    await expect(named.text()).resolves.toBe('Named public file')
+    const head = await request(new Request('https://app.test/storage/assets/item.txt', { method: 'HEAD' }))
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-length')).toBe(response.headers.get('content-length'))
+    await expect(head.text()).resolves.toBe('')
+    const download = await request(new Request('https://app.test/storage/download.svg'))
+    expect(download.headers.get('content-disposition')).toBe('attachment')
+    expect(download.headers.get('content-type')).toBe('application/octet-stream')
+    for (const path of ['escape.txt', '__holo/local/secret.txt', 'missing.txt', '%2e%2e%2fsecret.txt']) {
+      const missing = await request(new Request(`https://app.test/storage/${path}`))
+      expect(missing.status).toBe(404)
+      await expect(missing.text()).resolves.toBe('Storage file not found.')
     }
   })
 
-  it('returns not found for valid paths that do not map to any public disk', async () => {
-    const originalVisibility = runtimeConfig.disks.public?.visibility
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/missing/logo.txt'))
-    runtimeConfig.disks.public!.visibility = 'private'
-
-    try {
-      await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-        statusCode: 404,
-        message: 'Storage file not found.',
-      })
-      expect(readFile).not.toHaveBeenCalled()
-    } finally {
-      runtimeConfig.disks.public!.visibility = originalVisibility ?? 'public'
-    }
-  })
-
-  it('sets the content type from the resolved file extension', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars/user-1.png'))
-    readFile.mockResolvedValue(Buffer.from('png-data'))
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('png-data'))
-    expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', 'image/png')
-  })
-
-  it('decodes URL-escaped path segments before reading local public files', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/reports/My%20File%20%231.pdf'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/reports/My File #1.pdf')) {
-        return Buffer.from('pdf-data')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('pdf-data'))
-    expect(readFile).toHaveBeenCalledWith(
-      expect.stringContaining('/storage/app/public/reports/My File #1.pdf'),
-    )
-  })
-
-  it('preserves malformed escape sequences instead of rejecting the request path', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/reports/%E0%A4%A.txt'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/reports/%E0%A4%A.txt')) {
-        return Buffer.from('raw-escape-data')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('raw-escape-data'))
-    expect(readFile).toHaveBeenCalledWith(
-      expect.stringContaining('/storage/app/public/reports/%E0%A4%A.txt'),
-    )
-  })
-
-  it('rejects files that resolve outside the public root through symlinks', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/linked/report.txt'))
-    realpath.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public')) {
-        return '/resolved/storage/app/public'
-      }
-
-      if (path.endsWith('/storage/app/public/linked/report.txt')) {
-        return '/private/report.txt'
-      }
-
-      throw new Error(`unexpected realpath: ${path}`)
-    })
-    readFile.mockResolvedValue(Buffer.from('leaked-data'))
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-    expect(readFile).not.toHaveBeenCalled()
-  })
-
-  it('reads from the resolved public path after symlink containment succeeds', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/linked/report.txt'))
-    realpath.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public')) {
-        return '/resolved/storage/app/public'
-      }
-
-      if (path.endsWith('/storage/app/public/linked/report.txt')) {
-        return '/resolved/storage/app/public/report.txt'
-      }
-
-      throw new Error(`unexpected realpath: ${path}`)
-    })
-    readFile.mockResolvedValue(Buffer.from('public-report'))
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('public-report'))
-    expect(open).toHaveBeenCalledWith(
-      expect.stringContaining('/storage/app/public/linked/report.txt'),
-      'r',
-    )
-    expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/app/public/linked/report.txt'))
-    expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', 'text/plain; charset=utf-8')
-  })
-
-  it('reads from the opened file handle when the checked path is swapped before read', async () => {
-    const openedHandle = createMockFileHandle('/storage/app/public/report.txt', { dev: 1, ino: 10 })
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/report.txt'))
-    realpath.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public')) {
-        return '/resolved/storage/app/public'
-      }
-
-      if (path.endsWith('/storage/app/public/report.txt')) {
-        return '/resolved/storage/app/public/report.txt'
-      }
-
-      throw new Error(`unexpected realpath: ${path}`)
-    })
-    stat.mockResolvedValue({ dev: 1, ino: 10 })
-    open.mockResolvedValue(openedHandle)
-    readFile.mockResolvedValue(Buffer.from('leaked-data'))
-    openedHandle.readFile.mockResolvedValue(Buffer.from('public-data'))
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('public-data'))
-    expect(readFile).not.toHaveBeenCalled()
-    expect(openedHandle.readFile).toHaveBeenCalledTimes(1)
-    expect(openedHandle.close).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects a file path swapped to another target between open and containment validation', async () => {
-    const openedHandle = createMockFileHandle('/storage/app/public/report.txt', { dev: 1, ino: 10 })
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/report.txt'))
-    realpath.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public')) {
-        return '/resolved/storage/app/public'
-      }
-
-      if (path.endsWith('/storage/app/public/report.txt')) {
-        return '/resolved/storage/app/public/report.txt'
-      }
-
-      throw new Error(`unexpected realpath: ${path}`)
-    })
-    stat.mockResolvedValue({ dev: 2, ino: 20 })
-    open.mockResolvedValue(openedHandle)
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-    expect(openedHandle.readFile).not.toHaveBeenCalled()
-    expect(openedHandle.close).toHaveBeenCalledTimes(1)
-  })
-
-  it('maps known file extensions to content types and falls back for unknown types', async () => {
-    const cases = [
-      ['asset.avif', 'image/avif'],
-      ['asset.css', 'text/css; charset=utf-8'],
-      ['asset.gif', 'image/gif'],
-      ['asset.html', 'application/octet-stream'],
-      ['asset.jpeg', 'image/jpeg'],
-      ['asset.jpg', 'image/jpeg'],
-      ['asset.js', 'application/octet-stream'],
-      ['asset.mjs', 'application/octet-stream'],
-      ['asset.json', 'application/json; charset=utf-8'],
-      ['asset.mp3', 'audio/mpeg'],
-      ['asset.pdf', 'application/pdf'],
-      ['asset.png', 'image/png'],
-      ['asset.svg', 'application/octet-stream'],
-      ['asset.txt', 'text/plain; charset=utf-8'],
-      ['asset.webp', 'image/webp'],
-      ['asset.woff', 'font/woff'],
-      ['asset.woff2', 'font/woff2'],
-      ['asset.bin', 'application/octet-stream'],
-    ] as const
-
-    for (const [fileName, contentType] of cases) {
-      setResponseHeader.mockReset()
-      vi.stubGlobal('getRequestURL', () => new URL(`https://app.test/storage/${fileName}`))
-      readFile.mockResolvedValue(Buffer.from(fileName))
-
-      await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from(fileName))
-      expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', contentType)
-      expect(setResponseHeader).toHaveBeenCalledWith({}, 'x-content-type-options', 'nosniff')
-      if (['asset.html', 'asset.js', 'asset.mjs', 'asset.svg'].includes(fileName)) {
-        expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-disposition', 'attachment')
-      }
-    }
-  })
-
-  it('treats non-prefixed request paths as direct storage paths', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/assets/logo.txt'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/assets/logo.txt')) {
-        throw createReadError('ENOENT')
-      }
-
-      if (path.endsWith('/storage/assets/logo.txt')) {
-        return Buffer.from('named-logo')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
-    expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', 'text/plain; charset=utf-8')
-  })
-
-  it('returns not found when both the primary and fallback locations are missing', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.png'))
-    readFile.mockRejectedValue(createReadError('ENOENT'))
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-    expect(readFile).toHaveBeenCalledTimes(2)
-  })
-
-  it('treats directory reads as not found', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars'))
-    readFile.mockRejectedValue(createReadError('EISDIR'))
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-  })
-
-  it('returns not found when a default public path misses and no alternate disk matches', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars/logo.png'))
-    readFile.mockRejectedValue(createReadError('ENOENT'))
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
-      statusCode: 404,
-      message: 'Storage file not found.',
-    })
-    expect(readFile).toHaveBeenCalledTimes(1)
-  })
-
-  it('rethrows non-missing fallback errors after a primary miss', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.png'))
-    readFile.mockImplementation(async (path: string) => {
-      if (path.endsWith('/storage/app/public/assets/logo.png')) {
-        throw createReadError('ENOENT')
-      }
-
-      if (path.endsWith('/storage/assets/logo.png')) {
-        throw createReadError('EACCES')
-      }
-
-      throw new Error(`unexpected path: ${path}`)
-    })
-
-    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({ code: 'EACCES' })
-  })
-
-  it('rethrows primitive read errors without treating them as missing files', async () => {
-    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars/logo.png'))
-    readFile.mockRejectedValue('boom')
-
-    await expect(storageHandler({} as H3Event)).rejects.toBe('boom')
-    expect(readFile).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects empty and traversing paths', () => {
-    expect(resolvePublicStorageRequest(runtimeConfig, '/')).toBeNull()
-    expect(resolvePublicStorageRequest(runtimeConfig, '/__holo')).toMatchObject({
-      disk: { name: 'public' },
-    })
-    expect(resolvePublicStorageRequest({
-      ...runtimeConfig,
-      disks: {
-        ...runtimeConfig.disks,
-        public: {
-          ...runtimeConfig.disks.public!,
-          visibility: 'private',
-        },
-      },
-    }, '/assets')).toBeNull()
-    expect(resolvePublicStorageRequest({
-      ...runtimeConfig,
-      disks: {
-        ...runtimeConfig.disks,
-        public: {
-          ...runtimeConfig.disks.public!,
-          visibility: 'private',
-        },
-      },
-    }, '/missing/logo.txt')).toBeNull()
-    expect(resolvePublicStorageRequest(runtimeConfig, '/../secrets.txt')).toBeNull()
-    expect(resolvePublicStorageRequest(runtimeConfig, '/assets/../../secrets.txt')).toBeNull()
+  it('serves signed private files with native response headers and rejects unsigned access', async () => {
+    const { request } = await project()
+    await holo.getApp()
+    await Storage.disk('local').put('attachment.txt', 'Private attachment')
+    const url = Storage.disk('local').temporaryUrl('attachment.txt', { expiresIn: 60 })
+    const response = await request(new Request(url))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('content-length')).toBe(String(Buffer.byteLength('Private attachment')))
+    await expect(response.text()).resolves.toBe('Private attachment')
+    const head = await request(new Request(url, { method: 'HEAD' }))
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-length')).toBe(response.headers.get('content-length'))
+    await expect(head.text()).resolves.toBe('')
+    const unsigned = new URL(url)
+    unsigned.search = ''
+    expect((await request(new Request(unsigned))).status).toBe(404)
   })
 })

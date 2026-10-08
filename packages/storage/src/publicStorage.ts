@@ -1,7 +1,8 @@
-import { readFile, realpath } from 'node:fs/promises'
+import { open, realpath, stat } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
+import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
 
 const NAMED_PUBLIC_DISK_ROUTE_SEGMENT = '__holo'
 
@@ -104,6 +105,21 @@ function createMissingFileResponse(): Response {
   return new Response('Storage file not found.', { status: 404 })
 }
 
+async function readLocalStorageFile(projectRoot: string, disk: RuntimeDiskConfig & { root: string }, absolutePath: string, head = false): Promise<{ contents: Buffer<ArrayBuffer> | null, path: string, size: number } | null> {
+  const root = await realpath(resolve(projectRoot, disk.root))
+  const file = await open(absolutePath, 'r')
+  try {
+    const opened = await file.stat()
+    const path = await realpath(absolutePath)
+    if (path === root || !path.startsWith(`${root}${sep}`)) return null
+    const resolvedFile = await stat(path)
+    if (opened.dev !== resolvedFile.dev || opened.ino !== resolvedFile.ino || !opened.isFile()) return null
+    return { contents: head ? null : await file.readFile(), path, size: opened.size }
+  } finally {
+    await file.close()
+  }
+}
+
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
   if (segments.length === 0 || segments.includes('..')) {
@@ -166,13 +182,38 @@ function resolveFallbackPublicStorageRequest(projectRoot: string, config: HoloSt
   return candidates.find(candidate => candidate && candidate.disk.name !== attemptedDiskName) ?? null
 }
 
-export async function createPublicStorageResponse(projectRoot: string, storageConfig: NormalizedHoloStorageConfig, request: Request): Promise<Response> {
+export async function createPublicStorageResponse(projectRoot: string, storageConfig: NormalizedHoloStorageConfig, request: Request, appKey?: string): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return createMissingFileResponse()
   const normalized = normalizeModuleOptions({
     defaultDisk: storageConfig.defaultDisk,
     routePrefix: storageConfig.routePrefix,
     disks: storageConfig.disks,
   })
-  const pathname = new URL(request.url).pathname
+  const url = new URL(request.url)
+  const host = request.headers.get('host')
+  if (host) {
+    try {
+      const authority = new URL(`${url.protocol}//${host}`)
+      if (authority.username || authority.password || authority.pathname !== '/' || authority.search || authority.hash) return createMissingFileResponse()
+      url.host = authority.host
+    } catch {
+      return createMissingFileResponse()
+    }
+  }
+  if (isTemporaryLocalStorageRequest(normalized, url)) {
+    const entry = resolveTemporaryLocalStorageRequest(projectRoot, normalized, url, appKey, request.method)
+    if (!entry) return createMissingFileResponse()
+    try {
+      const file = await readLocalStorageFile(projectRoot, entry.disk, entry.absolutePath, request.method === 'HEAD')
+      if (!file) return createMissingFileResponse()
+      return new Response(file.contents, {
+        headers: { ...resolvePublicFileHeaders(file.path), 'cache-control': 'private, no-store', 'content-length': String(file.size) },
+      })
+    } catch {
+      return createMissingFileResponse()
+    }
+  }
+  const pathname = url.pathname
   const routePath = pathname.startsWith(normalized.routePrefix) ? pathname.slice(normalized.routePrefix.length) : pathname
   const segments = resolveRouteSegments(routePath)
 
@@ -187,16 +228,11 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
 
   const tryRead = async (entry: ResolvedPublicStorageRequest): Promise<Response | null> => {
     try {
-      const resolvedRoot = await realpath(resolve(projectRoot, entry.disk.root))
-      const resolvedPath = await realpath(entry.absolutePath)
-      if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${sep}`)) {
-        return null
-      }
-
-      const contents = await readFile(resolvedPath)
-      return new Response(contents, {
+      const file = await readLocalStorageFile(projectRoot, entry.disk, entry.absolutePath, request.method === 'HEAD')
+      if (!file) return null
+      return new Response(file.contents, {
         status: 200,
-        headers: resolvePublicFileHeaders(resolvedPath),
+        headers: { ...resolvePublicFileHeaders(file.path), 'content-length': String(file.size) },
       })
     } catch {
       return null

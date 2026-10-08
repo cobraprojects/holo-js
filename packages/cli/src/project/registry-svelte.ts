@@ -215,7 +215,7 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     ...(features.storageEnabled
       ? [
           'async function handleHoloStorageRoute(event: RequestEvent, app: HoloApp): Promise<Response | undefined> {',
-          '  if (event.request.method.toUpperCase() !== \'GET\') {',
+          '  if (event.request.method !== \'GET\' && event.request.method !== \'HEAD\') {',
           '    return undefined',
           '  }',
           '',
@@ -228,7 +228,7 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
           '    return undefined',
           '  }',
           '',
-          '  return createPublicStorageResponse(app.projectRoot, app.config.storage, event.request)',
+          '  return createPublicStorageResponse(app.projectRoot, app.config.storage, event.request, app.config.app.key)',
           '}',
           '',
         ]

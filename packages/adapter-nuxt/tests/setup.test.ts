@@ -619,7 +619,7 @@ export default defineStorageConfig({
     expect(addServerImportsDir).toHaveBeenCalledTimes(1)
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/files/**',
-      handler: './runtime/server/routes/storage.get',
+      handler: './runtime/server/routes/storage',
     })
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/storage')
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
@@ -658,7 +658,7 @@ export default defineStorageConfig({
     expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/storage')
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/storage/**',
-      handler: './runtime/server/routes/storage.get',
+      handler: './runtime/server/routes/storage',
     })
   }, 30000)
 
@@ -776,7 +776,7 @@ export default defineStorageConfig({
     })
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/storage/**',
-      handler: './runtime/server/routes/storage.get',
+      handler: './runtime/server/routes/storage',
     })
   }, 30000)
 

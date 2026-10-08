@@ -946,7 +946,7 @@ export default defineStorageConfig({
     }, './s3.js')
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/storage/**',
-      handler: './runtime/server/routes/storage.get',
+      handler: './runtime/server/routes/storage',
     })
   })
 })

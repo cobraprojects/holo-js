@@ -11,7 +11,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
     const clientEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/forms.ts')
     const realtimeEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/realtime.ts')
     const storagePluginPath = resolve(import.meta.dirname, '../src/runtime/plugins/storage.ts')
-    const storageRoutePath = resolve(import.meta.dirname, '../src/runtime/server/routes/storage.get.ts')
+    const storageRoutePath = resolve(import.meta.dirname, '../src/runtime/server/routes/storage.ts')
     const s3DriverPath = resolve(import.meta.dirname, '../src/runtime/drivers/s3.ts')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
       dependencies?: Record<string, string>

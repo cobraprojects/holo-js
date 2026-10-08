@@ -452,7 +452,7 @@ function renderNextGeneratedStorageRoute(): string {
     '    throw new Error(\'[Holo] Storage routes require normalized storage configuration.\')',
     '  }',
     '',
-    '  return createPublicStorageResponse(app.projectRoot, storage, request)',
+    '  return createPublicStorageResponse(app.projectRoot, storage, request, app.config.app.key)',
     '}',
     '',
   ].join('\n')

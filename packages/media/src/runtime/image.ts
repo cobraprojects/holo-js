@@ -8,37 +8,15 @@ import {
 import type {
   MediaConversionExecutor,
 } from '../registry'
+import type sharp from 'sharp'
 
-type SharpPipeline = {
-  rotate(): SharpPipeline
-  resize(options: {
-    width?: number
-    height?: number
-    fit?: FitMode
-    withoutEnlargement?: boolean
-  }): SharpPipeline
-  avif(options: { quality?: number, effort?: number }): SharpPipeline
-  jpeg(options: { quality?: number, mozjpeg?: boolean }): SharpPipeline
-  png(options: { compressionLevel?: number, quality?: number }): SharpPipeline
-  webp(options: { quality?: number, effort?: number }): SharpPipeline
-  toBuffer(): Promise<Buffer>
-}
-
-type SharpFactory = (input: Buffer, options?: {
-  animated?: boolean
-  failOn?: 'warning'
-}) => SharpPipeline
 type FitMode = 'contain' | 'cover' | 'fill' | 'inside' | 'outside'
 
-let sharpFactoryPromise: Promise<SharpFactory> | undefined
+let sharpFactoryPromise: Promise<typeof sharp> | undefined
 
-async function loadSharp(): Promise<SharpFactory> {
+async function loadSharp(): Promise<typeof sharp> {
   sharpFactoryPromise ??= import('sharp')
-    .then((module) => {
-      const resolved = module as unknown as SharpFactory & { default?: SharpFactory }
-      /* v8 ignore next -- The direct callable-module fallback depends on runtime module interop and is not reproducible under Vitest mocks. */
-      return resolved.default ?? resolved
-    })
+    .then(module => module.default)
     .catch((error: unknown) => {
       sharpFactoryPromise = undefined
       throw error
@@ -131,3 +109,36 @@ export function createDefaultMediaConversionExecutor(): MediaConversionExecutor 
 }
 
 export const defaultMediaConversionExecutor = createDefaultMediaConversionExecutor()
+
+interface MediaImageInspection {
+  readonly mimeType: 'image/gif' | 'image/jpeg' | 'image/png' | 'image/webp'
+  readonly width: number
+  readonly height: number
+  readonly pages: number
+}
+
+const imageMimeTypes = {
+  gif: 'image/gif',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+} as const
+
+export const mediaRuntimeInternals = Object.freeze({
+  async inspectImage(contents: Uint8Array, maximumPixels = 40_000_000): Promise<MediaImageInspection> {
+    if (!Number.isSafeInteger(maximumPixels) || maximumPixels < 1) throw new TypeError('[Holo Media] Image pixel limits require a positive integer.')
+    const factory = await loadSharp()
+    try {
+      const image = factory(Buffer.from(contents), { animated: true, failOn: 'warning', limitInputPixels: maximumPixels })
+      const metadata = await image.metadata()
+      const { width, height } = metadata
+      const format = metadata.format
+      if (format !== 'gif' && format !== 'jpeg' && format !== 'png' && format !== 'webp') throw new Error('[Holo Media] Unsupported raster image format.')
+      if (!width || !height || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width * height > maximumPixels) throw new Error('[Holo Media] Image exceeds the pixel limit.')
+      await image.stats()
+      return { mimeType: imageMimeTypes[format], width, height: metadata.pageHeight ?? height, pages: metadata.pages ?? 1 }
+    } catch (error) {
+      throw new Error('[Holo Media] Image could not be decoded.', { cause: error })
+    }
+  },
+})

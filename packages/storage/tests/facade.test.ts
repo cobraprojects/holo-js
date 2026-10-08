@@ -774,7 +774,7 @@ describe('Storage facade', () => {
     expect(media.path('exports/report.pdf')).toBe('s3://media-bucket/exports/report.pdf')
     expect(() => Storage.disk('missingBucketMedia').path('exports/report.pdf')).toThrow('requires a bucket')
 
-    expect(() => Storage.disk('public').temporaryUrl('avatars/user-1.txt')).toThrow('only for s3-compatible disks')
+    expect(() => Storage.disk('public').temporaryUrl('avatars/user-1.txt')).toThrow('configured application key')
     expect(() => Storage.disk('missingBucketMedia').temporaryUrl('exports/report.pdf')).toThrow('requires a bucket')
     expect(() => Storage.disk('missingEndpointMedia').temporaryUrl('exports/report.pdf')).toThrow('requires an endpoint')
     expect(() => Storage.disk('missingCredsMedia').temporaryUrl('exports/report.pdf')).toThrow('requires accessKeyId')

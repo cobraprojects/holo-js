@@ -75,13 +75,19 @@ Use `url()` for public files:
 const avatarUrl = Storage.disk('public').url('avatars/user-1.jpg')
 ```
 
-Use `temporaryUrl()` for short-lived S3-compatible access:
+Use `temporaryUrl()` for short-lived local or S3-compatible access:
 
 ```ts
 const url = await Storage.disk('s3').temporaryUrl('exports/report.pdf', {
   expiresIn: 300,
 })
 ```
+
+For a private local disk, use the same method with its disk name. Holo signs the URL with the
+discovered application key and serves it through the host framework's existing storage route.
+The signature binds the application origin, file path, disk and expiration; unsigned or expired requests cannot read
+the file. Local responses use `Cache-Control: private, no-store`. Generate a fresh URL when displaying
+the file rather than saving an expiring URL in the database.
 
 ## Environment overrides
 

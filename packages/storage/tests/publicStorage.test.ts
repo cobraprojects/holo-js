@@ -68,6 +68,25 @@ describe('createPublicStorageResponse', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
   })
 
+  it('returns public file information on HEAD without a response body and refuses other methods', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    const contents = 'Stored file information'
+    await writeFile(join(publicRoot, 'asset.txt'), contents)
+    const config = storageConfig('./storage/app/public')
+    const url = 'https://app.test/storage/asset.txt'
+    const response = await createPublicStorageResponse(projectRoot, config, new Request(url, { method: 'HEAD' }))
+    expect(response.status).toBe(200)
+    expect(response.body).toBeNull()
+    expect(response.headers.get('content-length')).toBe(String(Buffer.byteLength(contents)))
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    const get = await createPublicStorageResponse(projectRoot, config, new Request(url))
+    expect(get.headers.get('content-length')).toBe(response.headers.get('content-length'))
+    await expect(get.text()).resolves.toBe(contents)
+    const rejected = await createPublicStorageResponse(projectRoot, config, new Request(url, { method: 'POST' }))
+    expect(rejected.status).toBe(404)
+    await expect(rejected.text()).resolves.toBe('Storage file not found.')
+  })
+
   it('does not read public symlinks that resolve outside the disk root', async () => {
     const { projectRoot, publicRoot } = await createProject()
     const secretPath = join(projectRoot, 'secret.txt')

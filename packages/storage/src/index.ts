@@ -10,3 +10,4 @@ export function defineStorageConfig<TConfig extends ModuleOptions>(config: TConf
 
 export * from './config'
 export { createPublicStorageResponse } from './publicStorage'
+export { storageRuntimeInternals } from './temporaryLocalStorage'

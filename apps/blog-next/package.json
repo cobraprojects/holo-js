@@ -37,7 +37,6 @@
     "@holo-js/forms": "workspace:*",
     "@holo-js/kernel": "workspace:*",
     "@holo-js/mail": "workspace:*",
-    "@holo-js/media": "workspace:*",
     "@holo-js/notifications": "workspace:*",
     "@holo-js/queue": "workspace:*",
     "@holo-js/queue-db": "workspace:*",

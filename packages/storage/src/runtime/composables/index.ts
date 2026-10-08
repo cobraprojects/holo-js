@@ -1,4 +1,5 @@
 import { createHmac, createHash } from 'node:crypto'
+import { createTemporaryLocalStorageUrl } from '../../temporaryLocalStorage'
 import type {
   RuntimeDiskConfig,
   StorageVisibility,
@@ -9,7 +10,7 @@ type RawStorageValue = string | Uint8Array | ArrayBuffer | Buffer | null
 const NAMED_PUBLIC_DISK_ROUTE_SEGMENT = '__holo'
 type StorageRuntimeConfigValue = {
   holoStorage: HoloStorageRuntimeConfig
-  holo?: { appUrl?: string }
+  holo?: { appUrl?: string, appKey?: string }
 }
 
 export interface StorageBackend {
@@ -389,12 +390,13 @@ export function resetStorageRuntime(): void {
   delete getStorageRuntimeGlobals().__holoStorageRuntimeBindings__
 }
 
-function getRuntimeConfig(): HoloStorageRuntimeConfig & { appUrl?: string } {
+function getRuntimeConfig(): HoloStorageRuntimeConfig & { appUrl?: string, appKey?: string } {
   const runtimeConfig = resolveStorageRuntimeBindings().getRuntimeConfig()
 
   return {
     ...runtimeConfig.holoStorage,
     appUrl: runtimeConfig.holo?.appUrl,
+    appKey: runtimeConfig.holo?.appKey,
   }
 }
 
@@ -763,7 +765,8 @@ function createDisk(diskName?: string): StorageInstance {
 
     temporaryUrl(path, options) {
       if (disk.driver !== 's3') {
-        throw new Error(`[Holo Storage] temporaryUrl() is currently supported only for s3-compatible disks. "${disk.name}" is ${disk.driver}.`)
+        assertNoTraversal(path)
+        return createTemporaryLocalStorageUrl(disk, normalizeRelativePath(path), config, resolveExpiration(options))
       }
 
       return createS3TemporaryUrl(disk, path, options)

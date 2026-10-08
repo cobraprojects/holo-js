@@ -61,7 +61,7 @@ type StorageRuntimeModule = {
   configureStorageRuntime(options: {
     getRuntimeConfig(): {
       holoStorage: unknown
-      holo: { appUrl: string }
+      holo: { appUrl: string, appKey: string | undefined }
     }
     getStorage(base: string): StorageBackend | Promise<StorageBackend>
   }): void
@@ -462,7 +462,7 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
   storageRuntime.configureStorageRuntime({
     getRuntimeConfig: () => ({
       holoStorage: normalizedStorage,
-      holo: { appUrl: loadedConfig.app.url },
+      holo: { appUrl: loadedConfig.app.url, appKey: loadedConfig.app.key },
     }),
     getStorage: (base: string) => {
       const diskName = base.replace(/^holo:/, '')

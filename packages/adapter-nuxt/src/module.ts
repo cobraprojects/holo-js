@@ -624,7 +624,7 @@ function finalizeStorageSetup(
   if (storageModule.hasPublicLocalDisk(normalized)) {
     addServerHandler({
       route: `${normalized.routePrefix}/**`,
-      handler: resolver.resolve('./runtime/server/routes/storage.get'),
+      handler: resolver.resolve('./runtime/server/routes/storage'),
     })
   }
 }
