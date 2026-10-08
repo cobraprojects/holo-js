@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -1877,14 +1877,37 @@ export default defineQueueConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeRegistry(root)
+    const evaluationsPath = join(root, 'config-evaluations.txt')
+    await writeFile(join(root, 'config/probe.ts'), `
+import { appendFileSync } from 'node:fs'
+
+appendFileSync(${JSON.stringify(evaluationsPath)}, 'evaluated\\n')
+
+export default {}
+`, 'utf8')
 
     const initialized = await initializeHoloAdapterProject(root)
 
+    expect(await readFile(evaluationsPath, 'utf8')).toBe('evaluated\n')
     expect(initialized.runtime.initialized).toBe(true)
     expect(getHolo()).toBe(initialized.runtime)
+    expect(initialized.config).toBe(initialized.runtime.loadedConfig)
+    expect(initialized.registry).toBe(initialized.runtime.registry)
+
+    await writeFile(join(root, 'config/app.ts'), `
+export default { name: 'Changed App' }
+`, 'utf8')
+    await writeRegistry(root, {
+      models: [{ sourcePath: 'server/models/Post.ts', name: 'Post', prunable: false }],
+    })
 
     const reused = await initializeHoloAdapterProject(root)
+    expect(await readFile(evaluationsPath, 'utf8')).toBe('evaluated\n')
     expect(reused.runtime).toBe(initialized.runtime)
+    expect(reused.config).toBe(initialized.config)
+    expect(reused.config.app.name).toBe('Runtime App')
+    expect(reused.registry).toBe(initialized.registry)
+    expect(reused.registry?.models[0]?.name).toBe('User')
     expect(reused.registry?.commands[0]?.name).toBe('inspire')
   })
 

@@ -401,8 +401,7 @@ export async function initializeHoloAdapterProject<TCustom extends HoloConfigMap
   projectRoot: string,
   options: CreateHoloOptions = {},
 ): Promise<HoloAdapterProject<TCustom>> {
-  const project = await createHoloAdapterProject<TCustom>(projectRoot, options)
-  const runtime = await ensureHolo<TCustom>(project.projectRoot, options)
+  const runtime = await ensureHolo<TCustom>(projectRoot, options)
   await reconfigureHoloRuntime(runtime, {
     renderView: options.renderView,
     authRequest: options.authRequest,
@@ -410,7 +409,9 @@ export async function initializeHoloAdapterProject<TCustom extends HoloConfigMap
   })
 
   return {
-    ...project,
+    projectRoot: runtime.projectRoot,
+    config: runtime.loadedConfig,
+    registry: runtime.registry,
     runtime,
   }
 }
