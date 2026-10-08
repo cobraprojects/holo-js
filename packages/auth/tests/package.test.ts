@@ -989,7 +989,7 @@ describe('@holo-js/auth package runtime', () => {
     const appendedCookies: string[] = []
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: {
         ...runtime.context,
@@ -1026,7 +1026,7 @@ describe('@holo-js/auth package runtime', () => {
     const shared = await auth.guard('admin').loginUsing(admin)
     const otherDevice = await getSessionRuntime().create({ data: { device: 'other' } })
     const failure = new Error('transition delivery failed')
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       ...(failurePoint === 'remember' ? { session: { ...getSessionRuntime(), async issueRememberMeToken() { throw failure } } } : {}),
       ...(failurePoint === 'cookie' ? { context: { ...runtime.context, async appendResponseCookie() { throw failure } } } : {}),
@@ -1049,7 +1049,7 @@ describe('@holo-js/auth package runtime', () => {
     const initial = await auth.loginUsing(created)
     const delivery = new Error('remember unavailable')
     const cleanup = new Error('delete unavailable')
-    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), session: {
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), session: {
       ...getSessionRuntime(),
       async issueRememberMeToken() { throw delivery },
       async invalidate() { throw cleanup },
@@ -1066,7 +1066,7 @@ describe('@holo-js/auth package runtime', () => {
     const target = await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
     const initial = await auth.loginUsing(actor)
     const failure = new Error('cookies unavailable')
-    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: { ...runtime.context, async appendResponseCookie() { throw failure } } })
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: { ...runtime.context, async appendResponseCookie() { throw failure } } })
     await expect(impersonate(target)).rejects.toBe(failure)
     await expect(getSessionRuntime().read(initial.sessionId)).resolves.toBeNull()
     await expect(user()).resolves.toBeNull()
@@ -1174,7 +1174,7 @@ describe('@holo-js/auth package runtime', () => {
     await logout()
     const pendingRecovery = await login({ email: 'ava@example.com', password: 'secret-secret' })
     const recoveryBindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...recoveryBindings,
       context: {
         ...authRuntimeInternals.createMemoryAuthContext(),
@@ -1483,7 +1483,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     await logout()
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       session: {
         ...bindings.session,
@@ -1514,7 +1514,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     await logout()
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       session: {
         ...bindings.session,
@@ -1630,7 +1630,7 @@ describe('@holo-js/auth package runtime', () => {
     await logout()
     const pending = await auth.loginUsing(created)
     const failure = new Error('cookies unavailable')
-    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: { ...runtime.context, async appendResponseCookie() { throw failure } } })
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: { ...runtime.context, async appendResponseCookie() { throw failure } } })
     await expect(auth.multiFactor.recover({ code: recovery.recoveryCodes[0]! })).rejects.toBe(failure)
     await expect(getSessionRuntime().read(pending.sessionId)).resolves.toBeNull()
     await expect(user()).resolves.toBeNull()
@@ -1646,7 +1646,7 @@ describe('@holo-js/auth package runtime', () => {
       activate,
     }
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: activatableContext,
     })
@@ -1658,7 +1658,7 @@ describe('@holo-js/auth package runtime', () => {
       ...runtime.context,
       activate: false,
     }
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: inactiveContext,
     })
@@ -1672,7 +1672,7 @@ describe('@holo-js/auth package runtime', () => {
     const appendedCookies: string[] = []
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: {
         ...runtime.context,
@@ -1718,7 +1718,7 @@ describe('@holo-js/auth package runtime', () => {
       },
     })
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: createRequestContext(),
     })
@@ -1730,7 +1730,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(await check()).toBe(false)
     expect(await user()).toBeNull()
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: createRequestContext(),
     })
@@ -2220,7 +2220,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(remembered.rememberToken).toBeTypeOf('string')
 
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: {
         ...authRuntimeInternals.createMemoryAuthContext(),
@@ -4216,7 +4216,7 @@ describe('@holo-js/auth package runtime', () => {
 
   it('ignores malformed hosted provider cookie configs during logout', async () => {
     const runtime = configureRuntime()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: {
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -6873,7 +6873,7 @@ describe('@holo-js/auth package runtime', () => {
   it('defaults authorization checks to false', async () => {
     const runtime = configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       authorization: undefined,
     })
@@ -6893,7 +6893,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(() => authRuntimeInternals.getPasswordHash({ getId: () => 1 } as never, null)).toThrow('must be objects')
 
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       providers: {
         users: {
@@ -6952,7 +6952,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     const token = await tokens.create(created, { guard: 'api', name: 'hydrate' })
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       context: {
         ...bindings.context,
@@ -6966,7 +6966,7 @@ describe('@holo-js/auth package runtime', () => {
 
     const current = authRuntimeInternals.getRuntimeBindings()
     const rememberCookie = authRuntimeInternals.parseSetCookieDefinition(current.session.rememberMeCookie(''))
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...current,
       session: {
         ...current.session,
@@ -6998,7 +6998,7 @@ describe('@holo-js/auth package runtime', () => {
     }
     const refreshed = authRuntimeInternals.getRuntimeBindings()
     refreshed.context.setRememberToken?.('web')
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...refreshed,
       session: { ...refreshed.session, consumeRememberMeToken: async () => wrongGuardSession },
       context: {
@@ -7078,7 +7078,7 @@ describe('@holo-js/auth package runtime', () => {
     const current = authRuntimeInternals.getRuntimeBindings()
     const rememberName = authRuntimeInternals.parseSetCookieDefinition(current.session.rememberMeCookie(''))?.name
     current.context.setRememberToken?.('web')
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...current,
       context: {
         ...current.context,

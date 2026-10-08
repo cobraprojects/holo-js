@@ -48,6 +48,9 @@
       ],
       "@holo-js/media/config": [
         "../media/src/projectConfig.ts"
+      ],
+      "@holo-js/broadcast/client-config": [
+        "../broadcast/src/client-config.ts"
       ]
     }
   },

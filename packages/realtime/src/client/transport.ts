@@ -1,3 +1,4 @@
+import { broadcastBrowserInternals } from '@holo-js/broadcast/client-config'
 import type { RealtimeExecutionResult, RealtimeSubscriptionSnapshot } from '../contracts'
 import {
   createWireError,
@@ -14,7 +15,6 @@ import type {
   RealtimeClientGlobals,
   RealtimeClientTransport,
   RealtimeWireResult,
-  RealtimeWebSocketLike,
 } from './types'
 import {
   unavailableTransportMessage,
@@ -58,16 +58,11 @@ async function resolveBroadcastClientConfig(
     throw new Error('Realtime live updates require fetch support in this runtime.')
   }
 
-  const response = await globals.fetch(endpoint, {
-    credentials: 'same-origin',
-  })
-  if (!response.ok) {
-    throw new Error(`Realtime broadcast config failed with HTTP ${response.status}.`)
-  }
+  const config = await broadcastBrowserInternals.discoverConfig(globals.fetch, endpoint) as Partial<BroadcastClientConfig>
 
-  const config = await response.json() as Partial<BroadcastClientConfig>
   if (
-    typeof config.key !== 'string'
+    !config || typeof config !== 'object' || Array.isArray(config)
+    || typeof config.key !== 'string'
     || typeof config.host !== 'string'
     || typeof config.port !== 'number'
     || typeof config.path !== 'string'
@@ -126,18 +121,15 @@ export function createBroadcastRealtimeTransport(options: {
     listener(snapshot: RealtimeSubscriptionSnapshot<unknown>): void
     readonly onError: (error: unknown) => void
   }>()
-  let socket: RealtimeWebSocketLike | undefined
-  let connecting: Promise<RealtimeWebSocketLike> | undefined
+  let connection: ReturnType<typeof broadcastBrowserInternals.createConnection> | undefined
   let nextRequestId = 0
 
   const closeSocketIfIdle = (): void => {
-    if (subscriptions.size > 0 || pendingMutations.size > 0 || socket?.readyState !== 1) {
+    if (subscriptions.size > 0 || pendingMutations.size > 0 || !connection?.socket) {
       return
     }
 
-    const idleSocket = socket
-    socket = undefined
-    idleSocket.close()
+    connection.disconnect()
   }
 
   const rejectPending = (error: unknown): void => {
@@ -213,62 +205,30 @@ export function createBroadcastRealtimeTransport(options: {
     subscription.listener(snapshot)
   }
 
-  const connect = async (): Promise<RealtimeWebSocketLike> => {
+  const connect = async () => {
     const globals = globalThis as RealtimeClientGlobals
-    if (socket?.readyState === 1) {
-      return socket
+    const WebSocketConstructor = globals.WebSocket
+    if (!WebSocketConstructor) {
+      throw new Error('Realtime live updates require WebSocket support in this runtime.')
     }
-
-    if (connecting) {
-      return await connecting
-    }
-
-    connecting = (async () => {
-      const WebSocketConstructor = globals.WebSocket
-      if (!WebSocketConstructor) {
-        throw new Error('Realtime live updates require WebSocket support in this runtime.')
-      }
-
-      const config = await resolveBroadcastClientConfig(options.configEndpoint ?? '/broadcasting/config', globals)
-      const scheme = resolveWebSocketScheme(config.scheme, globals)
-      const host = resolveBrowserHost(config.host, globals)
-      const normalizedPath = `/${config.path.replace(/^\/+|\/+$/g, '')}`
-      const url = `${scheme}://${host}:${config.port}${normalizedPath}/${encodeURIComponent(config.key)}`
-
-      return await new Promise<RealtimeWebSocketLike>((resolve, reject) => {
-        const nextSocket = new WebSocketConstructor(url)
-        socket = nextSocket
-        nextSocket.addEventListener('open', () => {
-          resolve(nextSocket)
+    connection ??= broadcastBrowserInternals.createConnection({
+      WebSocket: WebSocketConstructor,
+      failureMessage: unavailableTransportMessage,
+      async resolveUrl() {
+        const config = await resolveBroadcastClientConfig(options.configEndpoint ?? '/broadcasting/config', globals)
+        return broadcastBrowserInternals.formatUrl({
+          ...config,
+          scheme: resolveWebSocketScheme(config.scheme, globals),
+          host: resolveBrowserHost(config.host, globals),
         })
-        nextSocket.addEventListener('message', handleMessage)
-        nextSocket.addEventListener('close', () => {
-          if (socket !== nextSocket) {
-            return
-          }
-          socket = undefined
-          connecting = undefined
-          const error = new Error(unavailableTransportMessage)
-          warnRealtimeOnce(unavailableTransportMessage)
-          rejectPending(error)
-        })
-        nextSocket.addEventListener('error', () => {
-          if (socket !== nextSocket) {
-            return
-          }
-          socket = undefined
-          connecting = undefined
-          const error = new Error(unavailableTransportMessage)
-          warnRealtimeOnce(unavailableTransportMessage)
-          reject(error)
-          rejectPending(error)
-        })
-      })
-    })().finally(() => {
-      connecting = undefined
+      },
+      onMessage: handleMessage,
+      onDisconnect(error) {
+        warnRealtimeOnce(error.message)
+        rejectPending(error)
+      },
     })
-
-    return await connecting
+    return await connection.connect()
   }
 
   const sendSubscription = async (
@@ -301,7 +261,7 @@ export function createBroadcastRealtimeTransport(options: {
     name: string,
     args: Record<string, unknown>,
   ): Promise<RealtimeExecutionResult<TResult> | undefined> => {
-    if (socket?.readyState !== 1) {
+    if (!connection?.socket) {
       return undefined
     }
 
@@ -313,7 +273,7 @@ export function createBroadcastRealtimeTransport(options: {
       })
     })
     try {
-      socket.send(JSON.stringify({
+      connection.socket.send(JSON.stringify({
         event: 'holo:realtime',
         data: {
           id,
@@ -366,13 +326,16 @@ export function createBroadcastRealtimeTransport(options: {
       })
       void sendSubscription(name, args, id).catch((error) => {
         warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
-        onError(error)
+        if (subscriptions.delete(id)) {
+          onError(error)
+          closeSocketIfIdle()
+        }
       })
 
       return () => {
         subscriptions.delete(id)
-        if (socket?.readyState === 1) {
-          socket.send(JSON.stringify({
+        if (connection?.socket) {
+          connection.socket.send(JSON.stringify({
             event: 'holo:realtime',
             data: {
               id,

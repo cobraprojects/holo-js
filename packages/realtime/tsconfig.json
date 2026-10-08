@@ -1,7 +1,13 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "paths": {
+      "@holo-js/broadcast/client-config": [
+        "../broadcast/src/client-config.ts"
+      ]
+    },
+    "baseUrl": "."
   },
   "include": [
     "src/**/*"

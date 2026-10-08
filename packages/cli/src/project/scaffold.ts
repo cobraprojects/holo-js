@@ -1,5 +1,6 @@
+import { resolveFrameworkPreparation } from './framework-preparation'
 import { mkdir, readdir } from 'node:fs/promises'
-import { dirname, extname, relative, resolve, sep } from 'node:path'
+import { dirname, extname, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import {
   loadProjectConfig,
@@ -95,19 +96,12 @@ import {
   renderFrameworkRunner,
   renderFrameworkRunnerForDescriptor,
   renderManagedHostedAuthRouteFiles,
-  renderNextHoloHelper,
   renderScaffoldPackageJson,
   resolvePackageManagerVersion,
   scaffoldProject,
 } from './scaffold/framework'
 import {
   renderNextBroadcastConfigRoute,
-  renderNextGeneratedRealtimeMutationRoute,
-  renderNextGeneratedRealtimeQueryRoute,
-  renderNextGeneratedRealtimeDefinitions,
-  renderNextRealtimeMutationRoute,
-  renderNextRealtimeQueryRoute,
-  renderNextRuntimeBootstrap,
   renderSvelteViteConfig,
 } from './scaffold/framework-renderers'
 import {
@@ -216,34 +210,6 @@ function injectSvelteRealtimeVitePlugin(viteConfigContents: string): SvelteRealt
   }
 
   return withPlugin
-}
-
-const realtimeDefinitionExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
-
-async function collectRealtimeDefinitionFiles(root: string): Promise<readonly string[]> {
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
-  const files = await Promise.all(entries.map(async (entry) => {
-    const entryPath = resolve(root, entry.name)
-    if (entry.isDirectory()) {
-      return await collectRealtimeDefinitionFiles(entryPath)
-    }
-
-    return realtimeDefinitionExtensions.has(extname(entry.name)) ? [entryPath] : []
-  }))
-
-  return files.flat().sort((left, right) => left.localeCompare(right))
-}
-
-async function renderNextRealtimeDefinitions(projectRoot: string): Promise<string> {
-  const generatedRoot = resolve(projectRoot, '.holo-js/generated/next')
-  const files = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
-  const importPaths = files.map((filePath) => {
-    const withoutExtension = filePath.slice(0, -extname(filePath).length)
-    const importPath = relative(generatedRoot, withoutExtension).split(sep).join('/')
-    return importPath.startsWith('.') ? importPath : `./${importPath}`
-  })
-
-  return renderNextGeneratedRealtimeDefinitions(importPaths)
 }
 
 async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promise<Map<AuthMigrationSlug, string>> {
@@ -634,31 +600,13 @@ export async function installRealtimeIntoProject(
   await loadProjectConfig(projectRoot, { required: true })
   const realtimeRoot = resolve(projectRoot, 'server/realtime')
   const realtimeDirectoryExists = await pathExists(realtimeRoot)
-  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  const preparation = await resolveFrameworkPreparation(projectRoot)
+  const framework = preparation.framework?.id
   let createdFrameworkSetup = false
 
   await mkdir(realtimeRoot, { recursive: true })
 
-  if (framework === 'next') {
-    const routes = [
-      { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
-      { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
-      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
-      { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
-      { path: '.holo-js/generated/next/realtime-definitions.ts', contents: await renderNextRealtimeDefinitions(projectRoot) },
-      { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
-      { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
-    ] as const
-
-    for (const route of routes) {
-      const routePath = resolve(projectRoot, route.path)
-      if (!(await pathExists(routePath))) {
-        createdFrameworkSetup = true
-      }
-      await writeTextFile(routePath, route.contents)
-    }
-  } else if (framework === 'sveltekit') {
+  if (framework === 'sveltekit') {
     const viteConfigPath = resolve(projectRoot, 'vite.config.ts')
     if (await pathExists(viteConfigPath)) {
       const existingViteConfig = await readTextFile(viteConfigPath)
@@ -675,8 +623,15 @@ export async function installRealtimeIntoProject(
     }
   }
 
+  const updatedPackageJson = await upsertRealtimePackageDependency(projectRoot)
+  const updatedPreparation = updatedPackageJson
+    ? await resolveFrameworkPreparation(projectRoot)
+    : preparation
+  const createdArtifacts = await updatedPreparation.writeArtifacts()
+  createdFrameworkSetup ||= createdArtifacts
+
   return {
-    updatedPackageJson: await upsertRealtimePackageDependency(projectRoot),
+    updatedPackageJson,
     createdRealtimeDirectory: !realtimeDirectoryExists,
     createdFrameworkSetup,
   }

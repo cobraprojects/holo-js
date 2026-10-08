@@ -26,6 +26,7 @@ import {
   type NotificationBuildFactories,
   type NotificationDefinition,
   type NotificationRecord,
+  type NotificationEmailRoute,
 } from '../src'
 
 type InvoicePaidNotifiable = {
@@ -137,7 +138,7 @@ const invoicePaidDefinition: NotificationDefinition<
 
 const invoicePaid = defineNotification(invoicePaidDefinition)
 
-function createQueueModuleStub() {
+function createQueueModuleStub(runImmediately = true) {
   const jobs = new Map<string, { handle(payload: unknown): Promise<unknown> | unknown }>()
   const dispatches: Array<{
     jobName: string
@@ -187,7 +188,7 @@ function createQueueModuleStub() {
           },
           async dispatch() {
             dispatches.push({ ...entry })
-            return await jobs.get(jobName)?.handle(payload)
+            return runImmediately ? await jobs.get(jobName)?.handle(payload) : undefined
           },
         }
       },
@@ -1515,6 +1516,222 @@ export default {
     expect(mailer.send).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the deferred plan fixed while building queued payloads from committed recipient data', async () => {
+    const queue = createQueueModuleStub(false)
+    notificationsRuntimeInternals.setQueueModuleLoader(async () => queue.module)
+    const callbacks: Array<() => Promise<void>> = []
+    const deliveries: Array<{ subject: string | undefined, route: NotificationEmailRoute | undefined }> = []
+    const recipient = { email: 'before@example.com' }
+    const recipients = [recipient]
+    const delay = new Date('2030-01-01T00:00:00.000Z')
+    let useEmail = true
+    let queued = true
+    let configuredDelay: number | Date = delay
+
+    configureNotificationsRuntime({
+      config: {
+        table: 'notifications',
+        queue: { connection: 'original', queue: 'original-notifications', afterCommit: true },
+      },
+      deferAfterCommit(callback) {
+        callbacks.push(callback)
+        return true
+      },
+      mailer: {
+        send() {
+          throw new Error('The previous mailer must not be used')
+        },
+      },
+    })
+
+    const receipt = await notifyMany(recipients, defineNotification({
+      via() {
+        return useEmail ? ['email'] : ['database']
+      },
+      queue() {
+        return queued
+      },
+      delay() {
+        return configuredDelay
+      },
+      build: {
+        email(user: { email: string }) {
+          return { subject: user.email }
+        },
+        database() {
+          return { data: { changed: true } }
+        },
+      },
+    }))
+
+    expect(receipt).toEqual({
+      totalTargets: 1,
+      channels: [{ channel: 'email', targetIndex: 0, queued: true, deferred: true, success: true }],
+      deferred: true,
+    })
+    expect(queue.dispatches).toEqual([])
+
+    recipient.email = 'committed@example.com'
+    recipients.splice(0, 1, { email: 'replacement@example.com' }, { email: 'added@example.com' })
+    useEmail = false
+    queued = false
+    configuredDelay = 500
+    delay.setFullYear(2040)
+    configureNotificationsRuntime({
+      config: {
+        table: 'notifications',
+        queue: { connection: 'replacement', queue: 'replacement-notifications', afterCommit: false },
+      },
+      mailer: {
+        async send(message, context) {
+          deliveries.push({ subject: message.subject, route: context.route })
+        },
+      },
+    })
+
+    await callbacks[0]!()
+
+    expect(queue.dispatches).toEqual([expect.objectContaining({
+      connection: 'original',
+      queue: 'original-notifications',
+      delay: new Date('2030-01-01T00:00:00.000Z'),
+      payload: expect.objectContaining({
+        channel: 'email',
+        targetIndex: 0,
+        route: { email: 'committed@example.com' },
+        payload: { subject: 'committed@example.com' },
+      }),
+    })])
+    expect(deliveries).toEqual([])
+
+    recipient.email = 'after-enqueue@example.com'
+    const delivery = queue.dispatches[0]!
+    await queue.jobs.get(delivery.jobName)!.handle(delivery.payload)
+
+    expect(deliveries).toEqual([{ subject: 'committed@example.com', route: { email: 'committed@example.com' } }])
+  })
+
+  it('uses the same plan when commitment scheduling falls back to immediate execution', async () => {
+    const queue = createQueueModuleStub()
+    notificationsRuntimeInternals.setQueueModuleLoader(async () => queue.module)
+    const deliveries: string[] = []
+    let firstQueueDecision = true
+
+    configureNotificationsRuntime({
+      deferAfterCommit() {
+        return false
+      },
+      mailer: {
+        async send(message) {
+          deliveries.push(message.subject ?? '')
+        },
+      },
+    })
+
+    const result = await notify({ email: 'ava@example.com' }, defineNotification({
+      via() {
+        return ['email']
+      },
+      queue() {
+        const queued = firstQueueDecision
+        firstQueueDecision = false
+        return queued ? { connection: 'original', queue: 'selected' } : false
+      },
+      delay() {
+        return 250
+      },
+      build: {
+        email() {
+          return { subject: 'Hello' }
+        },
+      },
+    })).afterCommit()
+
+    expect(result.channels).toEqual([{ channel: 'email', targetIndex: 0, queued: true, success: true }])
+    expect(queue.dispatches).toEqual([expect.objectContaining({ connection: 'original', queue: 'selected', delay: 250 })])
+    expect(deliveries).toEqual(['Hello'])
+  })
+
+  it('resolves current channel adapters after commitment and keeps channel failures independent', async () => {
+    const callbacks: Array<() => Promise<void>> = []
+    const delivered: unknown[] = []
+    const recipient = { email: 'before@example.com' }
+    const failure = new Error('Email payload failed')
+
+    registerNotificationChannel('slack', {
+      send() {
+        throw new Error('The previous channel adapter must not be used')
+      },
+    })
+    configureNotificationsRuntime({
+      deferAfterCommit(callback) {
+        callbacks.push(callback)
+        return true
+      },
+    })
+
+    const result = await notify(recipient, defineNotification({
+      via() {
+        return ['email', 'slack']
+      },
+      build: {
+        email() {
+          throw failure
+        },
+        slack(user: { email: string }) {
+          return { text: user.email }
+        },
+      },
+    })).afterCommit()
+
+    expect(result.deferred).toBe(true)
+    expect(delivered).toEqual([])
+    recipient.email = 'committed@example.com'
+    registerNotificationChannel('slack', {
+      async send(context) {
+        delivered.push(context.payload)
+      },
+    }, { replaceExisting: true })
+
+    await callbacks[0]!()
+
+    expect(delivered).toEqual([{ text: 'committed@example.com' }])
+  })
+
+  it('reports an immediate planning failure without preventing another channel delivery', async () => {
+    const delivered: string[] = []
+    configureNotificationsRuntime({
+      mailer: {
+        async send(message) {
+          delivered.push(message.subject ?? '')
+        },
+      },
+    })
+
+    const result = await notify({ email: 'ava@example.com' }, defineNotification({
+      via() {
+        return ['broadcast', 'email']
+      },
+      delay(_recipient, channel) {
+        return channel === 'broadcast' ? -1 : undefined
+      },
+      build: {
+        email() {
+          return { subject: 'Still delivered' }
+        },
+        broadcast() {
+          return { event: 'notification.failed', data: {} }
+        },
+      },
+    }))
+
+    expect(result.channels).toEqual([
+      { channel: 'broadcast', targetIndex: 0, queued: false, success: false, error: expect.any(Error) },
+      { channel: 'email', targetIndex: 0, queued: false, success: true },
+    ])
+    expect(delivered).toEqual(['Still delivered'])
+  })
+
   it('falls back to immediate delivery when afterCommit is requested without an active transaction', async () => {
     const mailer = {
       send: vi.fn(async () => {}),
@@ -2551,30 +2768,6 @@ export default {
     await notificationsRuntimeInternals.ensureNotificationsQueueJobRegistered(queue.module)
     expect(queue.jobs.size).toBe(1)
 
-    expect(notificationsRuntimeInternals.resolveChannelDispatchPlan({
-      via() {
-        return ['email']
-      },
-      build: {
-        email() {
-          return {
-            subject: 'Hello',
-          }
-        },
-      },
-    }, {
-      index: 0,
-      anonymous: false,
-      notifiable: {},
-    }, 'email', {})).toEqual({
-      channel: 'email',
-      queued: false,
-      connection: undefined,
-      queue: undefined,
-      delay: undefined,
-      afterCommit: false,
-    })
-
     expect(notificationsRuntimeInternals.resolveTargets({
       kind: 'many',
       value: [{ id: 'user-1' }, { id: 'user-2' }],
@@ -2626,49 +2819,6 @@ export default {
       anonymous: false,
       notifiable: {},
     }, 'email')).toBeUndefined()
-
-    configureNotificationsRuntime({
-      deferAfterCommit() {
-        return false
-      },
-    })
-    await expect(notificationsRuntimeInternals.deferDispatchUntilCommit({
-      target: {
-        kind: 'notifiable',
-        value: { email: 'ava@example.com' },
-      },
-      notification: {
-        via() {
-          return ['email']
-        },
-        build: {
-          email() {
-            return {
-              subject: 'Hello',
-            }
-          },
-        },
-      },
-      options: {},
-    }, {
-      via() {
-        return ['email']
-      },
-      build: {
-        email() {
-          return {
-            subject: 'Hello',
-          }
-        },
-      },
-    }, [{
-      target: {
-        index: 0,
-        anonymous: false,
-        notifiable: { email: 'ava@example.com' },
-      },
-      channels: ['email'] as const,
-    }])).resolves.toBeNull()
 
     const finallyDispatch = notify({ id: 'user-1', email: 'ava@example.com' }, invoicePaid)
     await expect(finallyDispatch.finally()).resolves.toMatchObject({

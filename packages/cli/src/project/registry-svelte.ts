@@ -6,11 +6,8 @@ import {
 } from './shared'
 import {
   renderNextManagedHostedAuthRouteFiles,
-  renderNextGeneratedRealtimeDefinitions,
   renderNextManagedRouteFiles,
   renderNextHoloHelper,
-  renderNextRealtimeMutationRoute,
-  renderNextRealtimeQueryRoute,
   renderSvelteHoloHelper,
   renderSvelteManagedRuntimeFiles,
 } from './scaffold/framework-renderers'
@@ -574,13 +571,13 @@ async function ensureSvelteConfigHooksOverride(projectRoot: string): Promise<voi
   }
 }
 
-async function writeFileIfChanged(path: string, contents: string): Promise<void> {
-  if ((await readFileIfPresent(path)) === contents) {
-    return
-  }
+async function writeFileIfChanged(path: string, contents: string): Promise<boolean> {
+  const existing = await readFileIfPresent(path)
+  if (existing === contents) return false
 
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, contents, 'utf8')
+  return existing === undefined
 }
 
 async function ensureSvelteManagedHooks(projectRoot: string, features: SvelteManagedFeatures): Promise<void> {
@@ -695,7 +692,7 @@ async function collectRealtimeDefinitionFiles(root: string): Promise<readonly st
   return files.flat().sort((left, right) => left.localeCompare(right))
 }
 
-async function renderNextRealtimeDefinitions(projectRoot: string): Promise<string> {
+async function resolveNextRealtimeImportPaths(projectRoot: string): Promise<readonly string[]> {
   const generatedRoot = resolve(projectRoot, '.holo-js/generated/next')
   const files = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
   const importPaths = files.map((filePath) => {
@@ -704,10 +701,10 @@ async function renderNextRealtimeDefinitions(projectRoot: string): Promise<strin
     return importPath.startsWith('.') ? importPath : `./${importPath}`
   })
 
-  return renderNextGeneratedRealtimeDefinitions(importPaths)
+  return importPaths
 }
 
-async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
+async function ensureNextManagedRoutes(projectRoot: string): Promise<boolean> {
   const authEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/user/route.ts'))
   const storageEnabled = await pathExists(resolve(projectRoot, 'app/storage/[[...path]]/route.ts'))
   const broadcastEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/config/route.ts'))
@@ -722,6 +719,7 @@ async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
       storageEnabled,
       broadcastAuthEnabled,
       realtimeEnabled,
+      realtimeImportPaths: realtimeEnabled ? await resolveNextRealtimeImportPaths(projectRoot) : [],
     }),
     ...renderNextManagedHostedAuthRouteFiles({
       clerk: clerkEnabled,
@@ -729,52 +727,17 @@ async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
     }),
   ]
 
+  let createdFrameworkSetup = false
   for (const file of files) {
-    await writeFileIfChanged(resolve(projectRoot, file.path), file.contents)
-  }
-
-  if (realtimeEnabled) {
-    await Promise.all([
-      writeFileIfChanged(
-        resolve(projectRoot, '.holo-js/generated/next/realtime-definitions.ts'),
-        await renderNextRealtimeDefinitions(projectRoot),
-      ),
-      writeFileIfChanged(
-        resolve(projectRoot, 'app/holo/realtime/query/route.ts'),
-        renderNextRealtimeQueryRoute(),
-      ),
-      writeFileIfChanged(
-        resolve(projectRoot, 'app/holo/realtime/mutation/route.ts'),
-        renderNextRealtimeMutationRoute(),
-      ),
-    ])
+    const created = await writeFileIfChanged(resolve(projectRoot, file.path), file.contents)
+    createdFrameworkSetup ||= created
   }
 
   await removeLegacyManagedHoloHelper(resolve(projectRoot, 'server/holo.ts'), renderNextHoloHelper())
+  return createdFrameworkSetup
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-async function readProjectDependencies(projectRoot: string): Promise<ReadonlySet<string>> {
-  const contents = await readFileIfPresent(resolve(projectRoot, 'package.json'))
-  if (!contents) {
-    return new Set()
-  }
-
-  const manifest = JSON.parse(contents) as unknown
-  if (!isRecord(manifest)) {
-    return new Set()
-  }
-
-  const dependencies = isRecord(manifest.dependencies) ? Object.keys(manifest.dependencies) : []
-  const devDependencies = isRecord(manifest.devDependencies) ? Object.keys(manifest.devDependencies) : []
-  return new Set([...dependencies, ...devDependencies])
-}
-
-async function resolveSvelteManagedFeatures(projectRoot: string): Promise<SvelteManagedFeatures> {
-  const dependencies = await readProjectDependencies(projectRoot)
+async function resolveSvelteManagedFeatures(projectRoot: string, dependencies: ReadonlySet<string>): Promise<SvelteManagedFeatures> {
   const realtimeFiles = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
   const generatedRoot = resolve(projectRoot, '.holo-js/generated')
   const realtimeImportPaths = realtimeFiles.map((filePath) => {
@@ -844,23 +807,16 @@ async function ensureSvelteManagedRoutes(projectRoot: string): Promise<void> {
   }
 }
 
-export async function syncManagedFrameworkArtifacts(projectRoot: string): Promise<void> {
-  let manifest: { framework?: string }
-  try {
-    const content = await readFile(resolve(projectRoot, '.holo-js/framework/project.json'), 'utf8')
-    manifest = JSON.parse(content) as { framework?: string }
-  } catch {
-    return
-  }
-
-  if (manifest.framework === 'sveltekit') {
-    const features = await resolveSvelteManagedFeatures(projectRoot)
+export async function syncManagedFrameworkArtifacts(projectRoot: string, framework: string, dependencies: ReadonlySet<string>): Promise<boolean> {
+  if (framework === 'sveltekit') {
+    const features = await resolveSvelteManagedFeatures(projectRoot, dependencies)
     await ensureSvelteManagedRuntime(projectRoot)
     await ensureSvelteManagedHooks(projectRoot, features)
     await ensureSvelteManagedRoutes(projectRoot)
   }
 
-  if (manifest.framework === 'next') {
-    await ensureNextManagedRoutes(projectRoot)
+  if (framework === 'next') {
+    return await ensureNextManagedRoutes(projectRoot)
   }
+  return false
 }

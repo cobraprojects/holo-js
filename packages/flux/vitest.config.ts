@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/broadcast/client-config': fileURLToPath(new URL('../broadcast/src/client-config.ts', import.meta.url)),
       '@holo-js/broadcast': fileURLToPath(new URL('../broadcast/src/index.ts', import.meta.url)),
     },
   },

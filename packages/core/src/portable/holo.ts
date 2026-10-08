@@ -300,11 +300,13 @@ type MailModule = Pick<typeof MailFeature,
 >
 
 type AuthModule = Pick<typeof AuthFeature,
-  | 'configureAuthRuntime'
+  | 'authRuntimeInternals'
   | 'createAsyncAuthContext'
   | 'getAuthRuntime'
   | 'resetAuthRuntime'
 >
+
+type CoreAuthProviderBinding = ReturnType<typeof AuthFeature.authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
 type AuthorizationModule = Pick<typeof AuthorizationFeature,
   | 'isAuthorizationPolicyDefinition'
@@ -1672,13 +1674,13 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
   redemption = createAuthRedemptionContext(),
-): Promise<AuthFeature.AuthRuntimeBindings['providers']> {
+): Promise<Readonly<Record<string, CoreAuthProviderBinding>>> {
   const providers = Object.entries(loadedConfig.auth.providers)
 
   return Object.freeze(Object.fromEntries(await Promise.all(providers.map(async ([providerName, providerConfig]) => {
     type AuthModelQuery = {
       where(column: string, value: unknown): AuthModelQuery
-      first(): Promise<AuthFeature.AuthUser | null | undefined>
+      first(): Promise<Record<string, unknown> | null | undefined>
     }
 
     type AuthModelEntity = {
@@ -1686,7 +1688,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
     }
 
     type AuthModelRepository = {
-      saveEntity?(entity: unknown, internalColumns?: ReadonlySet<string>): Promise<AuthFeature.AuthUser>
+      saveEntity?(entity: unknown, internalColumns?: ReadonlySet<string>): Promise<Record<string, unknown>>
       delete?(id: unknown): Promise<void>
     }
 
@@ -1709,11 +1711,11 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         readonly hasExplicitFillable?: boolean
       }
       query?(): AuthModelQuery
-      find(value: unknown): Promise<AuthFeature.AuthUser | null | undefined>
+      find(value: unknown): Promise<Record<string, unknown> | null | undefined>
       where(column: string, value: unknown): AuthModelQuery
       getRepository?(): AuthModelRepository
-      create(values: Record<string, unknown>): Promise<AuthFeature.AuthUser>
-      update(id: unknown, values: Record<string, unknown>): Promise<AuthFeature.AuthUser>
+      create(values: Record<string, unknown>): Promise<Record<string, unknown>>
+      update(id: unknown, values: Record<string, unknown>): Promise<Record<string, unknown>>
       delete?(id: unknown): Promise<void>
     }
     const throwPendingSchema = (): never => {
@@ -1724,7 +1726,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
     }
 
     if (typeof model === 'undefined' && resolvedModule.holoModelPendingSchema === true) {
-      const pendingAdapter: AuthFeature.AuthProviderAdapter = {
+      const pendingAdapter: CoreAuthProviderBinding = {
         async findById() {
           return throwPendingSchema()
         },
@@ -1846,7 +1848,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       return null
     }
 
-    const adapter: AuthFeature.AuthProviderAdapter = {
+    const adapter: CoreAuthProviderBinding = {
       async findById(id: string | number) {
         const repository = redemption.repository(providerName)
         const resolved = repository ? await repository.find(id) : await model.find(id)
@@ -1958,7 +1960,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       },
       serialize(user: unknown) {
         const serialized = user && typeof user === 'object' && typeof (user as { toJSON?: () => unknown }).toJSON === 'function'
-          ? (user as { toJSON(): AuthFeature.AuthUser }).toJSON()
+          ? (user as { toJSON(): Record<string, unknown> }).toJSON()
           : { ...getEntityAttributes(user) }
         Object.defineProperty(serialized, HOLO_AUTH_PROVIDER_MARKER, {
           value: providerName,
@@ -2622,7 +2624,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
     authContext = options.authContext ?? createRequestAwareAuthContext(authModule.createAsyncAuthContext(), options.authRequest)
     authContext.setRequestAccessors?.(options.authRequest)
-    authModule.configureAuthRuntime({
+    authModule.authRuntimeInternals.configureRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
       providers,

@@ -1,28 +1,19 @@
 import { spawn } from 'node:child_process'
-import { resolve } from 'node:path'
 import type {
   HoloProjectPrepareChange,
   HoloProjectPrepareCommand,
   HoloProjectPrepareRun,
 } from '@holo-js/kernel'
 import type { IoStreams } from './cli-types'
-import { readProjectDependencyNames } from './package-json'
 import { installProjectDependencies, resolveProjectPackageManager } from './package-manager'
 import {
   ensureProjectConfig,
   ensureGeneratedSchemaPlaceholder,
   prepareProjectDiscovery,
-  renderFrameworkRunnerForDescriptor,
   syncManagedDriverDependencies,
-  readTextFile,
-  writeTextFile,
 } from './project'
-import {
-  getFrameworkDescriptorByIdFrom,
-  getFrameworkDescriptorsWith,
-  type FrameworkDescriptor,
-} from './project/frameworks'
-import { loadProjectPluginFrameworkDescriptors } from './project/plugins'
+import type { FrameworkDescriptor } from './project/frameworks'
+import { resolveFrameworkPreparation } from './project/framework-preparation'
 import { runPluginProjectPreparers } from './project/plugin-prepare/coordinator'
 
 type ProjectPrepareOptions = {
@@ -34,34 +25,6 @@ type ProjectPrepareOptions = {
   readonly signal?: AbortSignal
 }
 
-type FrameworkPreparation = {
-  readonly framework?: FrameworkDescriptor
-  readonly sync?: FrameworkDescriptor['sync']
-}
-
-async function discoverFrameworkPreparation(projectRoot: string): Promise<FrameworkPreparation> {
-  const pluginDescriptors = await loadProjectPluginFrameworkDescriptors(projectRoot)
-  const descriptors = getFrameworkDescriptorsWith(pluginDescriptors)
-  const dependencyNames = await readProjectDependencyNames(projectRoot)
-  let framework: FrameworkDescriptor | undefined
-  try {
-    const content = await readTextFile(resolve(projectRoot, '.holo-js/framework/project.json'))
-    if (content) {
-      const manifest = JSON.parse(content) as { framework?: unknown }
-      if (typeof manifest.framework === 'string') {
-        framework = getFrameworkDescriptorByIdFrom(manifest.framework, pluginDescriptors)
-      }
-    }
-  } catch {
-    framework = undefined
-  }
-  framework ??= descriptors.find(descriptor => descriptor.detectPackages.some(name => dependencyNames.has(name)))
-  const sync = framework
-    ? descriptors.find(descriptor => descriptor.id === framework.id && descriptor.sync)?.sync
-    : undefined
-  return { framework, sync }
-}
-
 async function prepareFrameworkPass(
   projectRoot: string,
   project: Awaited<ReturnType<typeof ensureProjectConfig>>,
@@ -70,7 +33,8 @@ async function prepareFrameworkPass(
   options: ProjectPrepareOptions,
 ): Promise<void> {
   options.signal?.throwIfAborted()
-  const { framework, sync } = await discoverFrameworkPreparation(projectRoot)
+  const preparation = await resolveFrameworkPreparation(projectRoot)
+  const { framework, sync } = preparation
   options.signal?.throwIfAborted()
   await runPluginProjectPreparers(projectRoot, project.config, {
     run,
@@ -88,9 +52,7 @@ async function prepareFrameworkPass(
     writeWarning: message => io?.stderr.write(`${message}\n`),
   })
   options.signal?.throwIfAborted()
-  if (!framework) return
-  await writeTextFile(resolve(projectRoot, '.holo-js/framework/project.json'), `${JSON.stringify({ framework: framework.id }, null, 2)}\n`)
-  await writeTextFile(resolve(projectRoot, '.holo-js/framework/run.mjs'), renderFrameworkRunnerForDescriptor(framework))
+  await preparation.writeArtifacts()
   options.signal?.throwIfAborted()
   if (options.syncFramework === false || !sync) return
   await runFrameworkSync(projectRoot, sync, options.signal)
@@ -104,7 +66,7 @@ export async function runProjectPrepare(
   options.signal?.throwIfAborted()
   const project = options.prepareSchema === false
     ? await ensureProjectConfig(projectRoot)
-    : await prepareProjectSchema(projectRoot)
+    : await prepareSchemaArtifacts(projectRoot, false)
   const command = options.command ?? 'prepare'
   const run: HoloProjectPrepareRun = options.changes && command === 'dev'
     ? { kind: 'incremental', command: 'dev', changes: options.changes }
@@ -117,18 +79,18 @@ export async function runProjectPrepare(
   await installProjectDependencies(io, projectRoot, spawn, options.signal)
   options.signal?.throwIfAborted()
   const refreshedProject = await ensureProjectConfig(projectRoot)
-  await prepareProjectDiscovery(projectRoot, refreshedProject.config)
+  await prepareProjectDiscovery(projectRoot, refreshedProject.config, false)
   await prepareFrameworkPass(projectRoot, refreshedProject, { kind: 'full', command, reason: 'dependencies-changed' }, io, options)
 }
 
 export async function prepareProjectSchema(projectRoot: string): Promise<Awaited<ReturnType<typeof ensureProjectConfig>>> {
+  return await prepareSchemaArtifacts(projectRoot, true)
+}
+
+async function prepareSchemaArtifacts(projectRoot: string, prepareFramework: boolean): Promise<Awaited<ReturnType<typeof ensureProjectConfig>>> {
   const project = await ensureProjectConfig(projectRoot)
-  const { framework } = await discoverFrameworkPreparation(projectRoot)
-  if (framework) {
-    await writeTextFile(resolve(projectRoot, '.holo-js/framework/project.json'), `${JSON.stringify({ framework: framework.id }, null, 2)}\n`)
-  }
   await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
-  await prepareProjectDiscovery(projectRoot, project.config)
+  await prepareProjectDiscovery(projectRoot, project.config, prepareFramework)
   return project
 }
 

@@ -1,3 +1,5 @@
+import { PooledTransactionClients } from './drivers/PooledTransactionClients'
+
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
 export {
   defineDatabaseConfig,
@@ -386,3 +388,5 @@ export type {
   SimplePaginationMeta,
   UpdateQueryPlan,
 } from './query'
+
+export const holoRuntimeInternals = Object.freeze({ PooledTransactionClients })

@@ -1,3 +1,4 @@
+import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
 import type { RuntimeExecutor } from '../src/command-executors'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -10045,7 +10046,26 @@ export default defineConfig({
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
-  it('regenerates framework runner metadata and managed routes on the first prepare', async () => {
+  it.each(['next', 'sveltekit'] as const)('prepares managed realtime artifacts when scaffolding %s before dependencies are installed', async (framework) => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await projectInternals.scaffoldProject(projectRoot, {
+      projectName: 'Realtime App',
+      framework,
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['realtime'],
+    })
+    expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8'))).toEqual({ framework })
+    expect((await stat(join(projectRoot, '.holo-js/framework/run.mjs'))).isFile()).toBe(true)
+    const realtimePath = framework === 'next'
+      ? '.holo-js/generated/next/realtime-query-route.ts'
+      : '.holo-js/generated/hooks.server.ts'
+    expect(await readFile(join(projectRoot, realtimePath), 'utf8')).toContain('handleRealtimeQueryRequest')
+  }, 60_000)
+
+  it.each(['prepare', 'schema', 'discovery'] as const)('regenerates framework artifacts on first %s preparation', async (entry) => {
     const projectRoot = await createTempDirectory()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
@@ -10071,11 +10091,59 @@ export default defineDatabaseConfig({})
 
     await writeProjectFile(projectRoot, 'app/storage/[[...path]]/route.ts', `export { GET, HEAD } from '../../../.holo-js/generated/next/storage-route'\n`)
 
-    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    if (entry === 'prepare') await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    else if (entry === 'schema') await prepareProjectSchema(projectRoot)
+    else await prepareProjectDiscovery(projectRoot, (await loadProjectConfig(projectRoot)).config)
 
     expect((await stat(join(projectRoot, '.holo-js/generated/next/storage-route.ts'))).isFile()).toBe(true)
     expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
+  }, 60_000)
+
+  it('refreshes installed Next realtime routes through discovery without rewriting unchanged artifacts', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'realtime-preparation-fixture',
+      private: true,
+      dependencies: { next: '^16.0.0' },
+    }))
+    await writeProjectFile(projectRoot, 'server/realtime/posts.ts', 'export const posts = {}\n')
+    const installed = await installRealtimeIntoProject(projectRoot)
+    expect(installed.createdFrameworkSetup).toBe(true)
+    const definitionsPath = join(projectRoot, '.holo-js/generated/next/realtime-definitions.ts')
+    expect(await readFile(definitionsPath, 'utf8')).toContain('server/realtime/posts')
+    await rm(join(projectRoot, 'server/realtime/posts.ts'))
+    await writeProjectFile(projectRoot, 'server/realtime/messages.ts', 'export const messages = {}\n')
+    const config = (await loadProjectConfig(projectRoot)).config
+    await prepareProjectDiscovery(projectRoot, config)
+    const refreshed = await readFile(definitionsPath, 'utf8')
+    expect(refreshed).toContain('server/realtime/messages')
+    expect(refreshed).not.toContain('server/realtime/posts')
+    const definitionStat = await stat(definitionsPath)
+    const runnerPath = join(projectRoot, '.holo-js/framework/run.mjs')
+    const runnerStat = await stat(runnerPath)
+    await prepareProjectDiscovery(projectRoot, config)
+    expect((await stat(definitionsPath)).mtimeMs).toBe(definitionStat.mtimeMs)
+    expect((await stat(runnerPath)).mtimeMs).toBe(runnerStat.mtimeMs)
+    await rm(join(projectRoot, '.holo-js/generated/next/realtime-mutation-route.ts'))
+    expect((await installRealtimeIntoProject(projectRoot)).createdFrameworkSetup).toBe(true)
+    expect((await installRealtimeIntoProject(projectRoot)).createdFrameworkSetup).toBe(false)
+  }, 60_000)
+
+  it('refreshes framework selection when dependencies replace a saved framework', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'next' }))
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'framework-replacement-fixture',
+      private: true,
+      dependencies: { '@sveltejs/kit': '^2.0.0' },
+    }))
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8'))).toEqual({ framework: 'sveltekit' })
+    expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "vite"')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/hooks.server.ts'), 'utf8')).toContain('createSvelteKitHoloHooks')
   }, 60_000)
 
   it('falls back to package dependencies when framework metadata is stale during prepare', async () => {

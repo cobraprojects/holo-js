@@ -587,6 +587,7 @@ export function renderNextManagedRouteFiles(options: {
   readonly storageEnabled?: boolean
   readonly broadcastAuthEnabled?: boolean
   readonly realtimeEnabled?: boolean
+  readonly realtimeImportPaths?: readonly string[]
 } = {}): readonly ScaffoldedFile[] {
   return [
     { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
@@ -602,8 +603,10 @@ export function renderNextManagedRouteFiles(options: {
       : []),
     ...(options.realtimeEnabled
       ? [
-          { path: '.holo-js/generated/next/realtime-definitions.ts', contents: renderNextGeneratedRealtimeDefinitions() },
+          { path: '.holo-js/generated/next/realtime-definitions.ts', contents: renderNextGeneratedRealtimeDefinitions(options.realtimeImportPaths) },
           { path: '.holo-js/generated/next/realtime-server-modules.d.ts', contents: renderNextGeneratedRealtimeServerModules() },
+          { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
+          { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
           { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
           { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
         ]
@@ -916,7 +919,6 @@ const FRAMEWORK_RENDERERS = {
       const storageEnabled = optionalPackages.includes('storage')
       const authEnabled = optionalPackages.includes('auth')
       const broadcastEnabled = optionalPackages.includes('broadcast')
-      const realtimeEnabled = optionalPackages.includes('realtime')
 
       return [
         { path: 'next.config.ts', contents: renderNextConfig() },
@@ -932,13 +934,6 @@ const FRAMEWORK_RENDERERS = {
         ...(broadcastEnabled
           ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
           : []),
-        ...(realtimeEnabled
-          ? [
-              { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
-              { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
-            ]
-          : []),
-        ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled, realtimeEnabled }),
       ]
     },
   },
@@ -966,7 +961,6 @@ const FRAMEWORK_RENDERERS = {
         { path: 'src/app.html', contents: renderSvelteAppHtml() },
         { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
         ...(authEnabled ? renderAuthRouteFiles('sveltekit') : []),
-        ...renderSvelteManagedRuntimeFiles(),
       ]
     },
   },

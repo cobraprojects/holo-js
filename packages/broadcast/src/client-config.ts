@@ -58,3 +58,5 @@ export function renderBroadcastClientConfigResponse(config: NormalizedHoloBroadc
     },
   })
 }
+
+export { broadcastBrowserInternals } from './browser-connection'

@@ -597,7 +597,7 @@ describe('@holo-js/auth-clerk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -680,7 +680,7 @@ describe('@holo-js/auth-clerk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -745,7 +745,7 @@ describe('@holo-js/auth-clerk', () => {
       return new Response(null, { status: 404 })
     })
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -878,7 +878,7 @@ describe('@holo-js/auth-clerk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -944,7 +944,7 @@ describe('@holo-js/auth-clerk', () => {
       typ: 'JWT',
     })
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -1154,7 +1154,7 @@ describe('@holo-js/auth-clerk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -1180,7 +1180,7 @@ describe('@holo-js/auth-clerk', () => {
       },
     })
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -1244,7 +1244,7 @@ describe('@holo-js/auth-clerk', () => {
       return new Response(null, { status: 404 })
     }))
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -2646,7 +2646,7 @@ describe('@holo-js/auth-clerk', () => {
   it('resolves multiple configured Clerk providers deterministically', () => {
     const runtime = configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       config: defineAuthConfig({
         ...bindings.config,
@@ -2658,7 +2658,7 @@ describe('@holo-js/auth-clerk', () => {
       }),
     })
     expect(() => clerkAuthInternals.resolveConfiguredProviderName()).toThrow('provider name is required')
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       config: defineAuthConfig({
         ...bindings.config,
@@ -2737,7 +2737,7 @@ describe('@holo-js/auth-clerk', () => {
       user: { id: 'cookie-name-user', email: 'cookie-name@app.test', emailVerified: true },
     })
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       session: { ...bindings.session, sessionCookie: () => '' },
     })

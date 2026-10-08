@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { holoRuntimeInternals } from '@holo-js/db'
 import { Pool, types, type PoolConfig, type QueryResult } from 'pg'
 import type {
   DatabaseDriverFactory,
@@ -34,10 +34,6 @@ export interface PostgresAdapterOptions<TConfig extends PoolConfig = PoolConfig>
   client?: PostgresClientLike
   pool?: PostgresPoolLike
   createPool?: (config?: TConfig) => PostgresPoolLike
-}
-
-type ScopedPostgresTransaction = {
-  client: PostgresClientLike
 }
 
 type BootstrapTarget = {
@@ -106,9 +102,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
   private readonly createPoolInstance?: (config?: TConfig) => PostgresPoolLike
   private readonly config?: TConfig
   private connected: boolean
-  private transactionClient?: PostgresClientLike
-  private leasedTransactionClient = false
-  private readonly transactionScope = new AsyncLocalStorage<ScopedPostgresTransaction>()
+  private readonly transactionClients
 
   constructor(options: PostgresAdapterOptions<TConfig> = {}) {
     this.directClient = options.client
@@ -126,6 +120,22 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
         }))
     this.config = options.config ?? (options.connectionString ? { connectionString: options.connectionString } as TConfig : undefined)
     this.connected = !!(options.client || options.pool)
+    this.transactionClients = new holoRuntimeInternals.PooledTransactionClients(
+      'Postgres',
+      this.directClient,
+      async () => {
+        await this.initialize()
+        if (this.directClient) {
+          return this.directClient
+        }
+
+        if (!this.pool) {
+          throw new TransactionError('Postgres adapter is not initialized with a pool or client.')
+        }
+
+        return this.pool.connect()
+      },
+    )
   }
 
   async initialize(): Promise<void> {
@@ -152,11 +162,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
       return
     }
 
-    if (this.transactionClient && this.leasedTransactionClient) {
-      this.transactionClient.release?.()
-      this.transactionClient = undefined
-      this.leasedTransactionClient = false
-    }
+    this.transactionClients.disconnect()
 
     if (this.pool) {
       await this.pool.end()
@@ -172,35 +178,8 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     return this.connected
   }
 
-  async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
-    const active = this.transactionScope.getStore()
-    if (active) {
-      return callback()
-    }
-
-    await this.initialize()
-
-    if (this.directClient) {
-      return this.transactionScope.run({
-        client: this.directClient,
-      }, callback)
-    }
-
-    if (!this.pool) {
-      throw new TransactionError('Postgres adapter is not initialized with a pool or client.')
-    }
-
-    const state: ScopedPostgresTransaction = {
-      client: await this.pool.connect(),
-    }
-
-    return this.transactionScope.run(state, async () => {
-      try {
-        return await callback()
-      } finally {
-        this.releaseScopedTransaction(state)
-      }
-    })
+  runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
+    return this.transactionClients.run(callback)
   }
 
   async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
@@ -237,42 +216,38 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
   }
 
   async beginTransaction(): Promise<void> {
-    const client = await this.leaseTransactionClient()
+    const client = await this.transactionClients.lease()
     await client.query('BEGIN')
   }
 
   async commit(): Promise<void> {
-    const client = this.requireTransactionClient()
+    const client = this.transactionClients.require()
     await client.query('COMMIT')
-    this.releaseTransactionClient()
+    this.transactionClients.release()
   }
 
   async rollback(): Promise<void> {
-    const client = this.requireTransactionClient()
+    const client = this.transactionClients.require()
     await client.query('ROLLBACK')
-    this.releaseTransactionClient()
+    this.transactionClients.release()
   }
 
   async createSavepoint(name: string): Promise<void> {
-    await this.requireTransactionClient().query(`SAVEPOINT ${this.normalizeSavepointName(name)}`)
+    await this.transactionClients.require().query(`SAVEPOINT ${this.normalizeSavepointName(name)}`)
   }
 
   async rollbackToSavepoint(name: string): Promise<void> {
-    await this.requireTransactionClient().query(`ROLLBACK TO SAVEPOINT ${this.normalizeSavepointName(name)}`)
+    await this.transactionClients.require().query(`ROLLBACK TO SAVEPOINT ${this.normalizeSavepointName(name)}`)
   }
 
   async releaseSavepoint(name: string): Promise<void> {
-    await this.requireTransactionClient().query(`RELEASE SAVEPOINT ${this.normalizeSavepointName(name)}`)
+    await this.transactionClients.require().query(`RELEASE SAVEPOINT ${this.normalizeSavepointName(name)}`)
   }
 
   private async getQueryable(): Promise<PostgresQueryableLike> {
-    const scoped = this.transactionScope.getStore()
-    if (scoped) {
-      return scoped.client
-    }
-
-    if (this.transactionClient) {
-      return this.transactionClient
+    const active = this.transactionClients.current
+    if (active) {
+      return active
     }
 
     await this.initialize()
@@ -314,59 +289,6 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     } finally {
       await bootstrapPool.end()
     }
-  }
-
-  private async leaseTransactionClient(): Promise<PostgresClientLike> {
-    const scoped = this.transactionScope.getStore()
-    if (scoped) {
-      return scoped.client
-    }
-
-    if (this.transactionClient) {
-      return this.transactionClient
-    }
-
-    await this.initialize()
-
-    if (this.directClient) {
-      this.transactionClient = this.directClient
-      this.leasedTransactionClient = false
-      return this.transactionClient
-    }
-
-    if (!this.pool) {
-      throw new TransactionError('Postgres adapter is not initialized with a pool or client.')
-    }
-
-    this.transactionClient = await this.pool.connect()
-    this.leasedTransactionClient = true
-    return this.transactionClient
-  }
-
-  private requireTransactionClient(): PostgresClientLike {
-    const scoped = this.transactionScope.getStore()
-    if (scoped) {
-      return scoped.client
-    }
-
-    if (!this.transactionClient) {
-      throw new TransactionError('No active Postgres transaction client is available.')
-    }
-
-    return this.transactionClient
-  }
-
-  private releaseTransactionClient(): void {
-    if (this.transactionClient && this.leasedTransactionClient) {
-      this.transactionClient.release?.()
-    }
-
-    this.transactionClient = undefined
-    this.leasedTransactionClient = false
-  }
-
-  private releaseScopedTransaction(state: ScopedPostgresTransaction): void {
-    state.client.release?.()
   }
 
   private normalizeSavepointName(name: string): string {

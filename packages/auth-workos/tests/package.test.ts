@@ -882,7 +882,7 @@ describe('@holo-js/auth-workos', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -933,7 +933,7 @@ describe('@holo-js/auth-workos', () => {
       typ: 'JWT',
     })
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: defineAuthConfig({
         ...authRuntimeInternals.getRuntimeBindings().config,
@@ -2211,7 +2211,7 @@ describe('@holo-js/auth-workos', () => {
   it('resolves multiple configured providers deterministically', () => {
     const runtime = configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       config: defineAuthConfig({
         ...bindings.config,
@@ -2224,7 +2224,7 @@ describe('@holo-js/auth-workos', () => {
     })
     expect(() => workosAuthInternals.resolveConfiguredProviderName()).toThrow('provider name is required')
 
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       config: defineAuthConfig({
         ...bindings.config,
@@ -2262,7 +2262,7 @@ describe('@holo-js/auth-workos', () => {
       },
     })
     const bindings = authRuntimeInternals.getRuntimeBindings()
-    configureAuthRuntime({
+    authRuntimeInternals.configureRuntime({
       ...bindings,
       session: {
         ...bindings.session,

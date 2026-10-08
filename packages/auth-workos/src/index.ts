@@ -619,27 +619,6 @@ function resolveGuardAndProvider(provider?: string): {
   }
 }
 
-function requireUserId(
-  adapter: RuntimeAuthProviderAdapter,
-  user: Record<string, unknown>,
-  message: string,
-): string | number {
-  const userId = adapter.getId(user)
-  if (typeof userId !== 'string' && typeof userId !== 'number') {
-    throw new Error(message)
-  }
-
-  return userId
-}
-
-function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
-  if (!user || typeof user !== 'object') {
-    throw new Error(message)
-  }
-
-  return user as Record<string, unknown>
-}
-
 function createWorkosSessionPayload<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
   authenticated: Pick<WorkosAuthenticationResult<TUserAttributes>, 'guard' | 'authProvider' | 'provider' | 'user'>,
   session: WorkosVerifiedSession,
@@ -787,90 +766,6 @@ function normalizeHostedProfile(profile: WorkosIdentityProfile): Readonly<Record
     organizationId: profile.organizationId,
     raw: profile.raw,
   })
-}
-
-async function findUserByEmail(
-  adapter: RuntimeAuthProviderAdapter,
-  email: string,
-): Promise<Record<string, unknown> | null> {
-  const user = await adapter.findByCredentials({ email: email.trim() })
-  return user
-    ? requireUserRecord(user, '[@holo-js/auth-workos] Auth provider lookups must return object users.')
-    : null
-}
-
-async function updateLocalUser(
-  adapter: RuntimeAuthProviderAdapter,
-  user: Record<string, unknown>,
-  input: Readonly<Record<string, unknown>>,
-): Promise<{
-  readonly user: Record<string, unknown>
-  readonly changed: boolean
-}> {
-  const current = user as {
-    name?: string
-    email?: string
-    avatar?: string | null
-    email_verified_at?: Date | string | null
-  }
-
-  const changed = Object.entries(input).some(([key, value]) => {
-    if (key === 'email_verified_at') {
-      return value instanceof Date && !current.email_verified_at
-    }
-
-    return !Object.is(value, user[key])
-  })
-
-  if (!changed) {
-    return { user, changed: false }
-  }
-
-  if (adapter.update) {
-    return {
-      user: requireUserRecord(
-        await adapter.update(user, input),
-        '[@holo-js/auth-workos] Auth provider updates must return object users.',
-      ),
-      changed: true,
-    }
-  }
-
-  throw new Error(
-    '[@holo-js/auth-workos] Auth provider adapters must implement update() to persist profile changes.',
-  )
-}
-
-async function ensureNoUnexpectedEmailCollision(
-  adapter: RuntimeAuthProviderAdapter,
-  providerName: string,
-  profile: WorkosIdentityProfile,
-  currentUserId: string | number,
-): Promise<void> {
-  const email = profile.email.trim()
-  if (!email) {
-    return
-  }
-
-  const matched = await findUserByEmail(adapter, email)
-  if (!matched) {
-    return
-  }
-
-  if (
-    requireUserId(
-      adapter,
-      matched,
-      '[@holo-js/auth-workos] Matched local users must expose a serializable id.',
-    ) !== currentUserId
-  ) {
-    throw new WorkosAuthConflictError({
-      provider: providerName,
-      workosUserId: profile.id,
-      email,
-      message: `[@holo-js/auth-workos] WorkOS email "${email}" collides with a different local user.`,
-    })
-  }
 }
 
 function isEmailVerificationRequired(): boolean {
@@ -1105,133 +1000,43 @@ export async function syncIdentity<TUserAttributes extends WorkosUserAttributes 
     throw new Error(`[@holo-js/auth-workos] WorkOS identity "${profile.id}" must provide a verified email address.`)
   }
 
-  const identityStore = getBindings().identityStore
-  const existingIdentity = await identityStore.findByProviderUserId(providerName, profile.id)
-
-  if (existingIdentity) {
-    const existingLinkedUser = await adapter.findById(existingIdentity.userId)
-    let linkedUser = existingLinkedUser
-      ? requireUserRecord(existingLinkedUser, '[@holo-js/auth-workos] Auth provider lookups must return object users.')
-      : null
-
-    if (!linkedUser) {
-      const emailMatchedUser = verifiedEmail
-        ? await findUserByEmail(adapter, verifiedEmail)
-        : null
-      if (emailMatchedUser) {
-        throw new WorkosAuthConflictError({
-          provider: providerName,
-          workosUserId: profile.id,
-          email: verifiedEmail,
-          message: `[@holo-js/auth-workos] WorkOS email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
-        })
-      }
-
-      linkedUser = requireUserRecord(
-        await adapter.create(resolveCreateUserInput(profile, options.user)),
-        '[@holo-js/auth-workos] Auth provider create() must return an object user.',
-      )
-
-      const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
-      const relinkedUser = relinked.user
-      const identity = createIdentityRecord({
-        provider: providerName,
-        guard,
-        authProvider,
-        userId: requireUserId(
-          adapter,
-          relinkedUser,
-          '[@holo-js/auth-workos] Relinked local users must expose a serializable id.',
-        ),
-        profile,
-        previous: existingIdentity,
-      })
-      await identityStore.save(identity)
-
-      return Object.freeze({
-        provider: providerName,
-        guard,
-        authProvider,
-        status: 'relinked',
-        user: serializeLocalUser<TUserAttributes>(adapter, relinkedUser, authProvider),
-        identity,
-        session,
-      })
-    }
-
-    await ensureNoUnexpectedEmailCollision(
-      adapter,
-      providerName,
-      profile,
-      requireUserId(
-        adapter,
-        linkedUser,
-        '[@holo-js/auth-workos] Linked local users must expose a serializable id.',
-      ),
-    )
-    const updated = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
-    const identity = createIdentityRecord({
+  const synchronized = await authRuntimeInternals.syncHostedIdentity({
+    provider: providerName,
+    providerUserId: profile.id,
+    adapter,
+    identityStore: getBindings().identityStore,
+    ownership: 'save',
+    verifiedEmail,
+    email: profileEmail,
+    errorPrefix: '[@holo-js/auth-workos]',
+    identityLabel: 'WorkOS',
+    createUserInput: () => resolveCreateUserInput(profile, options.user),
+    updateUserInput: () => resolveUpdateUserInput(profile, options.user),
+    createIdentity: (userId, previous) => createIdentityRecord({
       provider: providerName,
       guard,
       authProvider,
-      userId: requireUserId(
-        adapter,
-        updated.user,
-        '[@holo-js/auth-workos] Updated local users must expose a serializable id.',
-      ),
+      userId,
       profile,
-      previous: existingIdentity,
-    })
-    await identityStore.save(identity)
-
-    return Object.freeze({
-      provider: providerName,
-      guard,
-      authProvider,
-      status: updated.changed ? 'updated' : 'linked',
-      user: serializeLocalUser<TUserAttributes>(adapter, updated.user, authProvider),
-      identity,
-      session,
-    })
-  }
-
-  let localUser = verifiedEmail
-    ? await findUserByEmail(adapter, verifiedEmail)
-    : null
-
-  if (localUser) {
-    throw new WorkosAuthConflictError({
+      previous,
+    }),
+    conflict: (email, collision) => new WorkosAuthConflictError({
       provider: providerName,
       workosUserId: profile.id,
-      email: verifiedEmail,
-      message: `[@holo-js/auth-workos] WorkOS email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
-    })
-  }
-
-  localUser = requireUserRecord(
-    await adapter.create(resolveCreateUserInput(profile, options.user)),
-    '[@holo-js/auth-workos] Auth provider create() must return an object user.',
-  )
-  const identity = createIdentityRecord({
-    provider: providerName,
-    guard,
-    authProvider,
-    userId: requireUserId(
-      adapter,
-      localUser,
-      '[@holo-js/auth-workos] Created local users must expose a serializable id.',
-    ),
-    profile,
+      email,
+      message: collision
+        ? `[@holo-js/auth-workos] WorkOS email "${email}" collides with a different local user.`
+        : `[@holo-js/auth-workos] WorkOS email "${email}" matches an existing local user and must be linked explicitly.`,
+    }),
   })
-  await identityStore.save(identity)
 
   return Object.freeze({
     provider: providerName,
     guard,
     authProvider,
-    status: 'created',
-    user: serializeLocalUser<TUserAttributes>(adapter, localUser, authProvider),
-    identity,
+    status: synchronized.status,
+    user: serializeLocalUser<TUserAttributes>(adapter, synchronized.user, authProvider),
+    identity: synchronized.identity,
     session,
   })
 }

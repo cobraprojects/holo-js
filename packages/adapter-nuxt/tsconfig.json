@@ -25,6 +25,9 @@
       "nitropack/runtime/storage": [
         "./src/runtime/shims.d.ts"
       ],
+      "@holo-js/broadcast/client-config": [
+        "../broadcast/src/client-config.ts"
+      ],
       "@holo-js/broadcast": [
         "../broadcast/src/index.ts"
       ],

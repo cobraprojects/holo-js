@@ -1,4 +1,11 @@
-import { holoNotificationsDefaults } from './config'
+import {
+  dispatchNotificationDelivery,
+  resolveNotificationDelay,
+  resolveNotificationQueueOptions,
+  type ResolvedChannelPlan,
+  type ResolvedTarget,
+  type ResolvedTargetChannels,
+} from './runtime-delivery'
 import {
   createAnonymousNotificationTarget,
   normalizeNotificationDefinition,
@@ -7,7 +14,6 @@ import {
   type NotificationBuildFactories,
   type NotificationBuildContext,
   type NotificationChannel,
-  type NotificationChannelDispatchResult,
   type NotificationChannelName,
   type NotificationDefinition,
   type NotificationDelayValue,
@@ -15,7 +21,6 @@ import {
   type NotificationDispatchOptions,
   type NotificationDispatchResult,
   type NotificationDispatchTarget,
-  type NotificationQueueOptions,
   type NotificationPage,
   type NotificationPagination,
   type NotificationQuery,
@@ -29,7 +34,6 @@ import { getRegisteredNotificationChannel } from './registry'
 import { loadNotificationPluginChannels, resetNotificationPluginChannels } from './plugins'
 import {
   normalizeNotificationDelay,
-  normalizeNotificationQueueOptions,
   normalizeOptionalNotificationString,
 } from './queueOptions'
 import {
@@ -56,7 +60,6 @@ const HOLO_NOTIFICATIONS_DELIVER_JOB = 'holo.notifications.deliver'
 
 const normalizeOptionalString = normalizeOptionalNotificationString
 const normalizeDelayValue = normalizeNotificationDelay
-const normalizeQueueOptions = normalizeNotificationQueueOptions
 
 function normalizeDeduplicationKey(value: string): string {
   if (typeof value !== 'string' || !/^[\x20-\x7e]{1,200}$/u.test(value)) {
@@ -80,11 +83,6 @@ type RuntimeState = {
 type RuntimeBindingsWithProjectRoot = NotificationRuntimeBindings & {
   readonly projectRoot?: string
   readonly plugins?: readonly string[]
-}
-
-type ResolvedTargetChannels = {
-  readonly target: ResolvedTarget
-  readonly channels: readonly string[]
 }
 
 function getRuntimeState(): RuntimeState {
@@ -152,26 +150,6 @@ type MutableDispatchOptions = {
 }
 
 type DispatchTargetInput = NotificationDispatchTarget | (() => NotificationDispatchTarget)
-
-type ResolvedTarget = {
-  readonly index: number
-  readonly anonymous: boolean
-  readonly notifiable: unknown
-  readonly routes?: Record<string, unknown>
-}
-
-type ResolvedChannelPlan = {
-  readonly channel: string
-  readonly queued: boolean
-  readonly connection?: string
-  readonly queue?: string
-  readonly delay?: NotificationDelayValue
-  readonly afterCommit: boolean
-}
-
-type DispatchExecutionOptions = {
-  readonly allowAfterCommitDeferral?: boolean
-}
 
 type QueueDispatchChain = {
   onConnection(name: string): QueueDispatchChain
@@ -311,54 +289,6 @@ function resolvePayload(
   return factory(target.notifiable, createBuildContext(channel, target.anonymous))
 }
 
-function resolveNotificationQueueOptions(
-  notification: NotificationDefinition,
-  target: ResolvedTarget,
-  channel: string,
-): boolean | NotificationQueueOptions {
-  const queue = typeof notification.queue === 'function'
-    ? notification.queue(
-      target.notifiable,
-      channel as NotificationChannelName,
-      createNotificationContext(target.anonymous),
-    )
-    : notification.queue ?? false
-
-  if (typeof queue === 'boolean') {
-    return queue
-  }
-
-  return normalizeQueueOptions(queue) ?? false
-}
-
-function resolveNotificationDelay(
-  notification: NotificationDefinition,
-  target: ResolvedTarget,
-  channel: string,
-): NotificationDelayValue | undefined {
-  if (typeof notification.delay === 'function') {
-    const delay = notification.delay(
-      target.notifiable,
-      channel as NotificationChannelName,
-      createNotificationContext(target.anonymous),
-    )
-
-    return typeof delay === 'undefined'
-      ? undefined
-      : normalizeDelayValue(delay, 'Notification delay')
-  }
-
-  if (typeof notification.delay === 'undefined') {
-    return undefined
-  }
-
-  if (typeof notification.delay === 'number' || notification.delay instanceof Date) {
-    return notification.delay
-  }
-
-  return notification.delay[channel as NotificationChannelName]
-}
-
 function resolveRoute(
   channel: string,
   target: ResolvedTarget,
@@ -433,51 +363,6 @@ function resolveChannelSendContext(
     notificationType: notification.type,
     payload,
     targetIndex: target.index,
-  })
-}
-
-function resolveChannelDispatchPlan(
-  notification: NotificationDefinition,
-  target: ResolvedTarget,
-  channel: string,
-  options: NotificationDispatchOptions,
-): ResolvedChannelPlan {
-  const notificationQueue = resolveNotificationQueueOptions(notification, target, channel)
-  const notificationQueueOptions = notificationQueue && notificationQueue !== true
-    ? notificationQueue
-    : undefined
-  const config = getRuntimeBindings().config ?? holoNotificationsDefaults
-
-  const resolvedDelay = options.delayByChannel?.[channel]
-    ?? options.delay
-    ?? resolveNotificationDelay(notification, target, channel)
-
-  const queued = notificationQueue === true
-    || Boolean(notificationQueueOptions)
-    || typeof options.connection !== 'undefined'
-    || typeof options.queue !== 'undefined'
-    || typeof resolvedDelay !== 'undefined'
-  const resolvedConnection = queued
-    ? options.connection
-      ?? notificationQueueOptions?.connection
-      ?? config.queue.connection
-    : undefined
-  const resolvedQueue = queued
-    ? options.queue
-      ?? notificationQueueOptions?.queue
-      ?? config.queue.queue
-    : undefined
-  const afterCommit = options.afterCommit
-    ?? notificationQueueOptions?.afterCommit
-    ?? (queued ? config.queue.afterCommit : false)
-
-  return Object.freeze({
-    channel,
-    queued,
-    connection: queued ? resolvedConnection : undefined,
-    queue: queued ? resolvedQueue : undefined,
-    delay: queued ? resolvedDelay : undefined,
-    afterCommit,
   })
 }
 
@@ -592,65 +477,8 @@ async function dispatchQueuedNotificationChannel(
   await pending.dispatch()
 }
 
-async function deferDispatchUntilCommit(
-  input: NotificationDispatchInput,
-  notification: NotificationDefinition,
-  targetChannels: readonly ResolvedTargetChannels[],
-): Promise<NotificationDispatchResult | null> {
-  const deferAfterCommit = getRuntimeBindings().deferAfterCommit
-  if (!deferAfterCommit) {
-    return null
-  }
-
-  const channels: NotificationChannelDispatchResult[] = []
-  for (const { target, channels: resolvedChannels } of targetChannels) {
-    for (const channel of resolvedChannels) {
-      const plan = resolveChannelDispatchPlan(notification, target, channel, input.options)
-      channels.push(Object.freeze({
-        channel,
-        targetIndex: target.index,
-        queued: plan.queued,
-        deferred: true,
-        success: true,
-      }))
-    }
-  }
-
-  const deferred = deferAfterCommit(async () => {
-    await dispatchNotifications(input, { allowAfterCommitDeferral: false })
-  })
-  if (!deferred) {
-    return null
-  }
-
-  return Object.freeze({
-    totalTargets: targetChannels.length,
-    channels: Object.freeze(channels),
-    deferred: true,
-  })
-}
-
-function shouldDeferDispatchAfterCommit(
-  notification: NotificationDefinition,
-  targetChannels: readonly ResolvedTargetChannels[],
-  options: NotificationDispatchOptions,
-): boolean {
-  if (options.afterCommit) {
-    return true
-  }
-
-  return targetChannels.some(({ target, channels }) => channels.some(channel => {
-    try {
-      return resolveChannelDispatchPlan(notification, target, channel, options).afterCommit
-    } catch {
-      return false
-    }
-  }))
-}
-
 async function dispatchNotifications(
   input: NotificationDispatchInput,
-  execution: DispatchExecutionOptions = {},
 ): Promise<NotificationDispatchResult> {
   const notification = normalizeNotificationDefinition(input.notification)
   const targets = resolveTargets(input.target)
@@ -678,45 +506,14 @@ async function dispatchNotifications(
     }
   }
 
-  if (execution.allowAfterCommitDeferral !== false && shouldDeferDispatchAfterCommit(notification, targetChannels, input.options)) {
-    const deferredResult = await deferDispatchUntilCommit(input, notification, targetChannels)
-    if (deferredResult) {
-      return deferredResult
-    }
-  }
-
-  const results: NotificationChannelDispatchResult[] = []
-
-  for (const { target, channels } of targetChannels) {
-    for (const channel of channels) {
-      try {
-        const context = resolveChannelSendContext(notification, channel, target)
-        const plan = resolveChannelDispatchPlan(notification, target, channel, input.options)
-        const result = plan.queued
-          ? await dispatchQueuedNotificationChannel(context, plan, deduplicationKey)
-          : await deliverResolvedNotificationChannel(context, deduplicationKey)
-        results.push(Object.freeze({
-          channel,
-          targetIndex: target.index,
-          queued: plan.queued,
-          success: true,
-          ...(typeof result === 'undefined' ? {} : { result }),
-        }))
-      } catch (error) {
-        results.push(Object.freeze({
-          channel,
-          targetIndex: target.index,
-          queued: false,
-          success: false,
-          error,
-        }))
-      }
-    }
-  }
-
-  return Object.freeze({
-    totalTargets: targets.length,
-    channels: Object.freeze(results),
+  return await dispatchNotificationDelivery({
+    notification,
+    targetChannels,
+    options: { ...input.options, deduplicationKey },
+  }, getRuntimeBindings(), {
+    createContext: resolveChannelSendContext,
+    send: deliverResolvedNotificationChannel,
+    enqueue: dispatchQueuedNotificationChannel,
   })
 }
 
@@ -1002,7 +799,6 @@ export const notificationsRuntimeInternals = {
   createBuildContext,
   createNotificationContext,
   createQueuedDeliveryPayload,
-  deferDispatchUntilCommit,
   deliverResolvedNotificationChannel,
   dispatchNotifications,
   dispatchQueuedNotificationChannel,
@@ -1024,7 +820,6 @@ export const notificationsRuntimeInternals = {
   normalizeNotificationQuery,
   normalizeOptionalString,
   resolveBroadcastRouteFromNotifiable,
-  resolveChannelDispatchPlan,
   resolveChannels,
   resolveDatabaseRouteFromNotifiable,
   resolveEmailRouteFromNotifiable,

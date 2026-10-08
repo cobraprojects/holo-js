@@ -1,3 +1,4 @@
+import { resolveFrameworkPreparation } from '../framework-preparation'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import {
@@ -64,7 +65,6 @@ import {
 } from './workspace-renderers'
 import {
   renderFrameworkFiles,
-  renderFrameworkRunner,
 } from './framework-renderers'
 export { renderFrameworkRunnerForDescriptor } from './framework-renderers'
 
@@ -347,8 +347,6 @@ export async function scaffoldProject(
   if (storageEnabled) {
     await writeFile(resolve(projectRoot, 'config/storage.ts'), renderStorageConfig(), 'utf8')
   }
-  await writeFile(resolve(projectRoot, '.holo-js/framework/run.mjs'), renderFrameworkRunner(options), 'utf8')
-  await writeFile(resolve(projectRoot, '.holo-js/framework/project.json'), `${JSON.stringify(options, null, 2)}\n`, 'utf8')
   await writeFile(resolve(projectRoot, 'tsconfig.json'), renderScaffoldTsconfig(options), 'utf8')
   const vscodeSettings = renderVSCodeSettings(options)
   if (vscodeSettings) {
@@ -362,6 +360,9 @@ export async function scaffoldProject(
   for (const file of renderFrameworkFiles(options)) {
     await writeTextFile(resolve(projectRoot, file.path), file.contents)
   }
+
+  const preparation = await resolveFrameworkPreparation(projectRoot)
+  await preparation.writeArtifacts()
 
   if (options.databaseDriver === 'sqlite') {
     await writeFile(resolve(projectRoot, 'storage/database.sqlite'), '', 'utf8')

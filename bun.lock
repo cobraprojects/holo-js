@@ -1000,6 +1000,7 @@
       "name": "@holo-js/realtime",
       "version": "0.3.16",
       "dependencies": {
+        "@holo-js/broadcast": "workspace:*",
         "@holo-js/db": "catalog:",
         "@holo-js/validation": "catalog:",
         "esbuild": "catalog:",

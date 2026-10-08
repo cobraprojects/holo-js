@@ -1,3 +1,4 @@
+import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
 import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
@@ -151,7 +152,11 @@ type ErasedAuthProviderAdapter = {
   getId(user: unknown): string | number
   getPasswordHash?(user: unknown): string | null | undefined
   getEmailVerifiedAt?(user: unknown): Date | string | null | undefined
-  serialize?(user: unknown): AuthUser
+  serialize?(user: unknown): Record<string, unknown>
+}
+
+type RuntimeConfigurationBindings = Omit<AuthRuntimeBindings, 'providers'> & {
+  readonly providers: Readonly<Record<string, ErasedAuthProviderAdapter>>
 }
 
 type RuntimeBindings = {
@@ -208,29 +213,6 @@ function getRuntimeBindings(): RuntimeBindings {
   }
 
   return bindings
-}
-
-function getExposedRuntimeBindings(): {
-  readonly config: RuntimeBindings['config']
-  readonly sessionRevocations?: AuthRuntimeBindings['sessionRevocations']
-  readonly session: AuthRuntimeBindings['session']
-  readonly providers: AuthRuntimeBindings['providers']
-  readonly tokens?: AuthTokenStore
-  readonly emailVerificationTokens?: EmailVerificationTokenStore
-  readonly passwordResetTokens?: PasswordResetTokenStore
-  readonly multiFactor?: AuthMultiFactorStore
-  readonly multiFactorEncryptionKey?: string
-  readonly delivery: AuthDeliveryHook
-  readonly context: AuthRuntimeContext
-  readonly passwordHasher: AuthPasswordHasher
-  readonly authorization?: AuthRuntimeBindings['authorization']
-} {
-  const bindings = getRuntimeBindings()
-
-  return {
-    ...bindings,
-    providers: bindings.providers as unknown as AuthRuntimeBindings['providers'],
-  }
 }
 
 function requireRecordValue(value: unknown, message: string): Record<string, unknown> {
@@ -2628,6 +2610,10 @@ function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthToke
 }
 
 export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
+  configureRuntime(bindings)
+}
+
+function configureRuntime(bindings?: RuntimeConfigurationBindings): void {
   if (!bindings) {
     getAuthRuntimeState().bindings = undefined
     return
@@ -2863,6 +2849,7 @@ export function resendEmailVerification(
 }
 
 export const authRuntimeInternals = {
+  configureRuntime,
   createAsyncAuthContext,
   createDefaultPasswordHasher,
   createMemoryAuthContext,
@@ -2872,7 +2859,7 @@ export const authRuntimeInternals = {
   establishSessionForUser,
   getPasswordHash,
   getProviderIdentifiers,
-  getRuntimeBindings: getExposedRuntimeBindings,
+  getRuntimeBindings,
   hashTokenSecret,
   isResponseInterrupt: isAuthResponseInterrupt,
   jwt: authJwtInternals,
@@ -2883,6 +2870,7 @@ export const authRuntimeInternals = {
   readSessionPayload,
   redirectResponse,
   serializeCookie,
+  syncHostedIdentity,
   toLookupCredentials,
   toPlainTextTokenResult,
   tokenHasAbility,

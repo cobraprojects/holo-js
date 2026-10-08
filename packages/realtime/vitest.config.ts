@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/broadcast/client-config': fileURLToPath(new URL('../broadcast/src/client-config.ts', import.meta.url)),
       '@holo-js/auth': fileURLToPath(new URL('../auth/src/index.ts', import.meta.url)),
       '@holo-js/db': fileURLToPath(new URL('../db/src/index.ts', import.meta.url)),
       '@holo-js/db-sqlite': fileURLToPath(new URL('../db-sqlite/src/index.ts', import.meta.url)),

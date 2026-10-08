@@ -7,7 +7,7 @@ import { renderGeneratedSchemaRuntimeModule, type TableDefinition } from '@holo-
 import { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/kernel'
 import { relativeImportPath } from '../templates'
 import { importProjectModule } from './runtime'
-import { syncManagedFrameworkArtifacts } from './registry-svelte'
+import { resolveFrameworkPreparation } from './framework-preparation'
 import {
   GENERATED_AUTHORIZATION_REGISTRY_PATH,
   GENERATED_AUTHORIZATION_TYPES_PATH,
@@ -858,6 +858,7 @@ export async function ensureGeneratedRegistryOwnership(projectRoot: string): Pro
 export async function writeGeneratedProjectRegistry(
   projectRoot: string,
   registry: GeneratedProjectRegistry,
+  prepareFramework = true,
 ): Promise<void> {
   await ensureGeneratedRegistryOwnership(projectRoot)
 
@@ -905,7 +906,10 @@ export async function writeGeneratedProjectRegistry(
     nextRegistry.authorizationAbilities,
     Object.keys(loadedConfig?.auth?.guards ?? {}).sort((left, right) => left.localeCompare(right)),
   ))
-  await syncManagedFrameworkArtifacts(projectRoot)
+  if (prepareFramework) {
+    const preparation = await resolveFrameworkPreparation(projectRoot)
+    await preparation.writeArtifacts()
+  }
   await writeFileIfChanged(resolve(projectRoot, GENERATED_INDEX_PATH), renderGeneratedIndexModule())
   await writeFileIfChanged(resolve(projectRoot, GENERATED_REGISTRY_JSON_PATH), `${JSON.stringify(nextRegistry, null, 2)}\n`)
   await writeFileIfChanged(

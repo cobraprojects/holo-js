@@ -162,7 +162,7 @@ it('checks remember restoration before trusting it and preserves later legitimat
     ...authRuntimeInternals.createMemoryAuthContext(),
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? remembered.rememberToken : undefined,
   }
-  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: rememberedContext })
+  authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: rememberedContext })
   expect(await auth.check()).toBe(false)
   expect(rememberedContext.getCachedUser('web')).toBeNull()
   await auth.loginUsingId(1)
@@ -175,14 +175,14 @@ it('does not reuse a custom context read after a revocation in another request',
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const custom = { ...authRuntimeInternals.createMemoryAuthContext() }
   custom.setSessionId('web', first.sessionId)
-  configureAuthRuntime({ ...bindings, context: custom })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: custom })
   expect(await auth.check()).toBe(true)
-  configureAuthRuntime(bindings)
+  authRuntimeInternals.configureRuntime(bindings)
   await context.run(async () => {
     context.setSessionId('web', second.sessionId)
     await auth.logoutOtherDevices()
   })
-  configureAuthRuntime({ ...bindings, context: custom })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: custom })
   expect(await auth.check()).toBe(false)
 })
 
@@ -205,7 +205,7 @@ it('retains aliases across physical rotation and named-guard revocation', async 
 it('propagates durable adapter failures without claiming revocation succeeded', async () => {
   const failure = new Error('durable database unavailable')
   const session = await context.run(() => auth.loginUsingId(1))
-  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: { ...store, async revokeOthers() { throw failure } } })
+  authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: { ...store, async revokeOthers() { throw failure } } })
   await context.run(async () => {
     context.setSessionId('web', session.sessionId)
     await expect(auth.logoutOtherDevices()).rejects.toBe(failure)
@@ -219,7 +219,7 @@ it('restores a valid remembered identity and rejects remembered payloads without
     ...authRuntimeInternals.createMemoryAuthContext(),
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? remembered.rememberToken : undefined,
   }
-  configureAuthRuntime({ ...bindings, context: validRemember })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: validRemember })
   expect(await auth.check()).toBe(true)
   const legacy = await getSessionRuntime().create({ data: { auth: { guard: 'web', provider: 'users', userId: 1, user, authenticatedAt: new Date().toISOString() } } })
   const legacyToken = await getSessionRuntime().issueRememberMeToken(legacy.id)
@@ -227,7 +227,7 @@ it('restores a valid remembered identity and rejects remembered payloads without
     ...authRuntimeInternals.createMemoryAuthContext(),
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? legacyToken : undefined,
   }
-  configureAuthRuntime({ ...bindings, context: legacyRemember })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: legacyRemember })
   expect(await auth.check()).toBe(false)
   expect(legacyRemember.getCachedUser('web')).toBeNull()
 })
@@ -272,7 +272,7 @@ it('preserves personal access token authentication when browser authentication i
       return Number(database.prepare("DELETE FROM tokens WHERE json_extract(record, '$.provider') = ? AND CAST(json_extract(record, '$.userId') AS TEXT) = ?").run(providerName, String(userId)).changes)
     },
   }
-  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), tokens })
+  authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), tokens })
   const token = await auth.tokens.create(user, { name: 'Mobile', guard: 'api' })
   await context.run(async () => {
     await auth.loginUsingId(1)
@@ -286,7 +286,7 @@ it('preserves personal access token authentication when browser authentication i
 
 it('reuses native request reads through framework contexts that preserve the async auth accessors', async () => {
   const wrapped = { ...context, getRequestCookie: () => undefined }
-  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: wrapped })
+  authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: wrapped })
   const session = await context.run(async () => {
     await auth.loginUsingId(1)
     return auth.guard('admin').loginUsingId(1)
@@ -363,7 +363,7 @@ it('establishes fresh authentication instead of copying invalid logical browser 
 })
 
 it('rejects incomplete durable reads instead of assuming the missing identity has generation zero', async () => {
-  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: { ...store, async readMany() { return [] } } })
+  authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: { ...store, async readMany() { return [] } } })
   await context.run(async () => {
     await expect(auth.loginUsingId(1)).rejects.toThrow('must return state for every requested identity')
   })
@@ -380,16 +380,16 @@ it('clears revoked request identity before failed session persistence while reta
   const request = { ...authRuntimeInternals.createMemoryAuthContext() }
   request.setSessionId('web', shared.sessionId)
   request.setSessionId('other', shared.sessionId)
-  configureAuthRuntime({ ...bindings, context: request })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: request })
   expect(await auth.check()).toBe(true)
   expect(await auth.guard('other').check()).toBe(true)
-  configureAuthRuntime(bindings)
+  authRuntimeInternals.configureRuntime(bindings)
   await context.run(async () => {
     await auth.loginUsingId(1)
     await auth.logoutOtherDevices()
   })
   const failure = new Error('Session persistence unavailable')
-  configureAuthRuntime({ ...bindings, context: request, session: { ...bindings.session, async write() { throw failure } } })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: request, session: { ...bindings.session, async write() { throw failure } } })
   await expect(auth.user()).rejects.toBe(failure)
   expect(request.getCachedUser('web')).toBeNull()
   expect(request.getSessionId('web')).toBeUndefined()

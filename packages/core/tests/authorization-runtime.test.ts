@@ -97,7 +97,7 @@ describe('@holo-js/core authorization boot integration', () => {
 
       if (specifier === '@holo-js/auth') {
         return {
-          configureAuthRuntime,
+          authRuntimeInternals: { configureRuntime: configureAuthRuntime },
           createAsyncAuthContext: () => ({
             activate() {},
             getSessionId() { return undefined },
@@ -171,7 +171,7 @@ describe('@holo-js/core authorization boot integration', () => {
 
       if (specifier === '@holo-js/auth') {
         return {
-          configureAuthRuntime,
+          authRuntimeInternals: { configureRuntime: configureAuthRuntime },
           createAsyncAuthContext: () => ({
             activate() {},
             getSessionId() { return undefined },

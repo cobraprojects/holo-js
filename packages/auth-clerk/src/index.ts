@@ -47,7 +47,6 @@ import {
   type ClerkVerifySessionContext,
   type ConfigureClerkAuthRuntimeOptions,
   type HostedIdentityRecord,
-  type HostedIdentityStore,
 } from './contracts'
 import {
   CLERK_API_BASE_URL,
@@ -101,7 +100,6 @@ type ClerkRuntimeStateHost = {
 }
 
 const clerkDefaultProviderRuntimeCache = new Map<string, ClerkProviderRuntime>()
-const clerkIdentitySyncLocks = new Map<string, Promise<void>>()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
 function getRuntimeState(): ClerkRuntimeState {
@@ -521,27 +519,6 @@ function resolveGuardAndProvider(provider?: string): {
   }
 }
 
-function requireUserId(
-  adapter: RuntimeAuthProviderAdapter,
-  user: Record<string, unknown>,
-  message: string,
-): string | number {
-  const userId = adapter.getId(user)
-  if (typeof userId !== 'string' && typeof userId !== 'number') {
-    throw new Error(message)
-  }
-
-  return userId
-}
-
-function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
-  if (!user || typeof user !== 'object') {
-    throw new Error(message)
-  }
-
-  return user as Record<string, unknown>
-}
-
 function createClerkSessionPayload(
   authenticated: Pick<ClerkAuthenticationResult, 'guard' | 'authProvider' | 'provider' | 'user'>,
   session: ClerkVerifiedSession,
@@ -708,90 +685,6 @@ function normalizeHostedProfile(profile: ClerkUserProfile): Readonly<Record<stri
   })
 }
 
-async function findUserByEmail(
-  adapter: RuntimeAuthProviderAdapter,
-  email: string,
-): Promise<Record<string, unknown> | null> {
-  const user = await adapter.findByCredentials({ email: email.trim() })
-  return user
-    ? requireUserRecord(user, '[@holo-js/auth-clerk] Auth provider lookups must return object users.')
-    : null
-}
-
-async function updateLocalUser(
-  adapter: RuntimeAuthProviderAdapter,
-  user: Record<string, unknown>,
-  input: Readonly<Record<string, unknown>>,
-): Promise<{
-  readonly user: Record<string, unknown>
-  readonly changed: boolean
-}> {
-  const current = user as {
-    name?: string
-    email?: string
-    avatar?: string | null
-    email_verified_at?: Date | string | null
-  }
-
-  const changed = Object.entries(input).some(([key, value]) => {
-    if (key === 'email_verified_at') {
-      return value instanceof Date && !current.email_verified_at
-    }
-
-    return !Object.is(value, user[key])
-  })
-
-  if (!changed) {
-    return { user, changed: false }
-  }
-
-  if (adapter.update) {
-    return {
-      user: requireUserRecord(
-        await adapter.update(user, input),
-        '[@holo-js/auth-clerk] Auth provider updates must return object users.',
-      ),
-      changed: true,
-    }
-  }
-
-  throw new Error(
-    '[@holo-js/auth-clerk] Auth provider adapters must implement update() to persist profile changes.',
-  )
-}
-
-async function ensureNoUnexpectedEmailCollision(
-  adapter: RuntimeAuthProviderAdapter,
-  providerName: string,
-  profile: ClerkUserProfile,
-  currentUserId: string | number,
-): Promise<void> {
-  const resolvedEmail = resolvePrimaryEmail(profile).email
-  if (!resolvedEmail) {
-    return
-  }
-
-  const matched = await findUserByEmail(adapter, resolvedEmail)
-  if (!matched) {
-    return
-  }
-
-  if (
-    requireUserId(
-      adapter,
-      matched,
-      '[@holo-js/auth-clerk] Matched local users must expose a serializable id.',
-    ) !== currentUserId
-  ) {
-    throw new ClerkAuthConflictError({
-      provider: providerName,
-      clerkUserId: profile.id,
-      email: resolvedEmail,
-      message: `[@holo-js/auth-clerk] Clerk email "${resolvedEmail}" collides with a different local user.`,
-    })
-  }
-}
-
 function isEmailVerificationRequired(): boolean {
   return authRuntimeInternals.getRuntimeBindings().config.emailVerification.required === true
 }
@@ -819,67 +712,6 @@ function createIdentityRecord(input: {
     linkedAt: input.previous?.linkedAt ?? now,
     updatedAt: now,
   })
-}
-
-async function withIdentitySyncLock<TResult>(key: string, callback: () => Promise<TResult>): Promise<TResult> {
-  const previous = clerkIdentitySyncLocks.get(key) ?? Promise.resolve()
-  let release!: () => void
-  const gate = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const current = previous.then(() => gate)
-  clerkIdentitySyncLocks.set(key, current)
-
-  await previous
-
-  try {
-    return await callback()
-  } finally {
-    release()
-    if (clerkIdentitySyncLocks.get(key) === current) {
-      clerkIdentitySyncLocks.delete(key)
-    }
-  }
-}
-
-async function claimNewIdentity(
-  identityStore: HostedIdentityStore,
-  identity: HostedIdentityRecord,
-): Promise<HostedIdentityRecord> {
-  if (identityStore.claim) {
-    return await identityStore.claim(identity)
-  }
-
-  await identityStore.save(identity)
-  return identity
-}
-
-function sameUserId(left: string | number, right: string | number): boolean {
-  return String(left) === String(right)
-}
-
-async function resolveClaimedIdentityUser(
-  adapter: RuntimeAuthProviderAdapter,
-  identity: HostedIdentityRecord,
-  fallback: {
-    readonly user: Record<string, unknown>
-    readonly userId: string | number
-  },
-): Promise<Record<string, unknown>> {
-  if (sameUserId(identity.userId, fallback.userId)) {
-    return fallback.user
-  }
-
-  const claimedUser = requireUserRecord(
-    await adapter.findById(identity.userId),
-    '[@holo-js/auth-clerk] Claimed Clerk identities must reference an existing local user.',
-  )
-
-  if (adapter.delete) {
-    await adapter.delete(fallback.userId)
-  }
-
-  return claimedUser
 }
 
 function getSessionTokenFromRequest(request: Request, sessionCookie: string): string | null {
@@ -1168,141 +1000,44 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
     throw new Error(`[@holo-js/auth-clerk] Clerk identity "${profile.id}" must provide a verified email address.`)
   }
 
-  return await withIdentitySyncLock(`${providerName}:${profile.id}`, async () => {
-    const identityStore = getBindings().identityStore
-    const existingIdentity = await identityStore.findByProviderUserId(providerName, profile.id)
-
-    if (existingIdentity) {
-      const existingLinkedUser = await adapter.findById(existingIdentity.userId)
-      let linkedUser = existingLinkedUser
-        ? requireUserRecord(existingLinkedUser, '[@holo-js/auth-clerk] Auth provider lookups must return object users.')
-        : null
-
-      if (!linkedUser) {
-        const emailMatchedUser = verifiedEmail
-          ? await findUserByEmail(adapter, verifiedEmail)
-          : null
-        if (emailMatchedUser) {
-          throw new ClerkAuthConflictError({
-            provider: providerName,
-            clerkUserId: profile.id,
-            email: verifiedEmail,
-            message: `[@holo-js/auth-clerk] Clerk email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
-          })
-        }
-
-        linkedUser = requireUserRecord(
-          await adapter.create(resolveCreateUserInput(profile, options.user)),
-          '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
-        )
-
-        const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
-        const relinkedUser = relinked.user
-        const identity = createIdentityRecord({
-          provider: providerName,
-          guard,
-          authProvider,
-          userId: requireUserId(
-            adapter,
-            relinkedUser,
-            '[@holo-js/auth-clerk] Relinked local users must expose a serializable id.',
-          ),
-          profile,
-          previous: existingIdentity,
-        })
-        await identityStore.save(identity)
-
-        return Object.freeze({
-          provider: providerName,
-          guard,
-          authProvider,
-          status: 'relinked',
-          user: serializeLocalUser<TUserAttributes>(adapter, relinkedUser, authProvider),
-          identity,
-          session,
-        })
-      }
-
-      await ensureNoUnexpectedEmailCollision(
-        adapter,
-        providerName,
-        profile,
-        requireUserId(
-          adapter,
-          linkedUser,
-          '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
-        ),
-      )
-      const updated = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
-      const identity = createIdentityRecord({
-        provider: providerName,
-        guard,
-        authProvider,
-        userId: requireUserId(
-          adapter,
-          updated.user,
-          '[@holo-js/auth-clerk] Updated local users must expose a serializable id.',
-        ),
-        profile,
-        previous: existingIdentity,
-      })
-      await identityStore.save(identity)
-
-      return Object.freeze({
-        provider: providerName,
-        guard,
-        authProvider,
-        status: updated.changed ? 'updated' : 'linked',
-        user: serializeLocalUser<TUserAttributes>(adapter, updated.user, authProvider),
-        identity,
-        session,
-      })
-    }
-
-    let localUser = verifiedEmail
-      ? await findUserByEmail(adapter, verifiedEmail)
-      : null
-
-    if (localUser) {
-      throw new ClerkAuthConflictError({
-        provider: providerName,
-        clerkUserId: profile.id,
-        email: verifiedEmail,
-        message: `[@holo-js/auth-clerk] Clerk email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
-      })
-    }
-
-    localUser = requireUserRecord(
-      await adapter.create(resolveCreateUserInput(profile, options.user)),
-      '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
-    )
-    const identity = createIdentityRecord({
+  const synchronized = await authRuntimeInternals.syncHostedIdentity({
+    provider: providerName,
+    providerUserId: profile.id,
+    adapter,
+    identityStore: getBindings().identityStore,
+    ownership: 'serialized-claim',
+    verifiedEmail,
+    email: resolvedEmail.email,
+    errorPrefix: '[@holo-js/auth-clerk]',
+    identityLabel: 'Clerk',
+    createUserInput: () => resolveCreateUserInput(profile, options.user),
+    updateUserInput: () => resolveUpdateUserInput(profile, options.user),
+    createIdentity: (userId, previous) => createIdentityRecord({
       provider: providerName,
       guard,
       authProvider,
-      userId: requireUserId(
-        adapter,
-        localUser,
-        '[@holo-js/auth-clerk] Created local users must expose a serializable id.',
-      ),
+      userId,
       profile,
-    })
-    const claimedIdentity = await claimNewIdentity(identityStore, identity)
-    const claimedUser = await resolveClaimedIdentityUser(adapter, claimedIdentity, {
-      user: localUser,
-      userId: identity.userId,
-    })
-    const claimedStatus = sameUserId(claimedIdentity.userId, identity.userId) ? 'created' : 'linked'
-
-    return Object.freeze({
+      previous,
+    }),
+    conflict: (email, collision) => new ClerkAuthConflictError({
       provider: providerName,
-      guard,
-      authProvider,
-      status: claimedStatus,
-      user: serializeLocalUser<TUserAttributes>(adapter, claimedUser, authProvider),
-      identity: claimedIdentity,
-      session,
-    })
+      clerkUserId: profile.id,
+      email,
+      message: collision
+        ? `[@holo-js/auth-clerk] Clerk email "${email}" collides with a different local user.`
+        : `[@holo-js/auth-clerk] Clerk email "${email}" matches an existing local user and must be linked explicitly.`,
+    }),
+  })
+
+  return Object.freeze({
+    provider: providerName,
+    guard,
+    authProvider,
+    status: synchronized.status,
+    user: serializeLocalUser<TUserAttributes>(adapter, synchronized.user, authProvider),
+    identity: synchronized.identity,
+    session,
   })
 }
 
@@ -1313,7 +1048,7 @@ export async function authenticate(input: ClerkRequestInput, provider?: string):
     return null
   }
 
-  const authenticated = await syncIdentity(session, provider)
+  const authenticated = await syncIdentity<ClerkUserAttributes>(session, provider)
   const authSession = await reuseExistingHoloSession(request, authenticated)
     ?? await authRuntimeInternals.establishSessionForUser(authenticated.user, {
       guard: authenticated.guard,

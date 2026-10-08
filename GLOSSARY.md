@@ -55,3 +55,9 @@ An attachment, regeneration, or deletion that changes a Media record and its sto
 
 **Presence membership**:
 The members currently represented in a Flux presence channel.
+
+**Notification delivery plan**:
+The recipients, channels, queue destinations, and delays selected for a Notification dispatch.
+
+**Broadcast browser connection**:
+A browser connection to the Broadcast worker carrying Flux channel events or Realtime query updates.

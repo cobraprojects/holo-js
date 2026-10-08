@@ -113,6 +113,7 @@ function resolveBroadcastExportEntry(
 export async function prepareProjectDiscovery(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
+  prepareFramework = true,
 ): Promise<GeneratedProjectRegistry> {
   const loadedConfig = await loadConfigDirectory(projectRoot, {
     processEnv: process.env,
@@ -548,7 +549,7 @@ export async function prepareProjectDiscovery(
     authorizationAbilities,
   }
 
-  await writeGeneratedProjectRegistry(projectRoot, registry)
+  await writeGeneratedProjectRegistry(projectRoot, registry, prepareFramework)
   return registry
 }
 

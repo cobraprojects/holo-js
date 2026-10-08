@@ -324,6 +324,29 @@ describe('@holo-js/realtime broadcast client transport', () => {
     expect(harness.closedWebsocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
   })
 
+  it('reports a connection closed before opening once per subscription and permits reconnect', async () => {
+    const harness = createSocketHarness({ autoOpen: false })
+    harness.install()
+    stubBroadcastConfig()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errors: unknown[] = []
+    const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
+    transport.subscribe('posts.list', {}, () => {}, error => errors.push(error))
+    transport.subscribe('posts.featured', {}, () => {}, error => errors.push(error))
+    await vi.waitUntil(() => harness.websocketUrls.length === 1)
+    harness.emit('close')
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(errors).toHaveLength(2)
+    expect(errors.every(error => error instanceof Error && error.message === realtimeClientInternals.unavailableTransportMessage)).toBe(true)
+
+    const unsubscribe = transport.subscribe('posts.list', {}, () => {}, error => errors.push(error))
+    await vi.waitUntil(() => harness.websocketUrls.length === 2)
+    harness.emit('open')
+    await vi.waitUntil(() => harness.sentFrames.length === 1)
+    expect(errors).toHaveLength(2)
+    unsubscribe()
+  })
+
   it('reconnects after the final subscription leaves so the next connection uses current authentication', async () => {
     const harness = createSocketHarness()
     harness.install()

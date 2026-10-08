@@ -3546,7 +3546,7 @@ export default {
         tokenHash: authRuntimeInternals.hashTokenSecret('reset-secret'), createdAt: new Date(),
         expiresAt: change === 'database deadline has passed' ? databaseDeadline : new Date(Date.now() + 60_000) }
       await store.create(record)
-      configureAuthRuntime({
+      authRuntimeInternals.configureRuntime({
         ...bindings,
         passwordResetTokens: {
           ...store,
@@ -3858,7 +3858,7 @@ export default {
       })
       const bindings = authRuntimeInternals.getRuntimeBindings()
       const store = bindings.emailVerificationTokens!
-      configureAuthRuntime({
+      authRuntimeInternals.configureRuntime({
         ...bindings,
         emailVerificationTokens: {
           ...store,
