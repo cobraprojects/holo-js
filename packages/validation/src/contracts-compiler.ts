@@ -117,10 +117,12 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
       case 'custom':
       case 'customAsync':
         if (!executionFor) throw new Error('Validation rule execution is missing.')
-        actions.push(v.rawCheckAsync(async ({ dataset }) => {
+        actions.push(v.rawCheckAsync(async ({ dataset, addIssue }) => {
           const execution = executionFor(dataset)
           if (dataset.typed && !execution.requiredMissing) {
             await executeCustomRule(execution, rule, dataset.value)
+            const message = execution.customIssues.get(rule)
+            if (message !== undefined) addIssue({ message })
           }
         }))
         break

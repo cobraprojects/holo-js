@@ -253,7 +253,7 @@ async function runValidation(
   const issues: Record<string, string[]> = {}
 
   if (!result.success) {
-    appendIssues(issues, result.issues)
+    appendIssues(issues, result.issues.filter(issue => issue.type !== 'raw_check'))
   }
 
   applyExecutionChecks(execution, rawInput, issues)

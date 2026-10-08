@@ -138,6 +138,16 @@ export function createShapeExecutionSchema(compiled: CompiledSchema, node: Execu
       for (const child of node.children) {
         if (child.field) checkFieldConfirmations(child.field, node.output, node.input)
       }
+      for (const child of node.children) {
+        if (!child.field) continue
+        for (const [rule, matches] of child.field.confirmationResults) {
+          if (!matches) {
+            return v.rawCheck(({ addIssue }) => {
+              addIssue({ message: resolveRuleMessage(rule, 'This field does not match its confirmation.') })
+            })['~run'](result, config)
+          }
+        }
+      }
       return result
     },
   }

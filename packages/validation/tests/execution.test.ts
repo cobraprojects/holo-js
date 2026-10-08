@@ -100,19 +100,20 @@ describe('Validation rule execution', () => {
     expect(values).toEqual([])
   })
 
-  it('continues rules after custom failures and retains null transform output', async () => {
-    const values: (string | null)[] = []
+  it('continues validation after custom failures until a transform changes the type', async () => {
+    const values: string[] = []
     const definition = schema({
       value: field.string()
         .custom(value => { values.push(value); return 'Custom failure.' })
+        .custom(value => { values.push(value); return 'Second failure.' })
         .transform(() => null)
-        .custom(value => { values.push(value); return 'Later failure.' }),
+        .custom(() => 'Suppressed failure.'),
     })
 
     const result = await safeParse({ value: 'Ava' }, definition)
 
-    expect(values).toEqual(['Ava', null])
-    expect(result.errors.get('value')).toEqual(['Custom failure.', 'Later failure.'])
+    expect(values).toEqual(['Ava', 'Ava'])
+    expect(result.errors.get('value')).toEqual(['Custom failure.', 'Second failure.'])
   })
 
   it('keeps nested array checks serial and isolated across overlapping validations', async () => {
@@ -145,16 +146,28 @@ describe('Validation rule execution', () => {
     expect(values.filter(value => value.includes('second'))).toEqual(['start:second', 'end:second', 'second-tail'])
   })
 
-  it('validates every child before a parent transform removes array entries', async () => {
-    const definition = schema({
-      rows: field.array(field.string().custom(value => value !== 'blocked' || 'Blocked row.'))
-        .transform(values => values.slice(1)),
-    })
+  it('skips parent transforms after synchronous and asynchronous child failures', async () => {
+    for (const child of [
+      field.string().custom(value => value !== 'blocked' || 'Blocked row.'),
+      field.string().customAsync(async value => value !== 'blocked' || 'Blocked row.'),
+    ]) {
+      let transforms = 0
+      const definition = schema({
+        rows: field.array({ cells: field.array(child) })
+          .transform(values => { transforms++; return values.slice(1) }),
+        tail: field.string().transform(value => value.toUpperCase()),
+      })
+      const result = await safeParse({ rows: [{ cells: ['blocked', 'allowed'] }], tail: 'tail' }, definition)
 
-    const result = await safeParse({ rows: ['blocked', 'allowed'] }, definition)
+      expect(result.valid).toBe(false)
+      expect(result.errors.flatten()).toEqual({ 'rows.0.cells.0': ['Blocked row.'] })
+      expect(transforms).toBe(0)
 
-    expect(result.valid).toBe(false)
-    expect(result.errors.flatten()).toEqual({ 'rows.0': ['Blocked row.'] })
+      const valid = await safeParse({ rows: [{ cells: ['allowed'] }], tail: 'tail' }, definition)
+      expect(valid.valid).toBe(true)
+      if (valid.valid) expect(valid.data).toEqual({ rows: [], tail: 'TAIL' })
+      expect(transforms).toBe(1)
+    }
   })
 
   it('keeps confirmation attached to its containing row after parent transforms', async () => {
@@ -198,6 +211,32 @@ describe('Validation rule execution', () => {
     expect(mismatching.errors.flatten()).toEqual({
       'rows.0.password': ['This field does not match its confirmation.'],
     })
+  })
+
+  it('stops parent transforms on confirmation failures and preserves rule error order', async () => {
+    let transforms = 0
+    const definition = schema({
+      rows: field.array({
+        password: field.string().confirmed('Confirmation failure.').custom(() => 'Custom failure.'),
+        passwordConfirmation: field.string(),
+      }).transform(rows => { transforms++; return rows.slice(1) }),
+    })
+
+    const result = await safeParse({ rows: [{ password: 'different', passwordConfirmation: 'secret' }] }, definition)
+
+    expect(result.errors.flatten()).toEqual({
+      'rows.0.password': ['Confirmation failure.', 'Custom failure.'],
+    })
+    expect(transforms).toBe(0)
+
+    const confirmationOnly = schema({
+      rows: field.array({
+        password: field.string().confirmed(),
+        passwordConfirmation: field.string(),
+      }).transform(rows => { transforms++; return rows.slice(1) }),
+    })
+    expect((await safeParse({ rows: [{ password: 'different', passwordConfirmation: 'secret' }] }, confirmationOnly)).valid).toBe(false)
+    expect(transforms).toBe(0)
   })
 
   it('checks confirmation inside nested arrays supplied by defaults', async () => {
