@@ -364,21 +364,35 @@ export default definePolicy('posts', Post, { class: { viewAny: () => true } })
     expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', reloadedPost)).allowed).toBe(false)
   })
 
-  it('keeps disposal atomic when a displaced target has a newer owner', async () => {
+  it('removes owned grants and restores unaffected definitions when a displaced target has a newer owner', async () => {
     const root = await createAuthorizationProject()
     class PreviousPost {}
+    class PreviousReport {}
     definePolicy('posts', PreviousPost, { class: { viewAny: () => false } })
+    definePolicy('reports', PreviousReport, { class: { viewAny: () => false } })
+    defineAbility('reports.export', () => false)
     await writeFile(join(root, 'server/policies/posts.ts'), `
 import { definePolicy } from '@holo-js/authorization'
 class Post {}
 export default definePolicy('posts', Post, { class: { viewAny: () => true } })
 `)
-    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry(['posts'], []), authorizationModule)
+    await writeFile(join(root, 'server/policies/reports.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Report {}
+export default definePolicy('reports', Report, { class: { viewAny: () => true } })
+`)
+    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+export default defineAbility('reports.export', () => true)
+`)
+    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry(['posts', 'reports'], ['reports.export']), authorizationModule)
     const installedTarget = authorizationInternals.getPolicyByName('posts').target
     definePolicy('new-owner', PreviousPost, { class: { viewAny: () => true } })
     expect(() => registration.dispose()).toThrow('already registered')
-    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', installedTarget)).allowed).toBe(true)
+    await expect(authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', installedTarget)).rejects.toThrow('was not found')
     expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousPost)).allowed).toBe(true)
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousReport)).allowed).toBe(false)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(false)
   })
 
   it('restores optional capability bindings when authorization disposal fails during shutdown', async () => {
@@ -398,9 +412,67 @@ export default definePolicy('posts', Post, { class: { viewAny: () => true } })
     configureQueueRuntime({ config: { default: 'sync', connections: { sync: { driver: 'sync', queue: 'borrowed' } } } })
     const runtime = await createHolo(root)
     await runtime.initialize()
+    const installedTarget = authorizationInternals.getPolicyByName('posts').target
     definePolicy('new-owner', PreviousPost, { class: { viewAny: () => true } })
     await expect(runtime.shutdown()).rejects.toThrow('already registered')
     expect(getQueueRuntime().config.connections.sync?.queue).toBe('borrowed')
+    await expect(authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', installedTarget)).rejects.toThrow('was not found')
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousPost)).allowed).toBe(true)
+  })
+
+  it('reports every rollback restoration failure while removing owned grants and restoring unaffected definitions', async () => {
+    class PreviousPost {}
+    class PreviousReport {}
+    class InstalledPost {}
+    class InstalledReport {}
+    definePolicy('posts', PreviousPost, { class: { viewAny: () => false } })
+    definePolicy('reports', PreviousReport, { class: { viewAny: () => false } })
+    defineAbility('reports.export', () => false)
+    let release = () => {}
+    let loaded = () => {}
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const ready = new Promise<void>((resolve) => { loaded = resolve })
+    const importError = new Error('Import failed')
+    const installation = authorizationInternals.installAuthorizationDefinitions([
+      {
+        name: 'posts',
+        async load() {
+          definePolicy('posts', InstalledPost, { class: { viewAny: () => true } })
+          return authorizationInternals.getPolicyByName('posts')
+        },
+      },
+      {
+        name: 'reports',
+        async load() {
+          definePolicy('reports', InstalledReport, { class: { viewAny: () => true } })
+          return authorizationInternals.getPolicyByName('reports')
+        },
+      },
+    ], [{
+      name: 'reports.export',
+      async load() {
+        defineAbility('reports.export', () => true)
+        defineAbility('import-side-effect', () => true)
+        loaded()
+        await pending
+        throw importError
+      },
+    }])
+    await ready
+    definePolicy('new-post-owner', PreviousPost, { class: { viewAny: () => true } })
+    definePolicy('new-report-owner', PreviousReport, { class: { viewAny: () => true } })
+    release()
+    const failure = await installation.catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    if (!(failure instanceof AggregateError)) throw failure
+    expect(failure.errors).toEqual([importError, expect.any(AggregateError)])
+    expect(failure.errors[1]).toMatchObject({ errors: [expect.any(Error), expect.any(Error)] })
+    await expect(authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', InstalledPost)).rejects.toThrow('was not found')
+    await expect(authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', InstalledReport)).rejects.toThrow('was not found')
+    await expect(authorizationInternals.evaluateAbility({}, 'import-side-effect', {})).rejects.toThrow('was not found')
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(false)
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousPost)).allowed).toBe(true)
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousReport)).allowed).toBe(true)
   })
 
   it('preserves a newer definition when an older installation is disposed', async () => {
@@ -415,6 +487,36 @@ export default defineAbility('reports.export', () => true)
     defineAbility('reports.export', () => authorizationModule.denyAsNotFound())
     registration.dispose()
     expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).status).toBe(404)
+  })
+
+  it.each(['older-first', 'newer-first'] as const)('restores the original definitions after overlapping installations are disposed %s', async (order) => {
+    const root = await createAuthorizationProject()
+    class OriginalPost {}
+    definePolicy('posts', OriginalPost, { class: { viewAny: () => false } })
+    defineAbility('reports.export', () => false)
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Post {}
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
+    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+export default defineAbility('reports.export', () => true)
+`)
+    const registry = authorizationRegistry(['posts'], ['reports.export'])
+    const older = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, registry, authorizationModule)
+    const olderTarget = authorizationInternals.getPolicyByName('posts').target
+    const newer = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, registry, authorizationModule)
+    const installedTarget = authorizationInternals.getPolicyByName('posts').target
+    const [first, last] = order === 'older-first' ? [older, newer] : [newer, older]
+    first.dispose()
+    const remainingTarget = order === 'older-first' ? installedTarget : olderTarget
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', remainingTarget)).allowed).toBe(true)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(true)
+    last.dispose()
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', OriginalPost)).allowed).toBe(false)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(false)
+    await expect(authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', installedTarget)).rejects.toThrow('was not found')
   })
 
   it('canonicalizes named exports and preserves unrelated authorization and auth integration', async () => {

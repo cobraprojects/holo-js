@@ -5,10 +5,26 @@ export type RegisteredAbility = AuthorizationAbilityDefinition<string, object, o
 
 export type AuthorizationInstallationContext = {
   active: boolean
+  disposed: boolean
   readonly policies: Map<string, RegisteredPolicy>
   readonly abilities: Map<string, RegisteredAbility>
   readonly displacedPolicies: Map<string, RegisteredPolicy>
   readonly displacedAbilities: Map<string, RegisteredAbility>
+}
+
+export type DefinitionLifetime<TDefinition> = {
+  readonly installation: AuthorizationInstallationContext
+  readonly previous?: TDefinition
+}
+
+export function resolveLiveDefinition<TDefinition extends object>(definition: TDefinition, lifetimes: WeakMap<TDefinition, DefinitionLifetime<TDefinition>>): TDefinition | undefined {
+  let current: TDefinition | undefined = definition
+  while (current !== undefined) {
+    const lifetime = lifetimes.get(current)
+    if (!lifetime?.installation.disposed) return current
+    current = lifetime.previous
+  }
+  return undefined
 }
 
 type InstallationStorage = {

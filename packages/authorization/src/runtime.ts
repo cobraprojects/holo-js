@@ -41,7 +41,7 @@ import {
   normalizeAuthorizationDecision,
 } from './contracts'
 
-import { getAuthorizationInstallation, runAuthorizationInstallation, type AuthorizationInstallationContext, type RegisteredAbility, type RegisteredPolicy } from './internal/installation'
+import { getAuthorizationInstallation, runAuthorizationInstallation, resolveLiveDefinition, type AuthorizationInstallationContext, type DefinitionLifetime, type RegisteredAbility, type RegisteredPolicy } from './internal/installation'
 
 const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
 
@@ -69,6 +69,8 @@ type AuthorizationRuntimeState = {
   policiesByTargetObject: WeakMap<object, RegisteredPolicy>
   policiesByDefinitionKey: Map<string, RegisteredPolicy>
   abilitiesByName: Map<string, RegisteredAbility>
+  policyLifetimes: WeakMap<RegisteredPolicy, DefinitionLifetime<RegisteredPolicy>>
+  abilityLifetimes: WeakMap<RegisteredAbility, DefinitionLifetime<RegisteredAbility>>
   authIntegration: AuthorizationAuthIntegration | null
 }
 
@@ -78,6 +80,8 @@ function createAuthorizationRuntimeState(): AuthorizationRuntimeState {
     policiesByTargetObject: new WeakMap(),
     policiesByDefinitionKey: new Map(),
     abilitiesByName: new Map(),
+    policyLifetimes: new WeakMap(),
+    abilityLifetimes: new WeakMap(),
     authIntegration: null,
   }
 }
@@ -191,21 +195,21 @@ function validateAbilityDefinition(definition: AuthorizationAbilityDefinition<st
   }
 }
 
-function assertPolicyRegistrationAvailable(definition: RegisteredPolicy, releasing?: ReadonlySet<RegisteredPolicy>): string | null {
+function assertPolicyRegistrationAvailable(definition: RegisteredPolicy): string | null {
   const state = getAuthorizationRuntimeState()
   const namedPolicy = state.policiesByName.get(definition.name)
-  if (namedPolicy && !releasing?.has(namedPolicy)) {
+  if (namedPolicy) {
     throw new Error(`[@holo-js/authorization] Policy "${definition.name}" is already registered.`)
   }
 
   const targetPolicy = state.policiesByTargetObject.get(definition.target)
-  if (targetPolicy && !releasing?.has(targetPolicy)) {
+  if (targetPolicy) {
     throw new Error('[@holo-js/authorization] A policy is already registered for this target.')
   }
 
   const definitionKey = getDefinitionKeyForTarget(definition.target)
   const definitionPolicy = definitionKey ? state.policiesByDefinitionKey.get(definitionKey) : undefined
-  if (definitionPolicy && !releasing?.has(definitionPolicy)) {
+  if (definitionPolicy) {
     throw new Error(`[@holo-js/authorization] A policy is already registered for target definition "${definitionKey}".`)
   }
 
@@ -220,7 +224,11 @@ function registerPolicyDefinition<TDefinition extends RegisteredPolicy>(definiti
   if (definitionKey) {
     state.policiesByDefinitionKey.set(definitionKey, definition)
   }
-  getAuthorizationInstallation()?.policies.set(definition.name, definition)
+  const installation = getAuthorizationInstallation()
+  if (installation) {
+    installation.policies.set(definition.name, definition)
+    state.policyLifetimes.set(definition, { installation, previous: installation.displacedPolicies.get(definition.name) })
+  }
   return definition
 }
 
@@ -231,7 +239,11 @@ function registerAbilityDefinition<TDefinition extends RegisteredAbility>(defini
   }
 
   state.abilitiesByName.set(definition.name, definition)
-  getAuthorizationInstallation()?.abilities.set(definition.name, definition)
+  const installation = getAuthorizationInstallation()
+  if (installation) {
+    installation.abilities.set(definition.name, definition)
+    state.abilityLifetimes.set(definition, { installation, previous: installation.displacedAbilities.get(definition.name) })
+  }
   return definition
 }
 
@@ -281,6 +293,7 @@ async function installAuthorizationDefinitions(
   const state = getAuthorizationRuntimeState()
   const installation: AuthorizationInstallationContext = {
     active: true,
+    disposed: false,
     policies: new Map(),
     abilities: new Map(),
     displacedPolicies: new Map(),
@@ -293,14 +306,34 @@ async function installAuthorizationDefinitions(
     if (getAuthorizationRuntimeState() !== state) return
     const releasingPolicies = new Map([...installation.policies].filter(([name, definition]) => state.policiesByName.get(name) === definition))
     const releasingAbilities = new Map([...installation.abilities].filter(([name, definition]) => state.abilitiesByName.get(name) === definition))
-    const restoringPolicies = [...installation.displacedPolicies].filter(([name]) => releasingPolicies.has(name) || ((rollback || !policyNames.has(name)) && !state.policiesByName.has(name)))
-    const restoringAbilities = [...installation.displacedAbilities].filter(([name]) => releasingAbilities.has(name) || ((rollback || !abilityNames.has(name)) && !state.abilitiesByName.has(name)))
-    const releasing = new Set(releasingPolicies.values())
-    for (const [, definition] of restoringPolicies) assertPolicyRegistrationAvailable(definition, releasing)
+    const restoringPolicies = [...installation.displacedPolicies]
+      .filter(([name]) => releasingPolicies.has(name) || ((rollback || !policyNames.has(name)) && !state.policiesByName.has(name)))
+      .flatMap(([, definition]) => {
+        const live = resolveLiveDefinition(definition, state.policyLifetimes)
+        return live ? [live] : []
+      })
+    const restoringAbilities = [...installation.displacedAbilities]
+      .filter(([name]) => releasingAbilities.has(name) || ((rollback || !abilityNames.has(name)) && !state.abilitiesByName.has(name)))
+      .flatMap(([, definition]) => {
+        const live = resolveLiveDefinition(definition, state.abilityLifetimes)
+        return live ? [live] : []
+      })
     for (const name of releasingPolicies.keys()) unregisterPolicyDefinition(name)
     for (const name of releasingAbilities.keys()) unregisterAbilityDefinition(name)
-    for (const [, definition] of restoringPolicies) registerPolicyDefinition(definition)
-    for (const [, definition] of restoringAbilities) registerAbilityDefinition(definition)
+    const failures: unknown[] = []
+    const restorations = [
+      ...restoringPolicies.map(definition => () => registerPolicyDefinition(definition)),
+      ...restoringAbilities.map(definition => () => registerAbilityDefinition(definition)),
+    ]
+    for (const restoreDefinition of restorations) {
+      try {
+        restoreDefinition()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'Authorization definition restoration failed.')
   }
 
   return await runAuthorizationInstallation(installation, async () => {
@@ -319,6 +352,7 @@ async function installAuthorizationDefinitions(
       }
     } catch (error) {
       installation.active = false
+      installation.disposed = true
       try {
         restore(true)
       } catch (restorationError) {
@@ -332,7 +366,10 @@ async function installAuthorizationDefinitions(
     return Object.freeze({
       policyNames: Object.freeze(policies.map(source => source.name)),
       abilityNames: Object.freeze(abilities.map(source => source.name)),
-      dispose: () => restore(),
+      dispose() {
+        installation.disposed = true
+        restore()
+      },
     })
   })
 }
