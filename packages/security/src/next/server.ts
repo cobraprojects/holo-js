@@ -1,11 +1,6 @@
-import { csrf, csrfInternals, isSecureRequest, protect } from '../index'
+import { protect } from '../index'
+import { prepareCsrfCookies } from '../cookie-issuance'
 import { SecurityCsrfError } from '../contracts'
-import {
-  SECURITY_CLIENT_CONFIG_COOKIE,
-  createSecurityClientConfig,
-  serializeSecurityClientConfig,
-} from '../client-config'
-import { getSecurityRuntime } from '../runtime'
 
 type NextCsrfRequest = Request & {
   readonly nextUrl?: URL
@@ -37,11 +32,6 @@ export type NextCsrfMiddleware = (
   request: NextCsrfRequest,
 ) => Response | undefined | Promise<Response | undefined>
 
-function isSafeMethod(method: string): boolean {
-  const normalized = method.trim().toUpperCase()
-  return normalized === 'GET' || normalized === 'HEAD'
-}
-
 function createCsrfErrorResponse(error: SecurityCsrfError): Response {
   return new Response(error.message, {
     status: error.status,
@@ -61,39 +51,16 @@ function getRequestCookie(request: NextCsrfRequest, name: string): string | unde
 }
 
 async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | undefined> {
-  const { config } = getSecurityRuntime()
-
-  if (!config.csrf.enabled || !isSafeMethod(request.method)) {
-    return undefined
-  }
-
-  const existingCsrfToken = getRequestCookie(request, config.csrf.cookie)
-  const shouldIssueCsrfToken = !existingCsrfToken
-    || !csrfInternals.isValidSignedCsrfToken(existingCsrfToken)
-  const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(config))
-  const shouldIssueClientConfig = getRequestCookie(request, SECURITY_CLIENT_CONFIG_COOKIE) !== clientConfig
-
-  if (!shouldIssueCsrfToken && !shouldIssueClientConfig) {
+  const cookies = await prepareCsrfCookies(request, name => getRequestCookie(request, name))
+  if (cookies.length === 0) {
     return undefined
   }
 
   const { NextResponse } = await import('next/server.js') as NextServerModule
   const response = NextResponse.next()
-  const cookieOptions = {
-    httpOnly: false,
-    path: '/',
-    sameSite: 'lax' as const,
-    secure: isSecureRequest(request),
+  for (const cookie of cookies) {
+    response.cookies.set(cookie.name, cookie.value, cookie.options)
   }
-
-  if (shouldIssueCsrfToken) {
-    response.cookies.set(config.csrf.cookie, await csrf.token(request), cookieOptions)
-  }
-
-  if (shouldIssueClientConfig) {
-    response.cookies.set(SECURITY_CLIENT_CONFIG_COOKIE, clientConfig, cookieOptions)
-  }
-
   return response
 }
 

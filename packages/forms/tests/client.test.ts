@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission } from '../src'
 import { field, schema, ValidationException, type WebFileLike } from '@holo-js/validation'
-import { createFormClient as useForm, FormClientState, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
+import { createFormClient as useForm, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
 import { validationExceptionToFailure } from '../src/internal/validation-exception'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
@@ -10,33 +10,6 @@ const originalFetch = globalThis.fetch
 const originalFormData = globalThis.FormData
 const originalDocument = browserGlobal.document
 
-describe('shared client state', () => {
-  it('preserves nested values and typed errors while comparing edits with their baseline', () => {
-    const initial = { contacts: [{ email: 'before@example.com' }], title: 'Before' }
-    const state = new FormClientState(initial)
-    const values = { contacts: [{ email: 'after@example.com' }], title: 'Before' }
-    state.replace(values, initial, { 'contacts.0.email': ['Already registered'] }, new Set(['contacts.0.email']))
-    expect(state.values).toBe(values)
-    expect(state.initialValues).toBe(initial)
-    expect(state.errors.get('contacts.0.email')).toEqual(['Already registered'])
-    expect(state.dirtyPaths).toEqual(['contacts.0.email'])
-    state.replace(values, values, {}, new Set())
-    expect(state.dirtyPaths).toEqual([])
-    expect(state.errors.flatten()).toEqual({})
-  })
-
-  it('keeps a newer submission pending when an older one finishes or is cancelled', () => {
-    const state = new FormClientState({ title: '' })
-    const controller = new AbortController()
-    const finishFirst = state.startSubmission(controller.signal)
-    const finishSecond = state.startSubmission()
-    controller.abort()
-    finishFirst()
-    expect(state.submitting).toBe(true)
-    finishSecond()
-    expect(state.submitting).toBe(false)
-  })
-})
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
 type TestFormDataEntryValue = NonNullable<ReturnType<FormData['get']>>
 type TestBrowserFormControl = {
@@ -429,6 +402,82 @@ describe('@holo-js/forms client', () => {
 
     const emailErrors = await blurClient.fields.email.validate()
     expect(emailErrors).toEqual([])
+  })
+
+  it('lets the newest submission own state while every caller receives its result', async () => {
+    const first = createDeferred<{ ok: false, status: number, valid: false, values: { email: string }, errors: { email: string[] } }>()
+    const second = createDeferred<{ ok: true, status: number, data: string }>()
+    let calls = 0
+    const client = useForm(schema({ email: field.string() }), {
+      initialValues: { email: 'initial@example.com' },
+      submitter: () => ++calls === 1 ? first.promise : second.promise,
+    })
+    const older = client.submit()
+    await vi.waitFor(() => expect(calls).toBe(1))
+    const newer = client.submit()
+    await vi.waitFor(() => expect(calls).toBe(2))
+    second.resolve({ ok: true, status: 200, data: 'newer' })
+    expect(await newer).toMatchObject({ data: 'newer' })
+    expect(client.submitting).toBe(true)
+    first.resolve({ ok: false, status: 422, valid: false, values: { email: 'old@example.com' }, errors: { email: ['Old error'] } })
+    expect(await older).toMatchObject({ ok: false, errors: { email: ['Old error'] } })
+    expect(client.values.email).toBe('initial@example.com')
+    expect(client.errors.flatten()).toEqual({})
+    expect(client.lastSubmission).toMatchObject({ data: 'newer' })
+    expect(client.submitting).toBe(false)
+  })
+
+  it.each(['reset', 'edit', 'server'] as const)('protects %s transitions from pending submission responses', async (transition) => {
+    const response = createDeferred<{ ok: false, status: number, valid: false, values: { email: string }, errors: { email: string[] } }>()
+    let started = false
+    const client = useForm(schema({ email: field.string(), password: field.password() }), {
+      initialValues: { email: 'before@example.com', password: 'secret' },
+      submitter: () => {
+        started = true
+        return response.promise
+      },
+    })
+    const pending = client.submit()
+    await vi.waitFor(() => expect(started).toBe(true))
+    if (transition === 'reset') client.reset({ email: 'current@example.com' })
+    if (transition === 'edit') await client.fields.email.set('current@example.com')
+    if (transition === 'server') client.applyServerState({ ok: false, status: 422, valid: false, values: { email: 'current@example.com' }, errors: {} })
+    response.resolve({ ok: false, status: 422, valid: false, values: { email: 'stale@example.com' }, errors: { email: ['Stale error'] } })
+    expect(await pending).toMatchObject({ ok: false })
+    expect(client.values.email).toBe('current@example.com')
+    expect(client.errors.flatten()).toEqual({})
+    expect(client.values.password).toBe(transition === 'server' ? '' : 'secret')
+    expect(client.fields.email.dirty).toBe(transition !== 'reset')
+    expect(client.submitting).toBe(false)
+  })
+
+  it('protects edits and applied server errors from pending validation', async () => {
+    const validation = createDeferred<true | string>()
+    const client = useForm(schema({ email: field.string().customAsync(() => validation.promise) }), {
+      initialValues: { email: 'before@example.com' },
+    })
+    const pending = client.validate()
+    await client.setValue('email', 'edited@example.com')
+    client.applyServerState({ ok: false, status: 422, valid: false, values: { email: 'server@example.com' }, errors: { email: ['Server error'] } })
+    validation.resolve('Stale error')
+    await pending
+    expect(client.values.email).toBe('server@example.com')
+    expect(client.errors.first('email')).toBe('Server error')
+    expect(client.fields.email.dirty).toBe(true)
+  })
+
+  it('keeps reset values when earlier validation completes', async () => {
+    const pending = createDeferred<true | string>()
+    const client = useForm(schema({ email: field.string().customAsync(() => pending.promise) }), {
+      initialValues: { email: 'before@example.com' },
+    })
+    const validation = client.validate()
+    client.reset({ email: 'reset@example.com' })
+    pending.resolve('Old error')
+    await validation
+    expect(client.values.email).toBe('reset@example.com')
+    expect(client.errors.flatten()).toEqual({})
+    expect(client.fields.email.dirty).toBe(false)
   })
 
   it('ignores stale async change validation results that resolve out of order', async () => {

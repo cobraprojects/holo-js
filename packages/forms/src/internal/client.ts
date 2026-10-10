@@ -29,7 +29,6 @@ import { validationExceptionToFailure } from './validation-exception'
 import { FormClientState } from './state'
 export { FormClientState, collectFormDirtyPaths } from './state'
 import {
-  areFormValuesEqual as areEqual,
   buildFormData,
   cloneFormValue as cloneValue,
   flattenFormLeafPaths as flattenLeafPaths,
@@ -38,7 +37,6 @@ import {
   isPlainFormObject as isPlainObject,
   mergeFormValues as mergeValues,
   normalizeFormObject as normalizeObject,
-  setFormValueAtPath as setValueAtPath,
 } from './formValues'
 
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
@@ -353,24 +351,6 @@ export async function runWithBrowserFormElement<TData, TSuccess>(
   return await formClient.submit()
 }
 
-function notifyListeners<TData, TSuccess>(state: MutableState<TData, TSuccess>): void {
-  for (const listener of state.listeners) {
-    listener()
-  }
-}
-
-function nextValidationSequence<TData, TSuccess>(state: MutableState<TData, TSuccess>): number {
-  state.validationSequence += 1
-  return state.validationSequence
-}
-
-function isLatestValidation<TData, TSuccess>(
-  state: MutableState<TData, TSuccess>,
-  sequence: number,
-): boolean {
-  return sequence === state.validationSequence
-}
-
 function collectErrorsForPath(
   flattenedErrors: Record<string, readonly string[]>,
   path: string,
@@ -384,25 +364,6 @@ function collectErrorsForPath(
   return direct.length > 0 || nested.length > 0
     ? [...direct, ...nested]
     : []
-}
-
-function replaceErrorsForPath(
-  flattenedErrors: Record<string, readonly string[]>,
-  path: string,
-  nextErrors: Record<string, readonly string[]>,
-): Record<string, readonly string[]> {
-  const prefix = `${path}.`
-  const merged = Object.fromEntries(
-    Object.entries(flattenedErrors).filter(([key]) => key !== path && !key.startsWith(prefix)),
-  )
-
-  for (const [key, messages] of Object.entries(nextErrors)) {
-    if (key === path || key.startsWith(prefix)) {
-      merged[key] = messages
-    }
-  }
-
-  return merged
 }
 
 function buildFieldsTree<TData>(
@@ -428,59 +389,44 @@ function buildFieldsTree<TData>(
         return state.touched.has(path)
       },
       get dirty() {
-        return state.dirty.has(path)
+        return state.isDirty(path)
       },
       async set(value: TData) {
-        setValueAtPath(state.values as Record<string, unknown>, path, value)
-        state.touched.add(path)
-        if (!areEqual(getValueAtPath(state.initialValues, path), value)) {
-          state.dirty.add(path)
-        } else {
-          state.dirty.delete(path)
-        }
+        state.edit(path, value)
 
         if (validateOn === 'change') {
-          const sequence = nextValidationSequence(state)
+          const sequence = state.beginValidation()
           const submission = await validateClientValues(
             cloneValue(state.values),
             schemaDefinition,
           ) as FormSubmissionResult<TData>
-          if (isLatestValidation(state, sequence)) {
-            state.flattenedErrors = submission.errors.flatten()
-          }
+          state.applyValidation(sequence, submission.errors.flatten())
+          return
         }
 
-        notifyListeners(state)
+        state.notify()
       },
       async onInput(value: TData) {
         await (this as FormFieldState<TData>).set(value)
       },
       async onBlur() {
-        state.touched.add(path)
+        state.touch(path)
         if (validateOn === 'blur') {
-          const sequence = nextValidationSequence(state)
+          const sequence = state.beginValidation()
           const submission = await validateClientValues(
             cloneValue(state.values),
             schemaDefinition,
           ) as FormSubmissionResult<TData>
-          if (isLatestValidation(state, sequence)) {
-            state.flattenedErrors = replaceErrorsForPath(
-              state.flattenedErrors,
-              path,
-              submission.errors.flatten(),
-            )
-          }
+          state.applyFieldValidation(sequence, path, submission.errors.flatten())
+          return
         }
 
-        notifyListeners(state)
+        state.notify()
       },
       async validate() {
-        const sequence = nextValidationSequence(state)
+        const sequence = state.beginValidation()
         const submission = await validateClientValues(cloneValue(state.values), schemaDefinition)
-        if (isLatestValidation(state, sequence)) {
-          state.flattenedErrors = submission.errors.flatten()
-          notifyListeners(state)
-        }
+        state.applyValidation(sequence, submission.errors.flatten())
         return state.flattenedErrors[path] ?? []
       },
     }) as unknown as FormFieldTree<TData>
@@ -763,30 +709,24 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
   }
 
   async function runValidationForInput(input: TData | FormLikeValidationInput): Promise<FormSubmissionResult<TData>> {
-    const sequence = nextValidationSequence(state)
+    const sequence = state.beginValidation()
     const submission = await validateClientValues<TData>(input, schemaDefinition)
-    if (isLatestValidation(state, sequence)) {
-      state.values = mergeValues(
-        state.values,
-        submission.valid ? submission.data : submission.values,
-      )
-      state.flattenedErrors = submission.errors.flatten()
-      notifyListeners(state)
-    }
+    state.applyValidation(sequence, submission.errors.flatten(), submission.valid ? submission.data : submission.values)
     return submission
   }
 
-  function applyServerState(result: ClientSubmitResult<TData, TSuccess>): ClientSubmitResult<TData, TSuccess> {
+  function applyServerState(result: ClientSubmitResult<TData, TSuccess>, submissionSequence?: number): ClientSubmitResult<TData, TSuccess> {
     const normalized = normalizeSubmissionLike(
       schemaDefinition,
       state.values,
       result,
     )
 
+    const applies = submissionSequence === undefined || state.ownsSubmissionEffects(submissionSequence)
+    if (submissionSequence === undefined) state.invalidateEffects()
+
     if ('ok' in normalized && normalized.ok === true) {
-      state.lastSubmission = normalized
-      state.flattenedErrors = {}
-      notifyListeners(state)
+      if (applies) state.applyServer(state.values, {}, normalized)
       return normalized
     }
 
@@ -796,29 +736,28 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
         values: sanitizeFlashedInput(normalized.values, schemaDefinition),
       }
 
-      state.values = mergeValues(state.values, sanitized.values)
-      clearSensitiveInputValues(state.values, schemaDefinition)
-      state.flattenedErrors = sanitized.errors
-      state.lastSubmission = sanitized
-      notifyListeners(state)
+      if (applies) {
+        const values = mergeValues(state.values, sanitized.values)
+        clearSensitiveInputValues(values, schemaDefinition)
+        state.applyServer(values, sanitized.errors, sanitized)
+      }
       return sanitized
     }
 
     const normalizedSubmission = normalized as FormSubmissionResult<TData>
-    state.values = mergeValues(state.values, normalizedSubmission.values)
-    clearSensitiveInputValues(state.values, schemaDefinition)
-    state.flattenedErrors = normalizedSubmission.errors.flatten()
-    state.lastSubmission = normalizedSubmission.valid
-      ? undefined
-      : normalizedSubmission.fail()
-    notifyListeners(state)
+    if (applies) {
+      const values = mergeValues(state.values, normalizedSubmission.values)
+      clearSensitiveInputValues(values, schemaDefinition)
+      state.applyServer(values, normalizedSubmission.errors.flatten(), normalizedSubmission.valid ? undefined : normalizedSubmission.fail())
+    }
 
     return normalizedSubmission
   }
 
   async function submit(browserForm?: BrowserFormElement): Promise<ClientSubmitResult<TData, TSuccess>> {
+    const submissionSequence = state.beginSubmissionEffects()
     const finishSubmission = state.startSubmission()
-    notifyListeners(state)
+    state.notify()
     try {
       const submitter = options.submitter
         ?? ((context: ClientSubmitContext<TData>) => defaultSubmitter<TData, TSuccess>(context, options))
@@ -856,8 +795,9 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
         }
 
         return applyServerState(
-          validationExceptionToFailure<TData>(error, state.values)
-            ?? createTransportFailure(state.values),
+          validationExceptionToFailure<TData>(error, localSubmission.data)
+            ?? createTransportFailure(localSubmission.data),
+          submissionSequence,
         )
       }
 
@@ -865,10 +805,10 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
         ok: true,
         status: 204,
         data: undefined,
-      } as FormSuccessPayload<TSuccess>)
+      } as FormSuccessPayload<TSuccess>, submissionSequence)
     } finally {
       finishSubmission()
-      notifyListeners(state)
+      state.notify()
     }
   }
 
@@ -909,30 +849,17 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
       return submit(form)
     },
     reset(values?: Partial<TData>) {
-      const next = mergeValues(state.initialValues, values)
-      state.values = cloneValue(next)
-      state.initialValues = cloneValue(next)
-      state.flattenedErrors = {}
-      state.touched.clear()
-      state.dirty.clear()
-      state.lastSubmission = undefined
-      notifyListeners(state)
+      state.reset(values)
     },
     async setValue(path: string, value: unknown) {
-      setValueAtPath(state.values as Record<string, unknown>, path, value)
-      state.touched.add(path)
-      if (!areEqual(getValueAtPath(state.initialValues, path), value)) {
-        state.dirty.add(path)
-      } else {
-        state.dirty.delete(path)
-      }
+      state.edit(path, value)
 
       if (validateOn === 'change' && fieldPaths.includes(path)) {
         await runValidation()
         return
       }
 
-      notifyListeners(state)
+      state.notify()
     },
     applyServerState(result: ClientSubmitResult<TData, TSuccess>) {
       return applyServerState(result)

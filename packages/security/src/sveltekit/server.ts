@@ -1,11 +1,6 @@
-import { csrf, isSecureRequest, protect } from '../index'
-import { getSecurityRuntime } from '../runtime'
+import { protect } from '../index'
+import { prepareCsrfCookies } from '../cookie-issuance'
 import { SecurityCsrfError } from '../contracts'
-import {
-  SECURITY_CLIENT_CONFIG_COOKIE,
-  createSecurityClientConfig,
-  serializeSecurityClientConfig,
-} from '../client-config'
 
 type SvelteKitCookieOptions = {
   path: string
@@ -44,31 +39,11 @@ export type SvelteKitCsrfHandle = <TEvent extends SvelteKitCsrfEvent>(
   input: SvelteKitCsrfHandleInput<TEvent>,
 ) => Response | Promise<Response>
 
-function isSafeMethod(method: string): boolean {
-  const normalized = method.trim().toUpperCase()
-  return normalized === 'GET' || normalized === 'HEAD'
-}
-
 async function issueCsrfCookie(event: SvelteKitCsrfEvent): Promise<void> {
-  const runtime = getSecurityRuntime()
-  const { config } = runtime
-
-  if (!config.csrf.enabled || !isSafeMethod(event.request.method)) {
-    return
+  const cookies = await prepareCsrfCookies(event.request, name => event.cookies.get(name))
+  for (const cookie of cookies) {
+    event.cookies.set(cookie.name, cookie.value, cookie.options)
   }
-
-  event.cookies.set(config.csrf.cookie, await csrf.token(event.request), {
-    httpOnly: false,
-    path: '/',
-    sameSite: 'lax',
-    secure: isSecureRequest(event.request),
-  })
-  event.cookies.set(SECURITY_CLIENT_CONFIG_COOKIE, serializeSecurityClientConfig(createSecurityClientConfig(config)), {
-    httpOnly: false,
-    path: '/',
-    sameSite: 'lax',
-    secure: isSecureRequest(event.request),
-  })
 }
 
 function createCsrfErrorResponse(error: SecurityCsrfError): Response {

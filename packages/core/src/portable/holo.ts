@@ -1177,43 +1177,16 @@ function unregisterProjectQueueJobs(
   }
 }
 
-function withCanonicalAuthorizationDefinitionName<TDefinition extends { readonly name: string }>(
-  definition: TDefinition,
-  name: string,
-): TDefinition {
-  if (definition.name === name) {
-    return definition
-  }
-
-  return {
-    ...definition,
-    name,
-  }
-}
-
-function withCanonicalAuthorizationAbilityName<TDefinition extends { readonly name: string }>(
-  definition: TDefinition,
-  name: string,
-): TDefinition {
-  if (definition.name === name) {
-    return definition
-  }
-
-  return {
-    ...definition,
-    name,
-  }
-}
-
 async function registerProjectAuthorizationDefinitions(
   projectRoot: string,
   registry: GeneratedProjectRegistry | undefined,
   authorizationModule: AuthorizationModule | undefined,
-): Promise<{ readonly policyNames: readonly string[], readonly abilityNames: readonly string[] }> {
+): Promise<Awaited<ReturnType<AuthorizationModule['authorizationInternals']['installAuthorizationDefinitions']>>> {
   if (!registry || (!registry.authorizationPolicies.length && !registry.authorizationAbilities.length)) {
     return Object.freeze({
       policyNames: Object.freeze([]),
       abilityNames: Object.freeze([]),
+      dispose() {},
     })
   }
 
@@ -1221,120 +1194,26 @@ async function registerProjectAuthorizationDefinitions(
     throw new Error('[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.')
   }
 
-  const registeredPolicyNames: string[] = []
-  const registeredAbilityNames: string[] = []
-  const previousPolicies = new Map< string, Parameters<AuthorizationModule['authorizationInternals']['registerPolicyDefinition']>[0]>()
-  const previousAbilities = new Map<string, Parameters<AuthorizationModule['authorizationInternals']['registerAbilityDefinition']>[0]>()
-
-  try {
-    for (const entry of registry.authorizationPolicies) {
-      const existing = authorizationModule.authorizationInternals.getAuthorizationRuntimeState().policiesByName.get(entry.name)
-      if (existing) {
-        previousPolicies.set(entry.name, existing)
-        authorizationModule.authorizationInternals.unregisterPolicyDefinition(entry.name)
-      }
-
-      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
-      const policy = resolveAuthorizationDefinitionExport(
-        moduleValue,
-        entry.exportName,
-        value => authorizationModule.isAuthorizationPolicyDefinition(value),
-      )
-      if (!policy) {
-        throw new Error(`Discovered policy "${entry.sourcePath}" does not export a Holo policy.`)
-      }
-
-      const canonicalPolicy = withCanonicalAuthorizationDefinitionName(
-        policy,
-        entry.name,
-      )
-      const resolvedPolicyName = policy.name
-      if (resolvedPolicyName !== entry.name) {
-        authorizationModule.authorizationInternals.unregisterPolicyDefinition(resolvedPolicyName)
-      }
-
-      if (
-        typeof authorizationModule.authorizationInternals.registerPolicyDefinition === 'function'
-        && !authorizationModule.authorizationInternals.getAuthorizationRuntimeState().policiesByName.has(entry.name)
-      ) {
-        authorizationModule.authorizationInternals.registerPolicyDefinition(canonicalPolicy)
-      }
-
-      registeredPolicyNames.push(entry.name)
-    }
-
-    for (const entry of registry.authorizationAbilities) {
-      const existing = authorizationModule.authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.get(entry.name)
-      if (existing) {
-        previousAbilities.set(entry.name, existing)
-        authorizationModule.authorizationInternals.unregisterAbilityDefinition(entry.name)
-      }
-
-      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
-      const ability = resolveAuthorizationDefinitionExport(
-        moduleValue,
-        entry.exportName,
-        value => authorizationModule.isAuthorizationAbilityDefinition(value),
-      )
-      if (!ability) {
-        throw new Error(`Discovered ability "${entry.sourcePath}" does not export a Holo ability.`)
-      }
-
-      const canonicalAbility = withCanonicalAuthorizationAbilityName(
-        ability,
-        entry.name,
-      )
-      const resolvedAbilityName = ability.name
-      if (resolvedAbilityName !== entry.name) {
-        authorizationModule.authorizationInternals.unregisterAbilityDefinition(resolvedAbilityName)
-      }
-
-      if (
-        typeof authorizationModule.authorizationInternals.registerAbilityDefinition === 'function'
-        && !authorizationModule.authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has(entry.name)
-      ) {
-        authorizationModule.authorizationInternals.registerAbilityDefinition(canonicalAbility)
-      }
-
-      registeredAbilityNames.push(entry.name)
-    }
-  } catch (error) {
-    unregisterProjectAuthorizationDefinitions(authorizationModule, registeredPolicyNames, registeredAbilityNames)
-    if (typeof authorizationModule.authorizationInternals.registerPolicyDefinition === 'function') {
-      for (const definition of previousPolicies.values()) {
-        authorizationModule.authorizationInternals.registerPolicyDefinition(definition)
-      }
-    }
-    if (typeof authorizationModule.authorizationInternals.registerAbilityDefinition === 'function') {
-      for (const definition of previousAbilities.values()) {
-        authorizationModule.authorizationInternals.registerAbilityDefinition(definition)
-      }
-    }
-    throw error
-  }
-
-  return Object.freeze({
-    policyNames: Object.freeze(registeredPolicyNames),
-    abilityNames: Object.freeze(registeredAbilityNames),
-  })
-}
-
-function unregisterProjectAuthorizationDefinitions(
-  authorizationModule: AuthorizationModule | undefined,
-  policyNames: readonly string[],
-  abilityNames: readonly string[],
-): void {
-  if (!authorizationModule) {
-    return
-  }
-
-  for (const policyName of policyNames) {
-    authorizationModule.authorizationInternals.unregisterPolicyDefinition(policyName)
-  }
-
-  for (const abilityName of abilityNames) {
-    authorizationModule.authorizationInternals.unregisterAbilityDefinition(abilityName)
-  }
+  return await authorizationModule.authorizationInternals.installAuthorizationDefinitions(
+    registry.authorizationPolicies.map(entry => ({
+      name: entry.name,
+      async load() {
+        const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+        const policy = resolveAuthorizationDefinitionExport(moduleValue, entry.exportName, authorizationModule.isAuthorizationPolicyDefinition)
+        if (!policy) throw new Error(`Discovered policy "${entry.sourcePath}" does not export a Holo policy.`)
+        return policy
+      },
+    })),
+    registry.authorizationAbilities.map(entry => ({
+      name: entry.name,
+      async load() {
+        const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+        const ability = resolveAuthorizationDefinitionExport(moduleValue, entry.exportName, authorizationModule.isAuthorizationAbilityDefinition)
+        if (!ability) throw new Error(`Discovered ability "${entry.sourcePath}" does not export a Holo ability.`)
+        return ability
+      },
+    })),
+  )
 }
 
 async function registerProjectEventsAndListeners(
@@ -1939,8 +1818,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   const runtimeOwnedQueueJobNames: string[] = []
   const runtimeOwnedEventNames: string[] = []
   const runtimeOwnedListenerIds: string[] = []
-  const runtimeOwnedAuthorizationPolicyNames: string[] = []
-  const runtimeOwnedAuthorizationAbilityNames: string[] = []
+  let disposeAuthorizationDefinitions: (() => void) | undefined
   let activeQueueModule: QueueModule | undefined
   let activeEventsModule: EventsModule | undefined
   let activeAuthorizationModule: AuthorizationModule | undefined
@@ -1957,13 +1835,22 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   }) as HoloQueueRuntimeBinding
 
   const unregisterRuntimeContributions = (): void => {
-    unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds)
+    const failures: unknown[] = []
+    const disposals = [
+      () => unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds),
+      () => disposeAuthorizationDefinitions?.(),
+      () => unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames),
+    ]
+    for (const dispose of disposals) {
+      try {
+        dispose()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
     runtimeOwnedEventNames.splice(0)
     runtimeOwnedListenerIds.splice(0)
-    unregisterProjectAuthorizationDefinitions(activeAuthorizationModule, runtimeOwnedAuthorizationPolicyNames, runtimeOwnedAuthorizationAbilityNames)
-    runtimeOwnedAuthorizationPolicyNames.splice(0)
-    runtimeOwnedAuthorizationAbilityNames.splice(0)
-    unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames)
+    disposeAuthorizationDefinitions = undefined
     runtimeOwnedQueueJobNames.splice(0)
     activeAuthorizationModule = undefined
     activeEventsModule = undefined
@@ -1971,6 +1858,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     activeSessionRuntime = undefined
     activeAuthRuntime = undefined
     activeAuthContext = undefined
+    throwCapabilityFailures(failures)
   }
 
   const applyOptionalSubsystems = async (
@@ -2006,8 +1894,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     }
     activeAuthorizationModule = await loadAuthorizationModule()
     const authorizationRegistration = await registerProjectAuthorizationDefinitions(projectRoot, registry, activeAuthorizationModule)
-    runtimeOwnedAuthorizationPolicyNames.push(...authorizationRegistration.policyNames)
-    runtimeOwnedAuthorizationAbilityNames.push(...authorizationRegistration.abilityNames)
+    disposeAuthorizationDefinitions = authorizationRegistration.dispose
     if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
       if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
       runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule))
@@ -2057,12 +1944,22 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       initialize: initializeRuntimeServices,
       async dispose() {
         if (!shouldBootRuntimeServices(options.processEnv)) return
-        unregisterRuntimeContributions()
-        try {
-          await resetOptionalHoloSubsystems()
-        } finally {
-          if (previousOptionalSubsystemBindings) restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
+        const failures: unknown[] = []
+        const disposals = [
+          unregisterRuntimeContributions,
+          resetOptionalHoloSubsystems,
+          () => {
+            if (previousOptionalSubsystemBindings) restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
+          },
+        ]
+        for (const dispose of disposals) {
+          try {
+            await dispose()
+          } catch (error) {
+            failures.push(error)
+          }
         }
+        throwCapabilityFailures(failures)
       },
     },
   ])
@@ -2249,7 +2146,6 @@ export const holoRuntimeInternals = {
   createNotificationMailText,
   createCoreSessionStores,
   registerProjectAuthorizationDefinitions,
-  unregisterProjectAuthorizationDefinitions,
   resolveAuthorizationDefinitionExport,
   fromHostedIdentityProviderValue: fromHostedIdentityProviderValue,
   getConfigSection,

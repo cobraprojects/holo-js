@@ -131,6 +131,36 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
     })
   })
 
+  it('preserves current cookies and refreshes only stale client configuration before rendering', async () => {
+    configureSecurity()
+    const token = await csrf.token(new Request('https://app.test/login'))
+    const clientConfig = '{"csrf":{"field":"_token","cookie":"XSRF-TOKEN"}}'
+    for (const configuration of [clientConfig, 'stale']) {
+      const request = new Request('https://app.test/login', {
+        headers: { cookie: `XSRF-TOKEN=${token}` },
+      })
+      const { event, writes } = createEvent(request, token)
+      const configuredEvent = {
+        ...event,
+        cookies: {
+          ...event.cookies,
+          get(name: string) {
+            return name === SECURITY_CLIENT_CONFIG_COOKIE ? configuration : event.cookies.get(name)
+          },
+        },
+      }
+      const response = await csrfProtection()({
+        event: configuredEvent,
+        resolve: async () => {
+          expect(writes.map(write => write.name)).toEqual(configuration === clientConfig ? [] : [SECURITY_CLIENT_CONFIG_COOKIE])
+          expect((await csrf.input(request)).value).toBe(token)
+          return new Response('ok')
+        },
+      })
+      expect(response.status).toBe(200)
+    }
+  })
+
   it('issues the readable csrf cookie for HEAD requests', async () => {
     configureSecurity()
     const { event, writes } = createEvent(new Request('https://app.test/login', {

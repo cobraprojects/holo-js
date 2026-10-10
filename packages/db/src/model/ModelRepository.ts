@@ -17,6 +17,8 @@ import {
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity } from './Entity'
+import { PivotMutation } from './PivotMutation'
+import { collectRelationKeys, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -51,7 +53,6 @@ import type {
 
 type WriteMode = 'create' | 'update'
 type PivotAttributes = Record<string, unknown>
-type PivotMutationEntry = { id: unknown, attributes: PivotAttributes }
 type PivotSyncResult = { attached: unknown[], detached: unknown[], updated: unknown[] }
 type PivotToggleResult = { attached: unknown[], detached: unknown[] }
 type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
@@ -1903,151 +1904,24 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return new Entity(this, attributes, false)
   }
 
-  async attachRelation(
-    entity: Entity<TTable>,
-    relationName: string,
-    ids: unknown,
-    attributes: PivotAttributes = {},
-  ): Promise<void> {
-    const context = this.getPivotMutationContext(entity, relationName)
-    const entries = this.normalizePivotInput(ids, attributes)
-    this.assertValidPivotEntries(relationName, entries, context.relation)
-    if (entries.length === 0) {
-      return
-    }
-
-    await this.getConnection().transaction(async (tx) => {
-      const currentRows = await this.getPivotRows(context, tx, entries.map(entry => entry.id))
-      const currentMap = this.indexPivotRows(currentRows, this.getPivotRelatedIdColumn(context.relation))
-
-      for (const entry of entries) {
-        const existing = currentMap.get(String(entry.id))
-        if (existing) {
-          if (this.pivotAttributesChanged(existing, entry.attributes, context.relation)) {
-            await this.updatePivotRow(context, tx, entry.id, entry.attributes)
-          }
-          continue
-        }
-
-        await this.insertPivotRow(context, tx, entry.id, entry.attributes)
-      }
-    })
+  async attachRelation(entity: Entity<TTable>, relationName: string, ids: unknown, attributes: PivotAttributes = {}): Promise<void> {
+    await this.createPivotMutation(entity, relationName).attach(ids, attributes)
   }
 
-  async detachRelation(
-    entity: Entity<TTable>,
-    relationName: string,
-    ids?: unknown,
-  ): Promise<number> {
-    const context = this.getPivotMutationContext(entity, relationName)
-
-    return this.getConnection().transaction(async (tx) => {
-      if (typeof ids === 'undefined' || ids === null) {
-        return this.deletePivotRows(context, tx)
-      }
-
-      const entries = this.normalizePivotInput(ids)
-      if (entries.length === 0) {
-        return 0
-      }
-
-      return this.deletePivotRows(context, tx, entries.map(entry => entry.id))
-    })
+  async detachRelation(entity: Entity<TTable>, relationName: string, ids?: unknown): Promise<number> {
+    return this.createPivotMutation(entity, relationName).detach(ids)
   }
 
-  async syncRelation(
-    entity: Entity<TTable>,
-    relationName: string,
-    ids: unknown,
-    detachMissing: boolean,
-  ): Promise<PivotSyncResult> {
-    const context = this.getPivotMutationContext(entity, relationName)
-    const entries = this.normalizePivotInput(ids)
-    this.assertValidPivotEntries(relationName, entries, context.relation)
-    const desiredMap = new Map(entries.map(entry => [String(entry.id), entry]))
-    const result: PivotSyncResult = { attached: [], detached: [], updated: [] }
-
-    await this.getConnection().transaction(async (tx) => {
-      const currentRows = await this.getPivotRows(context, tx)
-      const currentMap = this.indexPivotRows(currentRows, this.getPivotRelatedIdColumn(context.relation))
-
-      for (const entry of entries) {
-        const existing = currentMap.get(String(entry.id))
-        if (!existing) {
-          await this.insertPivotRow(context, tx, entry.id, entry.attributes)
-          result.attached.push(entry.id)
-          continue
-        }
-
-        if (this.pivotAttributesChanged(existing, entry.attributes, context.relation)) {
-          await this.updatePivotRow(context, tx, entry.id, entry.attributes)
-          result.updated.push(entry.id)
-        }
-      }
-
-      if (detachMissing) {
-        const idsToDetach = [...currentMap.keys()]
-          .filter(key => !desiredMap.has(key))
-          .map(key => currentMap.get(key)?.[this.getPivotRelatedIdColumn(context.relation)])
-          .filter(value => typeof value !== 'undefined')
-
-        if (idsToDetach.length > 0) {
-          await this.deletePivotRows(context, tx, idsToDetach)
-          result.detached.push(...idsToDetach)
-        }
-      }
-    })
-
-    return result
+  async syncRelation(entity: Entity<TTable>, relationName: string, ids: unknown, detachMissing: boolean): Promise<PivotSyncResult> {
+    return this.createPivotMutation(entity, relationName).sync(ids, detachMissing)
   }
 
-  async updateExistingPivot(
-    entity: Entity<TTable>,
-    relationName: string,
-    id: unknown,
-    attributes: PivotAttributes,
-  ): Promise<number> {
-    const context = this.getPivotMutationContext(entity, relationName)
-    this.assertValidPivotAttributes(relationName, attributes, context.relation)
-    if (Object.keys(attributes).length === 0) return 0
-    const [existing] = await this.getPivotRows(context, this.getConnection(), [id])
-    if (!existing) return 0
-    if (!this.pivotAttributesChanged(existing, attributes, context.relation)) return 0
-    await this.updatePivotRow(context, this.getConnection(), id, attributes)
-    return 1
+  async updateExistingPivot(entity: Entity<TTable>, relationName: string, id: unknown, attributes: PivotAttributes): Promise<number> {
+    return this.createPivotMutation(entity, relationName).update(id, attributes)
   }
 
-  async toggleRelation(
-    entity: Entity<TTable>,
-    relationName: string,
-    ids: unknown,
-  ): Promise<PivotToggleResult> {
-    const context = this.getPivotMutationContext(entity, relationName)
-    const entries = this.normalizePivotInput(ids)
-    this.assertValidPivotEntries(relationName, entries, context.relation)
-    const result: PivotToggleResult = { attached: [], detached: [] }
-
-    if (entries.length === 0) {
-      return result
-    }
-
-    await this.getConnection().transaction(async (tx) => {
-      const currentRows = await this.getPivotRows(context, tx, entries.map(entry => entry.id))
-      const currentMap = this.indexPivotRows(currentRows, this.getPivotRelatedIdColumn(context.relation))
-
-      for (const entry of entries) {
-        if (currentMap.has(String(entry.id))) {
-          await this.deletePivotRows(context, tx, [entry.id])
-          result.detached.push(entry.id)
-          continue
-        }
-
-        await this.insertPivotRow(context, tx, entry.id, entry.attributes)
-        result.attached.push(entry.id)
-      }
-    })
-
-    return result
+  async toggleRelation(entity: Entity<TTable>, relationName: string, ids: unknown): Promise<PivotToggleResult> {
+    return this.createPivotMutation(entity, relationName).toggle(ids)
   }
 
   private async loadRelation(
@@ -2158,11 +2032,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
   ): Promise<void> {
-    const foreignKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
       for (const entity of entities) {
@@ -2172,22 +2042,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const observationCount = hasActiveDatabaseDependencyCollector()
-      ? readDatabaseQueryObservationCount()
-      : undefined
-    const constrainedQuery = this.applyRelationConstraint(relation, related, constraint)
-    const constrainedPlan = typeof observationCount === 'number'
-      ? constrainedQuery.getTableQueryBuilder().getPlan()
-      : undefined
-    const relatedEntities = await constrainedQuery
-      .where(relation.ownerKey, 'in', foreignKeys)
-      .get()
-    if (typeof observationCount === 'number') {
-      truncateDatabaseQueryObservations(observationCount)
-    }
-    const relatedMap = new Map(
-      relatedEntities.map(entity => [entity.get(relation.ownerKey as never), entity]),
+    const { entities: relatedEntities, plan: constrainedPlan } = await retrieveRelation(
+      foreignKeys,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.ownerKey,
+      true,
     )
+    const relatedMap = indexRelation(relatedEntities, relation.ownerKey)
 
     for (const entity of entities) {
       const foreignKey = entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>]
@@ -2204,11 +2065,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'hasMany' }>,
     constraint?: RelationConstraint,
   ): Promise<void> {
-    const localKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const localKeys = collectRelationKeys(entities, relation.localKey)
 
     if (localKeys.length === 0) {
       for (const entity of entities) {
@@ -2218,27 +2075,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const observationCount = hasActiveDatabaseDependencyCollector()
-      ? readDatabaseQueryObservationCount()
-      : undefined
-    const constrainedQuery = this.applyRelationConstraint(relation, related, constraint)
-    const constrainedPlan = typeof observationCount === 'number'
-      ? constrainedQuery.getTableQueryBuilder().getPlan()
-      : undefined
-    const relatedEntities = await constrainedQuery
-      .where(relation.foreignKey, 'in', localKeys)
-      .get()
-    if (typeof observationCount === 'number') {
-      truncateDatabaseQueryObservations(observationCount)
-    }
-    const grouped = new Map<unknown, unknown[]>()
-
-    for (const relatedEntity of relatedEntities) {
-      const foreignKey = relatedEntity.get(relation.foreignKey as never)
-      const bucket = grouped.get(foreignKey) ?? []
-      bucket.push(relatedEntity)
-      grouped.set(foreignKey, bucket)
-    }
+    const { entities: relatedEntities, plan: constrainedPlan } = await retrieveRelation(
+      localKeys,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.foreignKey,
+      true,
+    )
+    const grouped = groupRelation(relatedEntities, relation.foreignKey)
 
     for (const entity of entities) {
       const localKey = entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>]
@@ -2370,77 +2213,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<void> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (parentKeys.length === 0) {
-      for (const entity of entities) {
-        entity.setRelation(relationName, [])
-      }
-      return
-    }
-
-    const observationCount = hasActiveDatabaseDependencyCollector()
-      ? readDatabaseQueryObservationCount()
-      : undefined
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
-      .where(relation.foreignPivotKey, 'in', parentKeys)
-      .get<Record<string, unknown>>()
-
-    if (pivotRows.length === 0) {
-      if (typeof observationCount === 'number') {
-        truncateDatabaseQueryObservations(observationCount)
-      }
-      for (const entity of entities) {
-        entity.setRelation(relationName, [])
-      }
-      return
-    }
-
-    const relatedIds = [...new Set(
-      pivotRows
-        .map(row => row[relation.relatedPivotKey])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (relatedIds.length === 0) {
-      if (typeof observationCount === 'number') {
-        truncateDatabaseQueryObservations(observationCount)
-      }
-      for (const entity of entities) {
-        entity.setRelation(relationName, [])
-      }
-      return
-    }
-
-    const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.relatedKey, 'in', relatedIds)
-      .get()
-    if (typeof observationCount === 'number') {
-      truncateDatabaseQueryObservations(observationCount)
-    }
-    const relatedMap = new Map(
-      relatedEntities.map(entity => [entity.get(relation.relatedKey as never), entity]),
-    )
-    const grouped = new Map<unknown, Entity[]>()
-
-    for (const row of pivotRows) {
-      const parentKey = row[relation.foreignPivotKey]
-      const relatedKey = row[relation.relatedPivotKey]
-      const relatedEntity = relatedMap.get(relatedKey)
-      if (!relatedEntity) {
-        continue
-      }
-
-      const bucket = grouped.get(parentKey) ?? []
-      bucket.push(this.attachPivotAttributes(relatedEntity, row, relation))
-      grouped.set(parentKey, bucket)
-    }
-
+    const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
+    const { rows, related } = await this.retrieveBelongsToMany(entities, relation, constraint)
+    if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
+    const grouped = this.groupPivotRows(rows, related, relation)
     for (const entity of entities) {
       const parentKey = entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, grouped.get(parentKey) ?? [])
@@ -2937,20 +2713,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
   ): Promise<Set<unknown>> {
-    const foreignKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
       return new Set()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.ownerKey, 'in', foreignKeys)
-      .get()
+    const { entities: relatedEntities } = await retrieveRelation(
+      foreignKeys,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.ownerKey,
+    )
 
     return new Set(relatedEntities.map(entity => entity.get(relation.ownerKey as never)))
   }
@@ -2960,20 +2734,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, number>> {
-    const foreignKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
       return new Map()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.ownerKey, 'in', foreignKeys)
-      .get()
+    const { entities: relatedEntities } = await retrieveRelation(
+      foreignKeys,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.ownerKey,
+    )
     const matching = new Set(relatedEntities.map(entity => entity.get(relation.ownerKey as never)))
     const counts = new Map<unknown, number>()
 
@@ -2992,23 +2764,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const foreignKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
       return new Map()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.ownerKey, 'in', foreignKeys)
-      .get()
-    const relatedMap = new Map(
-      relatedEntities.map(entity => [entity.get(relation.ownerKey as never), entity]),
+    const { entities: relatedEntities } = await retrieveRelation(
+      foreignKeys,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.ownerKey,
     )
+    const relatedMap = indexRelation(relatedEntities, relation.ownerKey)
     const grouped = new Map<unknown, Entity[]>()
 
     for (const entity of entities) {
@@ -3132,28 +2900,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' | 'hasOneOfMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const localKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const localKeys = collectRelationKeys(entities, relation.localKey)
 
     if (localKeys.length === 0) {
       return new Map()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.foreignKey, 'in', localKeys)
-      .get()
-    const grouped = new Map<unknown, Entity[]>()
-
-    for (const relatedEntity of relatedEntities) {
-      const key = relatedEntity.get(relation.foreignKey as never)
-      const bucket = grouped.get(key) ?? []
-      bucket.push(relatedEntity)
-      grouped.set(key, bucket)
-    }
+    const { entities: relatedEntities } = await retrieveRelation(
+      localKeys,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.foreignKey,
+    )
+    const grouped = groupRelation(relatedEntities, relation.foreignKey)
 
     if (relation.kind === 'hasOneOfMany') {
       const selected = new Map<unknown, Entity[]>()
@@ -3172,11 +2931,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'morphOne' | 'morphMany' | 'morphOneOfMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const localKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const localKeys = collectRelationKeys(entities, relation.localKey)
 
     if (localKeys.length === 0) {
       return new Map()
@@ -3187,14 +2942,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', localKeys)
       .get()
-    const grouped = new Map<unknown, Entity[]>()
-
-    for (const relatedEntity of relatedEntities) {
-      const key = relatedEntity.get(relation.morphIdColumn as never)
-      const bucket = grouped.get(key) ?? []
-      bucket.push(relatedEntity)
-      grouped.set(key, bucket)
-    }
+    const grouped = groupRelation(relatedEntities, relation.morphIdColumn)
 
     if (relation.kind === 'morphOneOfMany') {
       const selected = new Map<unknown, Entity[]>()
@@ -3397,11 +3145,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const parentKeys = collectRelationKeys(entities, relation.localKey)
 
     if (parentKeys.length === 0) {
       return new Map()
@@ -3435,9 +3179,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.secondKey, 'in', secondLocalValues)
-      .get()
+    const { entities: relatedEntities } = await retrieveRelation(
+      secondLocalValues,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.secondKey,
+    )
     const relatedBySecondKey = new Map<unknown, Entity[]>()
 
     for (const relatedEntity of relatedEntities) {
@@ -3466,39 +3212,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Set<unknown>> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (parentKeys.length === 0) {
-      return new Set()
-    }
-
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
-      .where(relation.foreignPivotKey, 'in', parentKeys)
-      .get<Record<string, unknown>>()
-
-    const relatedIds = [...new Set(
-      pivotRows
-        .map(row => row[relation.relatedPivotKey])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (relatedIds.length === 0) {
-      return new Set()
-    }
-
-    const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.relatedKey, 'in', relatedIds)
-      .get()
-    const matchingRelated = new Set(relatedEntities.map(entity => entity.get(relation.relatedKey as never)))
+    const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
     const matchingParents = new Set<unknown>()
 
     for (const row of pivotRows) {
-      if (matchingRelated.has(row[relation.relatedPivotKey])) {
+      if (relatedMap.has(row[relation.relatedPivotKey])) {
         matchingParents.add(row[relation.foreignPivotKey])
       }
     }
@@ -3529,39 +3247,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, number>> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (parentKeys.length === 0) {
-      return new Map()
-    }
-
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
-      .where(relation.foreignPivotKey, 'in', parentKeys)
-      .get<Record<string, unknown>>()
-
-    const relatedIds = [...new Set(
-      pivotRows
-        .map(row => row[relation.relatedPivotKey])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (relatedIds.length === 0) {
-      return new Map()
-    }
-
-    const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.relatedKey, 'in', relatedIds)
-      .get()
-    const matchingRelated = new Set(relatedEntities.map(entity => entity.get(relation.relatedKey as never)))
+    const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
     const counts = new Map<unknown, number>()
 
     for (const row of pivotRows) {
-      if (!matchingRelated.has(row[relation.relatedPivotKey])) {
+      if (!relatedMap.has(row[relation.relatedPivotKey])) {
         continue
       }
 
@@ -3607,52 +3297,39 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
+    return this.groupPivotRows(pivotRows, relatedMap, relation)
+  }
 
-    if (parentKeys.length === 0) {
-      return new Map()
-    }
-
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
-      .where(relation.foreignPivotKey, 'in', parentKeys)
-      .get<Record<string, unknown>>()
-
-    const relatedIds = [...new Set(
-      pivotRows
-        .map(row => row[relation.relatedPivotKey])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
-
-    if (relatedIds.length === 0) {
-      return new Map()
-    }
-
-    const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.relatedKey, 'in', relatedIds)
-      .get()
-    const relatedMap = new Map(
-      relatedEntities.map(entity => [entity.get(relation.relatedKey as never), entity]),
+  private retrieveBelongsToMany(
+    entities: readonly Entity<TTable>[],
+    relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
+    constraint?: RelationConstraint,
+  ): Promise<{ rows: Record<string, unknown>[], related: Map<unknown, Entity> }> {
+    return retrievePivotRelation(
+      collectRelationKeys(entities, relation.parentKey),
+      () => this.createBelongsToManyPivotQuery(relation, this.getConnection()),
+      relation.foreignPivotKey,
+      relation.relatedPivotKey,
+      () => this.applyRelationConstraint(relation, this.resolveRelatedRepository(relation.related), constraint),
+      relation.relatedKey,
     )
+  }
+
+  private groupPivotRows(
+    rows: readonly Record<string, unknown>[],
+    related: ReadonlyMap<unknown, Entity>,
+    relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
+  ): Map<unknown, Entity[]> {
     const grouped = new Map<unknown, Entity[]>()
-
-    for (const row of pivotRows) {
-      const parentKey = row[relation.foreignPivotKey]
-      const relatedKey = row[relation.relatedPivotKey]
-      const relatedEntity = relatedMap.get(relatedKey)
-      if (!relatedEntity) {
-        continue
-      }
-
-      const bucket = grouped.get(parentKey) ?? []
-      bucket.push(this.attachPivotAttributes(relatedEntity, row, relation))
-      grouped.set(parentKey, bucket)
+    for (const row of rows) {
+      const entity = related.get(row[relation.relatedPivotKey])
+      if (!entity) continue
+      const key = row[relation.foreignPivotKey]
+      const bucket = grouped.get(key) ?? []
+      bucket.push(this.attachPivotAttributes(entity, row, relation))
+      grouped.set(key, bucket)
     }
-
     return grouped
   }
 
@@ -3661,11 +3338,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'morphToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const parentKeys = collectRelationKeys(entities, relation.parentKey)
 
     if (parentKeys.length === 0) {
       return new Map()
@@ -3687,12 +3360,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.relatedKey, 'in', relatedIds)
-      .get()
-    const relatedMap = new Map(
-      relatedEntities.map(entity => [entity.get(relation.relatedKey as never), entity]),
+    const { entities: relatedEntities } = await retrieveRelation(
+      relatedIds,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.relatedKey,
     )
+    const relatedMap = indexRelation(relatedEntities, relation.relatedKey)
     const grouped = new Map<unknown, Entity[]>()
 
     for (const row of pivotRows) {
@@ -3716,11 +3389,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'morphedByMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
-    const parentKeys = [...new Set(
-      entities
-        .map(entity => entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>])
-        .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    const parentKeys = collectRelationKeys(entities, relation.parentKey)
 
     if (parentKeys.length === 0) {
       return new Map()
@@ -3741,12 +3410,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Map()
     }
 
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.relatedKey, 'in', relatedIds)
-      .get()
-    const relatedMap = new Map(
-      relatedEntities.map(entity => [entity.get(relation.relatedKey as never), entity]),
+    const { entities: relatedEntities } = await retrieveRelation(
+      relatedIds,
+      () => this.applyRelationConstraint(relation, related, constraint),
+      relation.relatedKey,
     )
+    const relatedMap = indexRelation(relatedEntities, relation.relatedKey)
     const grouped = new Map<unknown, Entity[]>()
 
     for (const row of pivotRows) {
@@ -3880,134 +3549,6 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     return { relation, parentId }
-  }
-
-  private normalizePivotInput(
-    ids: unknown,
-    attributes: PivotAttributes = {},
-  ): PivotMutationEntry[] {
-    if (ids == null) {
-      return []
-    }
-
-    if (Array.isArray(ids)) {
-      return ids.map(id => ({ id, attributes: { ...attributes } }))
-    }
-
-    if (typeof ids === 'object') {
-      return Object.entries(ids as Record<string, PivotAttributes>).map(([id, value]) => ({
-        id: /^-?\d+$/.test(id) ? Number(id) : id,
-        attributes: { ...(value ?? {}) },
-      }))
-    }
-
-    return [{ id: ids, attributes: { ...attributes } }]
-  }
-
-  private assertValidPivotEntries(
-    relationName: string,
-    entries: readonly PivotMutationEntry[],
-    relation: PivotMutationRelationDefinition,
-  ): void {
-    for (const entry of entries) {
-      this.assertValidPivotAttributes(relationName, entry.attributes, relation)
-    }
-  }
-
-  private assertValidPivotAttributes(
-    relationName: string,
-    attributes: PivotAttributes,
-    relation: PivotMutationRelationDefinition,
-  ): void {
-    const reserved = new Set<string>(this.getReservedPivotColumns(relation))
-    const allowed = new Set<string>(relation.pivotColumns)
-
-    for (const key of Object.keys(attributes)) {
-      if (reserved.has(key)) {
-        throw new SecurityError(`Pivot attribute "${key}" on relation "${relationName}" is reserved and cannot be set explicitly.`)
-      }
-
-      if (!allowed.has(key)) {
-        throw new SecurityError(`Pivot attribute "${key}" on relation "${relationName}" must be declared with withPivot(...) before it can be written.`)
-      }
-    }
-  }
-
-  private async getPivotRows(
-    context: {
-      relation: PivotMutationRelationDefinition
-      parentId: unknown
-    },
-    connection: DatabaseContext,
-    relatedIds?: readonly unknown[],
-  ): Promise<Record<string, unknown>[]> {
-    let query = this.createPivotMutationQuery(context, connection)
-
-    if (relatedIds && relatedIds.length > 0) {
-      query = query.where(this.getPivotRelatedIdColumn(context.relation), 'in', relatedIds)
-    }
-
-    return query.get<Record<string, unknown>>()
-  }
-
-  private indexPivotRows(
-    rows: readonly Record<string, unknown>[],
-    key: string,
-  ): Map<string, Record<string, unknown>> {
-    return new Map(rows.map(row => [String(row[key]), row]))
-  }
-
-  private pivotAttributesChanged(
-    existing: Record<string, unknown>,
-    attributes: PivotAttributes,
-    _relation: PivotMutationRelationDefinition,
-  ): boolean {
-    return Object.entries(attributes).some(([key, value]) => existing[key] !== value)
-  }
-
-  private async insertPivotRow(
-    context: {
-      relation: PivotMutationRelationDefinition
-      parentId: unknown
-    },
-    connection: DatabaseContext,
-    relatedId: unknown,
-    attributes: PivotAttributes,
-  ): Promise<void> {
-    await new TableQueryBuilder(context.relation.pivotTable, connection)
-      .insert(this.buildPivotInsertPayload(context, relatedId, attributes))
-  }
-
-  private async updatePivotRow(
-    context: {
-      relation: PivotMutationRelationDefinition
-      parentId: unknown
-    },
-    connection: DatabaseContext,
-    relatedId: unknown,
-    attributes: PivotAttributes,
-  ): Promise<void> {
-    await this.createPivotMutationQuery(context, connection)
-      .where(this.getPivotRelatedIdColumn(context.relation), relatedId)
-      .update(attributes)
-  }
-
-  private async deletePivotRows(
-    context: {
-      relation: PivotMutationRelationDefinition
-      parentId: unknown
-    },
-    connection: DatabaseContext,
-    relatedIds?: readonly unknown[],
-  ): Promise<number> {
-    let query = this.createPivotMutationQuery(context, connection)
-
-    if (relatedIds && relatedIds.length > 0) {
-      query = query.where(this.getPivotRelatedIdColumn(context.relation), 'in', relatedIds)
-    }
-
-    const result = await query.delete()
-    return result.affectedRows ?? 0
   }
 
   private isWritableColumn(column: string): boolean {
@@ -4147,88 +3688,27 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
   }
 
-  private createPivotMutationQuery(
-    context: {
-      relation: PivotMutationRelationDefinition
-      parentId: unknown
-    },
-    connection: DatabaseContext,
-  ): TableQueryBuilder<string | TableDefinition> {
-    switch (context.relation.kind) {
-      case 'belongsToMany':
-        return new TableQueryBuilder(context.relation.pivotTable, connection)
-          .where(context.relation.foreignPivotKey, context.parentId)
-      case 'morphToMany':
-        return new TableQueryBuilder(context.relation.pivotTable, connection)
-          .where(context.relation.morphTypeColumn, this.getMorphTypeValue())
-          .where(context.relation.morphIdColumn, context.parentId)
-      case 'morphedByMany': {
-        const related = this.resolveRelatedRepository(context.relation.related)
-        return new TableQueryBuilder(context.relation.pivotTable, connection)
-          .where(context.relation.foreignPivotKey, context.parentId)
-          .where(context.relation.morphTypeColumn, related.definition.morphClass)
-      }
-    }
-  }
-
-  private getPivotRelatedIdColumn(
-    relation: PivotMutationRelationDefinition,
-  ): string {
+  private createPivotMutation(entity: Entity<TTable>, relationName: string): PivotMutation {
+    const { relation, parentId } = this.getPivotMutationContext(entity, relationName)
+    const scope: Record<string, unknown> = {}
+    let relatedColumn: string
     switch (relation.kind) {
       case 'belongsToMany':
-        return relation.relatedPivotKey
+        scope[relation.foreignPivotKey] = parentId
+        relatedColumn = relation.relatedPivotKey
+        break
       case 'morphToMany':
-        return relation.foreignPivotKey
+        scope[relation.morphTypeColumn] = this.getMorphTypeValue()
+        scope[relation.morphIdColumn] = parentId
+        relatedColumn = relation.foreignPivotKey
+        break
       case 'morphedByMany':
-        return relation.morphIdColumn
+        scope[relation.foreignPivotKey] = parentId
+        scope[relation.morphTypeColumn] = this.resolveRelatedRepository(relation.related).definition.morphClass
+        relatedColumn = relation.morphIdColumn
+        break
     }
-  }
-
-  private getReservedPivotColumns(
-    relation: PivotMutationRelationDefinition,
-  ): readonly string[] {
-    switch (relation.kind) {
-      case 'belongsToMany':
-        return [relation.foreignPivotKey, relation.relatedPivotKey]
-      case 'morphToMany':
-        return [relation.morphTypeColumn, relation.morphIdColumn, relation.foreignPivotKey]
-      case 'morphedByMany':
-        return [relation.foreignPivotKey, relation.morphTypeColumn, relation.morphIdColumn]
-    }
-  }
-
-  private buildPivotInsertPayload(
-    context: {
-      relation: PivotMutationRelationDefinition
-      parentId: unknown
-    },
-    relatedId: unknown,
-    attributes: PivotAttributes,
-  ): Record<string, unknown> {
-    switch (context.relation.kind) {
-      case 'belongsToMany':
-        return {
-          [context.relation.foreignPivotKey]: context.parentId,
-          [context.relation.relatedPivotKey]: relatedId,
-          ...attributes,
-        }
-      case 'morphToMany':
-        return {
-          [context.relation.morphTypeColumn]: this.getMorphTypeValue(),
-          [context.relation.morphIdColumn]: context.parentId,
-          [context.relation.foreignPivotKey]: relatedId,
-          ...attributes,
-        }
-      case 'morphedByMany': {
-        const related = this.resolveRelatedRepository(context.relation.related)
-        return {
-          [context.relation.foreignPivotKey]: context.parentId,
-          [context.relation.morphTypeColumn]: related.definition.morphClass,
-          [context.relation.morphIdColumn]: relatedId,
-          ...attributes,
-        }
-      }
-    }
+    return new PivotMutation({ table: relation.pivotTable, scope, relatedColumn, allowedColumns: relation.pivotColumns, relationName }, this.getConnection())
   }
 
   private async dispatchCancelableEvent(

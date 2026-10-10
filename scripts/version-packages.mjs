@@ -2,17 +2,11 @@ import { spawnSync } from 'node:child_process'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveCatalogRangesInManifest } from './publish-with-resolved-catalogs.mjs'
+import { dependencySections, resolveReleaseManifest } from './release-manifests.mjs'
 import { collectPackageManifestFailures } from './validate-dependency-version-policy.mjs'
 import { syncWorkspaceCatalogVersions } from './sync-workspace-catalog-versions.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const dependencySections = [
-  'dependencies',
-  'devDependencies',
-  'peerDependencies',
-  'optionalDependencies',
-]
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'))
@@ -55,7 +49,7 @@ function restoreCatalogRanges(manifest, originalManifest) {
 }
 
 function resolveVersionCatalogRanges(manifest, catalog, workspacePackageNames) {
-  const resolvedManifest = resolveCatalogRangesInManifest(manifest, catalog)
+  const resolvedManifest = resolveReleaseManifest(manifest, catalog)
   const originalPeerDependencies = manifest.peerDependencies
   const resolvedPeerDependencies = resolvedManifest.peerDependencies
   if (!originalPeerDependencies || typeof originalPeerDependencies !== 'object' || !resolvedPeerDependencies || typeof resolvedPeerDependencies !== 'object') {

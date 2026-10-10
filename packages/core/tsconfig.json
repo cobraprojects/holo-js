@@ -4,6 +4,9 @@
     "outDir": "./dist",
     "baseUrl": ".",
     "paths": {
+      "@holo-js/authorization": [
+        "../authorization/src/index.ts"
+      ],
       "@holo-js/auth": [
         "../auth/src/index.ts"
       ],

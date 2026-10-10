@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import {
-  resolveCatalogRangesInManifest,
   validateNpmPublishAuthentication,
   withResolvedCatalogManifests,
 } from './publish-with-resolved-catalogs.mjs'
@@ -30,40 +29,6 @@ async function createTempRepo(files) {
 
   return repoRoot
 }
-
-test('catalog resolver replaces package dependency ranges from the root catalog', () => {
-  const resolved = resolveCatalogRangesInManifest({
-    dependencies: {
-      '@holo-js/core': 'catalog:',
-    },
-    peerDependencies: {
-      react: 'catalog:',
-    },
-  }, {
-    '@holo-js/core': '^0.1.4',
-    react: '^19.0.0',
-  })
-
-  assert.deepEqual(resolved.dependencies, {
-    '@holo-js/core': '^0.1.4',
-  })
-  assert.deepEqual(resolved.peerDependencies, {
-    react: '^19.0.0',
-  })
-})
-
-test('catalog resolver rejects catalog dependencies missing from the root catalog', () => {
-  assert.throws(
-    () => resolveCatalogRangesInManifest({
-      dependencies: {
-        '@holo-js/newpkg': 'catalog:',
-      },
-    }, {
-      '@holo-js/core': '^0.1.4',
-    }),
-    /Cannot resolve catalog range for dependencies\.@holo-js\/newpkg\./,
-  )
-})
 
 test('catalog resolver restores package manifests after publishing fails', async () => {
   const originalManifest = [
@@ -187,4 +152,20 @@ test('publishing resolves workspace ranges and restores original manifests', asy
     assert.equal(manifest.devDependencies['@holo-js/core'], '^0.3.16')
   }, repoRoot)
   assert.equal(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), original)
+})
+
+
+test('publishing restores every source manifest when preparation fails partway', async () => {
+  const core = '{ "name": "@holo-js/core", "version": "0.3.16", "dependencies": { "external": "catalog:" } }\n'
+  const consumer = '{ "name": "@holo-js/consumer", "dependencies": { "missing": "catalog:" } }\n'
+  const root = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{"external":"^1.0.0"}}}'],
+    'packages/a-core/package.json': core.split('\n'),
+    'packages/z-consumer/package.json': consumer.split('\n'),
+  })
+  await assert.rejects(withResolvedCatalogManifests(() => {
+    assert.fail('Publishing must not begin with unresolved dependencies')
+  }, root), /Cannot resolve catalog range/)
+  assert.equal(await readFile(join(root, 'packages/a-core/package.json'), 'utf8'), core)
+  assert.equal(await readFile(join(root, 'packages/z-consumer/package.json'), 'utf8'), consumer)
 })

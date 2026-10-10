@@ -41,8 +41,8 @@ import {
   normalizeAuthorizationDecision,
 } from './contracts'
 
-type RegisteredPolicy = AuthorizationPolicyDefinition<string, AuthorizationPolicyTarget, string, string, object>
-type RegisteredAbility = AuthorizationAbilityDefinition<string, object, object>
+import { getAuthorizationInstallation, runAuthorizationInstallation, type AuthorizationInstallationContext, type RegisteredAbility, type RegisteredPolicy } from './internal/installation'
+
 const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
 
 type FallbackAuthorizationActor<TActor> = [TActor] extends [never]
@@ -191,26 +191,36 @@ function validateAbilityDefinition(definition: AuthorizationAbilityDefinition<st
   }
 }
 
-function registerPolicyDefinition<TDefinition extends RegisteredPolicy>(definition: TDefinition): TDefinition {
+function assertPolicyRegistrationAvailable(definition: RegisteredPolicy, releasing?: ReadonlySet<RegisteredPolicy>): string | null {
   const state = getAuthorizationRuntimeState()
-  if (state.policiesByName.has(definition.name)) {
+  const namedPolicy = state.policiesByName.get(definition.name)
+  if (namedPolicy && !releasing?.has(namedPolicy)) {
     throw new Error(`[@holo-js/authorization] Policy "${definition.name}" is already registered.`)
   }
 
-  if (state.policiesByTargetObject.get(definition.target)) {
+  const targetPolicy = state.policiesByTargetObject.get(definition.target)
+  if (targetPolicy && !releasing?.has(targetPolicy)) {
     throw new Error('[@holo-js/authorization] A policy is already registered for this target.')
   }
 
   const definitionKey = getDefinitionKeyForTarget(definition.target)
-  if (definitionKey && state.policiesByDefinitionKey.has(definitionKey)) {
+  const definitionPolicy = definitionKey ? state.policiesByDefinitionKey.get(definitionKey) : undefined
+  if (definitionPolicy && !releasing?.has(definitionPolicy)) {
     throw new Error(`[@holo-js/authorization] A policy is already registered for target definition "${definitionKey}".`)
   }
 
+  return definitionKey
+}
+
+function registerPolicyDefinition<TDefinition extends RegisteredPolicy>(definition: TDefinition): TDefinition {
+  const state = getAuthorizationRuntimeState()
+  const definitionKey = assertPolicyRegistrationAvailable(definition)
   state.policiesByName.set(definition.name, definition)
   state.policiesByTargetObject.set(definition.target, definition)
   if (definitionKey) {
     state.policiesByDefinitionKey.set(definitionKey, definition)
   }
+  getAuthorizationInstallation()?.policies.set(definition.name, definition)
   return definition
 }
 
@@ -221,6 +231,7 @@ function registerAbilityDefinition<TDefinition extends RegisteredAbility>(defini
   }
 
   state.abilitiesByName.set(definition.name, definition)
+  getAuthorizationInstallation()?.abilities.set(definition.name, definition)
   return definition
 }
 
@@ -231,6 +242,9 @@ function unregisterPolicyDefinition(name: string): void {
     return
   }
 
+  const installation = getAuthorizationInstallation()
+  if (installation?.policies.get(name) === definition) installation.policies.delete(name)
+  else if (installation && !installation.displacedPolicies.has(name)) installation.displacedPolicies.set(name, definition)
   state.policiesByName.delete(name)
   state.policiesByTargetObject.delete(definition.target)
   const definitionKey = getDefinitionKeyForTarget(definition.target)
@@ -240,7 +254,87 @@ function unregisterPolicyDefinition(name: string): void {
 }
 
 function unregisterAbilityDefinition(name: string): void {
-  getAuthorizationRuntimeState().abilitiesByName.delete(name)
+  const state = getAuthorizationRuntimeState()
+  const definition = state.abilitiesByName.get(name)
+  if (!definition) return
+  const installation = getAuthorizationInstallation()
+  if (installation?.abilities.get(name) === definition) installation.abilities.delete(name)
+  else if (installation && !installation.displacedAbilities.has(name)) installation.displacedAbilities.set(name, definition)
+  state.abilitiesByName.delete(name)
+}
+
+type AuthorizationDefinitionSource<TDefinition> = {
+  readonly name: string
+  load(): Promise<TDefinition>
+}
+
+type AuthorizationDefinitionInstallation = {
+  readonly policyNames: readonly string[]
+  readonly abilityNames: readonly string[]
+  dispose(): void
+}
+
+async function installAuthorizationDefinitions(
+  policies: readonly AuthorizationDefinitionSource<RegisteredPolicy>[],
+  abilities: readonly AuthorizationDefinitionSource<RegisteredAbility>[],
+): Promise<AuthorizationDefinitionInstallation> {
+  const state = getAuthorizationRuntimeState()
+  const installation: AuthorizationInstallationContext = {
+    active: true,
+    policies: new Map(),
+    abilities: new Map(),
+    displacedPolicies: new Map(),
+    displacedAbilities: new Map(),
+  }
+
+  const policyNames = new Set(policies.map(source => source.name))
+  const abilityNames = new Set(abilities.map(source => source.name))
+  const restore = (rollback = false): void => {
+    if (getAuthorizationRuntimeState() !== state) return
+    const releasingPolicies = new Map([...installation.policies].filter(([name, definition]) => state.policiesByName.get(name) === definition))
+    const releasingAbilities = new Map([...installation.abilities].filter(([name, definition]) => state.abilitiesByName.get(name) === definition))
+    const restoringPolicies = [...installation.displacedPolicies].filter(([name]) => releasingPolicies.has(name) || ((rollback || !policyNames.has(name)) && !state.policiesByName.has(name)))
+    const restoringAbilities = [...installation.displacedAbilities].filter(([name]) => releasingAbilities.has(name) || ((rollback || !abilityNames.has(name)) && !state.abilitiesByName.has(name)))
+    const releasing = new Set(releasingPolicies.values())
+    for (const [, definition] of restoringPolicies) assertPolicyRegistrationAvailable(definition, releasing)
+    for (const name of releasingPolicies.keys()) unregisterPolicyDefinition(name)
+    for (const name of releasingAbilities.keys()) unregisterAbilityDefinition(name)
+    for (const [, definition] of restoringPolicies) registerPolicyDefinition(definition)
+    for (const [, definition] of restoringAbilities) registerAbilityDefinition(definition)
+  }
+
+  return await runAuthorizationInstallation(installation, async () => {
+    try {
+      for (const { name } of policies) unregisterPolicyDefinition(name)
+      for (const { name } of abilities) unregisterAbilityDefinition(name)
+      for (const source of policies) {
+        const definition = await source.load()
+        if (state.policiesByName.get(definition.name) === definition) unregisterPolicyDefinition(definition.name)
+        registerPolicyDefinition(freezePolicyDefinition({ ...definition, name: source.name }))
+      }
+      for (const source of abilities) {
+        const definition = await source.load()
+        if (state.abilitiesByName.get(definition.name) === definition) unregisterAbilityDefinition(definition.name)
+        registerAbilityDefinition(freezeAbilityDefinition({ ...definition, name: source.name }))
+      }
+    } catch (error) {
+      installation.active = false
+      try {
+        restore(true)
+      } catch (restorationError) {
+        throw new AggregateError([error, restorationError], 'Authorization definition installation and restoration failed.')
+      }
+      throw error
+    } finally {
+      installation.active = false
+    }
+
+    return Object.freeze({
+      policyNames: Object.freeze(policies.map(source => source.name)),
+      abilityNames: Object.freeze(abilities.map(source => source.name)),
+      dispose: () => restore(),
+    })
+  })
 }
 
 function freezePolicyDefinition<TDefinition extends RegisteredPolicy>(definition: TDefinition): TDefinition {
@@ -825,6 +919,7 @@ export function guard<TGuardName extends HoloAuthorizationGuardName>(name: TGuar
 
 export const authorizationInternals = Object.freeze({
   getAuthorizationRuntimeState,
+  installAuthorizationDefinitions,
   resetAuthorizationRuntimeState,
   configureAuthorizationAuthIntegration,
   resetAuthorizationAuthIntegration,

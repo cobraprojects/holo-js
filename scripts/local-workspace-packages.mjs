@@ -4,17 +4,13 @@ import { constants as fsConstants } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const dependencySections = [
+import { resolveReleaseManifest } from './release-manifests.mjs'
+
+const localDependencySections = [
   'dependencies',
-  'devDependencies',
   'peerDependencies',
   'optionalDependencies',
 ]
-const localDependencySections = new Set([
-  'dependencies',
-  'peerDependencies',
-  'optionalDependencies',
-])
 const projectDependencySections = ['dependencies', 'devDependencies']
 const manifestBackupName = '.holo-smoke-package.json'
 const packageIndexName = 'workspace-packages.json'
@@ -33,45 +29,14 @@ async function pathExists(path) {
   }
 }
 
-function resolveWorkspaceRange(packageName, range, workspaceVersions) {
-  const version = workspaceVersions.get(packageName)
-  if (!version) {
-    throw new Error(`Missing workspace version for "${packageName}".`)
-  }
-
-  const workspaceRange = range.slice('workspace:'.length)
-  if (workspaceRange === '^' || workspaceRange === '~') {
-    return `${workspaceRange}${version}`
-  }
-
-  return version
-}
-
-function resolveDependencyRange(packageName, range, catalog, workspaceVersions) {
-  if (range === 'catalog:') {
-    const catalogRange = catalog[packageName]
-    if (typeof catalogRange !== 'string') {
-      throw new Error(`Missing catalog range for "${packageName}".`)
-    }
-    return catalogRange
-  }
-
-  if (range.startsWith('workspace:')) {
-    return resolveWorkspaceRange(packageName, range, workspaceVersions)
-  }
-
-  return range
-}
-
 export function resolveLocalInstallManifest(
   manifest,
   catalog,
   localPackageRoots,
-  workspaceVersions,
 ) {
-  const resolvedManifest = structuredClone(manifest)
+  const resolvedManifest = resolveReleaseManifest(manifest, catalog)
 
-  for (const sectionName of dependencySections) {
+  for (const sectionName of localDependencySections) {
     const section = resolvedManifest[sectionName]
     if (!isObject(section)) {
       continue
@@ -83,9 +48,9 @@ export function resolveLocalInstallManifest(
       }
 
       const localPackageRoot = localPackageRoots.get(packageName)
-      section[packageName] = localPackageRoot && localDependencySections.has(sectionName)
-        ? pathToFileURL(localPackageRoot).href
-        : resolveDependencyRange(packageName, range, catalog, workspaceVersions)
+      if (localPackageRoot) {
+        section[packageName] = pathToFileURL(localPackageRoot).href
+      }
     }
   }
 
@@ -144,10 +109,6 @@ export async function stageLocalWorkspacePackages(rootDir, tempRoot) {
       `${item.manifest.name.replace(/^@/, '').replaceAll('/', '-')}-${item.manifest.version}.tgz`,
     ),
   ]))
-  const workspaceVersions = new Map(packages.map(item => [
-    item.manifest.name,
-    item.manifest.version,
-  ]))
   await mkdir(stagingRoot, { recursive: true })
   await mkdir(sourceRoot, { recursive: true })
 
@@ -169,7 +130,6 @@ export async function stageLocalWorkspacePackages(rootDir, tempRoot) {
       item.manifest,
       catalog,
       localPackageRoots,
-      workspaceVersions,
     )
     await writeFile(join(targetRoot, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 

@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { createServer } from 'node:net'
 
+import { dependencySections, resolveReleaseManifest } from './release-manifests.mjs'
+
 const rootDir = resolve(import.meta.dirname, '..')
-const dependencySections = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
 const frameworkApps = [
   { name: 'next', source: 'apps/blog-next', expectedTitle: 'Shipping a Real Holo Blog on Next' },
   { name: 'nuxt', source: 'apps/blog-nuxt', expectedTitle: 'Shipping a Real Holo Blog on Nuxt' },
@@ -130,44 +131,6 @@ async function assertProductionApp(appRoot, app) {
   }
 }
 
-function resolveDependencyRange(packageName, range, catalog, workspaceVersions) {
-  if (range === 'catalog:') {
-    const catalogRange = catalog[packageName]
-    if (typeof catalogRange !== 'string') {
-      throw new Error(`Missing catalog range for "${packageName}".`)
-    }
-    return catalogRange
-  }
-  if (range.startsWith('workspace:')) {
-    const version = workspaceVersions.get(packageName)
-    if (!version) {
-      throw new Error(`Missing workspace package version for "${packageName}".`)
-    }
-    const workspaceRange = range.slice('workspace:'.length)
-    if (workspaceRange === '^' || workspaceRange === '~') {
-      return `${workspaceRange}${version}`
-    }
-    return version
-  }
-  return range
-}
-
-export function resolvePublishedManifest(manifest, catalog, workspaceVersions) {
-  const resolvedManifest = structuredClone(manifest)
-  for (const sectionName of dependencySections) {
-    const section = resolvedManifest[sectionName]
-    if (!section || typeof section !== 'object' || Array.isArray(section)) {
-      continue
-    }
-    for (const [packageName, range] of Object.entries(section)) {
-      if (typeof range === 'string') {
-        section[packageName] = resolveDependencyRange(packageName, range, catalog, workspaceVersions)
-      }
-    }
-  }
-  return resolvedManifest
-}
-
 async function readPackageManifests() {
   const entries = await readdir(join(rootDir, 'packages'), { withFileTypes: true })
   const packages = []
@@ -191,7 +154,6 @@ async function readPackageManifests() {
 
 async function stagePackages(tempRoot, packages, catalog) {
   const nodeModulesRoot = join(tempRoot, 'node_modules')
-  const workspaceVersions = new Map(packages.map(item => [item.manifest.name, item.manifest.version]))
   for (const item of packages) {
     const dist = join(item.directory, 'dist')
     if (!existsSync(dist)) {
@@ -200,7 +162,7 @@ async function stagePackages(tempRoot, packages, catalog) {
     const target = join(nodeModulesRoot, ...item.manifest.name.split('/'))
     await mkdir(target, { recursive: true })
     await cp(dist, join(target, 'dist'), { recursive: true })
-    const manifest = resolvePublishedManifest(item.manifest, catalog, workspaceVersions)
+    const manifest = resolveReleaseManifest(item.manifest, catalog)
     const serializedManifest = JSON.stringify(manifest)
     assert.doesNotMatch(serializedManifest, /(?:catalog|workspace):/)
     await writeFile(join(target, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)

@@ -3,15 +3,10 @@ import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveReleaseManifest } from './release-manifests.mjs'
 import { collectPackageManifestFailures } from './validate-dependency-version-policy.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const dependencySections = [
-  'dependencies',
-  'devDependencies',
-  'peerDependencies',
-  'optionalDependencies',
-]
 const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 function isObject(value) {
@@ -80,32 +75,6 @@ async function listPackageManifestPaths(root = repoRoot) {
   return manifestPaths.filter(manifestPath => typeof manifestPath === 'string')
 }
 
-export function resolveCatalogRangesInManifest(manifest, catalog) {
-  const resolvedManifest = structuredClone(manifest)
-
-  for (const sectionName of dependencySections) {
-    const section = resolvedManifest[sectionName]
-    if (!isObject(section)) {
-      continue
-    }
-
-    for (const [packageName, version] of Object.entries(section)) {
-      if (version !== 'catalog:' && version !== 'workspace:*') {
-        continue
-      }
-
-      const resolvedVersion = catalog[packageName]
-      if (typeof resolvedVersion !== 'string') {
-        throw new Error(`Cannot resolve catalog range for ${sectionName}.${packageName}.`)
-      }
-
-      section[packageName] = resolvedVersion
-    }
-  }
-
-  return resolvedManifest
-}
-
 export async function withResolvedCatalogManifests(callback, root = repoRoot) {
   const rootManifest = await readJson(join(root, 'package.json'))
   const catalog = rootManifest.workspaces?.catalog
@@ -124,7 +93,7 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
     for (const manifestPath of packageManifestPaths) {
       const original = await readFile(manifestPath, 'utf8')
       originalManifests.set(manifestPath, original)
-      const resolved = resolveCatalogRangesInManifest(JSON.parse(original), catalog)
+      const resolved = resolveReleaseManifest(JSON.parse(original), catalog)
       await writeFile(manifestPath, `${JSON.stringify(resolved, null, 2)}\n`)
     }
 

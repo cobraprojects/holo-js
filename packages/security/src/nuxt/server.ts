@@ -7,16 +7,11 @@ import {
   getRequestURL,
   readRawBody,
   setCookie,
+  type H3Event,
 } from 'h3'
-import type { H3Event } from 'h3'
-import { csrf, csrfInternals, isSecureRequest, protect } from '../index'
+import { protect } from '../index'
+import { prepareCsrfCookies } from '../cookie-issuance'
 import { SecurityCsrfError } from '../contracts'
-import {
-  SECURITY_CLIENT_CONFIG_COOKIE,
-  createSecurityClientConfig,
-  serializeSecurityClientConfig,
-} from '../client-config'
-import { getSecurityRuntime } from '../runtime'
 
 function isSafeMethod(method: string): boolean {
   const normalized = method.trim().toUpperCase()
@@ -59,35 +54,9 @@ async function createRequest(event: H3Event): Promise<Request> {
 }
 
 async function issueCsrfCookie(event: H3Event, request: Request): Promise<void> {
-  const { config } = getSecurityRuntime()
-
-  if (!config.csrf.enabled || !isSafeMethod(request.method)) {
-    return
-  }
-
-  const existingCsrfToken = getCookie(event, config.csrf.cookie)
-  const shouldIssueCsrfToken = !existingCsrfToken
-    || !csrfInternals.isValidSignedCsrfToken(existingCsrfToken)
-  const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(config))
-  const shouldIssueClientConfig = getCookie(event, SECURITY_CLIENT_CONFIG_COOKIE) !== clientConfig
-
-  if (!shouldIssueCsrfToken && !shouldIssueClientConfig) {
-    return
-  }
-
-  const cookieOptions = {
-    httpOnly: false,
-    path: '/',
-    sameSite: 'lax' as const,
-    secure: isSecureRequest(request),
-  }
-
-  if (shouldIssueCsrfToken) {
-    setCookie(event, config.csrf.cookie, await csrf.token(request), cookieOptions)
-  }
-
-  if (shouldIssueClientConfig) {
-    setCookie(event, SECURITY_CLIENT_CONFIG_COOKIE, clientConfig, cookieOptions)
+  const cookies = await prepareCsrfCookies(request, name => getCookie(event, name))
+  for (const cookie of cookies) {
+    setCookie(event, cookie.name, cookie.value, cookie.options)
   }
 }
 

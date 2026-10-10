@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
+import { configureQueueRuntime, getQueueRuntime } from '@holo-js/queue'
+import * as authorizationModule from '@holo-js/authorization'
 import { authorizationInternals, defineAbility, definePolicy } from '@holo-js/authorization'
-import { reconfigureOptionalHoloSubsystems, resetOptionalHoloSubsystems, holoRuntimeInternals } from '../src'
+import type { GeneratedProjectRegistry } from '../src/portable/registry'
+import { reconfigureOptionalHoloSubsystems, resetOptionalHoloSubsystems, holoRuntimeInternals, createHolo } from '../src'
 
 const tempDirs: string[] = []
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
@@ -51,6 +54,27 @@ export default defineSessionConfig({})
   ])
 
   return root
+}
+
+async function createAuthorizationProject(): Promise<string> {
+  const root = await createProject()
+  await mkdir(join(root, 'server/policies'), { recursive: true })
+  await mkdir(join(root, 'server/abilities'), { recursive: true })
+  await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
+  return root
+}
+
+function authorizationRegistry(policyNames: readonly string[], abilityNames: readonly string[], exportName = 'default'): GeneratedProjectRegistry {
+  return {
+    version: 1,
+    generatedAt: '',
+    paths: {
+      models: 'server/models', migrations: 'server/db/migrations', seeders: 'server/db/seeders', commands: 'server/commands', jobs: 'server/jobs', events: 'server/events', listeners: 'server/listeners', broadcast: 'server/broadcast', channels: 'server/channels', authorizationPolicies: 'server/policies', authorizationAbilities: 'server/abilities', generatedSchema: '.holo-js/generated/schema.generated.ts',
+    },
+    models: [], migrations: [], seeders: [], commands: [], jobs: [], events: [], listeners: [], broadcast: [], channels: [],
+    authorizationPolicies: policyNames.map(name => ({ name, sourcePath: `server/policies/${name}.ts`, exportName, target: 'Post', classActions: ['viewAny'], recordActions: [] })),
+    authorizationAbilities: abilityNames.map(name => ({ name, sourcePath: `server/abilities/${name}.ts`, exportName })),
+  }
 }
 
 afterEach(async () => {
@@ -241,614 +265,233 @@ describe('@holo-js/core authorization boot integration', () => {
     expect(resetAuthorizationRuntimeState).not.toHaveBeenCalled()
   })
 
-  it('covers the project authorization helper fallbacks directly', async () => {
-    const namedDefinition = { name: 'posts' }
-    expect(
-      holoRuntimeInternals.resolveAuthorizationDefinitionExport({
-        default: { name: 'default' },
-        named: namedDefinition,
-      }, undefined, (value): value is typeof namedDefinition => value === namedDefinition),
-    ).toBe(namedDefinition)
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      '/tmp/holo-authorization',
-      {
-        authorizationPolicies: [],
-        authorizationAbilities: [],
-      } as never,
-      undefined,
-    )).resolves.toEqual({
-      policyNames: [],
-      abilityNames: [],
-    })
-
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await mkdir(join(root, 'server/abilities'), { recursive: true })
-    await writeFile(join(root, 'server/policies/posts.ts'), `
-export default {
-  name: 'posts',
-}
-`, 'utf8')
-    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
-export const reportAbility = {
-  name: 'reports.export',
-}
-
-export default reportAbility
-`, 'utf8')
-
-    const authorizationModule = {
-      isAuthorizationPolicyDefinition(value: unknown) {
-        return !!value && typeof value === 'object' && 'name' in value && (value as { name?: unknown }).name === 'posts'
+  it.each(['success', 'failure'] as const)('preserves independent registrations while an installation awaits on %s', async (ending) => {
+    let release = () => {}
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const installation = authorizationInternals.installAuthorizationDefinitions([], [{
+      name: 'installed',
+      async load() {
+        defineAbility('import-side-effect', () => true)
+        await pending
+        if (ending === 'failure') throw new Error('Import failed')
+        return defineAbility('installed', () => true)
       },
-      isAuthorizationAbilityDefinition(value: unknown) {
-        return !!value && typeof value === 'object' && 'name' in value && (value as { name?: unknown }).name === 'reports.export'
-      },
-      authorizationInternals: {
-        getAuthorizationRuntimeState: () => ({
-          policiesByName: new Map(),
-          abilitiesByName: new Map(),
-        }),
-        configureAuthorizationAuthIntegration: vi.fn(),
-        resetAuthorizationAuthIntegration: vi.fn(),
-        resetAuthorizationRuntimeState: vi.fn(),
-        unregisterPolicyDefinition: vi.fn(),
-        unregisterAbilityDefinition: vi.fn(),
-      },
-    }
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      authorizationModule as never,
-    )).resolves.toEqual({
-      policyNames: ['posts'],
-      abilityNames: ['reports.export'],
-    })
+    }])
+    defineAbility('independent', () => false)
+    class IndependentTarget {}
+    definePolicy('independent-policy', IndependentTarget, { class: { viewAny: () => false } })
+    release()
+    if (ending === 'failure') await expect(installation).rejects.toThrow('Import failed')
+    else (await installation).dispose()
+    expect((await authorizationInternals.evaluateAbility({}, 'independent', {})).allowed).toBe(false)
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', IndependentTarget)).allowed).toBe(false)
+    await expect(authorizationInternals.evaluateAbility({}, 'import-side-effect', {})).rejects.toThrow('was not found')
   })
 
-  it('preserves configured authorization auth integration when loading project definitions', async () => {
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await mkdir(join(root, 'server/abilities'), { recursive: true })
-    await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
-    await writeFile(join(root, 'server/policies/posts.ts'), `
-import { definePolicy } from '@holo-js/authorization'
+  it('does not restore a replaced name after its owned definition was independently removed', async () => {
+    defineAbility('canonical', () => false)
+    const registration = await authorizationInternals.installAuthorizationDefinitions([], [{ name: 'canonical', load: async () => defineAbility('canonical', () => true) }])
+    authorizationInternals.unregisterAbilityDefinition('canonical')
+    registration.dispose()
+    await expect(authorizationInternals.evaluateAbility({}, 'canonical', {})).rejects.toThrow('was not found')
+  })
 
-class Post {}
+  it('restores a cached definition alias after canonical installation is disposed', async () => {
+    const ability = defineAbility('alias', () => false)
+    const registration = await authorizationInternals.installAuthorizationDefinitions([], [{ name: 'canonical', load: async () => ability }])
+    expect((await authorizationInternals.evaluateAbility({}, 'canonical', {})).allowed).toBe(false)
+    registration.dispose()
+    expect((await authorizationInternals.evaluateAbility({}, 'alias', {})).allowed).toBe(false)
+    await expect(authorizationInternals.evaluateAbility({}, 'canonical', {})).rejects.toThrow('was not found')
+  })
 
-export default definePolicy('posts', Post, {
-  record: {
-    view() {
-      return true
-    },
-  },
-})
-`, 'utf8')
+  it('rolls back import-time definitions when a project module throws', async () => {
+    const root = await createAuthorizationProject()
+    defineAbility('reports.export', () => false)
     await writeFile(join(root, 'server/abilities/reports.export.ts'), `
 import { defineAbility } from '@holo-js/authorization'
-
 export default defineAbility('reports.export', () => true)
-`, 'utf8')
+defineAbility('side-effect', () => true)
+throw new Error('Import failed')
+`)
+    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry([], ['reports.export']), authorizationModule)).rejects.toThrow('Import failed')
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(false)
+    await expect(authorizationInternals.evaluateAbility({}, 'side-effect', {})).rejects.toThrow('was not found')
+  })
 
+  it('restores displaced definitions and target lookup after disposal', async () => {
+    const root = await createAuthorizationProject()
     class ExistingPost {}
-    definePolicy('existing-posts', ExistingPost, {
-      record: {
-        view() {
-          return true
-        },
-      },
-    })
-    defineAbility('existing.reports.export', () => true)
+    definePolicy('posts', ExistingPost, { class: { viewAny: () => false } })
+    defineAbility('reports.export', () => false)
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Post {}
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
+    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+export default defineAbility('reports.export', () => true)
+`)
+    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry(['posts'], ['reports.export']), authorizationModule)
+    const target = authorizationInternals.getPolicyByName('posts').target
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', target)).allowed).toBe(true)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(true)
+    registration.dispose()
+    registration.dispose()
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', ExistingPost)).allowed).toBe(false)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(false)
+    await expect(authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', target)).rejects.toThrow('was not found')
+  })
 
+  it('rejects unrelated target collisions without damaging model-definition lookup', async () => {
+    const root = await createAuthorizationProject()
+    const Post = {
+      definition: { name: 'Post', table: { tableName: 'posts' } },
+      query: () => ({ first: async () => undefined, firstOrFail: async () => ({ id: 1 }) }),
+    }
+    definePolicy('unrelated', Post, { class: { viewAny: () => false } })
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+const Post = {
+  definition: { name: 'Post', table: { tableName: 'posts' } },
+  query: () => ({ first: async () => undefined, firstOrFail: async () => ({ id: 1 }) }),
+}
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
+    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry(['posts'], []), authorizationModule)).rejects.toThrow('already registered')
+    const reloadedPost = { ...Post, definition: { ...Post.definition } }
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', reloadedPost)).allowed).toBe(false)
+  })
+
+  it('keeps disposal atomic when a displaced target has a newer owner', async () => {
+    const root = await createAuthorizationProject()
+    class PreviousPost {}
+    definePolicy('posts', PreviousPost, { class: { viewAny: () => false } })
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Post {}
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
+    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry(['posts'], []), authorizationModule)
+    const installedTarget = authorizationInternals.getPolicyByName('posts').target
+    definePolicy('new-owner', PreviousPost, { class: { viewAny: () => true } })
+    expect(() => registration.dispose()).toThrow('already registered')
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', installedTarget)).allowed).toBe(true)
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousPost)).allowed).toBe(true)
+  })
+
+  it('restores optional capability bindings when authorization disposal fails during shutdown', async () => {
+    const root = await createAuthorizationProject()
+    await writeFile(join(root, 'config/database.ts'), `export default { defaultConnection: 'default', connections: { default: { driver: 'sqlite', url: ':memory:' } } }`)
+    await rm(join(root, 'config/auth.ts'))
+    await rm(join(root, 'config/session.ts'))
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/registry.json'), JSON.stringify(authorizationRegistry(['posts'], [])))
+    class PreviousPost {}
+    definePolicy('posts', PreviousPost, { class: { viewAny: () => false } })
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Post {}
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
+    configureQueueRuntime({ config: { default: 'sync', connections: { sync: { driver: 'sync', queue: 'borrowed' } } } })
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    definePolicy('new-owner', PreviousPost, { class: { viewAny: () => true } })
+    await expect(runtime.shutdown()).rejects.toThrow('already registered')
+    expect(getQueueRuntime().config.connections.sync?.queue).toBe('borrowed')
+  })
+
+  it('preserves a newer definition when an older installation is disposed', async () => {
+    const root = await createAuthorizationProject()
+    defineAbility('reports.export', () => false)
+    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+export default defineAbility('reports.export', () => true)
+`)
+    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry([], ['reports.export']), authorizationModule)
+    authorizationInternals.unregisterAbilityDefinition('reports.export')
+    defineAbility('reports.export', () => authorizationModule.denyAsNotFound())
+    registration.dispose()
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).status).toBe(404)
+  })
+
+  it('canonicalizes named exports and preserves unrelated authorization and auth integration', async () => {
+    const root = await createAuthorizationProject()
+    defineAbility('unrelated', () => false)
     const integration = {
-      hasGuard: vi.fn((guardName: string) => guardName === 'web'),
-      resolveDefaultActor: vi.fn(async () => ({ id: 'user-1' })),
-      resolveGuardActor: vi.fn(async (guardName: string) => ({ id: 'user-1', guard: guardName })),
+      hasGuard: () => true,
+      resolveDefaultActor: () => ({ id: 1 }),
+      resolveGuardActor: () => ({ id: 1 }),
     }
     authorizationInternals.configureAuthorizationAuthIntegration(integration)
-
-    await holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      {
-        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        authorizationInternals,
-      } as never,
-    )
-
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('existing-posts')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('existing.reports.export')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(true)
-    expect(() => authorizationInternals.getAuthorizationAuthIntegration()).not.toThrow()
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Post {}
+export const selected = definePolicy('drifted-posts', Post, { class: { viewAny: () => true } })
+export default {}
+`)
+    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+export const selected = defineAbility('drifted-export', () => true)
+export default {}
+`)
+    const registry = authorizationRegistry(['posts'], ['reports.export'], 'selected')
+    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, registry, authorizationModule)
+    expect(registration.policyNames).toEqual(['posts'])
+    expect(registration.abilityNames).toEqual(['reports.export'])
+    const target = authorizationInternals.getPolicyByName('posts').target
+    expect((await authorizationInternals.evaluatePolicyByName({}, 'posts', 'viewAny', target)).allowed).toBe(true)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(true)
+    await expect(authorizationInternals.evaluateAbility({}, 'drifted-export', {})).rejects.toThrow('was not found')
+    expect(() => authorizationInternals.getPolicyByName('drifted-posts')).toThrow('was not found')
+    registration.dispose()
+    expect((await authorizationInternals.evaluateAbility({}, 'unrelated', {})).allowed).toBe(false)
     expect(authorizationInternals.getAuthorizationAuthIntegration()).toBe(integration)
   })
 
-  it('replaces existing project-owned definitions before loading updated authorization modules', async () => {
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await mkdir(join(root, 'server/abilities'), { recursive: true })
-    await writeFile(join(root, 'server/policies/posts.ts'), `
-export default {
-  name: 'posts',
-}
-`, 'utf8')
-    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
-export default {
-  name: 'reports.export',
-}
-`, 'utf8')
-
-    const unregisterPolicyDefinition = vi.fn((name: string) => {
-      runtimeState.policiesByName.delete(name)
-    })
-    const unregisterAbilityDefinition = vi.fn((name: string) => {
-      runtimeState.abilitiesByName.delete(name)
-    })
-    const registerPolicyDefinition = vi.fn((definition: unknown) => {
-      const resolvedDefinition = definition as { name: string }
-      runtimeState.policiesByName.set(resolvedDefinition.name, resolvedDefinition)
-      return definition
-    })
-    const registerAbilityDefinition = vi.fn((definition: unknown) => {
-      const resolvedDefinition = definition as { name: string }
-      runtimeState.abilitiesByName.set(resolvedDefinition.name, resolvedDefinition)
-      return definition
-    })
-    const runtimeState = {
-      policiesByName: new Map<string, unknown>([['posts', { sourcePath: 'server/policies/posts.ts' }]]),
-      abilitiesByName: new Map<string, unknown>([['reports.export', { sourcePath: 'server/abilities/reports.export.ts' }]]),
-    }
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      {
-        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        authorizationInternals: {
-          getAuthorizationRuntimeState: () => runtimeState,
-          getAuthorizationAuthIntegration: vi.fn(),
-          registerPolicyDefinition,
-          registerAbilityDefinition,
-          configureAuthorizationAuthIntegration: vi.fn(),
-          resetAuthorizationAuthIntegration: vi.fn(),
-          resetAuthorizationRuntimeState: vi.fn(),
-          unregisterPolicyDefinition,
-          unregisterAbilityDefinition,
-        },
-      } as never,
-    )).resolves.toEqual({
-      policyNames: ['posts'],
-      abilityNames: ['reports.export'],
-    })
-
-    expect(unregisterPolicyDefinition).toHaveBeenCalledWith('posts')
-    expect(unregisterAbilityDefinition).toHaveBeenCalledWith('reports.export')
-    expect(registerPolicyDefinition).toHaveBeenCalledWith({ name: 'posts' })
-    expect(registerAbilityDefinition).toHaveBeenCalledWith({ name: 'reports.export' })
-    expect(runtimeState.policiesByName.get('posts')).toEqual({ name: 'posts' })
-    expect(runtimeState.abilitiesByName.get('reports.export')).toEqual({ name: 'reports.export' })
-  })
-
-  it('prefers the registry export name over the default authorization export', async () => {
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await mkdir(join(root, 'server/abilities'), { recursive: true })
-    await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
+  it('restores earlier policy changes when a later ability import fails', async () => {
+    const root = await createAuthorizationProject()
+    class Post {}
+    definePolicy('posts', Post, { class: { viewAny: () => false } })
+    defineAbility('reports.export', () => false)
     await writeFile(join(root, 'server/policies/posts.ts'), `
 import { definePolicy } from '@holo-js/authorization'
-
-class DefaultPost {}
-class NamedPost {}
-
-export const postsPolicy = definePolicy('posts', NamedPost, {
-  record: {
-    view() {
-      return true
-    },
-  },
-})
-
-export default definePolicy('wrong-posts', DefaultPost, {
-  record: {
-    view() {
-      return false
-    },
-  },
-})
-`, 'utf8')
-    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
-import { defineAbility } from '@holo-js/authorization'
-
-export const reportsExportAbility = defineAbility('reports.export', () => true)
-export default defineAbility('wrong.reports.export', () => false)
-`, 'utf8')
-
-    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'postsPolicy',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'reportsExportAbility',
-        }],
-      } as never,
-      {
-        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        authorizationInternals,
-      } as never,
-    )
-
-    expect(registration).toEqual({
-      policyNames: ['posts'],
-      abilityNames: ['reports.export'],
-    })
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.get('posts')).toMatchObject({ name: 'posts' })
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.get('reports.export')).toMatchObject({ name: 'reports.export' })
-  })
-
-  it('uses registry policy names when project policy exports drift before prepare reruns', async () => {
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await mkdir(join(root, 'server/abilities'), { recursive: true })
-    await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
-    await writeFile(join(root, 'server/policies/posts.ts'), `
-import { definePolicy } from '@holo-js/authorization'
-
 class Post {}
-
-export default definePolicy('renamed-posts', Post, {
-  record: {
-    view() {
-      return true
-    },
-  },
-})
-`, 'utf8')
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
     await writeFile(join(root, 'server/abilities/reports.export.ts'), `
 import { defineAbility } from '@holo-js/authorization'
-
-export default defineAbility('renamed.reports.export', () => true)
-`, 'utf8')
-
-    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      {
-        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        authorizationInternals,
-      } as never,
-    )
-
-    expect(registration).toEqual({
-      policyNames: ['posts'],
-      abilityNames: ['reports.export'],
-    })
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('renamed-posts')).toBe(false)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('renamed.reports.export')).toBe(false)
-
-    holoRuntimeInternals.unregisterProjectAuthorizationDefinitions(
-      {
-        authorizationInternals,
-      } as never,
-      registration.policyNames,
-      registration.abilityNames,
-    )
-
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(false)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(false)
+export default defineAbility('drifted-export', () => true)
+throw new Error('Later failure')
+`)
+    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, authorizationRegistry(['posts'], ['reports.export']), authorizationModule)).rejects.toThrow('Later failure')
+    expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', Post)).allowed).toBe(false)
+    expect((await authorizationInternals.evaluateAbility({}, 'reports.export', {})).allowed).toBe(false)
+    await expect(authorizationInternals.evaluateAbility({}, 'drifted-export', {})).rejects.toThrow('was not found')
   })
 
-  it('keeps the previously registered authorization definitions when reloading updated modules fails', async () => {
-    const unregisterPolicyDefinition = vi.fn((name: string) => {
-      runtimeState.policiesByName.delete(name)
-    })
-    const unregisterAbilityDefinition = vi.fn((name: string) => {
-      runtimeState.abilitiesByName.delete(name)
-    })
-    const registerPolicyDefinition = vi.fn((definition: unknown) => {
-      const resolvedDefinition = definition as { name: string }
-      runtimeState.policiesByName.set(resolvedDefinition.name, resolvedDefinition)
-      return definition
-    })
-    const registerAbilityDefinition = vi.fn((definition: unknown) => {
-      const resolvedDefinition = definition as { name: string }
-      runtimeState.abilitiesByName.set(resolvedDefinition.name, resolvedDefinition)
-      return definition
-    })
-    const runtimeState = {
-      policiesByName: new Map<string, unknown>([['posts', { name: 'posts', version: 'stable' }]]),
-      abilitiesByName: new Map<string, unknown>([['reports.export', { name: 'reports.export', version: 'stable' }]]),
-    }
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      '/tmp/holo-authorization',
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      {
-        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        authorizationInternals: {
-          getAuthorizationRuntimeState: () => runtimeState,
-          getAuthorizationAuthIntegration: vi.fn(),
-          registerPolicyDefinition,
-          registerAbilityDefinition,
-          configureAuthorizationAuthIntegration: vi.fn(),
-          resetAuthorizationAuthIntegration: vi.fn(),
-          resetAuthorizationRuntimeState: vi.fn(),
-          unregisterPolicyDefinition,
-          unregisterAbilityDefinition,
-        },
-      } as never,
-    )).rejects.toThrow()
-
-    expect(registerPolicyDefinition).toHaveBeenCalledWith({ name: 'posts', version: 'stable' })
-    expect(registerAbilityDefinition).not.toHaveBeenCalled()
-    expect(runtimeState.policiesByName.get('posts')).toEqual({ name: 'posts', version: 'stable' })
-    expect(runtimeState.abilitiesByName.get('reports.export')).toEqual({ name: 'reports.export', version: 'stable' })
+  it.each(['policy', 'ability'] as const)('rejects invalid %s exports and rolls back import registrations', async (kind) => {
+    const root = await createAuthorizationProject()
+    const sourcePath = kind === 'policy' ? 'server/policies/posts.ts' : 'server/abilities/reports.export.ts'
+    await writeFile(join(root, sourcePath), `
+import { defineAbility } from '@holo-js/authorization'
+defineAbility('side-effect', () => true)
+export default {}
+`)
+    const registry = authorizationRegistry(kind === 'policy' ? ['posts'] : [], kind === 'ability' ? ['reports.export'] : [])
+    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(root, registry, authorizationModule)).rejects.toThrow(`does not export a Holo ${kind}`)
+    await expect(authorizationInternals.evaluateAbility({}, 'side-effect', {})).rejects.toThrow('was not found')
   })
 
-  it('restores a previous ability definition when reloading abilities fails', async () => {
-    const unregisterPolicyDefinition = vi.fn((name: string) => {
-      runtimeState.policiesByName.delete(name)
-    })
-    const unregisterAbilityDefinition = vi.fn((name: string) => {
-      runtimeState.abilitiesByName.delete(name)
-    })
-    const registerPolicyDefinition = vi.fn((definition: unknown) => {
-      const resolvedDefinition = definition as { name: string }
-      runtimeState.policiesByName.set(resolvedDefinition.name, resolvedDefinition)
-      return definition
-    })
-    const registerAbilityDefinition = vi.fn((definition: unknown) => {
-      const resolvedDefinition = definition as { name: string }
-      runtimeState.abilitiesByName.set(resolvedDefinition.name, resolvedDefinition)
-      return definition
-    })
-    const runtimeState = {
-      policiesByName: new Map<string, unknown>(),
-      abilitiesByName: new Map<string, unknown>([['reports.export', { name: 'reports.export', version: 'stable' }]]),
-    }
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      '/tmp/holo-authorization',
-      {
-        authorizationPolicies: [],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      {
-        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
-        authorizationInternals: {
-          getAuthorizationRuntimeState: () => runtimeState,
-          getAuthorizationAuthIntegration: vi.fn(),
-          registerPolicyDefinition,
-          registerAbilityDefinition,
-          configureAuthorizationAuthIntegration: vi.fn(),
-          resetAuthorizationAuthIntegration: vi.fn(),
-          resetAuthorizationRuntimeState: vi.fn(),
-          unregisterPolicyDefinition,
-          unregisterAbilityDefinition,
-        },
-      } as never,
-    )).rejects.toThrow()
-
-    expect(registerPolicyDefinition).not.toHaveBeenCalled()
-    expect(registerAbilityDefinition).toHaveBeenCalledWith({ name: 'reports.export', version: 'stable' })
-    expect(runtimeState.abilitiesByName.get('reports.export')).toEqual({ name: 'reports.export', version: 'stable' })
-  })
-
-  it('rejects project authorization registration when registry entries exist but the package is missing', async () => {
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      '/tmp/holo-authorization',
-      {
-        authorizationPolicies: [
-          {
-            sourcePath: 'server/policies/posts.ts',
-            name: 'posts',
-            exportName: 'default',
-          },
-        ],
-        authorizationAbilities: [],
-      } as never,
-      undefined,
-    )).rejects.toThrow(
-      '[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.',
-    )
-  })
-
-  it('unregisters project authorization definitions only when a module is present', () => {
-    const unregisterPolicyDefinition = vi.fn()
-    const unregisterAbilityDefinition = vi.fn()
-
-    holoRuntimeInternals.unregisterProjectAuthorizationDefinitions(undefined, ['posts'], ['reports.export'])
-    holoRuntimeInternals.unregisterProjectAuthorizationDefinitions({
-      authorizationInternals: {
-        unregisterPolicyDefinition,
-        unregisterAbilityDefinition,
-      },
-    } as never, ['posts'], ['reports.export'])
-
-    expect(unregisterPolicyDefinition).toHaveBeenCalledWith('posts')
-    expect(unregisterAbilityDefinition).toHaveBeenCalledWith('reports.export')
-  })
-
-  it('rejects required authorization module loading when the package is missing', async () => {
-    const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockResolvedValueOnce(undefined)
-
-    await expect(holoRuntimeInternals.loadAuthorizationModule(true)).rejects.toThrow(
-      '[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.',
-    )
-
-    importOptionalModule.mockRestore()
-  })
-
-  it('rejects authorization policy files that do not export a valid policy', async () => {
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await writeFile(join(root, 'server/policies/posts.ts'), `
-export default {
-  name: 'wrong',
-}
-`, 'utf8')
-
-    const authorizationModule = {
-      isAuthorizationPolicyDefinition(value: unknown) {
-        return !!value && typeof value === 'object' && 'name' in value && (value as { name?: unknown }).name === 'posts'
-      },
-      isAuthorizationAbilityDefinition() {
-        return false
-      },
-      authorizationInternals: {
-        getAuthorizationRuntimeState: () => ({
-          policiesByName: new Map(),
-          abilitiesByName: new Map(),
-        }),
-        configureAuthorizationAuthIntegration: vi.fn(),
-        resetAuthorizationAuthIntegration: vi.fn(),
-        resetAuthorizationRuntimeState: vi.fn(),
-        unregisterPolicyDefinition: vi.fn(),
-        unregisterAbilityDefinition: vi.fn(),
-      },
-    }
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [],
-      } as never,
-      authorizationModule as never,
-    )).rejects.toThrow('Discovered policy "server/policies/posts.ts" does not export a Holo policy.')
-  })
-
-  it('rejects authorization ability files that do not export a valid ability', async () => {
-    const root = await createProject()
-    await mkdir(join(root, 'server/policies'), { recursive: true })
-    await mkdir(join(root, 'server/abilities'), { recursive: true })
-    await writeFile(join(root, 'server/policies/posts.ts'), `
-export default {
-  name: 'posts',
-}
-`, 'utf8')
-    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
-export default {
-  name: 'wrong',
-}
-`, 'utf8')
-
-    const authorizationModule = {
-      isAuthorizationPolicyDefinition(value: unknown) {
-        return !!value && typeof value === 'object' && 'name' in value && (value as { name?: unknown }).name === 'posts'
-      },
-      isAuthorizationAbilityDefinition(value: unknown) {
-        return !!value && typeof value === 'object' && 'name' in value && (value as { name?: unknown }).name === 'reports.export'
-      },
-      authorizationInternals: {
-        getAuthorizationRuntimeState: () => ({
-          policiesByName: new Map(),
-          abilitiesByName: new Map(),
-        }),
-        configureAuthorizationAuthIntegration: vi.fn(),
-        resetAuthorizationAuthIntegration: vi.fn(),
-        resetAuthorizationRuntimeState: vi.fn(),
-        unregisterPolicyDefinition: vi.fn(),
-        unregisterAbilityDefinition: vi.fn(),
-      },
-    }
-
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
-      root,
-      {
-        authorizationPolicies: [{
-          sourcePath: 'server/policies/posts.ts',
-          name: 'posts',
-          exportName: 'default',
-        }],
-        authorizationAbilities: [{
-          sourcePath: 'server/abilities/reports.export.ts',
-          name: 'reports.export',
-          exportName: 'default',
-        }],
-      } as never,
-      authorizationModule as never,
-    )).rejects.toThrow('Discovered ability "server/abilities/reports.export.ts" does not export a Holo ability.')
+  it('rejects missing authorization support only when project definitions need it', async () => {
+    const empty = await holoRuntimeInternals.registerProjectAuthorizationDefinitions('/tmp/holo-authorization', authorizationRegistry([], []), undefined)
+    expect(empty.policyNames).toEqual([])
+    expect(empty.abilityNames).toEqual([])
+    empty.dispose()
+    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions('/tmp/holo-authorization', authorizationRegistry(['posts'], []), undefined)).rejects.toThrow('requires @holo-js/authorization')
+    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockResolvedValueOnce(undefined)
+    await expect(holoRuntimeInternals.loadAuthorizationModule(true)).rejects.toThrow('requires @holo-js/authorization')
   })
 })

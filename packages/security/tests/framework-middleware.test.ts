@@ -1,355 +1,121 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  configureSecurityRuntime,
-  csrf,
-  csrfInternals,
-  defineSecurityConfig,
-  resetSecurityRuntime,
-} from '../src'
-import {
-  SECURITY_CLIENT_CONFIG_COOKIE,
-  createSecurityClientConfig,
-  serializeSecurityClientConfig,
-} from '../src/client-config'
-import { getSecurityRuntime } from '../src/runtime'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { createApp, defineEventHandler, getResponseHeader, toNodeListener } from 'h3'
+import { NextRequest } from 'next/server.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { configureSecurityRuntime, defineSecurityConfig, resetSecurityRuntime } from '../src'
+import { csrfProtection as nextCsrfProtection } from '../src/next/server'
+import { csrfProtection as nuxtCsrfProtection } from '../src/nuxt/server'
 
-function configureSecurity(except: readonly string[] = []): void {
+function configureSecurity(enabled = true): void {
   configureSecurityRuntime({
-    config: defineSecurityConfig({
-      csrf: {
-        enabled: true,
-        except,
-      },
-    }),
-    csrfSigningKey: 'test-signing-key',
+    config: defineSecurityConfig({ csrf: { enabled, except: ['/webhooks/*'] } }),
+    csrfSigningKey: 'native-middleware-test-key',
   })
 }
 
-afterEach(() => {
-  vi.doUnmock('h3')
-  vi.doUnmock('next/server.js')
-  vi.resetModules()
-  resetSecurityRuntime()
-})
+afterEach(resetSecurityRuntime)
 
-describe('@holo-js/security framework csrf middleware', () => {
-  it('wires Next csrf cookies and 419 responses without auth', async () => {
-    vi.doMock('next/server.js', () => ({
-      NextResponse: {
-        next() {
-          const response = new Response(null, {
-            headers: {
-              'x-middleware-next': '1',
-            },
-          })
-
-          return Object.assign(response, {
-            cookies: {
-              set(name: string, value: string, options: { readonly path?: string, readonly sameSite?: string, readonly secure?: boolean, readonly httpOnly?: boolean }) {
-                response.headers.append('set-cookie', [
-                  `${name}=${encodeURIComponent(value)}`,
-                  options.path ? `Path=${options.path}` : undefined,
-                  options.sameSite ? `SameSite=${options.sameSite[0]?.toUpperCase()}${options.sameSite.slice(1)}` : undefined,
-                  options.secure ? 'Secure' : undefined,
-                  options.httpOnly ? 'HttpOnly' : undefined,
-                ].filter((attribute): attribute is string => typeof attribute === 'string').join('; '))
-              },
-            },
-          })
-        },
-      },
-    }))
+describe('native csrf middleware', () => {
+  it('uses Next native cookies and continuation responses', async () => {
     configureSecurity()
-
-    const { csrfProtection } = await import('../src/next/server')
-    const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(getSecurityRuntime().config))
-    const getRequest = Object.assign(new Request('https://app.test/login'), {
-      cookies: {
-        get: vi.fn(() => undefined),
-      },
-      nextUrl: new URL('https://app.test/login'),
-    })
-    const getResponse = await csrfProtection()(getRequest)
-    const token = decodeURIComponent(getResponse?.headers.get('set-cookie')?.split(';', 1)[0]?.slice('XSRF-TOKEN='.length) ?? '')
-
-    expect(getResponse?.headers.get('x-middleware-next')).toBe('1')
-    expect(getResponse?.headers.get('set-cookie')).toContain('XSRF-TOKEN=')
-    expect(getResponse?.headers.get('set-cookie')).toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
-    expect(getResponse?.headers.get('set-cookie')).toContain(encodeURIComponent('"cookie":"XSRF-TOKEN"'))
-    expect(getResponse?.headers.get('set-cookie')).toContain(encodeURIComponent('"field":"_token"'))
-    expect(getResponse?.headers.get('set-cookie')).toContain('Secure')
-
-    const existingCookieRequest = Object.assign(new Request('https://app.test/login', {
-      headers: {
-        cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
-      },
-    }), {
-      cookies: {
-        get: vi.fn((name: string) => {
-          if (name === 'XSRF-TOKEN') return { value: token }
-          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: clientConfig }
-          return undefined
-        }),
-      },
-    })
-    const existingCookieResponse = await csrfProtection()(existingCookieRequest)
-    expect(existingCookieResponse).toBeUndefined()
-
-    const staleConfigRequest = Object.assign(new Request('https://app.test/login', {
-      headers: {
-        cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=stale`,
-      },
-    }), {
-      cookies: {
-        get: vi.fn((name: string) => {
-          if (name === 'XSRF-TOKEN') return token
-          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: 'stale' }
-          return undefined
-        }),
-      },
-    })
-    const staleConfigResponse = await csrfProtection()(staleConfigRequest)
-    const staleConfigSetCookie = staleConfigResponse?.headers.get('set-cookie')
-    expect(staleConfigSetCookie).not.toContain('XSRF-TOKEN=')
-    expect(staleConfigSetCookie).toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
-
-    const invalidCsrfRequest = Object.assign(new Request('https://app.test/login', {
-      headers: {
-        cookie: `XSRF-TOKEN=forged-token; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
-      },
-    }), {
-      cookies: {
-        get: vi.fn((name: string) => {
-          if (name === 'XSRF-TOKEN') return { value: 'forged-token' }
-          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: clientConfig }
-          return undefined
-        }),
-      },
-    })
-    const invalidCsrfResponse = await csrfProtection()(invalidCsrfRequest)
-    expect(invalidCsrfResponse?.headers.get('set-cookie')).toContain('XSRF-TOKEN=')
-    expect(invalidCsrfResponse?.headers.get('set-cookie')).not.toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
-
-    const headRequest = Object.assign(new Request('https://app.test/login', {
-      method: 'HEAD',
-      headers: {
-        cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
-      },
-    }), {
-      cookies: {
-        get: vi.fn((name: string) => {
-          if (name === 'XSRF-TOKEN') return { value: token }
-          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: clientConfig }
-          return undefined
-        }),
-      },
-    })
-    const headResponse = await csrfProtection()(headRequest)
-    expect(headResponse).toBeUndefined()
-
-    const traceRequest = Object.create(new Request('https://app.test/login'), {
-      method: { value: 'TRACE' },
-      cookies: { value: { get: vi.fn(() => undefined) } },
-    }) as Request
-    const traceResponse = await csrfProtection()(traceRequest)
-    expect(traceResponse?.status).toBe(405)
-    expect(traceResponse?.headers.get('allow')).toContain('POST')
-
-    resetSecurityRuntime()
-    await expect(csrfProtection()(Object.assign(new Request('https://app.test/login', {
-      method: 'POST',
-    }), {
-      cookies: {
-        get: vi.fn(() => undefined),
-      },
-    }))).rejects.toThrow(/Security runtime/)
-    configureSecurity()
-
-    const denied = await csrfProtection()(Object.assign(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), {
-      cookies: {
-        get: vi.fn(() => undefined),
-      },
+    const middleware = nextCsrfProtection()
+    const issued = await middleware(new NextRequest('https://app.test/page'))
+    expect(issued?.headers.get('x-middleware-next')).toBe('1')
+    const setCookies = issued?.headers.getSetCookie() ?? []
+    expect(setCookies).toHaveLength(2)
+    for (const cookie of setCookies) {
+      expect(cookie).toContain('Path=/')
+      expect(cookie).toContain('Secure')
+      expect(cookie).toContain('SameSite=lax')
+      expect(cookie).not.toContain('HttpOnly')
+    }
+    const cookieHeader = setCookies.map(cookie => cookie.split(';')[0]).join('; ')
+    expect(await middleware(new NextRequest('https://app.test/page', {
+      headers: { cookie: cookieHeader },
+    }))).toBeUndefined()
+    const tokenCookie = setCookies.find(cookie => cookie.startsWith('XSRF-TOKEN='))?.split(';')[0] ?? ''
+    const configurationCookie = setCookies.find(cookie => !cookie.startsWith('XSRF-TOKEN='))?.split(';')[0] ?? ''
+    const stale = await middleware(new NextRequest('https://app.test/page', {
+      headers: { cookie: `${tokenCookie}; HOLO-CSRF-CONFIG=stale` },
     }))
+    expect(stale?.headers.getSetCookie()).toHaveLength(1)
+    expect(stale?.headers.getSetCookie()[0]).not.toContain('XSRF-TOKEN=')
+    const forged = await middleware(new NextRequest('https://app.test/page', {
+      headers: { cookie: `XSRF-TOKEN=forged; ${configurationCookie}` },
+    }))
+    expect(forged?.headers.getSetCookie()).toHaveLength(1)
+    expect(forged?.headers.getSetCookie()[0]).toContain('XSRF-TOKEN=')
+    expect(await middleware(new NextRequest('https://app.test/page', {
+      method: 'HEAD', headers: { cookie: cookieHeader },
+    }))).toBeUndefined()
+    const token = decodeURIComponent(tokenCookie.slice('XSRF-TOKEN='.length))
+    expect(await middleware(new NextRequest('https://app.test/page', {
+      method: 'POST',
+      headers: { cookie: cookieHeader },
+      body: new URLSearchParams({ _token: token }),
+    }))).toBeUndefined()
+    const denied = await middleware(new NextRequest('https://app.test/page', { method: 'POST' }))
     expect(denied?.status).toBe(419)
+    expect(await middleware(new NextRequest('https://app.test/webhooks/provider', { method: 'POST' }))).toBeUndefined()
+    configureSecurity(false)
+    expect(await middleware(new NextRequest('https://app.test/page'))).toBeUndefined()
+    resetSecurityRuntime()
+    await expect(middleware(new NextRequest('https://app.test/page', { method: 'POST' }))).rejects.toThrow(/Security runtime/)
 
-    const allowed = await csrfProtection()(Object.assign(new Request('https://app.test/login', {
-      method: 'POST',
-      headers: {
-        cookie: `XSRF-TOKEN=${token}`,
-      },
-      body: new URLSearchParams({
-        _token: token,
-      }),
-    }), {
-      cookies: {
-        get: vi.fn(() => ({ value: token })),
-      },
-    }))
-    expect(allowed).toBeUndefined()
   })
 
-  it('wires Nuxt csrf cookies, request body verification, and exceptions without auth', async () => {
-    const writes: Array<{
-      readonly name: string
-      readonly value: string
-      readonly options: object
-    }> = []
-    const state = {
-      method: 'GET',
-      url: new URL('https://app.test/login'),
-      headers: {} as Record<string, string | undefined>,
-      cookie: undefined as string | undefined,
-      clientConfigCookie: undefined as string | undefined,
-      body: undefined as Buffer | undefined,
+  it('writes H3 cookies before rendering and validates native unsafe requests', async () => {
+    configureSecurity()
+    const app = createApp()
+    app.use(nuxtCsrfProtection())
+    app.use(defineEventHandler(event => ({ cookiesBeforeRendering: Boolean(getResponseHeader(event, 'set-cookie')) })))
+    const server = createServer(toNodeListener(app))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Missing server address')
+    const url = `http://127.0.0.1:${address.port}/page`
+    try {
+      const response = await fetch(url)
+      expect(await response.json()).toEqual({ cookiesBeforeRendering: true })
+      const cookies = response.headers.getSetCookie()
+      expect(cookies).toHaveLength(2)
+      expect(cookies.every(cookie => !cookie.includes('Secure') && !cookie.includes('HttpOnly'))).toBe(true)
+      const cookieHeader = cookies.map(cookie => cookie.split(';')[0]).join('; ')
+      const current = await fetch(url, { headers: { cookie: cookieHeader } })
+      expect(current.headers.getSetCookie()).toEqual([])
+      expect(await current.json()).toEqual({ cookiesBeforeRendering: false })
+      const configurationCookie = cookies.find(cookie => !cookie.startsWith('XSRF-TOKEN='))?.split(';')[0] ?? ''
+      const forged = await fetch(url, { headers: { cookie: `XSRF-TOKEN=forged; ${configurationCookie}` } })
+      expect(forged.headers.getSetCookie()).toHaveLength(1)
+      expect(forged.headers.getSetCookie()[0]).toContain('XSRF-TOKEN=')
+      const head = await fetch(url, { method: 'HEAD' })
+      expect(head.headers.getSetCookie()).toHaveLength(2)
+      expect((await fetch(url, { method: 'POST' })).status).toBe(419)
+      const tokenCookie = cookies.find(cookie => cookie.startsWith('XSRF-TOKEN='))
+      const token = decodeURIComponent(tokenCookie?.split(';')[0]?.slice('XSRF-TOKEN='.length) ?? '')
+      const accepted = await fetch(url, {
+        method: 'POST',
+        headers: { cookie: cookieHeader, 'x-csrf-token': token },
+      })
+      expect(accepted.status).toBe(200)
+      expect(accepted.headers.getSetCookie()).toEqual([])
+      const form = await fetch(url, {
+        method: 'POST',
+        headers: { cookie: cookieHeader },
+        body: new URLSearchParams({ _token: token }),
+      })
+      expect(form.status).toBe(200)
+      expect((await fetch(url.replace('/page', '/webhooks/provider'), { method: 'POST' })).status).toBe(200)
+      expect((await fetch(url.replace('/page', '/broadcasting/auth'), { method: 'POST' })).status).toBe(200)
+      configureSecurity(false)
+      const disabled = await fetch(url)
+      expect(disabled.headers.getSetCookie()).toEqual([])
+
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     }
-    vi.doMock('h3', () => ({
-      createError(input: { readonly statusCode: number, readonly message?: string }) {
-        return Object.assign(new Error(input.message), { statusCode: input.statusCode })
-      },
-      defineEventHandler<TValue>(handler: TValue) {
-        return handler
-      },
-      getCookie(_event: unknown, name: string) {
-        if (name === 'XSRF-TOKEN') return state.cookie
-        if (name === SECURITY_CLIENT_CONFIG_COOKIE) return state.clientConfigCookie
-        return undefined
-      },
-      getMethod() {
-        return state.method
-      },
-      getRequestHeaders() {
-        return state.headers
-      },
-      getRequestURL() {
-        return state.url
-      },
-      async readRawBody() {
-        return state.body
-      },
-      setCookie(_event: unknown, name: string, value: string, options: object) {
-        writes.push({ name, value, options })
-      },
-    }))
-    configureSecurity(['/webhooks/*'])
-
-    const { csrfProtection } = await import('../src/nuxt/server')
-    const middleware = csrfProtection()
-    await middleware({ node: { req: { headers: {} } } })
-    const token = writes[0]?.value ?? ''
-    const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(getSecurityRuntime().config))
-
-    expect(writes).toEqual([
-      {
-        name: 'XSRF-TOKEN',
-        value: token,
-        options: {
-          httpOnly: false,
-          path: '/',
-          sameSite: 'lax',
-          secure: true,
-        },
-      },
-      {
-        name: SECURITY_CLIENT_CONFIG_COOKIE,
-        value: JSON.stringify({
-          csrf: {
-            field: '_token',
-            cookie: 'XSRF-TOKEN',
-          },
-        }),
-        options: {
-          httpOnly: false,
-          path: '/',
-          sameSite: 'lax',
-          secure: true,
-        },
-      },
-    ])
-
-    writes.length = 0
-    state.cookie = token
-    state.clientConfigCookie = clientConfig
-    state.headers = {
-      cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
-    }
-    await middleware({ node: { req: { headers: {} } } })
-    expect(writes).toEqual([])
-
-    state.clientConfigCookie = 'stale'
-    await middleware({ node: { req: { headers: {} } } })
-    expect(writes).toEqual([
-      {
-        name: SECURITY_CLIENT_CONFIG_COOKIE,
-        value: clientConfig,
-        options: {
-          httpOnly: false,
-          path: '/',
-          sameSite: 'lax',
-          secure: true,
-        },
-      },
-    ])
-    writes.length = 0
-
-    state.cookie = csrfInternals.encodeCsrfToken('old-token')
-    state.clientConfigCookie = clientConfig
-    state.headers = {
-      cookie: `XSRF-TOKEN=${state.cookie}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
-    }
-    await middleware({ node: { req: { headers: {} } } })
-    expect(writes).toEqual([])
-    writes.length = 0
-
-    state.cookie = 'forged-token'
-    state.headers = {
-      cookie: `XSRF-TOKEN=forged-token; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
-    }
-    await middleware({ node: { req: { headers: {} } } })
-    expect(writes).toHaveLength(1)
-    expect(writes[0]?.name).toBe('XSRF-TOKEN')
-    writes.length = 0
-
-    state.method = 'POST'
-    state.headers = {
-      cookie: `XSRF-TOKEN=${token}`,
-      'X-CSRF-TOKEN': token,
-      'content-type': 'application/x-www-form-urlencoded',
-    }
-    state.cookie = token
-    state.body = Buffer.from(new URLSearchParams({ _token: token }).toString())
-    await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
-
-    state.method = 'HEAD'
-    state.headers = {
-      'x-array': undefined,
-    }
-    await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
-
-    state.body = Buffer.from('')
-    state.method = 'POST'
-    await expect(middleware({ node: { req: { headers: {} } } })).rejects.toMatchObject({
-      statusCode: 419,
-    })
-
-    state.url = new URL('https://app.test/webhooks/stripe')
-    await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
-
-    state.url = new URL('https://app.test/broadcasting/auth')
-    await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
-
-    state.method = 'TRACE'
-    const traceResponse = await middleware({ node: { req: { headers: {} } } })
-    expect(traceResponse).toBeInstanceOf(Response)
-    expect((traceResponse as Response).status).toBe(405)
-
-    resetSecurityRuntime()
-    state.method = 'POST'
-    state.url = new URL('https://app.test/login')
-    await expect(middleware({ node: { req: { headers: {} } } })).rejects.toThrow(/Security runtime/)
   })
 })
