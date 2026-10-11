@@ -144,12 +144,14 @@ async function writeProjectFile(projectRoot, relativePath, contents) {
   await writeFile(target, contents, 'utf8')
 }
 
-async function overlayLocalPackages(projectRoot) {
-  const entries = await readdir(join(rootDir, 'packages'), { withFileTypes: true })
+async function overlayLocalPackages(projectRoot, stagingRoot = process.env.HOLO_LOCAL_PACKAGES_ROOT) {
+  assert.equal(typeof stagingRoot, 'string')
+  const sourcesRoot = join(dirname(stagingRoot), 'local-package-sources')
+  const entries = await readdir(sourcesRoot, { withFileTypes: true })
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
 
-    const sourceRoot = join(rootDir, 'packages', entry.name)
+    const sourceRoot = join(sourcesRoot, entry.name)
     const manifestPath = join(sourceRoot, 'package.json')
     const distPath = join(sourceRoot, 'dist')
     if (!await pathExists(manifestPath) || !await pathExists(distPath)) continue
@@ -853,7 +855,7 @@ async function runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPac
   assert.match(scaffold.stdout, /Created Holo project:/)
   assert.match(scaffold.stdout, /dependencies installed/i)
 
-  await overlayLocalPackages(projectRoot)
+  await overlayLocalPackages(projectRoot, localPackageEnv.HOLO_LOCAL_PACKAGES_ROOT)
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   await assertScaffoldStructure(projectRoot, journey)
@@ -883,7 +885,7 @@ export default defineMigration({
   run(journey.framework, 'npx', ['holo', 'migrate', '--force'], { cwd: projectRoot, env: localPackageEnv })
   run(journey.framework, 'npx', ['holo', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   await copyWorkspaceNativeDependencies(projectRoot)
-  await overlayLocalPackages(projectRoot)
+  await overlayLocalPackages(projectRoot, localPackageEnv.HOLO_LOCAL_PACKAGES_ROOT)
   await assertGeneratedSchema(projectRoot, tableName)
   if (journey.framework === 'nuxt') {
     await runConfiguredDriverUserJourney(projectRoot, journey.framework, cliPath, localPackageEnv)
@@ -952,11 +954,11 @@ async function runOptionalPackageIsolationJourney(tempRoot, isolationJourney, cl
 
   assert.match(scaffold.stdout, /Created Holo project:/)
   assert.match(scaffold.stdout, /dependencies installed/i)
-  await overlayLocalPackages(projectRoot)
+  await overlayLocalPackages(projectRoot, localPackageEnv.HOLO_LOCAL_PACKAGES_ROOT)
   await assertUndeclaredOptionalPackagesAreAbsent(projectRoot)
   run(framework, realNpm, ['run', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   await copyWorkspaceNativeDependencies(projectRoot)
-  await overlayLocalPackages(projectRoot)
+  await overlayLocalPackages(projectRoot, localPackageEnv.HOLO_LOCAL_PACKAGES_ROOT)
   await assertUndeclaredOptionalPackagesAreAbsent(projectRoot)
   run(framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: localPackageEnv })
   log(framework, `${isolationJourney.name} passed`)

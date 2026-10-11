@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-clerk",
-  "version": "0.3.19",
+  "version": "0.3.20",
   "description": "Holo-JS Framework - Clerk auth integration contracts",
   "type": "module",
   "license": "MIT",

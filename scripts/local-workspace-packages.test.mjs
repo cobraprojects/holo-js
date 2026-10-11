@@ -106,3 +106,30 @@ test('packed local manifests preserve publishing ranges outside archive substitu
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('scaffold overlays retain staged declarations when workspace output changes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-staged-overlay-'))
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: { catalog: {} } }))
+    const packageRoot = join(root, 'packages', 'queue')
+    await mkdir(join(packageRoot, 'dist'), { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: '@holo-js/queue', version: '0.3.20', files: ['dist'],
+      exports: { '.': { types: './dist/index.d.ts', import: './dist/index.mjs' } },
+    }))
+    const declaration = 'export declare const stagedQueue: true\n'
+    await writeFile(join(packageRoot, 'dist', 'index.d.ts'), declaration)
+    await writeFile(join(packageRoot, 'dist', 'index.mjs'), 'export const stagedQueue = true\n')
+    const stagingRoot = await stageLocalWorkspacePackages(root, join(root, 'staged'))
+    await rm(join(packageRoot, 'dist', 'index.d.ts'))
+    const projectRoot = join(root, 'project')
+    await mkdir(projectRoot)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ dependencies: { '@holo-js/queue': '0.3.20' } }))
+    await promisify(execFile)(process.execPath, [
+      join(import.meta.dirname, 'validate-scaffold-user-journey-smoke.mjs'), '--overlay-local-packages', projectRoot,
+    ], { env: { ...process.env, HOLO_LOCAL_PACKAGES_ROOT: stagingRoot } })
+    assert.equal(await readFile(join(projectRoot, 'node_modules', '@holo-js', 'queue', 'dist', 'index.d.ts'), 'utf8'), declaration)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
