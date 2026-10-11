@@ -1933,7 +1933,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     await applyOptionalSubsystems(options)
     const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
       ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
-        ? [...registry.jobs, ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
+        ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
         : [])
     const optionalEventsModule = activeQueueModule ? await loadEventsModule() : undefined
     if (activeQueueModule && optionalEventsModule) {

@@ -12670,8 +12670,11 @@ export default defineJob({
 
     await withFakeBun(async () => {
       await prepareProjectDiscovery(failingRoot)
+      const runtimeArtifacts = await readdir(join(failingRoot, '.holo-js', 'runtime'))
       await writeProjectFile(failingRoot, 'server/jobs/broken.mjs', 'export default { nope: true }\n')
       await expect(isolatedCliInternals.getQueueRuntimeEnvironment(failingRoot)).rejects.toThrow('does not export a Holo job')
+      expect(queueModule.getRegisteredQueueJob('broken')).toBeUndefined()
+      expect(await readdir(join(failingRoot, '.holo-js', 'runtime'))).toEqual(runtimeArtifacts)
     })
   })
 
@@ -15054,73 +15057,6 @@ export default defineJob({
       vi.resetModules()
     }
   })
-
-  it('shuts down the runtime and cleans bundled job artifacts when a discovered bundled job stops exporting a Holo job', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, 'server/jobs/broken.mjs', 'export default { nope: true }\n')
-
-    const cleanup = vi.fn(async () => {})
-    const shutdown = vi.fn(async () => {})
-
-    vi.resetModules()
-    vi.doMock('@holo-js/core', async () => {
-      const actual = await vi.importActual('@holo-js/core') as typeof HoloCoreModule
-      return {
-        ...actual,
-        initializeHolo: vi.fn(async () => ({ shutdown }) as unknown as Awaited<ReturnType<typeof initializeHolo>>),
-      }
-    })
-    vi.doMock('../src/project', async () => {
-      const actual = await vi.importActual('../src/project') as typeof ProjectModule
-      return {
-        ...actual,
-        prepareProjectDiscovery: vi.fn(async () => undefined),
-        loadGeneratedProjectRegistry: vi.fn(async () => ({
-          version: 1,
-          generatedAt: new Date('2026-04-02T00:00:00.000Z').toISOString(),
-          paths: {
-            models: 'server/models',
-            migrations: 'server/db/migrations',
-            seeders: 'server/db/seeders',
-            commands: 'server/commands',
-            jobs: 'server/jobs',
-            authorizationPolicies: 'server/policies',
-            authorizationAbilities: 'server/abilities',
-            generatedSchema: '.holo-js/generated/schema.generated.ts',
-          },
-          models: [],
-          migrations: [],
-          seeders: [],
-          commands: [],
-          jobs: [{
-            sourcePath: 'server/jobs/broken.mjs',
-            name: 'broken',
-            queue: 'default',
-          }],
-          authorizationPolicies: [],
-          authorizationAbilities: [],
-        })),
-        bundleProjectModule: vi.fn(async () => ({
-          path: join(projectRoot, 'server/jobs/broken.mjs'),
-          cleanup,
-        })),
-      }
-    })
-
-    try {
-      const isolatedCliInternals = await import('../src/queue')
-      await expect(isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot)).rejects.toThrow(
-        'Discovered job "server/jobs/broken.mjs" does not export a Holo job.',
-      )
-      expect(shutdown).toHaveBeenCalledTimes(1)
-      expect(cleanup).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.doUnmock('@holo-js/core')
-      vi.doUnmock('../src/project')
-      vi.resetModules()
-    }
-  }, 30000)
 
   it('does not re-import queue job modules that were already registered during runtime initialization', async () => {
     const projectRoot = await createTempProject()
