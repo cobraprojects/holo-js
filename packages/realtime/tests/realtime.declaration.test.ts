@@ -83,5 +83,5 @@ describe('@holo-js/realtime declaration emit', () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })

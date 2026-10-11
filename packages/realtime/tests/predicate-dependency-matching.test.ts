@@ -42,28 +42,28 @@ describe('@holo-js/realtime predicate dependency matching', () => {
     const exactPredicates = createExactPredicates('status', ['%'])
 
     expect(isQueryObservationContradictedByExactPredicates(createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     }), exactPredicates)).toBe(false)
     expect(readExactPredicateValues(exactPredicates, 'main', 'posts', 'status')).toBeUndefined()
   })
 
   it('detects contradicted exact predicate values and missing table metadata', () => {
     expect(isQueryObservationContradictedByExactPredicates(createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     }), createExactPredicates('status', [
-      encodeDependencyValue('closed'),
+      encodeDependencyValue(0),
     ]))).toBe(true)
 
     expect(isQueryObservationContradictedByExactPredicates(createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     }), createExactPredicates('status', [
-      encodeDependencyValue('open'),
+      encodeDependencyValue(1),
     ], 'db:main:comments'))).toBeUndefined()
   })
 
   it('keeps queries eligible when predicates can match or no exact column is present', () => {
     const exactPredicates = createExactPredicates('status', [
-      encodeDependencyValue('open'),
+      encodeDependencyValue(1),
     ])
 
     expect(isQueryObservationContradictedByExactPredicates(createQuery(), exactPredicates)).toBe(false)
@@ -71,7 +71,7 @@ describe('@holo-js/realtime predicate dependency matching', () => {
       predicates: [{ column: 'kind', operator: '=', value: 'post' }],
     }), exactPredicates)).toBe(false)
     expect(isQueryObservationContradictedByExactPredicates(createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     }), exactPredicates)).toBe(false)
   })
 

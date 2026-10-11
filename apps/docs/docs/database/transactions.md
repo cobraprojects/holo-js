@@ -147,6 +147,9 @@ transactions are independent.
 Non-transactional work can be scheduled concurrently. Transaction-scoped work is serialized so pinned
 transaction queries do not overlap unsafely.
 
+PostgreSQL and MySQL pools can run independent transactions concurrently on separate leased connections.
+When an adapter uses a single injected client, independent transactions run one at a time on that client.
+
 ## Abort and timeout control
 
 Transactions accept the same operation options as other runtime calls:

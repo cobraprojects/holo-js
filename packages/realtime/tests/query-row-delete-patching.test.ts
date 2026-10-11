@@ -13,9 +13,9 @@ import type {
 type TestRow = Readonly<Record<string, unknown>>
 
 const rows = Object.freeze([
-  Object.freeze({ id: 1, title: 'First', status: 'open', priority: 1 }),
-  Object.freeze({ id: 2, title: 'Second', status: 'closed', priority: 2 }),
-  Object.freeze({ id: 3, title: 'Third', status: 'open', priority: 3 }),
+  Object.freeze({ id: 1, title: 'First', status: 1, priority: 1 }),
+  Object.freeze({ id: 2, title: 'Second', status: 0, priority: 2 }),
+  Object.freeze({ id: 3, title: 'Third', status: 1, priority: 3 }),
 ]) satisfies readonly TestRow[]
 
 function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): DatabaseQueryObservation {
@@ -167,7 +167,7 @@ describe('@holo-js/realtime row delete patching', () => {
       rows,
       createQuery(),
       createMutation(),
-      createPredicateContext({ column: 'status', operator: '=', value: 'open' }),
+      createPredicateContext({ column: 'status', operator: '=', value: 1 }),
     )).toEqual({
       patched: true,
       rows: [
@@ -181,7 +181,7 @@ describe('@holo-js/realtime row delete patching', () => {
       rows,
       createQuery(),
       createMutation(),
-      createPredicateContext({ column: 'status', operator: '=', value: 'archived' }),
+      createPredicateContext({ column: 'status', operator: '=', value: 2 }),
     )).toEqual({ patched: true, unchanged: true })
   })
 
@@ -190,7 +190,7 @@ describe('@holo-js/realtime row delete patching', () => {
       rows,
       createQuery(),
       createMutation(),
-      createPredicateContext({ column: 'missing', operator: '=', value: 'open' }),
+      createPredicateContext({ column: 'missing', operator: '=', value: 1 }),
     )).toEqual({ patched: false })
 
     expect(applyDeleteMutationToRows(
@@ -211,7 +211,7 @@ describe('@holo-js/realtime row delete patching', () => {
         orderBy: [{ column: 'priority', direction: 'asc' }],
       }),
       createMutation(),
-      createPredicateContext({ column: 'status', operator: '=', value: 'closed' }),
+      createPredicateContext({ column: 'status', operator: '=', value: 0 }),
     )).toEqual({
       backfill: true,
       patched: true,
@@ -231,7 +231,7 @@ describe('@holo-js/realtime row delete patching', () => {
         orderBy: [{ column: 'priority', direction: 'asc' }],
       }),
       createMutation(),
-      createPredicateContext({ column: 'status', operator: '=', value: 'closed' }),
+      createPredicateContext({ column: 'status', operator: '=', value: 0 }),
     )).toEqual({ patched: false })
   })
 })

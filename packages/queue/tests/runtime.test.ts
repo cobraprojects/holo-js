@@ -853,6 +853,67 @@ export default {
     })
   })
 
+  it.each(['distinct handlers', 'closed-over handlers'] as const)(
+    'dispatches only registered definitions with matching options and %s',
+    async (handlerKind) => {
+      const createJob = (prefix: string) => defineJob({
+        async handle(payload: { readonly id: string }) {
+          return `${prefix}:${payload.id}`
+        },
+      })
+      const first = handlerKind === 'closed-over handlers'
+        ? createJob('FIRST')
+        : defineJob({
+            async handle(payload: { readonly id: string }) {
+              return `FIRST:${payload.id}`
+            },
+          })
+      const second = handlerKind === 'closed-over handlers'
+        ? createJob('SECOND')
+        : defineJob({
+            async handle(payload: { readonly id: string }) {
+              return `SECOND:${payload.id}`
+            },
+          })
+      registerNamedJob('jobs.first', first)
+
+      expect(() => second.dispatch({ id: '42' })).toThrow('cannot dispatch before the job is registered')
+      expect(() => second.dispatchSync({ id: '42' })).toThrow('cannot dispatch before the job is registered')
+
+      registerNamedJob('jobs.second', second)
+
+      await expect(first.dispatchSync({ id: '42' })).resolves.toBe('FIRST:42')
+      await expect(second.dispatchSync({ id: '42' })).resolves.toBe('SECOND:42')
+    },
+  )
+
+  it.each(['unregister', 'reset', 'replace'] as const)(
+    'revokes typed dispatch when its registration is removed by %s',
+    async (operation) => {
+      const original = defineJob({ async handle() { return 'original' } })
+      const replacement = defineJob({ async handle() { return 'replacement' } })
+      const registration = registerQueueJob(original, { name: 'jobs.lifetime' })
+      const registeredDefinition = defineJob(registration.definition)
+      await expect(registeredDefinition.dispatchSync({})).resolves.toBe('original')
+      if (operation === 'unregister') unregisterQueueJob('jobs.lifetime')
+      if (operation === 'reset') resetQueueRegistry()
+      registerQueueJob(replacement, { name: 'jobs.lifetime', replaceExisting: operation === 'replace' })
+
+      expect(() => original.dispatchSync({})).toThrow('cannot dispatch before the job is registered')
+      expect(() => registeredDefinition.dispatchSync({})).toThrow('cannot dispatch before the job is registered')
+      await expect(replacement.dispatchSync({})).resolves.toBe('replacement')
+    },
+  )
+
+  it('retains typed dispatch when another name for the same definition is unregistered', async () => {
+    const job = defineJob({ async handle(_payload, context) { return context.jobName } })
+    registerNamedJob('jobs.previous', job)
+    registerNamedJob('jobs.current', job)
+    unregisterQueueJob('jobs.previous')
+
+    await expect(job.dispatchSync({})).resolves.toBe('jobs.current')
+  })
+
   it('supports PromiseLike catch(), finally(), onComplete(), and onFailed() on pending dispatches', async () => {
     const onFinally = vi.fn()
     const onComplete = vi.fn()

@@ -29,6 +29,58 @@ afterEach(async () => {
   await adapter.disconnect()
 })
 
+it.each(['!=', 'not in'] as const)('removes null values from live rows filtered by %s and restores later matches', async (operator) => {
+  await adapter.execute('CREATE TABLE scores (id INTEGER PRIMARY KEY, score INTEGER)')
+  await adapter.execute('INSERT INTO scores VALUES (1, 10), (2, 20)')
+  const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
+  const query = defineRealtimeQuery({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').where('score', operator, operator === '!=' ? 5 : [5]).orderBy('id').get()
+  } })
+  await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: error => { throw error } })
+  let score: number | null = null
+  const mutation = defineRealtimeMutation({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').where('id', 1).update({ score })
+  } })
+  await executeRealtimeMutation(mutation)
+  expect(snapshots.at(-1)).toEqual([{ id: 2, score: 20 }])
+  score = 30
+  await executeRealtimeMutation(mutation)
+  expect(snapshots.at(-1)).toEqual([{ id: 1, score: 30 }, { id: 2, score: 20 }])
+})
+
+it('keeps null-containing exclusions empty when live rows change', async () => {
+  await adapter.execute('CREATE TABLE scores (id INTEGER PRIMARY KEY, score INTEGER)')
+  await adapter.execute('INSERT INTO scores VALUES (1, 5)')
+  const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
+  const query = defineRealtimeQuery({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').whereNotIn('score', [5, null]).get()
+  } })
+  await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: error => { throw error } })
+  await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').where('id', 1).update({ score: 10 })
+  } }))
+  expect(snapshots.at(-1)).toEqual([])
+})
+
+it('preserves native string ordering in bounded live windows after updates and inserts', async () => {
+  await adapter.execute('CREATE TABLE scores (id INTEGER PRIMARY KEY, score TEXT NOT NULL)')
+  await adapter.execute("INSERT INTO scores VALUES (1, 'b'), (2, 'c'), (3, 'd')")
+  const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
+  const query = defineRealtimeQuery({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').orderBy('score').limit(2).get()
+  } })
+  await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: error => { throw error } })
+  await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').where('id', 1).update({ score: 'Z' })
+  } }))
+  expect(snapshots.at(-1)).toEqual([{ id: 1, score: 'Z' }, { id: 2, score: 'c' }])
+  await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => {
+    return db.table('scores').insert({ id: 4, score: 'A' })
+  } }))
+  expect(snapshots.at(-1)).toEqual([{ id: 4, score: 'A' }, { id: 1, score: 'Z' }])
+  expect(rowCounts.every(count => count !== undefined && count <= 2)).toBe(true)
+})
+
 it('keeps projected limited rows shared when hidden values change and patches visible values without a refill', async () => {
   let reads = 0
   const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []

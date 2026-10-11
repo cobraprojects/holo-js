@@ -167,6 +167,9 @@ Aggregates are regular query results. Matching committed writes update `count()`
 aggregate data through their own patch and refill policies. When a result cannot be patched safely, Holo reruns the
 original query and sends its recalculated result.
 
+Live snapshots follow the database's filtering and ordering rules, including SQL `NULL` handling and string
+collation. When Holo cannot preserve those rules with a local update, it fetches the result from the database.
+
 ## Pagination
 
 Realtime pagination uses the same result type as the normal Holo paginator. If the realtime query returns

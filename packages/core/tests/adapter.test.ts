@@ -18,6 +18,7 @@ import {
   resolveHoloFrameworkOptions,
 } from '../src'
 import { Queue, listRegisteredQueueJobs } from '@holo-js/queue'
+import { dispatchEvent } from '@holo-js/events'
 import { runtimeModuleInternals } from '../src/runtimeModule'
 import { configureStorageRuntime, resetStorageRuntime, useStorage } from '@holo-js/storage/runtime'
 
@@ -414,7 +415,22 @@ describe('@holo-js/core adapter helpers', () => {
 
     await mkdir(join(root, '.holo-js/generated'), { recursive: true })
     await mkdir(join(root, 'server/jobs'), { recursive: true })
-    await writeFile(join(root, 'server/jobs/report.ts'), 'export default { nope: true }\n', 'utf8')
+    await writeFile(join(root, 'server/jobs/report.ts'), 'throw new Error("A disabled standalone job was evaluated")\n', 'utf8')
+    await mkdir(join(root, 'server/events'), { recursive: true })
+    await mkdir(join(root, 'server/listeners'), { recursive: true })
+    await writeFile(join(root, 'server/events/ready.ts'), `
+import { defineEvent } from '@holo-js/events'
+export default defineEvent({ name: 'ready' })
+`, 'utf8')
+    await writeFile(join(root, 'server/listeners/ready.ts'), `
+import { writeFile } from 'node:fs/promises'
+import { defineListener } from '@holo-js/events'
+import Ready from '../events/ready'
+export default defineListener({
+  listensTo: [Ready],
+  async handle() { await writeFile(${JSON.stringify(join(root, 'listener-result.txt'))}, 'ready') },
+})
+`, 'utf8')
     await writeFile(join(root, '.holo-js/generated/registry.json'), `${JSON.stringify({
       version: 1,
       generatedAt: new Date('2026-04-02T00:00:00.000Z').toISOString(),
@@ -430,6 +446,8 @@ describe('@holo-js/core adapter helpers', () => {
       migrations: [],
       seeders: [],
       commands: [],
+      events: [{ sourcePath: 'server/events/ready.ts', name: 'ready' }],
+      listeners: [{ sourcePath: 'server/listeners/ready.ts', id: 'ready', eventNames: ['ready'] }],
       jobs: [
         {
           sourcePath: 'server/jobs/report.ts',
@@ -438,14 +456,14 @@ describe('@holo-js/core adapter helpers', () => {
       ],
     }, null, 2)}\n`, 'utf8')
 
-    const loadEsbuildSpy = vi.spyOn(runtimeModuleInternals, 'loadEsbuild')
     const project = await createHoloAdapterProject(root, {
       registerProjectQueueJobs: false,
     })
 
     await expect(project.runtime.initialize()).resolves.toBeUndefined()
-    expect(listRegisteredQueueJobs().map(job => job.name)).toEqual(['holo.events.invoke-listener'])
-    expect(loadEsbuildSpy).not.toHaveBeenCalled()
+    expect(listRegisteredQueueJobs().map(job => job.name)).not.toContain('report')
+    await dispatchEvent('ready', {})
+    await expect(readFile(join(root, 'listener-result.txt'), 'utf8')).resolves.toBe('ready')
   })
 
   it('loads discovered queue jobs when initializing an adapter project runtime directly with explicit registration', async () => {
@@ -570,7 +588,7 @@ export default defineAbility('manage-posts', () => true)
 
     await mkdir(join(root, '.holo-js/generated'), { recursive: true })
     await mkdir(join(root, 'server/jobs'), { recursive: true })
-    await writeFile(join(root, 'server/jobs/report.ts'), 'export default { nope: true }\n', 'utf8')
+    await writeFile(join(root, 'server/jobs/report.ts'), 'throw new Error("A disabled standalone job was evaluated")\n', 'utf8')
     await writeFile(join(root, '.holo-js/generated/registry.json'), `${JSON.stringify({
       version: 1,
       generatedAt: new Date('2026-04-02T00:00:00.000Z').toISOString(),
@@ -594,16 +612,13 @@ export default defineAbility('manage-posts', () => true)
       ],
     }, null, 2)}\n`, 'utf8')
 
-    const loadEsbuildSpy = vi.spyOn(runtimeModuleInternals, 'loadEsbuild')
-
     const project = await adapter.initializeProject({
       projectRoot: root,
       registerProjectQueueJobs: false,
     })
 
     expect(project.runtime.initialized).toBe(true)
-    expect(listRegisteredQueueJobs().map(job => job.name)).toEqual(['holo.events.invoke-listener'])
-    expect(loadEsbuildSpy).not.toHaveBeenCalled()
+    expect(listRegisteredQueueJobs().map(job => job.name)).not.toContain('report')
   })
 
   it('loads discovered queue jobs during framework adapter initialization with explicit registration', async () => {

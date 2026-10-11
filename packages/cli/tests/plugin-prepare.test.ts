@@ -667,10 +667,10 @@ describe('plugin project preparation', () => {
 
     for (const path of new Set([
       '.gitignore',
-      '.ENV.local',
+      '.env.local',
       '.vscode/settings.json',
-      'Config/plugin.ts',
-      'Node_Modules/example/index.js',
+      'config/plugin.ts',
+      'node_modules/example/index.js',
       'eslint.config.mjs',
       'tsconfig.json',
       ...scaffoldPaths,
@@ -685,6 +685,17 @@ describe('plugin project preparation', () => {
       'src/routes/admin/+page.svelte',
     ]) {
       expect(() => assertManagedPathAllowed(path, [])).not.toThrow()
+    }
+  })
+
+  it('protects case aliases according to platform path identity', () => {
+    for (const path of ['.ENV.local', 'Config/plugin.ts', 'Node_Modules/example/index.js']) {
+      const check = () => assertManagedPathAllowed(path, [])
+      if (process.platform === 'darwin' || process.platform === 'win32') {
+        expect(check).toThrow(`Protected managed project artifact path: ${path}.`)
+      } else {
+        expect(check).not.toThrow()
+      }
     }
   })
 })

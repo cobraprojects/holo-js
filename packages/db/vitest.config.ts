@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/authorization': resolve(__dirname, '../authorization/src/index.ts'),
       '@holo-js/config/registry': resolve(__dirname, '../config/src/registry.ts'),
       '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
       '@holo-js/media/config': resolve(__dirname, '../media/src/projectConfig.ts'),

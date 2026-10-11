@@ -306,36 +306,16 @@ export async function getQueueRuntimeEnvironment(projectRoot: string): Promise<Q
   await prepareProjectDiscovery(projectRoot, project.config)
   project = await loadProjectConfig(projectRoot, { required: true })
 
-  const runtime = await initializeProjectRuntime(projectRoot, {
-    registerProjectQueueJobs: false,
-  })
+  const runtime = await initializeProjectRuntime(projectRoot)
   const registry = await loadGeneratedProjectRegistry(projectRoot)
   const modelEntries = registry?.models ?? []
-  const jobEntries = registry?.jobs ?? []
   const bundledModels: Array<Awaited<ReturnType<typeof bundleProjectModule>>> = []
-  const bundledJobs: Array<Awaited<ReturnType<typeof bundleProjectModule>>> = []
 
   try {
-    const queueModule = jobEntries.length > 0
-      ? await loadQueueCliModule(projectRoot)
-      : undefined
-
     for (const entry of modelEntries) {
       bundledModels.push(await bundleProjectModule(
         projectRoot,
         resolve(projectRoot, entry.sourcePath),
-      ))
-    }
-
-    for (const entry of jobEntries) {
-      if (queueModule?.getRegisteredQueueJob(entry.name)) {
-        continue
-      }
-
-      bundledJobs.push(await bundleProjectModule(
-        projectRoot,
-        resolve(projectRoot, entry.sourcePath),
-        { external: ['@holo-js/queue'] },
       ))
     }
 
@@ -344,41 +324,17 @@ export async function getQueueRuntimeEnvironment(projectRoot: string): Promise<Q
       await import(`${pathToFileURL(bundledEntry.path).href}?t=${Date.now()}-model-${index}`)
     }
 
-    let bundledJobIndex = 0
-    for (let index = 0; index < jobEntries.length; index += 1) {
-      const entry = jobEntries[index]!
-      if (queueModule?.getRegisteredQueueJob(entry.name)) {
-        continue
-      }
-
-      const bundledEntry = bundledJobs[bundledJobIndex]!
-      bundledJobIndex += 1
-
-      const moduleValue = await import(`${pathToFileURL(bundledEntry.path).href}?t=${Date.now()}-${index}`)
-      const job = resolveModuleExport(moduleValue, (value): value is unknown => queueModule!.isQueueJobDefinition(value))
-      if (!job) {
-        throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
-      }
-
-      if (!queueModule?.getRegisteredQueueJob(entry.name)) {
-        queueModule!.registerQueueJob(job, {
-          name: entry.name,
-          sourcePath: entry.sourcePath,
-        })
-      }
-    }
   } catch (error) {
     await runtime.shutdown().catch(() => {})
-    await Promise.all([...bundledModels, ...bundledJobs].map(entry => entry.cleanup()))
+    await Promise.all(bundledModels.map(entry => entry.cleanup()))
     throw error
   }
 
   return {
     runtime,
     project,
-    bundledJobs: bundledJobs.map(entry => entry.path),
     async cleanup() {
-      await Promise.all([...bundledModels, ...bundledJobs].map(entry => entry.cleanup()))
+      await Promise.all(bundledModels.map(entry => entry.cleanup()))
       await runtime.shutdown()
     },
   }

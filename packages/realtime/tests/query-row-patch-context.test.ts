@@ -127,8 +127,8 @@ describe('@holo-js/realtime row patch context helpers', () => {
     expect(matchesPredicateContext(firstRow, exactOpenContext)).toBe(true)
     expect(matchesPredicateContext(secondRow, exactOpenContext)).toBe(false)
     expect(matchesPredicateContext({ id: 1, title: 'Sparse' }, exactOpenContext)).toBeUndefined()
-    expect(matchesPredicateContext({ id: 1, status: 'closed' }, exactOpenContext)).toBe(false)
-    expect(matchesPatchedPredicateContext(firstRow, { status: 'closed' }, exactOpenContext)).toBe(false)
+    expect(matchesPredicateContext({ id: 1, status: 'closed' }, exactOpenContext)).toBeUndefined()
+    expect(matchesPatchedPredicateContext(firstRow, { status: 'closed' }, exactOpenContext)).toBeUndefined()
     expect(matchesPatchedPredicateContext(firstRow, { status: 'open' }, exactOpenContext)).toBe(true)
     expect(matchesPatchedPredicateContext(firstRow, { status: 'open', id: 2 }, exactOpenContext)).toBe(false)
     expect(matchesPatchedPredicateContext({ id: 1, title: 'Sparse' }, {}, exactOpenContext)).toBeUndefined()
@@ -137,7 +137,7 @@ describe('@holo-js/realtime row patch context helpers', () => {
   it('matches plain and patched predicate contexts across fast and multi-predicate paths', () => {
     expect(matchesPredicateContext(firstRow, createPredicateContext([
       createPredicate('status', '!=', 'closed'),
-    ]))).toBe(true)
+    ]))).toBeUndefined()
 
     const multiContext = createPredicateContext([
       createPredicate('status', '=', 'open'),
@@ -158,7 +158,7 @@ describe('@holo-js/realtime row patch context helpers', () => {
       createPredicate('status', '=', 'open'),
       createPredicate('missing', '=', true),
     ]))).toBeUndefined()
-    expect(matchesPatchedPredicateContext(firstRow, { status: 'closed' }, multiContext)).toBe(false)
+    expect(matchesPatchedPredicateContext(firstRow, { status: 'closed' }, multiContext)).toBeUndefined()
     expect(matchesPatchedPredicateContext(firstRow, {}, createPredicateContext([]))).toBe(true)
   })
 

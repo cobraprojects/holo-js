@@ -20,12 +20,12 @@ import {
 } from '../src/runtime/predicate-matching'
 
 describe('@holo-js/realtime predicate matching', () => {
-  it('compares numbers, strings, dates, equal references, and incompatible values', () => {
+  it('compares typed values without assuming database string collation', () => {
     expect(compareValues(1, 2)).toBe(-1)
     expect(compareValues(2, 2)).toBe(0)
     expect(compareValues(3, 2)).toBe(1)
-    expect(compareValues('a', 'b')).toBe(-1)
-    expect(compareValues('b', 'a')).toBe(1)
+    expect(compareValues('a', 'b')).toBeUndefined()
+    expect(compareValues('b', 'a')).toBeUndefined()
     expect(compareValues(new Date('2026-01-01T00:00:00.000Z'), new Date('2026-01-02T00:00:00.000Z'))).toBe(-1)
     expect(compareValues(new Date('2026-01-02T00:00:00.000Z'), new Date('2026-01-02T00:00:00.000Z'))).toBe(0)
     expect(compareValues(new Date('2026-01-03T00:00:00.000Z'), new Date('2026-01-02T00:00:00.000Z'))).toBe(1)
@@ -67,7 +67,7 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(matchesPatchedPredicate(row, {}, createPredicate('count', '>', 0))).toBe(true)
     expect(matchesPatchedPredicate(row, {}, createPredicate('missing', '=', true))).toBeUndefined()
     expect(matchesPredicates(row, [])).toBe(true)
-    expect(matchesPredicates(row, [createPredicate('status', '!=', 'published')])).toBe(true)
+    expect(matchesPredicates(row, [createPredicate('status', '!=', 'published')])).toBeUndefined()
     expect(matchesPredicates(row, [createPredicate('missing', '=', true)])).toBeUndefined()
     expect(matchesPredicates(row, [
       createPredicate('status', '=', 'draft'),

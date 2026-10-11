@@ -1,5 +1,5 @@
 import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
-import { lstatSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path'
@@ -763,7 +763,21 @@ export default defineNuxtModule<ModuleOptions>({
     applyStorageRuntimeConfig(opts.runtimeConfig, normalizedStorage)
 
     if (!opts._holoCoreRuntimeRegistered) {
-      addServerPlugin(resolver.resolve('./runtime/plugins/init'))
+      if (existsSync(resolve(rootDir, '.holo-js/generated/definition-importer.ts'))) {
+        const initPluginPath = resolve(rootDir, '.holo-js/generated/nuxt-init.ts')
+        await writeFile(initPluginPath, [
+          `import init from ${JSON.stringify(resolver.resolve('./runtime/plugins/init'))}`,
+          "import { installProjectDefinitionImporter } from './definition-importer'",
+          '',
+          `installProjectDefinitionImporter(${JSON.stringify(rootDir)})`,
+          '',
+          'export default init',
+          '',
+        ].join('\n'), 'utf8')
+        addServerPlugin(initPluginPath)
+      } else {
+        addServerPlugin(resolver.resolve('./runtime/plugins/init'))
+      }
       addServerPlugin(resolver.resolve('./runtime/plugins/forms'))
       addServerImportsDir(resolver.resolve('./runtime/server/auto-imports'))
       const serverModelImports = await createServerModelImports(

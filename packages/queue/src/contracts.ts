@@ -48,130 +48,42 @@ function getQueueJobDefinitionNames(): WeakMap<object, string> {
   return runtime.__holoQueueJobDefinitionNames__
 }
 
-function getQueueJobDefinitionFingerprints(): Map<string, Set<string>> {
+function getQueueJobDefinitionsByName(): Map<string, Set<object>> {
   const runtime = globalThis as typeof globalThis & {
-    __holoQueueJobDefinitionFingerprints__?: Map<string, Set<string>>
+    __holoQueueJobDefinitionsByName__?: Map<string, Set<object>>
   }
 
-  runtime.__holoQueueJobDefinitionFingerprints__ ??= new Map<string, Set<string>>()
-  return runtime.__holoQueueJobDefinitionFingerprints__
-}
-
-function getQueueJobDefinitionOptionFingerprints(): Map<string, Set<string>> {
-  const runtime = globalThis as typeof globalThis & {
-    __holoQueueJobDefinitionOptionFingerprints__?: Map<string, Set<string>>
-  }
-
-  runtime.__holoQueueJobDefinitionOptionFingerprints__ ??= new Map<string, Set<string>>()
-  return runtime.__holoQueueJobDefinitionOptionFingerprints__
-}
-
-function createQueueJobDefinitionOptionsFingerprint(definition: QueueJobDefinition): string {
-  return JSON.stringify({
-    connection: definition.connection,
-    queue: definition.queue,
-    tries: definition.tries,
-    backoff: definition.backoff,
-    timeout: definition.timeout,
-  })
-}
-
-function getQueueJobDefinitionFingerprint(definition: object): string | undefined {
-  if (!isQueueJobDefinition(definition)) {
-    return undefined
-  }
-
-  return JSON.stringify({
-    options: createQueueJobDefinitionOptionsFingerprint(definition),
-    handle: definition.handle.toString(),
-  })
-}
-
-function addQueueJobDefinitionNameByFingerprint(
-  fingerprints: Map<string, Set<string>>,
-  fingerprint: string,
-  name: string,
-): void {
-  const names = fingerprints.get(fingerprint) ?? new Set<string>()
-  names.add(name)
-  fingerprints.set(fingerprint, names)
+  runtime.__holoQueueJobDefinitionsByName__ ??= new Map<string, Set<object>>()
+  return runtime.__holoQueueJobDefinitionsByName__
 }
 
 function setQueueJobDefinitionName(definition: object, name: string): void {
   getQueueJobDefinitionNames().set(definition, name)
-
-  if (!isQueueJobDefinition(definition)) {
-    return
-  }
-
-  addQueueJobDefinitionNameByFingerprint(
-    getQueueJobDefinitionFingerprints(),
-    getQueueJobDefinitionFingerprint(definition)!,
-    name,
-  )
-  addQueueJobDefinitionNameByFingerprint(
-    getQueueJobDefinitionOptionFingerprints(),
-    createQueueJobDefinitionOptionsFingerprint(definition),
-    name,
-  )
+  const definitions = getQueueJobDefinitionsByName().get(name) ?? new Set<object>()
+  definitions.add(definition)
+  getQueueJobDefinitionsByName().set(name, definitions)
 }
 
 function deleteQueueJobDefinitionName(name: string): void {
-  for (const fingerprints of [
-    getQueueJobDefinitionFingerprints(),
-    getQueueJobDefinitionOptionFingerprints(),
-  ]) {
-    for (const [fingerprint, names] of fingerprints) {
-      names.delete(name)
-      if (names.size === 0) {
-        fingerprints.delete(fingerprint)
-      }
+  const definitions = getQueueJobDefinitionsByName().get(name)
+  for (const definition of definitions ?? []) {
+    if (getQueueJobDefinitionNames().get(definition) === name) {
+      getQueueJobDefinitionNames().delete(definition)
     }
   }
+  getQueueJobDefinitionsByName().delete(name)
 }
 
 function clearQueueJobDefinitionNames(): void {
-  getQueueJobDefinitionFingerprints().clear()
-  getQueueJobDefinitionOptionFingerprints().clear()
-}
-
-function resolveSingleQueueJobDefinitionFingerprintName(
-  names: Set<string> | undefined,
-): string | undefined {
-  if (!names) {
-    return undefined
+  for (const name of getQueueJobDefinitionsByName().keys()) {
+    deleteQueueJobDefinitionName(name)
   }
-
-  if (names.size === 1) {
-    return [...names][0]!
-  }
-
-  throw new Error('[Holo Queue] Job definition dispatch is ambiguous because multiple registered jobs match the same definition.')
 }
 
 function resolveQueueJobDefinitionName(definition: object): string {
   const name = getQueueJobDefinitionNames().get(definition)
   if (name) {
     return name
-  }
-
-  const fingerprint = getQueueJobDefinitionFingerprint(definition)
-  const fingerprintName = fingerprint
-    ? resolveSingleQueueJobDefinitionFingerprintName(getQueueJobDefinitionFingerprints().get(fingerprint))
-    : undefined
-
-  if (fingerprintName) {
-    return fingerprintName
-  }
-
-  if (isQueueJobDefinition(definition)) {
-    const optionFingerprintName = resolveSingleQueueJobDefinitionFingerprintName(
-      getQueueJobDefinitionOptionFingerprints().get(createQueueJobDefinitionOptionsFingerprint(definition)),
-    )
-
-    if (optionFingerprintName) {
-      return optionFingerprintName
-    }
   }
 
   throw new Error('[Holo Queue] Job definitions cannot dispatch before the job is registered.')
@@ -624,6 +536,10 @@ export function defineJob<TPayload extends QueueJsonValue, TResult = unknown>(
   job: QueueJobDefinition<TPayload, TResult>,
 ): DefinedQueueJobDefinition<TPayload, TResult> {
   const normalized = normalizeQueueJobDefinition<TPayload, TResult, QueueJobDefinition<TPayload, TResult>>(job) as DefinedQueueJobDefinition<TPayload, TResult>
+  const registeredName = getQueueJobDefinitionNames().get(job)
+  if (registeredName) {
+    setQueueJobDefinitionName(normalized, registeredName)
+  }
   Object.defineProperty(normalized, 'dispatch', {
     value(payload: TPayload): QueuePendingDispatch<TPayload> {
       return dispatchDefinedQueueJob(normalized, payload)

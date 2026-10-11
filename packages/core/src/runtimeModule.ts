@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { basename, extname, join } from 'node:path'
+import * as nodeModule from 'node:module'
+import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult } from 'esbuild'
 
@@ -13,7 +13,7 @@ async function importModule<TModule>(specifier: string): Promise<TModule> {
   return import(/* @vite-ignore */ /* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
-const runtimeModuleRequire = createRequire(import.meta.url)
+const runtimeModuleRequire = nodeModule.createRequire(import.meta.url)
 
 function resolveRuntimeModuleSearchPaths(
   projectRoot: string,
@@ -180,7 +180,8 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
 async function bundleRuntimeModule(
   projectRoot: string,
   entryPath: string,
-): Promise<{ path: string, cleanup(): Promise<void> }> {
+  metafile = false,
+): Promise<{ path: string, metafile: BuildResult['metafile'], cleanup(): Promise<void> }> {
   const runtimeTempRoot = join(projectRoot, '.holo-js', 'runtime')
   await mkdir(runtimeTempRoot, { recursive: true })
   const tempDir = await mkdtemp(join(runtimeTempRoot, 'bundle-'))
@@ -192,7 +193,7 @@ async function bundleRuntimeModule(
   }
 
   try {
-    await runtimeModuleInternals.runEsbuild({
+    const result = await runtimeModuleInternals.runEsbuild({
       absWorkingDir: projectRoot,
       bundle: true,
       entryPoints: [entryPath],
@@ -204,10 +205,12 @@ async function bundleRuntimeModule(
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: false,
+      metafile,
     })
 
     return {
       path: outfile,
+      metafile: result.metafile,
       cleanup,
     }
   } catch (error) {
@@ -238,6 +241,65 @@ async function bundleRuntimeModule(
     }
 
     throw new Error(`Failed to load ${entryPath}.`)
+  }
+}
+
+const definitionGraphSources = new Map<string, { readonly sources: ReadonlyMap<string, string>, readonly native: boolean }>()
+
+export async function loadProjectDefinitionRuntimeModules(
+  projectRoot: string,
+  entryPaths: readonly string[],
+): Promise<(entryPath: string) => Promise<unknown>> {
+  if (!entryPaths.length) return async entryPath => { throw new Error(`No discovered definition exists at "${entryPath}".`) }
+  const runtimeTempRoot = join(projectRoot, '.holo-js', 'runtime')
+  await mkdir(runtimeTempRoot, { recursive: true })
+  const tempDir = await mkdtemp(join(runtimeTempRoot, 'definitions-'))
+  const entryPath = join(tempDir, 'definitions.mjs')
+  let bundled: Awaited<ReturnType<typeof bundleRuntimeModule>> | undefined
+  try {
+    await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(sourcePath)}`).join('\n'), 'utf8')
+    bundled = await bundleRuntimeModule(projectRoot, entryPath, true)
+    const sources = new Map<string, string>()
+    const nativeSourceLoader = typeof globalThis === 'object' && 'Bun' in globalThis
+      || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
+    let nativeGraph = true
+    for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
+      const sourcePath = resolve(projectRoot, inputPath)
+      if (sourcePath === entryPath) continue
+      const source = await readFile(sourcePath, 'utf8')
+      sources.set(sourcePath, source)
+      if (nativeSourceLoader) continue
+      if (input.imports.some(dependency => {
+        const original = dependency.original ?? dependency.path
+        return /^[@~]\//.test(original)
+          || !dependency.external && (
+            !original.startsWith('.') && !original.startsWith('file:') && !isAbsolute(original)
+            || !extname(original) || extname(original) !== extname(dependency.path)
+          )
+      })) nativeGraph = false
+      if (/\.[cm]?tsx?$/.test(sourcePath)) {
+        if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
+        try {
+          if (!nodeModule.stripTypeScriptTypes) nativeGraph = false
+          else nodeModule.stripTypeScriptTypes(source)
+        } catch {
+          nativeGraph = false
+        }
+      }
+    }
+    const previous = definitionGraphSources.get(projectRoot)
+    if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
+    definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })
+    if (nativeGraph) await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(pathToFileURL(sourcePath).href)}`).join('\n'), 'utf8')
+    const modules = await importModule<Record<string, unknown>>(pathToFileURL(nativeGraph ? entryPath : bundled.path).href)
+    const definitions = new Map(entryPaths.map((sourcePath, index) => [sourcePath, modules[`definition${index}`]]))
+    return async sourcePath => {
+      if (!definitions.has(sourcePath)) throw new Error(`No discovered definition exists at "${sourcePath}".`)
+      return definitions.get(sourcePath)
+    }
+  } finally {
+    await bundled?.cleanup()
+    await rm(tempDir, { recursive: true, force: true })
   }
 }
 

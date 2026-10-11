@@ -705,14 +705,14 @@ describe('query grouped aggregate patching', () => {
   it('keeps grouped count retained state unchanged for irrelevant mutations', () => {
     const query = createQuery({
       groupedAggregate: groupedCountHavingWithStates,
-      predicates: [{ column: 'status', operator: '=', value: 'published' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     expect(tryPatchGroupedAggregateQuery(
       query,
       [{ total: 2, user_id: 1 }],
       [createMutation('insert', {
-        rows: [{ id: 4, status: 'draft', user_id: 2 }],
+        rows: [{ id: 4, status: 0, user_id: 2 }],
       })],
     )).toEqual({ patched: true, unchanged: true })
   })
@@ -2150,7 +2150,7 @@ describe('query grouped aggregate patching', () => {
     expect(tryPatchGroupedAggregateQuery(
       createQuery({
         groupedAggregate: groupedAvgWithStates,
-        predicates: [{ column: 'status', operator: '=', value: 'published' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       [{ average_score: 6, user_id: 1 }],
       [createMutation('insert', {
@@ -2160,11 +2160,11 @@ describe('query grouped aggregate patching', () => {
     expect(tryPatchGroupedAggregateQuery(
       createQuery({
         groupedAggregate: groupedAvgWithStates,
-        predicates: [{ column: 'status', operator: '=', value: 'published' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       [{ average_score: 6, user_id: 1 }],
       [createMutation('insert', {
-        rows: [{ id: 1, score: 6, status: 'draft', user_id: 1 }],
+        rows: [{ id: 1, score: 6, status: 0, user_id: 1 }],
       })],
     )).toEqual({ patched: true, unchanged: true })
     expect(tryPatchGroupedAggregateQuery(
@@ -2426,7 +2426,7 @@ describe('query grouped aggregate patching', () => {
     )).toEqual({ patched: true, unchanged: true })
   })
 
-  it('sorts grouped aggregate rows by string and date group values', () => {
+  it('falls back for string group ordering and sorts date group values', () => {
     const stringQuery = createQuery({
       groupedAggregate: {
         aggregateResultKey: 'total',
@@ -2452,14 +2452,7 @@ describe('query grouped aggregate patching', () => {
       stringQuery,
       [{ category: 'b', total: 1 }],
       [createMutation('insert', { rows: [{ category: 'a', id: 2 }] })],
-    )).toEqual({
-      patched: true,
-      query: stringQuery,
-      value: [
-        { category: 'b', total: 1 },
-        { category: 'a', total: 1 },
-      ],
-    })
+    )).toEqual({ patched: false })
     expect(tryPatchGroupedAggregateQuery(
       dateQuery,
       [{ day: later, total: 1 }],

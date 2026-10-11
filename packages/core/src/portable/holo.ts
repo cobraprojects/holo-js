@@ -51,7 +51,7 @@ import {
   unregisterDatabaseDriverFactory,
   type DatabaseDriverFactory,
 } from '@holo-js/db'
-import { importBundledRuntimeModule, importOptionalRuntimeModule } from '../runtimeModule'
+import { importBundledRuntimeModule, importOptionalRuntimeModule, loadProjectDefinitionRuntimeModules } from '../runtimeModule'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
@@ -1125,10 +1125,52 @@ async function importRuntimeModule(projectRoot: string, filePath: string): Promi
   return importBundledRuntimeModule(projectRoot, filePath)
 }
 
+type ProjectDefinitionImporter = (absolutePath: string) => Promise<unknown>
+
+type ProjectDefinitionImportBinding = {
+  readonly importModule: ProjectDefinitionImporter
+  readonly registrations: WeakMap<object, Promise<void>>
+}
+
+function getProjectDefinitionImporters(): Map<string, ProjectDefinitionImportBinding> {
+  const runtime = globalThis as typeof globalThis & {
+    __holoProjectDefinitionImporters__?: Map<string, ProjectDefinitionImportBinding>
+  }
+  runtime.__holoProjectDefinitionImporters__ ??= new Map<string, ProjectDefinitionImportBinding>()
+  return runtime.__holoProjectDefinitionImporters__
+}
+
+function setProjectDefinitionImporter(projectRoot: string, importModule: ProjectDefinitionImporter): void {
+  getProjectDefinitionImporters().set(resolve(projectRoot), { importModule, registrations: new WeakMap<object, Promise<void>>() })
+}
+
+async function bindProjectDefinitionImporter(runtime: HoloRuntime): Promise<void> {
+  const binding = getProjectDefinitionImporters().get(resolve(runtime.projectRoot))
+  if (!binding || !runtime.registry || (!runtime.registry.jobs.length && !runtime.registry.events.length && !runtime.registry.listeners.length)) return
+  const existing = binding.registrations.get(runtime)
+  if (existing) return existing
+  const registration = (async () => {
+    const queueModule = await loadQueueModule(runtime.registry!.jobs.length > 0, { projectRoot: runtime.projectRoot })
+    if (runtime.registry!.jobs.length) await registerProjectQueueJobs(runtime.projectRoot, runtime.registry, queueModule!, binding.importModule)
+    if (runtime.registry!.events.length || runtime.registry!.listeners.length) {
+      const eventsModule = await loadEventsModule(true, { projectRoot: runtime.projectRoot })
+      await registerProjectEventsAndListeners(runtime.projectRoot, runtime.registry, eventsModule, queueModule, binding.importModule)
+    }
+  })()
+  binding.registrations.set(runtime, registration)
+  try {
+    await registration
+  } catch (error) {
+    binding.registrations.delete(runtime)
+    throw error
+  }
+}
+
 async function registerProjectQueueJobs(
   projectRoot: string,
   registry: GeneratedProjectRegistry | undefined,
   queueModule: QueueModule,
+  importDefinition: ProjectDefinitionImporter,
 ): Promise<readonly string[]> {
   /* v8 ignore next 4 -- initialization short-circuits before calling this helper when no jobs are present */
   if (!registry || registry.jobs.length === 0) {
@@ -1143,7 +1185,7 @@ async function registerProjectQueueJobs(
         continue
       }
 
-      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+      const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
       const job = resolveQueueJobExport(queueModule, moduleValue)
       if (!job) {
         throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
@@ -1221,6 +1263,7 @@ async function registerProjectEventsAndListeners(
   registry: GeneratedProjectRegistry | undefined,
   eventsModule: EventsModule,
   queueModule: QueueModule | undefined,
+  importDefinition: ProjectDefinitionImporter,
 ): Promise<{ readonly eventNames: readonly string[], readonly listenerIds: readonly string[] }> {
   /* v8 ignore next 6 -- initialization short-circuits before calling this helper when no events or listeners are present */
   if (!registry || (registry.events.length === 0 && registry.listeners.length === 0)) {
@@ -1241,7 +1284,7 @@ async function registerProjectEventsAndListeners(
         continue
       }
 
-      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+      const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
       const event = resolveEventExport(moduleValue)
       if (!event || !eventsModule.isEventDefinition(event)) {
         throw new Error(`Discovered event "${entry.sourcePath}" does not export a Holo event.`)
@@ -1261,7 +1304,7 @@ async function registerProjectEventsAndListeners(
         continue
       }
 
-      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+      const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
       const listener = resolveListenerExport(eventsModule, moduleValue)
       if (!listener) {
         throw new Error(`Discovered listener "${entry.sourcePath}" does not export a Holo listener.`)
@@ -1888,6 +1931,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   const initializeRuntimeServices = async (): Promise<void> => {
     if (!shouldBootRuntimeServices(options.processEnv)) return
     await applyOptionalSubsystems(options)
+    const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
+      ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
+        ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
+        : [])
     const optionalEventsModule = activeQueueModule ? await loadEventsModule() : undefined
     if (activeQueueModule && optionalEventsModule) {
       await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
@@ -1896,7 +1943,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       const eventsModule = await loadEventsModule(true)
       if (!eventsModule) throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
       activeEventsModule = eventsModule
-      const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule)
+      const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule, importDefinition)
       runtimeOwnedEventNames.push(...eventRegistration.eventNames)
       runtimeOwnedListenerIds.push(...eventRegistration.listenerIds)
     }
@@ -1905,7 +1952,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     disposeAuthorizationDefinitions = authorizationRegistration.dispose
     if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
       if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
-      runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule))
+      runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule, importDefinition))
     }
   }
 
@@ -2046,6 +2093,7 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
     ;(current as HoloRuntime<TCustom> & {
       setAuthRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
     }).setAuthRequestAccessors?.(options.authRequest)
+    if (options.registerProjectQueueJobs !== false) await bindProjectDefinitionImporter(current)
     return current
   }
 
@@ -2054,10 +2102,11 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
       throw new Error(`A Holo runtime is already initializing for "${state.pendingProjectRoot}".`)
     }
 
-    return (state.pending as Promise<HoloRuntime<TCustom>>).then((runtime) => {
+    return (state.pending as Promise<HoloRuntime<TCustom>>).then(async (runtime) => {
       ;(runtime as HoloRuntime<TCustom> & {
         setAuthRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
       }).setAuthRequestAccessors?.(options.authRequest)
+      if (options.registerProjectQueueJobs !== false) await bindProjectDefinitionImporter(runtime)
       return runtime
     })
   }
@@ -2065,6 +2114,9 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
   const pending = (async () => {
     const runtime = await createHolo<TCustom>(projectRoot, options)
     await runtime.initialize()
+    if (options.registerProjectQueueJobs !== false) {
+      getProjectDefinitionImporters().get(resolvedProjectRoot)?.registrations.set(runtime, Promise.resolve())
+    }
     return runtime
   })()
 
@@ -2144,6 +2196,7 @@ function getConfigSection(key: string): unknown {
 }
 
 export const holoRuntimeInternals = {
+  setProjectDefinitionImporter,
   createAuthMailDeliveryHook,
   createAuthNotificationsDeliveryHook,
   createCoreNotificationBroadcaster,

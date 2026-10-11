@@ -68,6 +68,7 @@ type AuthorizationRuntimeState = {
   policiesByName: Map<string, RegisteredPolicy>
   policiesByTargetObject: WeakMap<object, RegisteredPolicy>
   policiesByDefinitionKey: Map<string, RegisteredPolicy>
+  definitionKeys: WeakMap<AuthorizationTargetModelDefinition, string>
   abilitiesByName: Map<string, RegisteredAbility>
   policyLifetimes: WeakMap<RegisteredPolicy, DefinitionLifetime<RegisteredPolicy>>
   abilityLifetimes: WeakMap<RegisteredAbility, DefinitionLifetime<RegisteredAbility>>
@@ -79,6 +80,7 @@ function createAuthorizationRuntimeState(): AuthorizationRuntimeState {
     policiesByName: new Map(),
     policiesByTargetObject: new WeakMap(),
     policiesByDefinitionKey: new Map(),
+    definitionKeys: new WeakMap(),
     abilitiesByName: new Map(),
     policyLifetimes: new WeakMap(),
     abilityLifetimes: new WeakMap(),
@@ -621,11 +623,15 @@ function resolveDefinitionTableName(definition: AuthorizationTargetModelDefiniti
 }
 
 function buildDefinitionKey(definition: AuthorizationTargetModelDefinition): string {
+  const keys = getAuthorizationRuntimeState().definitionKeys
+  const existing = keys.get(definition)
+  if (existing) return existing
+
   const tableName = resolveDefinitionTableName(definition)
   const modelName = definition.name.trim()
-  return tableName
-    ? `${modelName}:${tableName}`
-    : modelName
+  const key = tableName ? `${modelName}:${tableName}` : modelName
+  keys.set(definition, key)
+  return key
 }
 
 function resolveContext<TActor extends object>(actor: TActor | null): AuthorizationActorContext<TActor>

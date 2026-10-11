@@ -1,5 +1,6 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import mysql, {
+  type Connection,
   type Pool,
   type PoolConnection,
   type PoolOptions,
@@ -29,7 +30,7 @@ export interface MySQLPoolLike extends MySQLQueryableLike {
 export interface MySQLAdapterOptions<TConfig extends PoolOptions = PoolOptions> {
   uri?: string
   config?: TConfig
-  client?: MySQLClientLike
+  client?: Connection | MySQLClientLike
   pool?: MySQLPoolLike
   createPool?: (config: TConfig) => MySQLPoolLike
 }
@@ -99,7 +100,7 @@ function resolveBootstrapTarget(config: PoolOptions): BootstrapTarget | undefine
   return undefined
 }
 
-function wrapMySQLClient(client: PoolConnection | MySQLClientLike): MySQLClientLike {
+function wrapMySQLClient(client: Connection | MySQLClientLike): MySQLClientLike {
   const rawClient = client as unknown as RawMySQLClientLike
 
   return {
@@ -145,7 +146,7 @@ function isMySQLDatabaseMissing(error: unknown): boolean {
 }
 
 export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements DriverAdapter {
-  readonly supportsConcurrentTransactionScopes = true
+  readonly supportsConcurrentTransactionScopes: boolean
   private pool?: MySQLPoolLike
   private readonly directClient?: MySQLClientLike
   private readonly createPoolInstance?: (config: TConfig) => MySQLPoolLike
@@ -154,7 +155,8 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
   private readonly transactionClients
 
   constructor(options: MySQLAdapterOptions<TConfig> = {}) {
-    this.directClient = options.client
+    this.supportsConcurrentTransactionScopes = !options.client
+    this.directClient = options.client ? wrapMySQLClient(options.client) : undefined
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined

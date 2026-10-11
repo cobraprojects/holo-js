@@ -3496,7 +3496,7 @@ function createModelNotEqualHasManyRelationPatchBenchmarkQuery(counters: Benchma
       return await context
         .model(Author)
         .query()
-        .with('posts', relationQuery => relationQuery.where('title', '!=', 'Draft').orderBy('id'))
+        .with('posts', relationQuery => relationQuery.where('score', '!=', 0).orderBy('id'))
         .orderBy('id', 'asc')
         .getJson()
     },

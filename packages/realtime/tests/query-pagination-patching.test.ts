@@ -133,7 +133,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 3,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -151,11 +151,11 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 4, status: 'open' }],
+          rows: [{ id: 4, status: 1 }],
         }),
         createMutation({
           kind: 'delete',
-          rows: [{ id: 1, status: 'closed' }],
+          rows: [{ id: 1, status: 0 }],
         }),
       ],
       createBackfills(),
@@ -194,7 +194,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 3,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -212,9 +212,9 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, status: 'closed' }],
-          rows: [{ id: 1, status: 'open' }],
-          values: { status: 'open' },
+          previousRows: [{ id: 1, status: 0 }],
+          rows: [{ id: 1, status: 1 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -254,7 +254,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 3,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -272,14 +272,14 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, status: 'closed' }],
-          values: { status: 'open' },
+          previousRows: [{ id: 1, status: 0 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 2, status: 'open' }],
-          values: { status: 'closed' },
+          previousRows: [{ id: 2, status: 1 }],
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -301,8 +301,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, status: 'closed' }],
-          values: { status: 'open' },
+          previousRows: [{ id: 1, status: 0 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -379,8 +379,8 @@ describe('@holo-js/realtime pagination patching', () => {
         total: 3,
       },
       predicates: [
-        { column: 'status', operator: '=', value: 'open' },
-        { column: 'category', operator: '=', value: 'news' },
+        { column: 'status', operator: '=', value: 1 },
+        { column: 'category', operator: '=', value: 1 },
       ],
     })
 
@@ -400,10 +400,10 @@ describe('@holo-js/realtime pagination patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { category: 'news', id: 1, status: 'closed' },
-            { category: 'archive', id: 2, status: 'closed' },
+            { category: 1, id: 1, status: 0 },
+            { category: 0, id: 2, status: 0 },
           ],
-          values: { status: 'open' },
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -444,7 +444,7 @@ describe('@holo-js/realtime pagination patching', () => {
         total: 1,
       },
       predicates: [
-        { column: 'status', operator: '=', value: 'open' },
+        { column: 'status', operator: '=', value: 1 },
         { column: 'priority', operator: '>', value: 1 },
       ],
     })
@@ -464,8 +464,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, priority: 2, status: 'closed' }],
-          values: { priority: {}, status: 'open' },
+          previousRows: [{ id: 1, priority: 2, status: 0 }],
+          values: { priority: {}, status: 1 },
           valueKeys: ['priority', 'status'],
         }),
       ],
@@ -482,7 +482,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 10,
         total: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -500,7 +500,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ id: 1, status: 'open' }],
+          rows: [{ id: 1, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -516,7 +516,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 10,
         total: 1,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -534,7 +534,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ id: 1, status: 'open' }],
+          rows: [{ id: 1, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -663,7 +663,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 3,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const invalidCountDatabase = createFakeDatabase(() => [
       { __holo_count: '' },
@@ -708,9 +708,9 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, status: 'open' }],
+          previousRows: [{ id: 1, status: 1 }],
           rows: [{ id: 1 }],
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -816,7 +816,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 3,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -834,7 +834,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -865,7 +865,7 @@ describe('@holo-js/realtime pagination patching', () => {
     })
     expect(database.queries).toHaveLength(1)
     expect(database.queries[0]?.sql).toContain('COUNT(*) AS "__holo_count"')
-    expect(database.queries[0]?.bindings).toEqual(['open'])
+    expect(database.queries[0]?.bindings).toEqual([1])
   })
 
   it('falls back to scoped pagination counts when grouped count predicates are unavailable', async () => {
@@ -949,7 +949,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 2,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const closedQuery = createQuery({
       pagination: {
@@ -959,7 +959,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'closed' }],
+      predicates: [{ column: 'status', operator: '=', value: 0 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -977,7 +977,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1011,13 +1011,13 @@ describe('@holo-js/realtime pagination patching', () => {
     })
     expect(database.queries).toHaveLength(1)
     expect(database.queries[0]?.sql).not.toContain('GROUP BY "status"')
-    expect(database.queries[0]?.bindings).toEqual(['open'])
+    expect(database.queries[0]?.bindings).toEqual([1])
   })
 
   it('backfills grouped pagination counts once across related paginated queries', async () => {
     const database = createFakeDatabase(() => [
-      { __holo_count: '4', status: 'open' },
-      { __holo_count: '1', status: 'closed' },
+      { __holo_count: '4', status: 1 },
+      { __holo_count: '1', status: 0 },
       { __holo_count: '2', status: 'pending' },
     ])
     configureRealtimeRuntime({
@@ -1031,7 +1031,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 2,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const closedQuery = createQuery({
       pagination: {
@@ -1042,7 +1042,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         rowCount: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'closed' }],
+      predicates: [{ column: 'status', operator: '=', value: 0 }],
     })
     const pendingQuery = createQuery({
       pagination: {
@@ -1063,7 +1063,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 0,
       },
-      predicates: [{ column: 'category', operator: '=', value: 'news' }],
+      predicates: [{ column: 'category', operator: '=', value: 1 }],
     })
     const closedMutation = createMutation({
       kind: 'insert',
@@ -1077,7 +1077,7 @@ describe('@holo-js/realtime pagination patching', () => {
       rows: [{ id: 6, status: 'pending' }],
     })
     const mutationExactPredicates = new WeakMap<DatabaseMutationEvent, PredicateDependencyIndex>()
-    mutationExactPredicates.set(closedMutation, createExactPredicateIndex('status', 'closed'))
+    mutationExactPredicates.set(closedMutation, createExactPredicateIndex('status', 0))
     mutationExactPredicates.set(ignoredPendingMutation, createExactPredicateIndex('status', 'pending'))
     mutationExactPredicates.set(pendingMutation, createExactPredicateIndex('status', 'pending'))
 
@@ -1096,7 +1096,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1134,7 +1134,7 @@ describe('@holo-js/realtime pagination patching', () => {
     })
     expect(database.queries).toHaveLength(1)
     expect(database.queries[0]?.sql).toContain('GROUP BY "status"')
-    expect(database.queries[0]?.bindings).toEqual(['open', 'closed', 'pending'])
+    expect(database.queries[0]?.bindings).toEqual([1, 0, 'pending'])
   })
 
   it('falls back to a scoped count when grouped pagination values are duplicated or incomplete', async () => {
@@ -1152,7 +1152,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 2,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const closedQuery = createQuery({
       pagination: {
@@ -1162,7 +1162,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'closed' }],
+      predicates: [{ column: 'status', operator: '=', value: 0 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1180,7 +1180,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1217,15 +1217,15 @@ describe('@holo-js/realtime pagination patching', () => {
     })
     expect(database.queries).toHaveLength(1)
     expect(database.queries[0]?.sql).not.toContain('GROUP BY "status"')
-    expect(database.queries[0]?.bindings).toEqual(['open'])
+    expect(database.queries[0]?.bindings).toEqual([1])
   })
 
   it('falls back to scoped counts when grouped pagination count rows are invalid', async () => {
     const database = createFakeDatabase(statement => {
       if (statement.sql.includes('GROUP BY "status"')) {
         return [
-          { __holo_count: 'bad', status: 'open' },
-          { __holo_count: 1, status: 'closed' },
+          { __holo_count: 'bad', status: 1 },
+          { __holo_count: 1, status: 0 },
         ]
       }
 
@@ -1244,7 +1244,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 2,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const closedQuery = createQuery({
       pagination: {
@@ -1254,13 +1254,13 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'closed' }],
+      predicates: [{ column: 'status', operator: '=', value: 0 }],
     })
     const closedMutation = createMutation({
       kind: 'insert',
     })
     const mutationExactPredicates = new WeakMap<DatabaseMutationEvent, PredicateDependencyIndex>()
-    mutationExactPredicates.set(closedMutation, createExactPredicateIndex('status', 'closed'))
+    mutationExactPredicates.set(closedMutation, createExactPredicateIndex('status', 0))
 
     await expect(tryPatchQueryPaginationMeta(
       openQuery,
@@ -1277,7 +1277,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1327,7 +1327,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 2,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const closedQuery = createQuery({
       pagination: {
@@ -1337,13 +1337,13 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'closed' }],
+      predicates: [{ column: 'status', operator: '=', value: 0 }],
     })
     const closedMutation = createMutation({
       kind: 'insert',
     })
     const mutationExactPredicates = new WeakMap<DatabaseMutationEvent, PredicateDependencyIndex>()
-    mutationExactPredicates.set(closedMutation, createExactPredicateIndex('status', 'closed'))
+    mutationExactPredicates.set(closedMutation, createExactPredicateIndex('status', 0))
 
     await expect(tryPatchQueryPaginationMeta(
       openQuery,
@@ -1360,7 +1360,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1377,7 +1377,7 @@ describe('@holo-js/realtime pagination patching', () => {
 
   it('filters grouped pagination candidates contradicted by exact predicates', async () => {
     const database = createFakeDatabase(() => [
-      { __holo_count: 4, status: 'open' },
+      { __holo_count: 4, status: 1 },
       { __holo_count: 2, status: 'pending' },
     ])
     configureRealtimeRuntime({
@@ -1391,7 +1391,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 2,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const closedQuery = createQuery({
       pagination: {
@@ -1401,7 +1401,7 @@ describe('@holo-js/realtime pagination patching', () => {
         perPage: 2,
         total: 0,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'closed' }],
+      predicates: [{ column: 'status', operator: '=', value: 0 }],
     })
     const pendingQuery = createQuery({
       pagination: {
@@ -1434,13 +1434,13 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
       createBackfills({
         entries: [createBackfillEntry([openQuery, closedQuery, pendingQuery])],
-        exactPredicates: createExactPredicateIndexValues('status', ['open', 'pending']),
+        exactPredicates: createExactPredicateIndexValues('status', [1, 'pending']),
         mutationExactPredicates,
         mutations: new Map([
           [createMutationIndexKey('main', 'posts'), [pendingMutation]],
@@ -1473,12 +1473,12 @@ describe('@holo-js/realtime pagination patching', () => {
     })
     expect(database.queries).toHaveLength(1)
     expect(database.queries[0]?.sql).toContain('GROUP BY "status"')
-    expect(database.queries[0]?.bindings).toEqual(['open', 'pending'])
+    expect(database.queries[0]?.bindings).toEqual([1, 'pending'])
   })
 
   it('falls back safely for cursor pagination mutations that cannot be evaluated locally', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -1491,7 +1491,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1523,7 +1523,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 3, status: 'open' }],
+          rows: [{ id: 3, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1535,7 +1535,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1556,7 +1556,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 0,
         rows: [],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1565,7 +1565,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 1, priority: 1, status: 'open' }],
+          rows: [{ id: 1, priority: 1, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1576,7 +1576,7 @@ describe('@holo-js/realtime pagination patching', () => {
           ...query.pagination,
           hasMorePages: false,
           nextCursor: null,
-          rows: [{ id: 1, priority: 1, status: 'open' }],
+          rows: [{ id: 1, priority: 1, status: 1 }],
           rowCount: 1,
         },
       },
@@ -1587,8 +1587,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('keeps cursor pagination unchanged for irrelevant inserts, deletes, and updates', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -1601,7 +1601,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1610,11 +1610,11 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 3, priority: 3, status: 'closed' }],
+          rows: [{ id: 3, priority: 3, status: 0 }],
         }),
         createMutation({
           kind: 'delete',
-          rows: [{ id: 4, priority: 4, status: 'closed' }],
+          rows: [{ id: 4, priority: 4, status: 0 }],
         }),
         createMutation({
           kind: 'update',
@@ -1627,7 +1627,7 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back safely for cursor deletes with incomplete or inconsistent row data', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -1640,7 +1640,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 1,
         rows: [firstRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1672,7 +1672,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ priority: 1, status: 'open' }],
+          rows: [{ priority: 1, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1685,8 +1685,8 @@ describe('@holo-js/realtime pagination patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, priority: 1, status: 'open' },
-            { id: 2, priority: 2, status: 'open' },
+            { id: 1, priority: 1, status: 1 },
+            { id: 2, priority: 2, status: 1 },
           ],
         }),
       ],
@@ -1695,7 +1695,7 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back when cursor inserts leave too few rows to satisfy the current window', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -1708,7 +1708,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1717,7 +1717,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 2, priority: 2, status: 'open' }],
+          rows: [{ id: 2, priority: 2, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1725,7 +1725,7 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back when cursor related row hydration cannot be resolved', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -1738,7 +1738,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 1,
         rows: [firstRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       relatedHydrations: [{
         foreignKey: 'post_id',
         kind: 'hasMany',
@@ -1757,7 +1757,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 2, priority: 2, status: 'open' }],
+          rows: [{ id: 2, priority: 2, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1765,7 +1765,7 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back when cursor belongs-to hydration cannot read mutation rows', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
     const query = createQuery({
       belongsToHydrations: [{
         foreignKey: 'author_id',
@@ -1785,7 +1785,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 1,
         rows: [firstRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1802,9 +1802,9 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('patches cursor deletes when the deleted row is outside the retained window', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
-    const thirdRow = Object.freeze({ id: 3, priority: 3, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
+    const thirdRow = Object.freeze({ id: 3, priority: 3, status: 1 })
     const currentCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
@@ -1818,7 +1818,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 4,
         rows: [firstRow, secondRow, thirdRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -1827,7 +1827,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ id: 99, priority: 99, status: 'open' }],
+          rows: [{ id: 99, priority: 99, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1854,8 +1854,8 @@ describe('@holo-js/realtime pagination patching', () => {
     })
 
     const mutableRows = [
-      { id: 1, priority: 1, status: 'open' },
-      { id: 2, priority: 2, status: 'open' },
+      { id: 1, priority: 1, status: 1 },
+      { id: 2, priority: 2, status: 1 },
     ]
     const mutableRowsQuery = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
@@ -1869,7 +1869,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 3,
         rows: mutableRows,
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     expect(Object.isFrozen(mutableRows)).toBe(false)
 
@@ -1879,7 +1879,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ id: 99, priority: 99, status: 'open' }],
+          rows: [{ id: 99, priority: 99, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -1904,8 +1904,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('patches cursor predicate-changing update values without returned rows', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -1918,7 +1918,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const expectedCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
 
@@ -1928,8 +1928,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 3, priority: 3, status: 'closed' }],
-          values: { status: 'open' },
+          previousRows: [{ id: 3, priority: 3, status: 0 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -1950,7 +1950,7 @@ describe('@holo-js/realtime pagination patching', () => {
           rows: [
             firstRow,
             secondRow,
-            { id: 3, priority: 3, status: 'open' },
+            { id: 3, priority: 3, status: 1 },
           ],
         },
       },
@@ -1969,8 +1969,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 3, priority: 3, status: 'open' }],
-          values: { status: 'closed' },
+          previousRows: [{ id: 3, priority: 3, status: 1 }],
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -1999,8 +1999,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('patches cursor predicate-changing upsert values without returned rows', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -2013,7 +2013,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const expectedCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
 
@@ -2023,8 +2023,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'upsert',
-          previousRows: [{ id: 3, priority: 3, status: 'closed' }],
-          values: { status: 'open' },
+          previousRows: [{ id: 3, priority: 3, status: 0 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -2043,7 +2043,7 @@ describe('@holo-js/realtime pagination patching', () => {
           rows: [
             firstRow,
             secondRow,
-            { id: 3, priority: 3, status: 'open' },
+            { id: 3, priority: 3, status: 1 },
           ],
         },
       },
@@ -2054,8 +2054,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('keeps cursor pagination unchanged for outside retained predicate updates that do not change ordering', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const currentCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
@@ -2069,7 +2069,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 3,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 'pending'] }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2078,7 +2078,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 3, priority: 3, status: 'open' }],
+          previousRows: [{ id: 3, priority: 3, status: 1 }],
           values: { status: 'pending' },
           valueKeys: ['status'],
         }),
@@ -2088,8 +2088,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('keeps cursor pagination unchanged when predicate update remains outside the query', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -2102,7 +2102,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2111,8 +2111,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 3, priority: 3, status: 'closed' }],
-          values: { status: 'archived' },
+          previousRows: [{ id: 3, priority: 3, status: 0 }],
+          values: { status: 2 },
           valueKeys: ['status'],
         }),
       ],
@@ -2121,8 +2121,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('patches cursor row count when an outside retained row leaves the query', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const currentCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
@@ -2136,7 +2136,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 3,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2145,8 +2145,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 3, priority: 3, status: 'open' }],
-          values: { status: 'closed' },
+          previousRows: [{ id: 3, priority: 3, status: 1 }],
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -2172,8 +2172,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back when outside retained cursor predicate updates change ordering', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const currentCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
@@ -2187,7 +2187,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 3,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2196,7 +2196,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 3, priority: 3, status: 'open' }],
+          previousRows: [{ id: 3, priority: 3, status: 1 }],
           values: { priority: 0 },
           valueKeys: ['priority'],
         }),
@@ -2206,8 +2206,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back when a cursor row enters but is already retained', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'closed' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 0 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -2220,7 +2220,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2229,8 +2229,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 2, priority: 2, status: 'closed' }],
-          values: { status: 'open' },
+          previousRows: [{ id: 2, priority: 2, status: 0 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -2239,8 +2239,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('patches retained cursor rows from predicate-changing update values without returned rows', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -2253,7 +2253,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 'pending'] }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2262,7 +2262,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 2, priority: 2, status: 'open' }],
+          previousRows: [{ id: 2, priority: 2, status: 1 }],
           values: { status: 'pending' },
           valueKeys: ['status'],
         }),
@@ -2291,7 +2291,7 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('falls back for malformed cursor predicate update values without returned rows', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -2304,7 +2304,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 1,
         rows: [firstRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     await expect(tryPatchQueryPaginationMeta(
@@ -2313,8 +2313,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ priority: 2, status: 'closed' }],
-          values: { status: 'open' },
+          previousRows: [{ priority: 2, status: 0 }],
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -2334,14 +2334,14 @@ describe('@holo-js/realtime pagination patching', () => {
           rowCount: 0,
           rows: [],
         },
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       null,
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, priority: 1, status: 'open' }],
-          values: { status: 'closed' },
+          previousRows: [{ id: 1, priority: 1, status: 1 }],
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -2362,7 +2362,7 @@ describe('@holo-js/realtime pagination patching', () => {
           rows: [firstRow],
         },
         predicates: [
-          { column: 'status', operator: '=', value: 'open' },
+          { column: 'status', operator: '=', value: 1 },
           { column: 'priority', operator: '>', value: 1 },
         ],
       }),
@@ -2370,8 +2370,8 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'update',
-          previousRows: [{ id: 1, priority: 2, status: 'closed' }],
-          values: { priority: {}, status: 'open' },
+          previousRows: [{ id: 1, priority: 2, status: 0 }],
+          values: { priority: {}, status: 1 },
           valueKeys: ['priority', 'status'],
         }),
       ],
@@ -2380,8 +2380,8 @@ describe('@holo-js/realtime pagination patching', () => {
   })
 
   it('patches cursor next cursors for inserts and deletes without handler reruns', async () => {
-    const firstRow = Object.freeze({ id: 1, priority: 1, status: 'open' })
-    const secondRow = Object.freeze({ id: 2, priority: 2, status: 'open' })
+    const firstRow = Object.freeze({ id: 1, priority: 1, status: 1 })
+    const secondRow = Object.freeze({ id: 2, priority: 2, status: 1 })
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
       pagination: {
@@ -2394,7 +2394,7 @@ describe('@holo-js/realtime pagination patching', () => {
         rowCount: 2,
         rows: [firstRow, secondRow],
       },
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const expectedCursor = Buffer.from(JSON.stringify({ values: [2] }), 'utf8').toString('base64url')
 
@@ -2404,7 +2404,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'insert',
-          rows: [{ id: 3, priority: 3, status: 'open' }],
+          rows: [{ id: 3, priority: 3, status: 1 }],
         }),
       ],
       createBackfills(),
@@ -2424,7 +2424,7 @@ describe('@holo-js/realtime pagination patching', () => {
           rows: [
             firstRow,
             secondRow,
-            { id: 3, priority: 3, status: 'open' },
+            { id: 3, priority: 3, status: 1 },
           ],
         },
       },
@@ -2443,7 +2443,7 @@ describe('@holo-js/realtime pagination patching', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ id: 3, priority: 3, status: 'open' }],
+          rows: [{ id: 3, priority: 3, status: 1 }],
         }),
       ],
       createBackfills(),

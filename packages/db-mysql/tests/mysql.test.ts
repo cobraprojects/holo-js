@@ -148,10 +148,7 @@ describe('@holo-js/db-mysql', () => {
 
   it('uses a real injected client for bound writes, commit, and rollback', async () => {
     const client = await createConnection(liveMySqlConfig)
-    const adapter = createMySQLAdapter({ client: {
-      query: (sql, bindings = []) => client.query(sql, [...bindings]),
-      end: () => client.end(),
-    } })
+    const adapter = createMySQLAdapter({ client })
     try {
       await adapter.execute('CREATE TEMPORARY TABLE direct_records (id INT AUTO_INCREMENT PRIMARY KEY, value TEXT NOT NULL)')
       await adapter.beginTransaction()

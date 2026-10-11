@@ -79,11 +79,10 @@ export function registerQueueJob<TPayload extends QueueJsonValue, TResult>(
   const entry = Object.freeze({
     name,
     ...(options.sourcePath ? { sourcePath: options.sourcePath } : {}),
-    definition: Object.freeze({
-      ...normalizedDefinition,
-    }),
+    definition: Object.freeze(normalizedDefinition),
   }) as QueueRegisteredJob<TPayload, TResult>
 
+  queueJobInternals.deleteQueueJobDefinitionName(name)
   queueJobInternals.setQueueJobDefinitionName(definition, name)
   queueJobInternals.setQueueJobDefinitionName(normalizedDefinition, name)
   registry.set(name, entry as unknown as QueueRegisteredJob)

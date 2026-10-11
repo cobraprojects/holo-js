@@ -6,6 +6,9 @@
     "declarationMap": true,
     "baseUrl": ".",
     "paths": {
+      "@holo-js/authorization": [
+        "../authorization/src/index.ts"
+      ],
       "@holo-js/config": [
         "../config/src/index.ts"
       ],

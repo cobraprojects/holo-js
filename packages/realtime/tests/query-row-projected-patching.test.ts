@@ -24,9 +24,9 @@ import {
 type TestRow = Readonly<Record<string, unknown>>
 
 const rows = Object.freeze([
-  Object.freeze({ id: 1, title: 'First', status: 'open', priority: 1 }),
-  Object.freeze({ id: 2, title: 'Second', status: 'open', priority: 2 }),
-  Object.freeze({ id: 3, title: 'Third', status: 'closed', priority: 3 }),
+  Object.freeze({ id: 1, title: 'First', status: 1, priority: 1 }),
+  Object.freeze({ id: 2, title: 'Second', status: 1, priority: 2 }),
+  Object.freeze({ id: 3, title: 'Third', status: 0, priority: 3 }),
 ]) satisfies readonly TestRow[]
 
 const emptyPredicateContext = Object.freeze({
@@ -37,9 +37,9 @@ const emptyPredicateContext = Object.freeze({
 
 const openPredicateContext = Object.freeze({
   exactId: NO_EXACT_ID_PREDICATE,
-  firstPredicate: { column: 'status', operator: '=', value: 'open' },
+  firstPredicate: { column: 'status', operator: '=', value: 1 },
   predicateCount: 1,
-  predicates: [{ column: 'status', operator: '=', value: 'open' }],
+  predicates: [{ column: 'status', operator: '=', value: 1 }],
 }) satisfies PredicateMatchContext
 
 function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): DatabaseQueryObservation {
@@ -477,7 +477,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second updated' },
@@ -491,7 +491,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
         rows[2]!,
       ],
     })
@@ -504,10 +504,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -532,10 +532,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 0, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 0, status: 0, title: 'Fourth' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -547,7 +547,7 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 0, status: 1, title: 'Fourth' },
         rows[0]!,
         rows[1]!,
         rows[2]!,
@@ -562,7 +562,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
         rows: undefined,
         values: { title: 'Fourth updated' },
@@ -580,7 +580,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second updated' },
@@ -601,10 +601,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -619,7 +619,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { priority: 2, status: 'open', title: 'Second' },
+          { priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second updated' },
@@ -637,7 +637,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second updated' },
@@ -674,19 +674,19 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
-        values: { priority: {}, status: 'open' },
+        values: { priority: {}, status: 1 },
         valueKeys: ['priority', 'status'],
       }),
       createContext({
         queryPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'status', operator: '=', value: 'open' },
+          firstPredicate: { column: 'status', operator: '=', value: 1 },
           predicateCount: 2,
           predicates: [
-            { column: 'status', operator: '=', value: 'open' },
+            { column: 'status', operator: '=', value: 1 },
             { column: 'priority', operator: '>', value: 1 },
           ],
         },
@@ -695,8 +695,8 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({ patched: false })
 
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 2, status: 'open', title: 'Duplicate' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 1, priority: 2, status: 1, title: 'Duplicate' }),
     ]) satisfies readonly TestRow[]
     expect(applyProjectedMutationToRows(
       duplicateRows,
@@ -707,7 +707,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         rows: undefined,
         values: { title: 'Updated' },
@@ -725,10 +725,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open' },
+          { id: 2, priority: 2, status: 1 },
         ],
         rows: undefined,
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -751,10 +751,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
         rows: undefined,
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -772,7 +772,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
         rows: undefined,
         values: { priority: 0 },
@@ -798,7 +798,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second updated' },
@@ -816,10 +816,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['title'],
       }),
       createContext({
@@ -834,7 +834,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second' },
@@ -856,10 +856,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -873,7 +873,7 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({ patched: false })
 
     const keyedRows = Object.freeze([
-      Object.freeze({ key: 'first', missing: 'visible', priority: 1, status: 'open', title: 'First' }),
+      Object.freeze({ key: 'first', missing: 'visible', priority: 1, status: 1, title: 'First' }),
     ]) satisfies readonly TestRow[]
     expect(applyProjectedMutationToRows(
       keyedRows,
@@ -885,10 +885,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { key: 'second', priority: 2, status: 'closed', title: 'Second' },
+          { key: 'second', priority: 2, status: 0, title: 'Second' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -911,10 +911,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -926,7 +926,7 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({ patched: true, unchanged: true })
 
     const invalidOrderRows = Object.freeze([
-      Object.freeze({ id: 1, priority: {}, status: 'open', title: 'First' }),
+      Object.freeze({ id: 1, priority: {}, status: 1, title: 'First' }),
     ]) satisfies readonly TestRow[]
     expect(applyProjectedMutationToRows(
       invalidOrderRows,
@@ -938,10 +938,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
         rows: undefined,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -963,10 +963,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -986,7 +986,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
         values: { title: 'Second updated' },
@@ -1011,10 +1011,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: undefined,
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1042,7 +1042,7 @@ describe('@holo-js/realtime projected row patching', () => {
         exactId: 99,
         kind: 'insert',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
       }),
       createContext({
@@ -1065,7 +1065,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
       }),
       context,
@@ -1082,7 +1082,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 5, priority: 5, status: 'closed', title: 'Fifth' },
+          { id: 5, priority: 5, status: 0, title: 'Fifth' },
         ],
       }),
       createContext({
@@ -1118,7 +1118,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -1137,7 +1137,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'upsert',
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -1159,7 +1159,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'upsert',
         rows: [
-          { priority: 2, status: 'closed', title: 'Missing id' },
+          { priority: 2, status: 0, title: 'Missing id' },
         ],
       }),
       createContext({
@@ -1175,7 +1175,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext(),
@@ -1195,7 +1195,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext(),
@@ -1217,7 +1217,7 @@ describe('@holo-js/realtime projected row patching', () => {
         exactId: 99,
         kind: 'delete',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
       }),
       createContext({
@@ -1231,7 +1231,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
       }),
       createContext(),
@@ -1245,7 +1245,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { priority: 2, status: 'open', title: 'Missing id' },
+          { priority: 2, status: 1, title: 'Missing id' },
         ],
       }),
       createContext(),
@@ -1259,7 +1259,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1271,7 +1271,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
         rows[2]!,
       ],
     })
@@ -1293,7 +1293,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1305,7 +1305,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
         rows[2]!,
       ],
     })
@@ -1322,7 +1322,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { priority: 2, status: 'open' },
+          { priority: 2, status: 1 },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1340,7 +1340,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1356,7 +1356,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, status: 'open' },
+          { id: 2, status: 1 },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1371,7 +1371,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
         rows[2]!,
       ],
     })
@@ -1391,7 +1391,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { status: 'open' },
+          { status: 1 },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1426,7 +1426,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { status: 'open' },
+          { status: 1 },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1442,8 +1442,8 @@ describe('@holo-js/realtime projected row patching', () => {
 
   it('repairs duplicate projected identities through the returned update fallback', () => {
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'Duplicate' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'Duplicate' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyProjectedMutationToRows(
@@ -1455,7 +1455,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1466,7 +1466,7 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'open', title: 'Updated' },
+        { id: 1, priority: 1, status: 1, title: 'Updated' },
       ],
     })
   })
@@ -1495,7 +1495,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
         values: { body: 'Hidden' },
         valueKeys: ['body'],
@@ -1514,7 +1514,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 99, priority: 99, status: 'closed', title: 'Outside' },
+          { id: 99, priority: 99, status: 0, title: 'Outside' },
         ],
         values: { title: 'Outside' },
         valueKeys: ['title'],
@@ -1532,7 +1532,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open' },
+          { id: 2, priority: 2, status: 1 },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1546,7 +1546,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
         rows[2]!,
       ],
     })
@@ -1577,7 +1577,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1595,10 +1595,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { priority: 2, status: 'open', title: 'Updated' },
+          { priority: 2, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1624,7 +1624,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1636,7 +1636,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
       ],
     })
   })
@@ -1649,7 +1649,7 @@ describe('@holo-js/realtime projected row patching', () => {
         exactId: 99,
         kind: 'update',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
         values: { title: 'Outside' },
         valueKeys: ['title'],
@@ -1668,7 +1668,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         values: { title: 'Second' },
         valueKeys: ['title'],
@@ -1686,10 +1686,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
         values: { id: 4, title: 'Fourth' },
         valueKeys: ['id', 'title'],
@@ -1702,7 +1702,7 @@ describe('@holo-js/realtime projected row patching', () => {
       rows: [
         rows[0]!,
         rows[2]!,
-        { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 4, status: 1, title: 'Fourth' },
       ],
     })
   })
@@ -1714,8 +1714,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First updated' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 1, priority: 1, status: 1, title: 'First updated' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1726,8 +1726,8 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'open', title: 'First updated' },
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 1, priority: 1, status: 1, title: 'First updated' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
         rows[2]!,
       ],
     })
@@ -1736,7 +1736,7 @@ describe('@holo-js/realtime projected row patching', () => {
   it('handles multi-row stable projected update edge cases without rerunning supported patches', () => {
     const sparseMutationRows: TestRow[] = []
     sparseMutationRows.length = 2
-    sparseMutationRows[1] = { id: 2, priority: 2, status: 'open', title: 'Second updated' }
+    sparseMutationRows[1] = { id: 2, priority: 2, status: 1, title: 'Second updated' }
 
     expect(applyProjectedMutationToRows(
       rows,
@@ -1754,7 +1754,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
         rows[2]!,
       ],
     })
@@ -1765,8 +1765,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 99, priority: 99, status: 'closed', title: 'Outside' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 99, priority: 99, status: 0, title: 'Outside' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1778,7 +1778,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
         rows[2]!,
       ],
     })
@@ -1789,8 +1789,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1802,7 +1802,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[0]!,
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
         rows[2]!,
       ],
     })
@@ -1810,8 +1810,8 @@ describe('@holo-js/realtime projected row patching', () => {
 
   it('falls back from multi-row stable projected updates when required metadata is unsafe', () => {
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 2, status: 'open', title: 'Duplicate' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 1, priority: 2, status: 1, title: 'Duplicate' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyProjectedMutationToRows(
@@ -1822,8 +1822,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First updated' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 1, priority: 1, status: 1, title: 'First updated' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1834,8 +1834,8 @@ describe('@holo-js/realtime projected row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'open', title: 'First updated' },
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 1, priority: 1, status: 1, title: 'First updated' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
       ],
     })
 
@@ -1845,8 +1845,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { priority: 1, status: 'open', title: 'Missing id' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { priority: 1, status: 1, title: 'Missing id' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1864,8 +1864,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1878,8 +1878,8 @@ describe('@holo-js/realtime projected row patching', () => {
       rows: [
         rows[0]!,
         rows[2]!,
-        { id: 99, priority: 99, status: 'open', title: 'Outside' },
-        { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+        { id: 99, priority: 99, status: 1, title: 'Outside' },
+        { id: 2, priority: 2, status: 1, title: 'Second updated' },
       ],
     })
 
@@ -1889,8 +1889,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First updated' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 1, priority: 1, status: 1, title: 'First updated' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { body: 'Hidden' },
         valueKeys: ['body'],
@@ -1908,7 +1908,7 @@ describe('@holo-js/realtime projected row patching', () => {
         kind: 'update',
         rows: [
           { id: 1, priority: 1, title: 'Missing status' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1926,12 +1926,12 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { priority: 1, status: 'open', title: 'Missing id' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { priority: 1, status: 1, title: 'Missing id' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1947,8 +1947,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 1, priority: 1, status: 1 },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1966,8 +1966,8 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First updated' },
-          { id: 2, priority: 2, status: 'open', title: 'Second updated' },
+          { id: 1, priority: 1, status: 1, title: 'First updated' },
+          { id: 2, priority: 2, status: 1, title: 'Second updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1988,10 +1988,10 @@ describe('@holo-js/realtime projected row patching', () => {
         exactId: 99,
         kind: 'update',
         previousRows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside updated' },
+          { id: 99, priority: 99, status: 1, title: 'Outside updated' },
         ],
         values: { title: 'Outside updated' },
         valueKeys: ['title'],
@@ -2013,10 +2013,10 @@ describe('@holo-js/realtime projected row patching', () => {
         exactId: 99,
         kind: 'update',
         previousRows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
         rows: [
-          { id: 99, priority: 100, status: 'open', title: 'Outside updated' },
+          { id: 99, priority: 100, status: 1, title: 'Outside updated' },
         ],
         values: { priority: 100, title: 'Outside updated' },
         valueKeys: ['priority', 'title'],
@@ -2038,12 +2038,12 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         rows: [
-          { id: 1, priority: 1, status: 'closed', title: 'First' },
+          { id: 1, priority: 1, status: 0, title: 'First' },
         ],
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -2067,10 +2067,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
         values: { id: 4, title: 'Fourth' },
         valueKeys: ['id', 'title'],
@@ -2084,7 +2084,7 @@ describe('@holo-js/realtime projected row patching', () => {
       rows: [
         rows[0]!,
         rows[2]!,
-        { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 4, status: 1, title: 'Fourth' },
       ],
     })
   })
@@ -2099,7 +2099,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'upsert',
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -2125,7 +2125,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'upsert',
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -2143,10 +2143,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { priority: 1, status: 'open', title: 'First' },
+          { priority: 1, status: 1, title: 'First' },
         ],
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First updated' },
+          { id: 1, priority: 1, status: 1, title: 'First updated' },
         ],
         values: { title: 'First updated' },
         valueKeys: ['title'],
@@ -2165,7 +2165,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         rows: [
           { id: 1, priority: 1, title: 'First updated' },
@@ -2187,10 +2187,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         rows: [
-          { id: 1, priority: 1, status: 'open' },
+          { id: 1, priority: 1, status: 1 },
         ],
         values: { title: 'First updated' },
         valueKeys: ['title'],
@@ -2209,10 +2209,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 99, priority: 99, status: 'closed', title: 'Outside' },
+          { id: 99, priority: 99, status: 0, title: 'Outside' },
         ],
         rows: [
-          { id: 99, priority: 100, status: 'closed', title: 'Outside updated' },
+          { id: 99, priority: 100, status: 0, title: 'Outside updated' },
         ],
         values: { title: 'Outside updated' },
         valueKeys: ['title'],
@@ -2231,10 +2231,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         values: { title: 'First' },
         valueKeys: ['title'],
@@ -2253,10 +2253,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'closed', title: 'First' },
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 0, title: 'First' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
-        values: { status: 'closed', title: 'Updated' },
+        values: { status: 0, title: 'Updated' },
         valueKeys: ['status', 'title'],
       }),
       createContext({
@@ -2267,7 +2267,7 @@ describe('@holo-js/realtime projected row patching', () => {
       patched: true,
       rows: [
         rows[2]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
       ],
     })
   })
@@ -2281,7 +2281,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -2295,7 +2295,7 @@ describe('@holo-js/realtime projected row patching', () => {
       rows: [
         rows[0]!,
         rows[2]!,
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
       ],
     })
   })
@@ -2323,7 +2323,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, status: 'open' },
+          { id: 4, status: 1 },
         ],
       }),
       createContext({
@@ -2355,11 +2355,11 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -2375,7 +2375,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { status: 'open', title: 'Missing identity' },
+          { status: 1, title: 'Missing identity' },
         ],
       }),
       createContext(),
@@ -2387,7 +2387,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 9, priority: 9, status: 'closed', title: 'Closed' },
+          { id: 9, priority: 9, status: 0, title: 'Closed' },
         ],
       }),
       createContext({
@@ -2406,7 +2406,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
         values: { title: 'Outside' },
         valueKeys: ['title'],
@@ -2422,8 +2422,8 @@ describe('@holo-js/realtime projected row patching', () => {
 
   it('falls back when returned projected update rows cannot be ordered locally', () => {
     const projectedRows = Object.freeze([
-      Object.freeze({ id: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyProjectedMutationToRows(
@@ -2434,7 +2434,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, status: 'open' },
+          { id: 1, status: 1 },
         ],
       }),
       createContext({
@@ -2460,7 +2460,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 3, status: 'open', title: 'Updated' },
+          { id: 2, priority: 3, status: 1, title: 'Updated' },
         ],
       }),
       createContext({
@@ -2484,7 +2484,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -2511,7 +2511,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -2532,12 +2532,12 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
         rows: [
-          { id: 2, status: 'open', title: 'Updated' },
+          { id: 2, status: 1, title: 'Updated' },
         ],
-        values: { status: 'open', title: 'Updated' },
+        values: { status: 1, title: 'Updated' },
         valueKeys: ['status', 'title'],
       }),
       createContext({
@@ -2558,7 +2558,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext({
@@ -2594,7 +2594,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, status: 'open' },
+          { id: 1, status: 1 },
         ],
       }),
       createContext({
@@ -2612,12 +2612,12 @@ describe('@holo-js/realtime projected row patching', () => {
     expect(applyProjectedMutationToRows(
       rows,
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'upsert',
         rows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -2630,12 +2630,12 @@ describe('@holo-js/realtime projected row patching', () => {
     expect(applyProjectedMutationToRows(
       rows,
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'upsert',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext({
@@ -2654,7 +2654,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -2675,7 +2675,7 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext({
@@ -2695,10 +2695,10 @@ describe('@holo-js/realtime projected row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
         ],
         rows: [
-          { id: 1, priority: 4, status: 'open', title: 'First' },
+          { id: 1, priority: 4, status: 1, title: 'First' },
         ],
         values: { priority: 4 },
         valueKeys: ['priority'],
@@ -2717,15 +2717,15 @@ describe('@holo-js/realtime projected row patching', () => {
       rows,
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         rowWindowMode: 'limited',
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({

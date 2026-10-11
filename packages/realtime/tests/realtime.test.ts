@@ -626,7 +626,7 @@ class RelationalMemoryAdapter implements DriverAdapter {
         row.id = nextId + rowIndex
       }
       if (tableName === 'todos' && !Object.prototype.hasOwnProperty.call(row, 'created_at')) {
-        row.created_at = `2026-06-24T10:00:0${table.length + rowIndex + 1}.000Z`
+        row.created_at = new Date(`2026-06-24T10:00:0${table.length + rowIndex + 1}.000Z`)
       }
       return row
     })
@@ -3640,7 +3640,7 @@ describe('@holo-js/realtime', () => {
 
   it('patches subscribed exact value queries to undefined when changed predicates stop matching without rerunning the handler', async () => {
     const db = createContext(new RelationalMemoryAdapter({
-      posts: [{ id: 1, status: 'open', title: 'First' }],
+      posts: [{ id: 1, status: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
@@ -3653,13 +3653,13 @@ describe('@holo-js/realtime', () => {
       access: 'public',
       handler: async ({ db: context }) => {
         queryRuns += 1
-        return await context.table('posts').where('id', 1).where('status', 'open').value('title')
+        return await context.table('posts').where('id', 1).where('status', 1).value('title')
       },
     })
     const updatePost = defineRealtimeMutation({
       access: 'public',
       handler: async ({ db: context }) => {
-        await context.table('posts').where('id', 1).update({ status: 'closed', title: 'Updated' })
+        await context.table('posts').where('id', 1).update({ status: 0, title: 'Updated' })
         return true
       },
     })
@@ -4944,8 +4944,8 @@ describe('@holo-js/realtime', () => {
   it('patches limited ordered inserts with database-generated returned columns', async () => {
     const adapter = new RelationalMemoryAdapter({
       todos: [
-        { id: 1, title: 'First', created_at: '2026-06-24T10:00:01.000Z' },
-        { id: 2, title: 'Second', created_at: '2026-06-24T09:00:00.000Z' },
+        { id: 1, title: 'First', created_at: new Date('2026-06-24T10:00:01.000Z') },
+        { id: 2, title: 'Second', created_at: new Date('2026-06-24T09:00:00.000Z') },
       ],
     })
     const db = createReturningContext(adapter)
@@ -9407,8 +9407,8 @@ describe('@holo-js/realtime', () => {
         { id: 1, name: 'Ada' },
       ],
       posts: [
-        { id: 1, author_id: 1, title: 'Published' },
-        { id: 3, author_id: 1, title: 'Published' },
+        { id: 1, author_id: 1, score: 1 },
+        { id: 3, author_id: 1, score: 1 },
       ],
     })
     const db = createContext(adapter)
@@ -9429,7 +9429,7 @@ describe('@holo-js/realtime', () => {
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
       author_id: column.integer(),
-      title: column.string(),
+      score: column.integer(),
     })
     const Post = defineModel(posts)
     const Author = defineModel(authors, {
@@ -9447,7 +9447,7 @@ describe('@holo-js/realtime', () => {
         return await context
           .model(Author)
           .query()
-          .with('posts', relationQuery => relationQuery.where('title', '!=', 'Draft').orderBy('id'))
+          .with('posts', relationQuery => relationQuery.where('score', '!=', 0).orderBy('id'))
           .orderBy('id')
           .get()
       },
@@ -9455,8 +9455,8 @@ describe('@holo-js/realtime', () => {
     const mutation = defineRealtimeMutation({
       access: 'public',
       handler: async ({ db: context }) => {
-        await context.table('posts').insert({ id: 2, author_id: 1, title: 'Published' })
-        await context.table('posts').insert({ id: 4, author_id: 1, title: 'Draft' })
+        await context.table('posts').insert({ id: 2, author_id: 1, score: 1 })
+        await context.table('posts').insert({ id: 4, author_id: 1, score: 0 })
         return true
       },
     })
@@ -9482,8 +9482,8 @@ describe('@holo-js/realtime', () => {
           id: 1,
           name: 'Ada',
           posts: [
-            { id: 1, author_id: 1, title: 'Published' },
-            { id: 3, author_id: 1, title: 'Published' },
+            { id: 1, author_id: 1, score: 1 },
+            { id: 3, author_id: 1, score: 1 },
           ],
         },
       ],
@@ -9496,7 +9496,7 @@ describe('@holo-js/realtime', () => {
         index: 1,
         deleteCount: 0,
         values: [
-          { id: 2, author_id: 1, title: 'Published' },
+          { id: 2, author_id: 1, score: 1 },
         ],
       },
     ])

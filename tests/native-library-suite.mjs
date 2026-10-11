@@ -13,6 +13,8 @@ const postgres = new pg.Client({ host: '127.0.0.1', port: 5432, user: 'postgres'
 const env = {
   ...process.env,
   HOLO_POSTGRES_INTEGRATION: '1',
+  HOLO_POSTGRES_HOST: '127.0.0.1',
+  HOLO_POSTGRES_PORT: '5432',
   HOLO_POSTGRES_DATABASE: name,
   HOLO_MYSQL_INTEGRATION: '1',
   HOLO_MYSQL_DATABASE: name,

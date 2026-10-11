@@ -69,6 +69,7 @@ async function assertBrowserAuth(baseUrl, framework) {
         page.waitForURL(url => url.pathname === account.destination),
         page.getByRole('button', { name: /^Sign in/i }).click(),
       ])
+      await page.waitForLoadState('networkidle')
       let blocked = false
       if (framework === 'nuxt') {
         const session = await context.newCDPSession(page)

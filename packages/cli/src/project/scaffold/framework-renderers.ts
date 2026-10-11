@@ -287,8 +287,11 @@ export function renderNextHoloHelper(): string {
     'import { dirname, resolve } from \'node:path\'',
     'import { fileURLToPath } from \'node:url\'',
     'import { createNextHoloHelpers } from \'@holo-js/adapter-next/runtime\'',
+    "import { installProjectDefinitionImporter } from '../definition-importer'",
     '',
     'const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), \'../../..\')',
+    '',
+    'installProjectDefinitionImporter(projectRoot)',
     '',
     'export const holo = createNextHoloHelpers({ projectRoot })',
     '',
@@ -797,6 +800,9 @@ function renderSveltePage(projectName: string): string {
 export function renderSvelteHoloHelper(): string {
   return [
     'import { createSvelteKitHoloHelpers } from \'@holo-js/adapter-sveltekit\'',
+    "import { installProjectDefinitionImporter } from '../definition-importer'",
+    '',
+    'installProjectDefinitionImporter(process.cwd())',
     '',
     'export const holo = createSvelteKitHoloHelpers()',
     '',

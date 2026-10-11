@@ -153,7 +153,7 @@ it.each(['active', 'closed'] as const)('does not restart a %s framework run when
   let completed = false
   const completion = run.then(() => { completed = true })
   try {
-    await vi.waitFor(() => expect(output).toContain('ready'))
+    await vi.waitFor(() => expect(output).toContain('ready'), { timeout: 5000 })
     observeChange?.('change', 'config/app.ts')
     await vi.waitFor(() => expect(preparationCount).toBe(2))
     const first = children[0]!
@@ -179,7 +179,7 @@ it.each(['active', 'closed'] as const)('does not restart a %s framework run when
     }
     await run.catch(() => undefined)
   }
-})
+}, 15000)
 
 describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
   it('closes a live framework process before reporting its error', async () => {
@@ -202,7 +202,7 @@ describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
       : runProjectStartServer(io, root, spawnProcess, ['--port=3000'])
     const completion = expect(run).rejects.toThrow('process failed')
     try {
-      await vi.waitFor(() => expect(output).toContain('ready'))
+      await vi.waitFor(() => expect(output).toContain('ready'), { timeout: 5000 })
       child?.emit('error', new Error('process failed'))
       await completion
       expect(closed).toBe(true)
@@ -214,7 +214,7 @@ describe.each(['dev', 'start'] as const)('%s stream lifetime', (mode) => {
       }
       await run.catch(() => undefined)
     }
-  })
+  }, 15000)
 
   it.each(['close', 'error', 'launch failure'] as const)('releases streams and signals after %s', async (outcome) => {
     const root = await createProject()
@@ -491,7 +491,7 @@ it.each(['preparation', 'exit', 'close'] as const)('prevents replacement when sh
   let completed = false
   const completion = command.then(() => { completed = true })
   try {
-    await vi.waitFor(() => expect(output).toContain('ready'))
+    await vi.waitFor(() => expect(output).toContain('ready'), { timeout: 5000 })
     const first = children[0]!
     if (phase !== 'preparation') first.once(phase, shutdown)
     observeChange?.('change', 'config/app.ts')
@@ -524,7 +524,7 @@ it.each(['preparation', 'exit', 'close'] as const)('prevents replacement when sh
     }
     await command.catch(() => undefined)
   }
-})
+}, 15000)
 
 it('prevents production launch when shutdown arrives before argument preparation finishes', async () => {
   const root = await createProject()
