@@ -564,6 +564,7 @@
         "inflection": "catalog:",
         "minimatch": "catalog:",
         "semver": "catalog:",
+        "typescript": "catalog:",
         "yaml": "catalog:",
       },
       "devDependencies": {
@@ -578,7 +579,6 @@
         "@types/node": "catalog:",
         "@types/semver": "catalog:",
         "tsup": "catalog:",
-        "typescript": "catalog:",
         "vite": "catalog:",
         "vitest": "catalog:",
       },

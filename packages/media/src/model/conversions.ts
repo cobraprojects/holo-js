@@ -22,7 +22,7 @@ import type {
 } from '../definitions/collections'
 import type { NormalizedMediaDefinition } from '../definitions/config'
 
-type MediaEntity = Entity<typeof Media.definition.table>
+type MediaEntity = Entity<typeof Media.definition.table, typeof Media.definition.relations>
 type MediaOwnerEntity = Entity<TableDefinition>
 function fallbackCollectionDefinition(
   collectionName: string,

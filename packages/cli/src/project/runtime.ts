@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
+import { createSourceModuleUrlPlugin } from './source-module-url'
 import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
@@ -197,7 +198,10 @@ export async function bundleProjectModule(
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: false,
-      plugins: options.bundleDependencies ? [createHoloPackageBundlerPlugin(projectRoot)] : [],
+      plugins: [
+        createSourceModuleUrlPlugin(),
+        ...(options.bundleDependencies ? [createHoloPackageBundlerPlugin(projectRoot)] : []),
+      ],
       external: [...(options.external ?? [])],
     })
 

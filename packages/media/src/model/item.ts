@@ -33,7 +33,7 @@ export class MediaItem<
   TEntity extends Entity<TableDefinition> = Entity<TableDefinition>,
 > {
   constructor(
-    private readonly entity: Entity<typeof Media.definition.table>,
+    private readonly entity: Entity<typeof Media.definition.table, typeof Media.definition.relations>,
     private readonly owner?: TEntity,
   ) {}
 
@@ -57,7 +57,7 @@ export class MediaItem<
     return this.entity.get('size')
   }
 
-  getEntity(): Entity<typeof Media.definition.table> {
+  getEntity(): Entity<typeof Media.definition.table, typeof Media.definition.relations> {
     return this.entity
   }
 

@@ -6923,6 +6923,55 @@ export default defineMigration({
     expect(generated).toContain('export const admins = defineGeneratedTable("admins", {')
   }, 30000)
 
+  it('reads seeder fixtures relative to each source module', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  seeders: ['server/db/seeders/FixtureSeeder.ts'],
+}
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+export default {
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+}
+`)
+    await writeProjectFile(projectRoot, 'server/db/seeders/fixture.txt', 'seeder fixture')
+    await writeProjectFile(projectRoot, 'server/fixtures/fixture.txt', 'helper fixture')
+    await writeProjectFile(projectRoot, 'server/fixtures/readFixture.ts', `
+import { readFile } from 'node:fs/promises'
+
+export function readFixture(): Promise<string> {
+  return readFile(new URL('./fixture.txt', import.meta.url), 'utf8')
+}
+`)
+    await writeProjectFile(projectRoot, 'server/db/seeders/FixtureSeeder.ts', `
+import { readFile } from 'node:fs/promises'
+import { defineSeeder } from '@holo-js/db'
+import { readFixture } from '../../fixtures/readFixture'
+
+export default defineSeeder({
+  name: 'fixtures',
+  async run() {
+    const fixture = await readFile(new URL('./fixture.txt', import.meta.url), 'utf8')
+    process.stdout.write(JSON.stringify({ fixture, helper: await readFixture() }) + '\\n')
+  },
+})
+`)
+
+    const result = runCliProcess(projectRoot, ['seed', '--only', 'fixtures'], {
+      env: { NODE_NO_WARNINGS: '1' },
+    })
+
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).toContain(JSON.stringify({
+      fixture: 'seeder fixture',
+      helper: 'helper fixture',
+    }))
+  }, 30_000)
+
   it('boots configured application services before migrate:fresh runs seeders', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
