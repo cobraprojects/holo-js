@@ -18,6 +18,7 @@ import {
   GENERATED_BROADCAST_MANIFEST_PATH,
   GENERATED_BROADCAST_TYPES_PATH,
   GENERATED_CHANNEL_IMPORTER_PATH,
+  GENERATED_JOB_IMPORTER_PATH,
   GENERATED_CHANNELS_PATH,
   GENERATED_CONFIG_TYPES_PATH,
   GENERATED_EVENT_TYPES_PATH,
@@ -372,6 +373,27 @@ export function renderGeneratedBroadcastManifest(
     '} as const satisfies GeneratedBroadcastManifest',
     '',
     'export default broadcastManifest',
+    '',
+  ].join('\n')
+}
+
+export function renderGeneratedJobImporter(jobs: readonly GeneratedJobRegistryEntry[]): string {
+  const imports = jobs.map((entry, index) =>
+    `import * as holoJobModule${index} from '${relativeImportPath(GENERATED_JOB_IMPORTER_PATH, entry.sourcePath)}'`,
+  )
+  return [
+    "import { holoRuntimeInternals } from '@holo-js/core/runtime'",
+    ...imports,
+    '',
+    'export function installProjectQueueJobImporter(projectRoot: string): void {',
+    '  holoRuntimeInternals.setProjectQueueJobImporter(projectRoot, async (absolutePath) => {',
+    "    const normalizedPath = absolutePath.replaceAll('\\\\', '/')",
+    ...jobs.flatMap((entry, index) => [
+      `    if (normalizedPath.endsWith(${JSON.stringify(`/${entry.sourcePath}`)})) return holoJobModule${index}`,
+    ]),
+    '    throw new Error(`[@holo-js/queue] Job module "${absolutePath}" was not generated for this app.`)',
+    '  })',
+    '}',
     '',
   ].join('\n')
 }
@@ -889,6 +911,7 @@ export async function writeGeneratedProjectRegistry(
   await writeFileIfChanged(resolve(projectRoot, GENERATED_SEEDERS_PATH), renderGeneratedModule('seeders', nextRegistry.seeders))
   await writeFileIfChanged(resolve(projectRoot, GENERATED_COMMANDS_PATH), renderGeneratedModule('commands', nextRegistry.commands))
   await writeFileIfChanged(resolve(projectRoot, GENERATED_JOBS_PATH), renderGeneratedModule('jobs', nextRegistry.jobs))
+  await writeFileIfChanged(resolve(projectRoot, GENERATED_JOB_IMPORTER_PATH), renderGeneratedJobImporter(nextRegistry.jobs))
   await writeFileIfChanged(resolve(projectRoot, GENERATED_EVENTS_PATH), renderGeneratedModule('events', nextRegistry.events))
   await writeFileIfChanged(resolve(projectRoot, GENERATED_LISTENERS_PATH), renderGeneratedModule('listeners', nextRegistry.listeners))
   await writeFileIfChanged(resolve(projectRoot, GENERATED_BROADCAST_PATH), renderGeneratedModule('broadcast', nextRegistry.broadcast))

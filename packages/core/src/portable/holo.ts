@@ -1125,6 +1125,43 @@ async function importRuntimeModule(projectRoot: string, filePath: string): Promi
   return importBundledRuntimeModule(projectRoot, filePath)
 }
 
+type ProjectQueueJobImporter = (absolutePath: string) => Promise<unknown>
+
+type ProjectQueueJobImportBinding = {
+  readonly importModule: ProjectQueueJobImporter
+  readonly registrations: WeakMap<object, Promise<void>>
+}
+
+function getProjectQueueJobImporters(): Map<string, ProjectQueueJobImportBinding> {
+  const runtime = globalThis as typeof globalThis & {
+    __holoProjectQueueJobImporters__?: Map<string, ProjectQueueJobImportBinding>
+  }
+  runtime.__holoProjectQueueJobImporters__ ??= new Map<string, ProjectQueueJobImportBinding>()
+  return runtime.__holoProjectQueueJobImporters__
+}
+
+function setProjectQueueJobImporter(projectRoot: string, importModule: ProjectQueueJobImporter): void {
+  getProjectQueueJobImporters().set(resolve(projectRoot), { importModule, registrations: new WeakMap<object, Promise<void>>() })
+}
+
+async function bindProjectQueueJobImporter(runtime: HoloRuntime): Promise<void> {
+  const binding = getProjectQueueJobImporters().get(resolve(runtime.projectRoot))
+  if (!binding || !runtime.registry?.jobs.length) return
+  const existing = binding.registrations.get(runtime)
+  if (existing) return existing
+  const registration = (async () => {
+    const queueModule = await loadQueueModule(true, { projectRoot: runtime.projectRoot })
+    await registerProjectQueueJobs(runtime.projectRoot, runtime.registry, queueModule)
+  })()
+  binding.registrations.set(runtime, registration)
+  try {
+    await registration
+  } catch (error) {
+    binding.registrations.delete(runtime)
+    throw error
+  }
+}
+
 async function registerProjectQueueJobs(
   projectRoot: string,
   registry: GeneratedProjectRegistry | undefined,
@@ -1143,7 +1180,8 @@ async function registerProjectQueueJobs(
         continue
       }
 
-      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+      const importer = getProjectQueueJobImporters().get(resolve(projectRoot))?.importModule
+      const moduleValue = await (importer ?? (path => importRuntimeModule(projectRoot, path)))(resolve(projectRoot, entry.sourcePath))
       const job = resolveQueueJobExport(queueModule, moduleValue)
       if (!job) {
         throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
@@ -2046,6 +2084,7 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
     ;(current as HoloRuntime<TCustom> & {
       setAuthRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
     }).setAuthRequestAccessors?.(options.authRequest)
+    if (options.registerProjectQueueJobs !== false) await bindProjectQueueJobImporter(current)
     return current
   }
 
@@ -2054,10 +2093,11 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
       throw new Error(`A Holo runtime is already initializing for "${state.pendingProjectRoot}".`)
     }
 
-    return (state.pending as Promise<HoloRuntime<TCustom>>).then((runtime) => {
+    return (state.pending as Promise<HoloRuntime<TCustom>>).then(async (runtime) => {
       ;(runtime as HoloRuntime<TCustom> & {
         setAuthRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
       }).setAuthRequestAccessors?.(options.authRequest)
+      if (options.registerProjectQueueJobs !== false) await bindProjectQueueJobImporter(runtime)
       return runtime
     })
   }
@@ -2065,6 +2105,9 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
   const pending = (async () => {
     const runtime = await createHolo<TCustom>(projectRoot, options)
     await runtime.initialize()
+    if (options.registerProjectQueueJobs !== false) {
+      getProjectQueueJobImporters().get(resolvedProjectRoot)?.registrations.set(runtime, Promise.resolve())
+    }
     return runtime
   })()
 
@@ -2144,6 +2187,7 @@ function getConfigSection(key: string): unknown {
 }
 
 export const holoRuntimeInternals = {
+  setProjectQueueJobImporter,
   createAuthMailDeliveryHook,
   createAuthNotificationsDeliveryHook,
   createCoreNotificationBroadcaster,

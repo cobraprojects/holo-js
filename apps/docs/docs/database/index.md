@@ -57,6 +57,19 @@ const adapter = createPostgresAdapter({
 })
 ```
 
+The MySQL adapter also accepts an existing `mysql2/promise` connection:
+
+```ts
+import { createConnection } from 'mysql2/promise'
+import { createMySQLAdapter } from '@holo-js/db-mysql'
+
+const client = await createConnection(process.env.DATABASE_URL!)
+const adapter = createMySQLAdapter({ client })
+```
+
+The adapter owns the injected client's lifecycle and closes it when disconnected. Transactions sharing
+that client run serially; use a pool when independent transactions need to overlap.
+
 The same application-level query and model code should stay stable while the configured database driver
 changes underneath it.
 

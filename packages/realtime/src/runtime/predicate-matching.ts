@@ -51,11 +51,6 @@ export function compareValues(left: unknown, right: unknown): number | undefined
     return left === right ? 0 : left < right ? -1 : 1
   }
 
-  if (typeof left === 'string' && typeof right === 'string') {
-    const comparison = left.localeCompare(right)
-    return comparison === 0 ? 0 : comparison < 0 ? -1 : 1
-  }
-
   if (left instanceof Date && right instanceof Date) {
     const leftTime = left.getTime()
     const rightTime = right.getTime()
@@ -69,8 +64,20 @@ export function compareValues(left: unknown, right: unknown): number | undefined
   return undefined
 }
 
-function includesValue(values: readonly unknown[], value: unknown): boolean {
-  return values.some(candidate => candidate === value)
+function equalValues(left: unknown, right: unknown): boolean | undefined {
+  if (left === null || right === null) return false
+  if (left === right) return true
+  return typeof left === 'string' && typeof right === 'string' ? undefined : false
+}
+
+function includesValue(values: readonly unknown[], value: unknown): boolean | undefined {
+  let comparable = true
+  for (const candidate of values) {
+    const equal = equalValues(candidate, value)
+    if (equal) return true
+    if (typeof equal === 'undefined') comparable = false
+  }
+  return comparable ? false : undefined
 }
 
 export function matchesPredicateValue(
@@ -79,13 +86,17 @@ export function matchesPredicateValue(
 ): boolean | undefined {
   switch (predicate.operator) {
     case '=':
-      return value === predicate.value
-    case '!=':
-      return value !== predicate.value
+      return equalValues(value, predicate.value)
+    case '!=': {
+      if (value === null || predicate.value === null) return false
+      const equal = equalValues(value, predicate.value)
+      return typeof equal === 'undefined' ? undefined : !equal
+    }
     case '>':
     case '>=':
     case '<':
     case '<=': {
+      if (value === null || predicate.value === null) return false
       const comparison = compareValues(value, predicate.value)
       if (typeof comparison === 'undefined') {
         return undefined
@@ -103,13 +114,19 @@ export function matchesPredicateValue(
       return comparison <= 0
     }
     case 'in':
-      return Array.isArray(predicate.value) ? includesValue(predicate.value, value) : undefined
-    case 'not in':
-      return Array.isArray(predicate.value) ? !includesValue(predicate.value, value) : undefined
+      return Array.isArray(predicate.value) ? value !== null && includesValue(predicate.value, value) : undefined
+    case 'not in': {
+      if (!Array.isArray(predicate.value)) return undefined
+      if (predicate.value.length === 0) return true
+      if (value === null || predicate.value.includes(null)) return false
+      const included = includesValue(predicate.value, value)
+      return typeof included === 'undefined' ? undefined : !included
+    }
     case 'between': {
       if (!Array.isArray(predicate.value) || predicate.value.length !== 2) {
         return undefined
       }
+      if (value === null) return false
 
       const lowerComparison = compareValues(value, predicate.value[0])
       const upperComparison = compareValues(value, predicate.value[1])
@@ -121,6 +138,7 @@ export function matchesPredicateValue(
       if (!Array.isArray(predicate.value) || predicate.value.length !== 2) {
         return undefined
       }
+      if (value === null) return false
 
       const lowerComparison = compareValues(value, predicate.value[0])
       const upperComparison = compareValues(value, predicate.value[1])
@@ -177,15 +195,7 @@ export function matchesPredicates(
     }
 
     const value = row[firstPredicate.column]
-    if (firstPredicate.operator === '=') {
-      return value === firstPredicate.value
-    }
-
-    if (firstPredicate.operator === '!=') {
-      return value !== firstPredicate.value
-    }
-
-    return matchesPredicate(row, firstPredicate)
+    return matchesPredicateValue(value, firstPredicate)
   }
 
   for (const predicate of predicates) {

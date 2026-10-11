@@ -102,7 +102,7 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
 }
 
 export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements DriverAdapter {
-  readonly supportsConcurrentTransactionScopes = true
+  readonly supportsConcurrentTransactionScopes: boolean
   private pool?: PostgresPoolLike
   private readonly directClient?: PostgresClientLike
   private readonly createPoolInstance?: (config?: TConfig) => PostgresPoolLike
@@ -111,6 +111,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
   private readonly transactionClients
 
   constructor(options: PostgresAdapterOptions<TConfig> = {}) {
+    this.supportsConcurrentTransactionScopes = !options.client
     this.directClient = options.client
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool

@@ -3,6 +3,7 @@ import { createFactoryService, type FactoryService } from '../factories/FactoryS
 import { createMigrationService, type MigrationService } from '../migrations/MigrationService'
 import { createModelEventService, type ModelEventService } from '../model/ModelEventService'
 import { ModelRepository } from '../model/ModelRepository'
+import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
@@ -11,6 +12,7 @@ import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import type { ModelDefinitionLike } from '../model/types'
+import type { TableDefinition } from '../schema/types'
 import type {
   CompiledStatement,
   ConcurrencyOptions,
@@ -205,6 +207,10 @@ export class DatabaseContext {
   model(reference: ModelDefinitionLike): ModelRepository {
     this._modelRegistry.register(reference)
     return ModelRepository.from(reference, this)
+  }
+
+  table<TTable extends string | TableDefinition>(table: TTable): TableQueryBuilder<TTable> {
+    return new TableQueryBuilder(table, this)
   }
 
   getLogger(): DatabaseLogger | undefined {

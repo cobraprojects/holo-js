@@ -714,6 +714,18 @@ export class SchemaService {
       sql: `INSERT INTO ${quote(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${quote(tableName)}`,
       source: `schema:sqliteRebuild:copy:${tableName}`,
     })
+    if (Object.values(rebuilt.columns).some(definition => definition.idStrategy === 'autoIncrement')) {
+      await this.connection.executeCompiled({
+        sql: 'DELETE FROM sqlite_sequence WHERE name = ?',
+        bindings: [temporaryTableName],
+        source: `schema:sqliteRebuild:sequence:${tableName}`,
+      })
+      await this.connection.executeCompiled({
+        sql: 'UPDATE sqlite_sequence SET name = ? WHERE name = ?',
+        bindings: [temporaryTableName, tableName],
+        source: `schema:sqliteRebuild:sequence:${tableName}`,
+      })
+    }
     await this.execute(compiler.compile(dropTableOperation(tableName)))
     await this.execute(compiler.compile(renameTableOperation(temporaryTableName, tableName)))
 

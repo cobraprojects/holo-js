@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { Client } from 'pg'
+import { createConnection } from 'mysql2/promise'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { describe, expect, it } from 'vitest'
@@ -175,6 +177,58 @@ describe.each(['postgres', 'mysql'] as const)('%s pooled transaction ownership',
 
 describe.each(['postgres', 'mysql'] as const)('%s native transaction ownership', driver => {
   const enabled = process.env[`HOLO_${driver.toUpperCase()}_INTEGRATION`] === '1'
+
+  it.runIf(enabled)('keeps overlapping direct-client transactions isolated', async () => {
+    const tableName = `holo_direct_${randomUUID().replaceAll('-', '')}`
+    const client = driver === 'postgres'
+      ? new Client({
+          host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+          port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+          user: 'postgres',
+          database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+        })
+      : await createConnection({
+          host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
+          port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
+          user: 'root',
+          database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
+        })
+    if (client instanceof Client) await client.connect()
+    const adapter = client instanceof Client
+      ? createPostgresAdapter({ client })
+      : createMySQLAdapter({ client })
+    const db = createDatabase({ adapter, dialect: createDialect(driver), security: { allowUnsafeRawSql: true } })
+    let ready!: () => void
+    let resume!: () => void
+    const paused = new Promise<void>(resolve => { ready = resolve })
+    const resumed = new Promise<void>(resolve => { resume = resolve })
+    let release: ReturnType<typeof setTimeout> | undefined
+    let first: Promise<void> | undefined
+
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY)`)
+      first = expect(db.transaction(async tx => {
+        await tx.unsafeExecute(unsafeSql(`INSERT INTO ${tableName} VALUES (1)`))
+        ready()
+        await resumed
+        throw new Error('first transaction fails')
+      })).rejects.toThrow('first transaction fails')
+      await paused
+      release = setTimeout(resume, 100)
+      const rows = await db.transaction(async tx => {
+        return (await tx.unsafeQuery<{ id: number }>(unsafeSql(`SELECT id FROM ${tableName}`))).rows
+      })
+      await first
+      expect(rows).toEqual([])
+      expect((await db.unsafeQuery<{ id: number }>(unsafeSql(`SELECT id FROM ${tableName}`))).rows).toEqual([])
+    } finally {
+      clearTimeout(release)
+      resume()
+      await first
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await adapter.disconnect()
+    }
+  }, 30_000)
 
   it.runIf(enabled)('isolates overlapping transactions and rolls back nested and failed callbacks', async () => {
     const tableName = `holo_leases_${randomUUID().replaceAll('-', '')}`

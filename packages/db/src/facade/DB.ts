@@ -3,7 +3,7 @@ import { ConfigurationError } from '../core/errors'
 import { unsafeSql } from '../core/unsafe'
 import { resetGlobalModelRegistry } from '../model/ModelRegistry'
 import { resetMorphRegistry } from '../model/morphRegistry'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ConnectionManager } from '../connection/ConnectionManager'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
@@ -58,7 +58,7 @@ class DatabaseFacade {
   table<TTable extends TableDefinition>(table: TTable, connectionName?: string): TableQueryBuilder<TTable>
   table(name: string, connectionName?: string): TableQueryBuilder<string>
   table(table: string | TableDefinition, connectionName?: string): TableQueryBuilder<string | TableDefinition> {
-    return new TableQueryBuilder(table, this.connection(connectionName))
+    return this.connection(connectionName).table(table)
   }
 
   raw(sql: string, bindings: readonly unknown[] = [], source?: string): UnsafeStatement {

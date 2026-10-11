@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "description": "Holo-JS Framework - portable database, ORM, migrations, factories, and seeders",
   "type": "module",
   "license": "MIT",
@@ -35,11 +35,13 @@
     "uuid": "catalog:"
   },
   "devDependencies": {
+    "@holo-js/authorization": "catalog:",
     "@holo-js/db-mysql": "catalog:",
     "@holo-js/db-postgres": "catalog:",
     "@holo-js/db-sqlite": "catalog:",
     "@types/pg": "catalog:",
     "pg": "catalog:",
+    "mysql2": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"
   },

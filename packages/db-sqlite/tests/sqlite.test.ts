@@ -157,6 +157,41 @@ describe('@holo-js/db-sqlite', () => {
     }
   })
 
+  it.each([false, true])('preserves allocated identifiers during column changes when the table is empty: %s', async (empty) => {
+    const adapter = createSQLiteAdapter()
+    const db = createDatabase({ connectionName: 'main', adapter, dialect: createDialect('sqlite') })
+    const createTable = defineMigration({
+      name: '2026_10_11_000001_create_items',
+      async up({ schema }) {
+        await schema.createTable('items', (table) => {
+          table.id()
+          table.string('name')
+        })
+      },
+    })
+    const changeName = defineMigration({
+      name: '2026_10_11_000002_change_item_name',
+      async up({ schema }) {
+        await schema.table('items', (table) => {
+          table.string('name').nullable().change()
+        })
+      },
+    })
+    const migrator = createMigrationService(db, [createTable])
+    const items = new TableQueryBuilder('items', db)
+    try {
+      await migrator.migrate()
+      await items.insert([{ id: 1, name: 'kept' }, { id: 100, name: 'removed' }])
+      await (empty ? items : items.where('id', 100)).delete()
+      migrator.register(changeName)
+      await migrator.migrate()
+      await items.insert({ name: 'new' })
+      expect(await items.where('name', 'new').value('id')).toBe(101)
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
   it('rebuilds SQLite tables for column changes without losing data, indexes, triggers, or foreign keys', async () => {
     const adapter = createSQLiteAdapter()
     const createTables = defineMigration({

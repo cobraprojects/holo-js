@@ -64,14 +64,6 @@ export function matchesPredicateContext(
     }
 
     const value = row[firstPredicate.column]
-    if (firstPredicate.operator === '=') {
-      return value === firstPredicate.value
-    }
-
-    if (firstPredicate.operator === '!=') {
-      return value !== firstPredicate.value
-    }
-
     return matchesPredicateValue(value, firstPredicate)
   }
 

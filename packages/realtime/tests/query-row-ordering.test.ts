@@ -131,28 +131,28 @@ describe('@holo-js/realtime row ordering helpers', () => {
 
   it('sorts multi-column rows and rejects invalid ordering data', () => {
     const multiRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, title: 'Beta' }),
-      Object.freeze({ id: 2, priority: 1, title: 'Alpha' }),
-      Object.freeze({ id: 3, priority: 2, title: 'Gamma' }),
+      Object.freeze({ id: 1, priority: 1, rank: 2 }),
+      Object.freeze({ id: 2, priority: 1, rank: 1 }),
+      Object.freeze({ id: 3, priority: 2, rank: 3 }),
     ]) satisfies readonly TestRow[]
 
-    expect(sortRowsByOrderMetadata(multiRows, ['priority', 'title'], [1, 1])).toEqual([
+    expect(sortRowsByOrderMetadata(multiRows, ['priority', 'rank'], [1, 1])).toEqual([
       multiRows[1],
       multiRows[0],
       multiRows[2],
     ])
-    expect(sortRowsByOrderMetadata(multiRows, ['priority', 'title'], [1])).toEqual([
+    expect(sortRowsByOrderMetadata(multiRows, ['priority', 'rank'], [1])).toEqual([
       multiRows[1],
       multiRows[0],
       multiRows[2],
     ])
     const sortedMultiRows = Object.freeze([
-      Object.freeze({ id: 2, priority: 1, title: 'Alpha' }),
-      Object.freeze({ id: 1, priority: 1, title: 'Beta' }),
-      Object.freeze({ id: 3, priority: 2, title: 'Gamma' }),
+      Object.freeze({ id: 2, priority: 1, rank: 1 }),
+      Object.freeze({ id: 1, priority: 1, rank: 2 }),
+      Object.freeze({ id: 3, priority: 2, rank: 3 }),
     ]) satisfies readonly TestRow[]
 
-    expect(sortRowsByOrderMetadata(sortedMultiRows, ['priority', 'title'], [1, 1])).toBe(sortedMultiRows)
+    expect(sortRowsByOrderMetadata(sortedMultiRows, ['priority', 'rank'], [1, 1])).toBe(sortedMultiRows)
     expect(sortRowsByOrderMetadata([
       undefined,
       Object.freeze({ id: 2, priority: 1, title: 'Beta' }),
@@ -185,12 +185,12 @@ describe('@holo-js/realtime row ordering helpers', () => {
 
   it('keeps equal multi-column rows stable while sorting later unordered rows', () => {
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 2, title: 'Beta' }),
-      Object.freeze({ id: 2, priority: 1, title: 'Alpha' }),
-      Object.freeze({ id: 3, priority: 1, title: 'Alpha' }),
+      Object.freeze({ id: 1, priority: 2, rank: 2 }),
+      Object.freeze({ id: 2, priority: 1, rank: 1 }),
+      Object.freeze({ id: 3, priority: 1, rank: 1 }),
     ]) satisfies readonly TestRow[]
 
-    expect(sortRowsByOrderMetadata(duplicateRows, ['priority', 'title'], [1, 1])).toEqual([
+    expect(sortRowsByOrderMetadata(duplicateRows, ['priority', 'rank'], [1, 1])).toEqual([
       duplicateRows[1],
       duplicateRows[2],
       duplicateRows[0],

@@ -62,12 +62,12 @@ export default defineDatabaseConfig({
     await migrations.migrate()
     await db.transaction(async tx => {
       await tx.unsafeQuery(DB.raw("SELECT set_config('holo.tenant_id', $1, true)", ['tenant-a']))
-      await DB.table('records').insert({ tenant_id: 'tenant-a', value: 'a' })
+      await tx.table('records').insert({ tenant_id: 'tenant-a', value: 'a' })
     })
     await db.transaction(async tx => {
       await tx.unsafeQuery(DB.raw("SELECT set_config('holo.tenant_id', $1, true)", ['tenant-b']))
-      await DB.table('records').insert({ tenant_id: 'tenant-b', value: 'b' })
-      expect(await DB.table('records').get()).toEqual([{ tenant_id: 'tenant-b', value: 'b' }])
+      await tx.table('records').insert({ tenant_id: 'tenant-b', value: 'b' })
+      expect(await tx.table('records').get()).toEqual([{ tenant_id: 'tenant-b', value: 'b' }])
     })
     expect(await DB.table('records').get()).toEqual([])
     let transactionsReady = 0
@@ -82,20 +82,25 @@ export default defineDatabaseConfig({
         transactionsReady += 1
         if (transactionsReady === 2) releaseTransactions()
         await bothReady
-        expect(await DB.table('records').get()).toEqual([{ tenant_id: tenant, value }])
+        expect(await tx.table('records').get()).toEqual([{ tenant_id: tenant, value }])
       })
     }))
     expect(await DB.table('records').get()).toEqual([])
     await expect(db.transaction(async tx => {
       await tx.unsafeQuery(DB.raw("SELECT set_config('holo.tenant_id', $1, true)", ['tenant-a']))
-      await DB.table('records').insert({ tenant_id: 'tenant-b', value: 'forbidden' })
+      await tx.table('records').insert({ tenant_id: 'tenant-b', value: 'forbidden' })
     })).rejects.toThrow('row-level security')
     await expect(db.transaction(async tx => {
       await tx.unsafeQuery(DB.raw("SELECT set_config('holo.tenant_id', $1, true)", ['tenant-a']))
-      expect(await DB.table('records').get()).toEqual([{ tenant_id: 'tenant-a', value: 'a' }])
+      expect(await tx.table('records').get()).toEqual([{ tenant_id: 'tenant-a', value: 'a' }])
+      await tx.table('records').insert({ tenant_id: 'tenant-a', value: 'rolled back' })
       throw new Error('roll back tenant context')
     })).rejects.toThrow('roll back tenant context')
     expect(await DB.table('records').get()).toEqual([])
+    await db.transaction(async tx => {
+      await tx.unsafeQuery(DB.raw("SELECT set_config('holo.tenant_id', $1, true)", ['tenant-a']))
+      expect(await tx.table('records').pluck('value')).toEqual(['a'])
+    })
     for (const connection of ['locked', 'denied']) {
       await expect(runtime.manager.connection(connection).unsafeQuery(DB.raw('SELECT 1'))).rejects.toThrow('Unsafe raw SQL is disabled')
     }

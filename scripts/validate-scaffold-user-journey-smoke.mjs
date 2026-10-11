@@ -539,6 +539,53 @@ async function waitForRenderedApp(journey, server) {
 }
 
 async function writeAuthSecurityRoutes(projectRoot, framework) {
+  await writeProjectFile(projectRoot, 'server/support/queue-job.ts', `
+import { defineJob } from '@holo-js/queue'
+
+export function createJourneyJob(prefix: string) {
+  return defineJob({
+    async handle(payload: { id: string }) {
+      return prefix + ':' + payload.id
+    },
+  })
+}
+`)
+  for (const name of ['first', 'second']) {
+    await writeProjectFile(projectRoot, `server/jobs/journey-${name}.ts`, `
+import { createJourneyJob } from '../support/queue-job'
+
+export default createJourneyJob('${name.toUpperCase()}')
+`)
+  }
+  const jobImportRoot = framework === 'nuxt' ? '..' : framework === 'next' ? '../../../../server' : '../../../../../server'
+  const jobImports = `
+import First from '${jobImportRoot}/jobs/journey-first'
+import Second from '${jobImportRoot}/jobs/journey-second'
+`
+  const jobBody = `
+  const first = await First.dispatchSync({ id: '42' })
+  const second = await Second.dispatchSync({ id: '42' })
+  return Response.json({ first, second })
+`
+  if (framework === 'nuxt') {
+    await writeProjectFile(projectRoot, 'server/api/security-jobs.get.ts', `
+import { defineEventHandler } from 'h3'
+${jobImports}
+export default defineEventHandler(async () => {
+${jobBody}
+})
+`)
+  } else {
+    const path = framework === 'next' ? 'app/api/security/jobs/route.ts' : 'src/routes/api/security/jobs/+server.ts'
+    await writeProjectFile(projectRoot, path, `
+${jobImports}
+${framework === 'next' ? "import { holo } from '../../../../.holo-js/generated/next/holo'" : ''}
+export async function GET() {
+${framework === 'next' ? '  await holo.getApp()' : ''}
+${jobBody}
+}
+`)
+  }
   if (framework === 'sveltekit') {
     await writeProjectFile(projectRoot, 'src/hooks.server.ts', `
 import { gzipSync } from 'node:zlib'
@@ -667,6 +714,9 @@ async function assertAuthSecurity(journey) {
   const route = action => journey.framework === 'nuxt'
     ? `${origin}/api/security-${action}`
     : `${origin}/api/security/${action}`
+  const jobs = await fetch(route('jobs'))
+  assert.equal(jobs.status, 200, await jobs.clone().text())
+  assert.deepEqual(await jobs.json(), { first: 'FIRST:42', second: 'SECOND:42' })
   const page = await fetch(origin)
   const tokenCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN='))
   assert.ok(tokenCookie, 'Generated app must issue its CSRF cookie on GET')
@@ -891,6 +941,7 @@ export default defineMigration({
     await runConfiguredDriverUserJourney(projectRoot, journey.framework, cliPath, localPackageEnv)
   }
   await writeAuthSecurityRoutes(projectRoot, journey.framework)
+  run(journey.framework, 'npx', ['holo', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   run(journey.framework, realNpm, ['run', 'lint'], { cwd: projectRoot, env: localPackageEnv })
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'typecheck'], { cwd: projectRoot, env: localPackageEnv })
