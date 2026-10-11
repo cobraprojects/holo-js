@@ -6,6 +6,38 @@
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.
 
+### Added
+
+- Add explicit other-device browser logout through `auth.logoutOtherDevices()` and session-guard `logoutOtherDevices()`, backed by durable provider/user revocation state. Retain the current logical browser session and reject the selected identity on other browsers' next authenticated request, including remember-cookie restoration. Unrelated identities and personal access tokens remain valid. Applications own recent reauthentication policy; Clerk and WorkOS logout affects Holo sessions, not upstream provider sessions.
+- Add `tokens.revokeOthers({ guard })` to revoke a user's other personal access tokens while retaining the verified token used for the current request. Browser-session revocation remains separate.
+- Allow session rotation to receive a complete replacement `data` payload and `renewLifetime`. Auth transitions renew lifetime while preserving private flash state and remember policy; ordinary rotation retains its defaults.
+
+### Security
+
+- Make email-verification and password-reset token redemption single-use under concurrent requests. Coordinate the claim and user mutation transactionally when Core proves they share the same database context. Password reset also revokes sibling tokens for the same provider, email and broker table before user mutation.
+- Fail closed after authenticated-session transition failures: invalidate the new session, clear affected request identities, keep the previous session identifier invalidated, and report cleanup failures alongside the original error. Ordinary login and rotation preserve other devices' authentication.
+- Make token-guard `logout()` revoke its verified current token before clearing request identity. A deletion failure rejects logout and preserves that request identity; other tokens and browser sessions remain valid.
+
+### Changed
+
+- Core capability disposal and startup rollback continue cleanup after individual failures, close only Holo-owned resources, and restore prior live bindings. Multiple failures are reported together. Queue asynchronous shutdown closes all owned drivers and resets state even if closure fails.
+- Queue separates handler outcomes from reservation finalization. Acknowledgement, release, failed-job persistence or reservation deletion errors stop `runQueueWorker` with the original adapter error instead of entering handler retry logic. Terminal failures are persisted before reservation deletion; delivery may repeat according to driver reservation semantics. See [worker failure semantics](apps/docs/docs/queue/workers.md#delivery-and-finalization-failures).
+- Realtime shares row-window patch preparation while preserving distinct pagination, aggregate and relation policies. Refills stay bounded, cursor windows retain their next-page boundary, and projected rows expose only selected fields after mutations. Unsafe shapes fall back to the original query.
+- Media coordinates record changes and file compensation with the enclosing transaction. Rollback restores prior records and overwritten conversions; obsolete-file cleanup and queued conversion dispatch run after commit. Post-commit failures report errors while retaining committed changes. Explicitly installed Media works with package defaults without `config/media.ts`. See [Media mutation outcomes](apps/docs/docs/media.md#mutation-commitment-and-failures).
+- Flux shares typed readonly presence-membership helpers across React, Vue and Svelte while retaining native subscription lifetimes. Each membership event delivers its own snapshot; framework helpers remove the first equivalent member, while core wire-event removal retains its all-match policy.
+- Default native database pools use UTC timestamp handling: MySQL defaults its timezone to `Z` and sets connection time to UTC for that default; PostgreSQL parses text timestamps without timezone as UTC unless custom type parsers are configured.
+
+### Compatibility and upgrade requirements
+
+- **Migrate before deploying the updated Core Auth integration.** Existing applications must add and apply the `auth_session_revocations` migration using `npx holo migrate`. New Auth scaffolds include it. This durable table is required independently of whether sessions use database, file or Redis storage; missing-table and persistence errors propagate explicitly. The documented MySQL migration requires **MySQL 8.0.17 or later** and exact binary identity comparison.
+- **Existing browser users must sign in again on adoption.** Authenticated browser payloads without logical-session and generation metadata are rejected when revocation persistence is enabled, including old remember-cookie payloads. **Existing personal access tokens remain valid.** No session enumeration or store cleanup is required. See [existing application rollout](apps/docs/docs/auth/session-and-cookies.md#existing-application-rollout) for the migration and deployment instructions.
+- Custom `EmailVerificationTokenStore` and `PasswordResetTokenStore` implementations must provide atomic `redeem<TResult>(record, operation): Promise<TResult | null>`. Custom `AuthTokenStore.deleteByUserId` implementations must honor optional `{ exceptId?: string }` to retain the current token during other-token revocation.
+- Custom session integrations must support native `rotate` with complete payload replacement and lifetime renewal; Auth rejects unsupported stores before mutation. Standalone Auth needs a durable `sessionRevocations` adapter for other-device logout; requesting it without an adapter fails explicitly.
+- With external providers or different database contexts, verification/reset claims are consumed before user mutation; a failed mutation requires a fresh token. Run these flows outside caller-owned token-storage transactions, which Core rejects with `TransactionError` before any claim or provider mutation. Proven shared native persistence retains transactional rollback behavior. See [verification](apps/docs/docs/auth/email-verification.md#single-use-redemption) and [password reset](apps/docs/docs/auth/password-reset.md#custom-token-stores).
+- Database `afterRollback` callbacks now run in reverse registration order and continue after callback failures; `afterCommit` callbacks retain registration order. Transaction and rollback-compensation failures are preserved together.
+
+These changes were merged in [#96](https://github.com/cobraprojects/holo-js/pull/96).
+
 ## 0.3.13
 
 Prepared, not yet published.
