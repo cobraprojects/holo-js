@@ -893,6 +893,7 @@ const FRAMEWORK_RENDERERS = {
         { path: 'nuxt.config.ts', contents: renderNuxtConfig() },
         { path: 'shared/.gitkeep', contents: '' },
         ...(authEnabled ? renderAuthRouteFiles('nuxt') : []),
+        ...(authEnabled || optionalPackages.includes('security') ? renderSecurityFrameworkFiles('nuxt') : []),
       ]
     },
   },
@@ -922,6 +923,7 @@ const FRAMEWORK_RENDERERS = {
 
       return [
         { path: 'next.config.ts', contents: renderNextConfig() },
+        ...(authEnabled || optionalPackages.includes('security') ? renderSecurityFrameworkFiles('next') : []),
         { path: 'next-env.d.ts', contents: renderNextEnvDts() },
         { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
         { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
@@ -999,6 +1001,19 @@ export function renderBroadcastAuthSupportFrameworkFiles(
   framework: ProjectScaffoldOptions['framework'],
 ): readonly ScaffoldedFile[] {
   return getFrameworkRenderer(framework).broadcastAuthSupportFiles()
+}
+
+export function renderSecurityFrameworkFiles(framework: ProjectScaffoldOptions['framework']): readonly ScaffoldedFile[] {
+  if (framework === 'sveltekit') return []
+
+  const contents = [
+    `import { csrfProtection } from '@holo-js/security/${framework}/server'`,
+    '',
+    framework === 'next' ? 'export const proxy = csrfProtection()' : 'export default csrfProtection()',
+    '',
+  ].join('\n')
+
+  return [{ path: framework === 'next' ? 'proxy.ts' : 'server/middleware/csrf.ts', contents }]
 }
 
 export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly ScaffoldedFile[] {

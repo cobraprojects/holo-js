@@ -29,6 +29,8 @@ const RESERVED_SCAFFOLD_FILES = new Set([
   'nuxt.config.ts',
   'shared/.gitkeep',
   'server/api/auth/user.get.ts',
+  'server/middleware/csrf.ts',
+  'proxy.ts',
   'next.config.ts',
   'next-env.d.ts',
   'app/layout.tsx',

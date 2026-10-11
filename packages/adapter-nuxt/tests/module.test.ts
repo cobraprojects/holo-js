@@ -1474,8 +1474,47 @@ describe('useHoloDb', () => {
 })
 
 describe('runtime plugin', () => {
+  it('holds requests until initialization completes and propagates initialization failures', async () => {
+    const { plugin, initializeHoloAdapterProject, shutdown } = await loadRuntimeExports({
+      holo: { appEnv: 'production', appDebug: false, projectRoot: '/tmp/nuxt-project' },
+    })
+    let completeInitialization: (() => void) | undefined
+    const initialization = new Promise<void>((resolve) => {
+      completeInitialization = resolve
+    })
+    initializeHoloAdapterProject.mockImplementationOnce(async () => {
+      await initialization
+      return {
+        runtime: {
+          manager: { connection: () => ({ getDriver: () => 'sqlite' }) },
+          shutdown,
+        },
+      }
+    })
+    const hooks = new Map<string, () => Promise<void>>()
+    plugin({ hooks: { hook: (name, handler) => hooks.set(name, handler) } })
+    const requestHandler = hooks.get('request')
+    expect(requestHandler).toBeDefined()
+    let handled = false
+    const request = requestHandler?.().then(() => handled = true)
+    await Promise.resolve()
+    expect(handled).toBe(false)
+    completeInitialization?.()
+    await request
+    expect(handled).toBe(true)
+
+    let failInitialization: ((error: Error) => void) | undefined
+    const failure = new Promise<Awaited<ReturnType<typeof initializeHoloAdapterProject>>>((_resolve, reject) => {
+      failInitialization = reject
+    })
+    initializeHoloAdapterProject.mockReturnValueOnce(failure)
+    plugin({ hooks: { hook: (name, handler) => hooks.set(name, handler) } })
+    const rejectedRequest = expect(hooks.get('request')?.()).rejects.toThrow('Initialization failed')
+    failInitialization?.(new Error('Initialization failed'))
+    await rejectedRequest
+  })
+
   it('initializes the adapter runtime and shuts it down on close', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const hook = vi.fn()
     const { runtime, plugin, configureHoloRuntimeConfig, initializeHoloAdapterProject, shutdown } = await loadRuntimeExports({
       holo: {
@@ -1526,13 +1565,10 @@ describe('runtime plugin', () => {
       processEnv: process.env,
     }))
     expectAuthorizationHttpError(getFirstRuntimeOptions(initializeHoloAdapterProject))
-    expect(log).toHaveBeenCalledWith('✅ Holo DB connected (sqlite)')
 
     const closeHandler = hook.mock.calls.find(([name]) => name === 'close')?.[1]
     await closeHandler?.()
     expect(shutdown).toHaveBeenCalledTimes(1)
-
-    log.mockRestore()
   })
 
   it('swallows adapter runtime shutdown errors on close', async () => {

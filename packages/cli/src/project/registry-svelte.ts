@@ -10,9 +10,11 @@ import {
   renderNextHoloHelper,
   renderSvelteHoloHelper,
   renderSvelteManagedRuntimeFiles,
+  renderSecurityFrameworkFiles,
 } from './scaffold/framework-renderers'
 
 type SvelteManagedFeatures = {
+  readonly securityEnabled: boolean
   readonly authEnabled: boolean
   readonly broadcastEnabled: boolean
   readonly realtimeEnabled: boolean
@@ -75,6 +77,9 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     'import { error as svelteKitError, type Handle, type HandleFetch, type HandleServerError, type RequestEvent } from \'@sveltejs/kit\'',
     'import { createSvelteKitHoloHooks } from \'@holo-js/adapter-sveltekit\'',
     'import { sequence } from \'@sveltejs/kit/hooks\'',
+    ...(features.securityEnabled
+      ? ["import { csrfProtection } from '@holo-js/security/sveltekit/server'"]
+      : []),
     ...(features.authEnabled
       ? ['import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'']
       : []),
@@ -327,8 +332,17 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     '  return decision?.status === 403 || decision?.status === 404',
     '}',
     '',
+    ...(features.securityEnabled ? ['const csrf = csrfProtection()', ''] : []),
     'const holoHandle: Handle = async ({ event, resolve }) => {',
     '  const app = await holo.getApp()',
+    ...(features.securityEnabled
+      ? [
+          '  return await csrf({ event, resolve: event => resolveHoloRoute(event, resolve, app) })',
+          '}',
+          '',
+          'async function resolveHoloRoute(event: RequestEvent, resolve: Parameters<Handle>[0][\'resolve\'], app: HoloApp): Promise<Response> {',
+        ]
+      : []),
     '',
     '  try {',
     '    const holoRouteResponse = await handleHoloRoute(event, app)',
@@ -747,6 +761,7 @@ async function resolveSvelteManagedFeatures(projectRoot: string, dependencies: R
   })
 
   return {
+    securityEnabled: dependencies.has('@holo-js/security'),
     authEnabled: dependencies.has('@holo-js/auth'),
     broadcastEnabled: dependencies.has('@holo-js/broadcast'),
     realtimeEnabled: dependencies.has('@holo-js/realtime'),
@@ -808,6 +823,18 @@ async function ensureSvelteManagedRoutes(projectRoot: string): Promise<void> {
 }
 
 export async function syncManagedFrameworkArtifacts(projectRoot: string, framework: string, dependencies: ReadonlySet<string>): Promise<boolean> {
+  if (dependencies.has('@holo-js/security') && (framework === 'next' || framework === 'nuxt')) {
+    const middlewarePaths = framework === 'next'
+      ? ['proxy.ts', 'proxy.js', 'src/proxy.ts', 'src/proxy.js', 'middleware.ts', 'middleware.js', 'src/middleware.ts', 'src/middleware.js']
+      : ['server/middleware/csrf.ts', 'server/middleware/csrf.js']
+    const existingMiddleware = await Promise.all(middlewarePaths.map(path => pathExists(resolve(projectRoot, path))))
+    if (!existingMiddleware.some(Boolean)) {
+      for (const file of renderSecurityFrameworkFiles(framework)) {
+        await writeFileIfChanged(resolve(projectRoot, file.path), file.contents)
+      }
+    }
+  }
+
   if (framework === 'sveltekit') {
     const features = await resolveSvelteManagedFeatures(projectRoot, dependencies)
     await ensureSvelteManagedRuntime(projectRoot)

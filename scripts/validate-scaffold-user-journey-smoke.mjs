@@ -536,6 +536,89 @@ async function waitForRenderedApp(journey, server) {
   throw new Error(`Timed out waiting for ${url}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
 }
 
+async function writeAuthSecurityRoutes(projectRoot, framework) {
+  const authBody = `
+  const credentials = {
+    email: 'csrf-journey@example.com',
+    password: 'csrf-journey-password',
+  }
+  if (new URL(request.url).pathname.endsWith('/register')) {
+    await register({ ...credentials, name: 'CSRF Journey', passwordConfirmation: credentials.password })
+    return Response.json({ registered: true })
+  }
+  const session = await login(credentials)
+  return Response.json({ email: session.user.email })
+`
+  for (const action of ['register', 'login']) {
+    if (framework === 'nuxt') {
+      await writeProjectFile(projectRoot, `server/api/security-${action}.post.ts`, `
+import { login, register } from '@holo-js/auth'
+import { defineEventHandler, getRequestURL } from 'h3'
+
+export default defineEventHandler(async (event) => {
+  const request = { url: getRequestURL(event).href }
+${authBody.replace("endsWith('/register')", "endsWith('-register')")}
+})
+`)
+    } else {
+      const path = framework === 'next'
+        ? `app/api/security/${action}/route.ts`
+        : `src/routes/api/security/${action}/+server.ts`
+      const signature = framework === 'next'
+        ? 'request: Request'
+        : '{ request }: RequestEvent'
+      await writeProjectFile(projectRoot, path, `
+import { login, register } from '@holo-js/auth'
+${framework === 'sveltekit' ? "import { type RequestEvent } from '@sveltejs/kit'" : ''}
+
+export async function POST(${signature}) {
+${authBody}
+}
+`)
+    }
+  }
+}
+
+async function assertAuthCsrfProtection(journey) {
+  const origin = `http://127.0.0.1:${journey.port}`
+  const route = action => journey.framework === 'nuxt'
+    ? `${origin}/api/security-${action}`
+    : `${origin}/api/security/${action}`
+  const page = await fetch(origin)
+  const tokenCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN='))
+  assert.ok(tokenCookie, 'Generated app must issue its CSRF cookie on GET')
+  const cookie = tokenCookie.split(';')[0]
+  const token = decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
+
+  const missingCookie = await fetch(route('login'), { method: 'POST', headers: { Origin: origin } })
+  assert.equal(missingCookie.status, 419, 'Login without a CSRF cookie must be rejected')
+  const missingToken = await fetch(route('login'), { method: 'POST', headers: { Cookie: cookie } })
+  assert.equal(missingToken.status, 419, 'Login without a token or same-origin proof must be rejected')
+  const forgedToken = await fetch(route('login'), {
+    method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-TOKEN': 'forged' },
+  })
+  assert.equal(forgedToken.status, 419, 'Mismatched tokens must be rejected even with a same-origin header')
+  const headers = { Cookie: cookie, 'X-CSRF-TOKEN': token }
+  const registration = await fetch(route('register'), { method: 'POST', headers })
+  assert.equal(registration.status, 200, await registration.text())
+  const login = await fetch(route('login'), { method: 'POST', headers })
+  assert.equal(login.status, 200, await login.clone().text())
+  assert.equal((await login.json()).email, 'csrf-journey@example.com')
+  const sessionCookie = login.headers.getSetCookie().find(cookie => cookie.startsWith('holo_session='))
+  assert.ok(sessionCookie, 'Login must issue its session cookie')
+  const currentUser = await fetch(`${origin}/api/auth/user`, {
+    headers: { Cookie: `${cookie}; ${sessionCookie.split(';')[0]}` },
+  })
+  assert.equal(currentUser.status, 200, await currentUser.clone().text())
+  const session = await currentUser.json()
+  assert.equal(session.authenticated, true)
+  assert.equal(session.user.email, 'csrf-journey@example.com')
+  const managedMutation = await fetch(`${origin}/holo/realtime/mutation`, { method: 'POST' })
+  assert.equal(managedMutation.status, 419, 'Managed mutation routes must also enforce CSRF')
+  log(journey.framework, 'CSRF cookie, rejected unsafe requests, and valid-token session login passed')
+}
+
 async function stopServer(server) {
   if (server.exitCode !== null || server.signalCode !== null) return
 
@@ -575,6 +658,9 @@ async function runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPac
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   await assertScaffoldStructure(projectRoot, journey)
+  if (journey.framework !== 'sveltekit') {
+    await rm(join(projectRoot, journey.framework === 'next' ? 'proxy.ts' : 'server/middleware/csrf.ts'))
+  }
 
   const tableName = `journey_${journey.framework.replace('sveltekit', 'svelte')}_records`
   await writeProjectFile(projectRoot, `server/db/migrations/2026_07_17_000001_create_${tableName}.ts`, `
@@ -603,6 +689,7 @@ export default defineMigration({
   if (journey.framework === 'nuxt') {
     await runConfiguredDriverUserJourney(projectRoot, journey.framework, cliPath, localPackageEnv)
   }
+  await writeAuthSecurityRoutes(projectRoot, journey.framework)
   run(journey.framework, realNpm, ['run', 'lint'], { cwd: projectRoot, env: localPackageEnv })
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'typecheck'], { cwd: projectRoot, env: localPackageEnv })
@@ -626,6 +713,7 @@ export default defineMigration({
 
   try {
     await waitForRenderedApp(journey, server)
+    await assertAuthCsrfProtection(journey)
   } catch (error) {
     throw new Error([
       error instanceof Error ? error.message : String(error),

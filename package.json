@@ -179,8 +179,8 @@
     "make:migration": "holo make:migration",
     "changeset": "changeset",
     "version-packages": "node scripts/version-packages.mjs",
-    "release": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run build && node scripts/publish-with-resolved-catalogs.mjs",
-    "release:skip-build": "node scripts/publish-with-resolved-catalogs.mjs --preflight && node scripts/publish-with-resolved-catalogs.mjs",
+    "release": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run build && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/publish-with-resolved-catalogs.mjs",
+    "release:skip-build": "node scripts/publish-with-resolved-catalogs.mjs --preflight && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/publish-with-resolved-catalogs.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules packages/*/dist apps/*/dist .nuxt apps/*/.nuxt",
     "test:smoke:browser-bundle": "node scripts/validate-browser-bundle.mjs"
   },

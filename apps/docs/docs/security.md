@@ -350,11 +350,15 @@ route actions run. Generated apps wire this globally. If you wire it manually, u
 ::: code-group
 
 ```ts [Next.js — proxy.ts]
-export { csrfProtection as proxy } from '@holo-js/security/next/server'
+import { csrfProtection } from '@holo-js/security/next/server'
+
+export const proxy = csrfProtection()
 ```
 
 ```ts [Nuxt — server/middleware/csrf.ts]
-export { csrfProtection as default } from '@holo-js/security/nuxt/server'
+import { csrfProtection } from '@holo-js/security/nuxt/server'
+
+export default csrfProtection()
 ```
 
 ```ts [SvelteKit — src/hooks.server.ts]
