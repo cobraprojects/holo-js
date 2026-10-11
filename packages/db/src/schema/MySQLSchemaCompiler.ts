@@ -40,8 +40,9 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     return resolveDialectColumnType('mysql', column)
   }
 
-  protected override compileDefaultValue(value: unknown): string {
-    return compileDialectDefaultLiteral('mysql', value)
+  protected override compileDefaultValue(value: unknown, column: AnyColumnDefinition): string {
+    const literal = compileDialectDefaultLiteral('mysql', value)
+    return value !== null && ['json', 'text', 'blob'].includes(column.kind) ? `(${literal})` : literal
   }
 
   override compileRenameTable(fromTableName: string, toTableName: string): { sql: string, source: string } {

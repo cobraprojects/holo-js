@@ -850,7 +850,6 @@ describe('multi-dialect schema compilers', () => {
     expect(statements[0]!.sql).toContain('`startsOn` DATE NOT NULL DEFAULT \'2025-01-02T03:04:05.000Z\'')
     expect(statements[0]!.sql).toContain('`publishedAt` DATETIME NOT NULL')
     expect(statements[0]!.sql).toContain('`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP')
-    expect(statements[0]!.sql).toContain('`payload` JSON NOT NULL DEFAULT \'{"enabled":true}\'')
     expect(statements[0]!.sql).toContain('`ratio` DOUBLE NOT NULL')
     expect(statements[0]!.sql).toContain('`amount` DECIMAL(10, 2) NOT NULL')
     expect(statements[0]!.sql).toContain('`blob` BLOB NOT NULL')

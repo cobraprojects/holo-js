@@ -3763,7 +3763,7 @@ export async function prepareAuthUpdateInput(user, input) {
         const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
         await expect(DB.transaction(() => runtime.auth!.verification.consume(token.plainTextToken))).rejects.toThrow('native save failed')
         await expect(runtime.auth!.verification.consume(token.plainTextToken)).resolves.toMatchObject({
-          id: driver === 'postgres' ? '1' : 1, email: 'ava@example.com', email_verified_at: expect.anything(),
+          id: 1, email: 'ava@example.com', email_verified_at: expect.anything(),
         })
         const databaseDeadline = new Date(Date.now() - 10_000)
         vi.setSystemTime(Date.now() - 60_000)

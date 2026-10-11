@@ -11,6 +11,7 @@
   <p>Signed in as {displayName} through the admin guard.</p>
   <div>
     <form method="post">
+      <input {...data.csrf.input} />
       <button type="submit">Sign out of super admin</button>
     </form>
   </div>

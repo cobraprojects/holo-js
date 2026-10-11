@@ -1,4 +1,3 @@
-import { hashPassword } from '@holo-js/auth'
 import { broadcast } from '@holo-js/broadcast'
 import { DB, uniqueSlug } from '@holo-js/db'
 import { ValidationException } from '@holo-js/validation'
@@ -8,7 +7,6 @@ import BlogPostSaved from '../events/blog/post-saved'
 import Category from '../models/Category'
 import Post from '../models/Post'
 import Tag from '../models/Tag'
-import User from '../models/User'
 
 const BLOG_QUERY_CACHE_SECONDS = 60
 const BLOG_FLEXIBLE_CACHE_SECONDS = [60, 300] as const
@@ -17,22 +15,6 @@ function now(): Date {
   return new Date()
 }
 
-async function ensureAuthorId(): Promise<number> {
-  const existing = await User.orderBy('id').first()
-  if (existing) {
-    return existing.id
-  }
-
-  const password = await hashPassword('secret-secret')
-  const user = await User.unguarded(() => User.create({
-    name: 'Holo Editor',
-    email: 'editor@example.com',
-    password,
-    avatar: null,
-    email_verified_at: now(),
-  }))
-  return user.id
-}
 
 export function parseTagIds(value: string): number[] {
   return [...new Set(value
@@ -197,10 +179,10 @@ export async function deleteTag(id: number) {
   await Tag.delete(id)
 }
 
-export async function createPost(input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
+export async function createPost(input: { authorId: number, title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
   const post = await DB.transaction(async () => {
     const publishedAt = now()
-    const authorId = await ensureAuthorId()
+    const authorId = input.authorId
     const postStatus = input.status === 'draft' ? 'draft' : 'published'
 
     const post = await Post.create({

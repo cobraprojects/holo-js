@@ -1,36 +1,12 @@
 import assert from 'node:assert/strict'
-import { createHmac, randomBytes } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
 
-let csrfSigningKey = null
-
-async function loadCsrfSigningKey() {
-  if (csrfSigningKey) {
-    return csrfSigningKey
-  }
-
-  if (process.env.APP_KEY?.trim()) {
-    csrfSigningKey = process.env.APP_KEY.trim()
-    return csrfSigningKey
-  }
-
-  const envSource = await readFile(`${process.cwd()}/.env`, 'utf8')
-  const appKey = envSource.match(/^APP_KEY=(.*)$/m)?.[1]?.trim()
-  if (!appKey) {
-    throw new Error('Expected APP_KEY to be configured for CSRF auth-flow tests.')
-  }
-
-  csrfSigningKey = appKey.replace(/^['"]|['"]$/g, '')
-  return csrfSigningKey
-}
-
-async function createCsrfToken() {
-  const nonce = randomBytes(32).toString('base64url')
-  const signature = createHmac('sha256', await loadCsrfSigningKey())
-    .update(nonce)
-    .digest('base64url')
-
-  return `${nonce}.${signature}`
+let authFlowSequence = 10
+async function createCsrfToken(baseUrl, jar = createCookieJar()) {
+  const page = await fetchText(baseUrl, '/login', { jar, allowFailure: true })
+  assert.ok(page.response.status < 400, page.text)
+  const cookie = jar.header().split('; ').find(value => value.startsWith('XSRF-TOKEN='))
+  assert.ok(cookie, 'Expected the real app to issue its CSRF cookie.')
+  return { token: decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)), cookie }
 }
 
 function createCookieJar() {
@@ -331,9 +307,10 @@ export async function assertExampleAppAuthFlow({
   const email = `${appName}-${Date.now()}@app.test`
   const password = 'secret-secret'
   const nextPassword = 'secret-secret-2'
-  const clientIp = `127.0.0.${(Date.now() % 200) + 1}`
-  const throttleLoginIp = `127.0.1.${(Date.now() % 200) + 1}`
-  const throttleRegisterIp = `127.0.2.${(Date.now() % 200) + 1}`
+  const flowAddress = ++authFlowSequence
+  const clientIp = `127.0.0.${flowAddress}`
+  const throttleLoginIp = `127.0.1.${flowAddress}`
+  const throttleRegisterIp = `127.0.2.${flowAddress}`
   const requestHeaders = {
     'x-forwarded-for': clientIp,
     'x-real-ip': clientIp,
@@ -347,18 +324,11 @@ export async function assertExampleAppAuthFlow({
     },
   })
   const applyCsrf = async (options = {}) => {
-    const csrfToken = await createCsrfToken()
-    const csrfCookie = `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`
+    const { token: csrfToken, cookie: csrfCookie } = await createCsrfToken(baseUrl, options.jar)
     const headers = new Headers(options.headers ?? {})
     headers.set('X-CSRF-TOKEN', csrfToken)
 
     if (options.jar) {
-      options.jar.capture(new Response(null, {
-        headers: {
-          'set-cookie': `${csrfCookie}; Path=/; SameSite=Lax`,
-        },
-      }))
-
       return {
         ...options,
         ...(options.fields ? { fields: { ...options.fields, _token: csrfToken } } : {}),
@@ -407,15 +377,10 @@ export async function assertExampleAppAuthFlow({
     headers.set('accept', 'application/json')
     headers.set('x-sveltekit-action', 'true')
     if (loginRequiresCsrf) {
-      const csrfToken = await createCsrfToken()
-      const csrfCookie = `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`
+      const { token: csrfToken, cookie: csrfCookie } = await createCsrfToken(baseUrl, options.jar)
       body.set('_token', csrfToken)
       if (options.jar) {
-        options.jar.capture(new Response(null, {
-          headers: {
-            'set-cookie': `${csrfCookie}; Path=/; SameSite=Lax`,
-          },
-        }))
+        assert.ok(options.jar.header().includes(csrfCookie))
       } else {
         appendCookieHeader(headers, csrfCookie)
       }
@@ -597,33 +562,47 @@ export async function assertExampleAppAuthFlow({
     'Expected WorkOS callback redirect to include an error query parameter.',
   )
 
+  const deniedOrigin = await fetchAuthText('/api/login', {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'https://untrusted.example',
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'content-type,x-csrf-token',
+    },
+    allowFailure: true,
+  })
+  assert.ok(deniedOrigin.response.status < 500, deniedOrigin.text)
+  assert.equal(deniedOrigin.response.headers.get('access-control-allow-origin'), null)
+  assert.equal(deniedOrigin.response.headers.get('access-control-allow-credentials'), null)
+
   if (loginRequiresCsrf) {
-    const missingLoginCsrf = usesSvelteKitActions
-      ? await fetchAuthText('/login', {
+    const csrfJar = createCookieJar()
+    const issued = await createCsrfToken(baseUrl, csrfJar)
+    for (const jar of [undefined, csrfJar]) {
+      const missingLoginCsrf = await fetchAuthText(usesSvelteKitActions ? '/login' : '/api/login', {
         method: 'POST',
-        body: new URLSearchParams({
-          email,
-          password,
-        }),
+        jar,
+        body: new URLSearchParams({ email, password }),
         headers: {
+          origin: new URL(baseUrl).origin,
           'x-forwarded-for': '127.0.0.229',
           'x-real-ip': '127.0.0.229',
         },
         allowFailure: true,
       })
-      : await fetchAuthText('/api/login', {
-        method: 'POST',
-        body: new URLSearchParams({
-          email,
-          password,
-        }),
-        headers: {
-          'x-forwarded-for': '127.0.0.229',
-          'x-real-ip': '127.0.0.229',
-        },
-        allowFailure: true,
-      })
-    assert.equal(missingLoginCsrf.response.status, 419)
+      assert.equal(missingLoginCsrf.response.status, 419, 'A matching Origin and valid cookie must not replace the request token.')
+    }
+    const mismatchedLoginCsrf = await fetchAuthText(usesSvelteKitActions ? '/login' : '/api/login', {
+      method: 'POST',
+      jar: csrfJar,
+      body: new URLSearchParams({ email, password, _token: `${issued.token}invalid` }),
+      headers: {
+        origin: new URL(baseUrl).origin,
+        'X-CSRF-TOKEN': `${issued.token}invalid`,
+      },
+      allowFailure: true,
+    })
+    assert.equal(mismatchedLoginCsrf.response.status, 419)
   }
 
   const badCredentials = await fetchLoginJson({

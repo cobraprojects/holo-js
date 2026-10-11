@@ -1,5 +1,7 @@
 'use client'
 
+import { useForm } from '@holo-js/adapter-next/client'
+import { logoutForm } from '@/lib/schemas/auth'
 import Link from 'next/link'
 import { useAuth } from '@holo-js/auth/next/client'
 import { logoutAction } from './logout/actions'
@@ -24,6 +26,9 @@ const logoutFormStyle = {
 
 export function AuthNav() {
   const auth = useAuth()
+  const form = useForm(logoutForm, {
+    submitter: ({ formData }) => logoutAction(formData),
+  })
   const displayName = auth.user?.name ?? auth.user?.email ?? 'Account'
 
   if (!auth.authenticated) {
@@ -38,7 +43,7 @@ export function AuthNav() {
   return (
     <>
       <span style={{ color: '#e5eef8' }}>{displayName}</span>
-      <form action={logoutAction} style={logoutFormStyle}>
+      <form onSubmit={(event) => { event.preventDefault(); void form.submit() }} style={logoutFormStyle}>
         <button type="submit" style={logoutButtonStyle}>Logout</button>
       </form>
       {auth.provider === 'workos' && (

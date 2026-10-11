@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useForm } from '@holo-js/adapter-nuxt/client'
+import { logoutForm } from '#shared/schemas/auth'
 import { useAuth } from '@holo-js/auth/nuxt'
 
 const { authenticated, provider, refreshUser, user } = await useAuth()
@@ -7,16 +9,18 @@ const currentProvider = computed(() => provider.value ?? '')
 const isClerkSession = computed(() => currentProvider.value === 'clerk')
 const isWorkosSession = computed(() => currentProvider.value === 'workos')
 
-async function logout() {
-  await $fetch('/api/logout', { method: 'POST' })
-  try {
-    await refreshUser()
-  } catch (error) {
-    console.warn('Auth refresh failed after logout.', error)
-  }
+const form = useForm(logoutForm, {
+  async submitter({ formData }) {
+    await $fetch('/api/logout', { method: 'POST', body: formData })
+    try {
+      await refreshUser()
+    } catch (error) {
+      console.warn('Auth refresh failed after logout.', error)
+    }
 
-  await navigateTo('/')
-}
+    await navigateTo('/')
+  },
+})
 </script>
 
 <template>
@@ -30,7 +34,7 @@ async function logout() {
         <NuxtLink to="/super-admin">Super Admin</NuxtLink>
         <template v-if="authenticated">
           <span class="user-name">{{ displayName }}</span>
-          <button type="button" class="logout-button" @click="logout">Logout</button>
+          <button type="button" class="logout-button" @click="form.submit()">Logout</button>
           <form v-if="isWorkosSession" action="/api/auth/workos/logout" method="post" class="logout-form">
             <button type="submit" class="logout-button">Logout from WorkOS</button>
           </form>

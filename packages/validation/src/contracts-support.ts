@@ -119,8 +119,8 @@ export function normalizeFieldBuilder<TOutput>(input: FieldBuilderInput<TOutput>
 }
 
 export function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TShape, path = 'schema'): NormalizedSchemaShape<TShape> {
-  if (!isPlainObject(shape) || Object.keys(shape).length === 0) {
-    throw new ValidationContractError(`${path} must declare at least one field.`)
+  if (!isPlainObject(shape)) {
+    throw new ValidationContractError(`${path} must be a schema object.`)
   }
 
   const normalizedEntries = Object.entries(shape).map(([key, value]) => {

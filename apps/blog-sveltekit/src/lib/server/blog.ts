@@ -1,35 +1,12 @@
-import { hashPassword } from '@holo-js/auth'
 import { DB, uniqueSlug } from '@holo-js/db'
 
 import Category from '../../../server/models/Category'
 import Post from '../../../server/models/Post'
 import Tag from '../../../server/models/Tag'
-import User from '../../../server/models/User'
 
 const BLOG_QUERY_CACHE_SECONDS = 60
 const BLOG_FLEXIBLE_CACHE_SECONDS = [60, 300] as const
 
-function now(): Date {
-  return new Date()
-}
-
-export async function ensureAuthorId(): Promise<number> {
-  const existing = await User.orderBy('id').first()
-  if (existing) {
-    return existing.id
-  }
-
-  const password = await hashPassword('secret-secret')
-  const user = await User.unguarded(() =>
-    User.firstOrCreate({ email: 'editor@example.com' }, {
-      name: 'Holo Editor',
-      password,
-      avatar: null,
-      email_verified_at: now(),
-    }),
-  )
-  return user.id
-}
 
 export function parseTagIds(value: string): number[] {
   return [...new Set(value

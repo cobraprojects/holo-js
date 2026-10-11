@@ -51,9 +51,9 @@ export default defineDatabaseConfig({
           table.string('tenant_id')
           table.string('value')
         })
-        await db.unsafeExecute(DB.raw(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`))
-        await db.unsafeExecute(DB.raw(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`))
-        await db.unsafeExecute(DB.raw(`CREATE POLICY tenant_context ON ${table}
+        await db.unsafeExecute(DB.raw(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
+          CREATE POLICY tenant_context ON ${table}
           USING (tenant_id = nullif(current_setting('holo.tenant_id', true), ''))
           WITH CHECK (tenant_id = nullif(current_setting('holo.tenant_id', true), ''))`))
       },

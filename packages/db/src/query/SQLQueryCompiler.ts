@@ -115,7 +115,7 @@ export class SQLQueryCompiler {
     const limitClause = typeof plan.limit === 'number' ? ` LIMIT ${plan.limit}` : ''
     const offsetClause = typeof plan.offset === 'number' ? ` OFFSET ${plan.offset}` : ''
 
-    return `${selectKeyword} ${selectList} FROM ${this.compileSource(plan.source)}${joinClause}${whereClause}${groupByClause}${havingClause}${unionClause}${orderClause}${lockClause}${limitClause}${offsetClause}`
+    return `${selectKeyword} ${selectList} FROM ${this.compileSource(plan.source)}${joinClause}${whereClause}${groupByClause}${havingClause}${unionClause}${orderClause}${limitClause}${offsetClause}${lockClause}`
   }
 
   protected compileInsert(plan: InsertQueryPlan): CompiledStatement {

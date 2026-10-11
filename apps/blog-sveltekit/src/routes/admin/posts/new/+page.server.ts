@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
+import { auth } from '@holo-js/auth/sveltekit/server'
 import { broadcast } from '@holo-js/broadcast'
 import { validate } from '@holo-js/forms'
 import { ValidationException } from '@holo-js/validation'
@@ -7,7 +8,7 @@ import { DB, uniqueSlug } from '@holo-js/db'
 import { csrf } from '@holo-js/security'
 
 import { postForm } from '$lib/schemas/blog'
-import { ensureAuthorId, getAdminPostsData } from '$lib/server/blog'
+import { getAdminPostsData } from '$lib/server/blog'
 import { blogPostChanged } from '../../../../../server/broadcast/blog-post-changed'
 import BlogPostSaved from '../../../../../server/events/blog/post-saved'
 import Post from '../../../../../server/models/Post'
@@ -24,6 +25,9 @@ export const load = (async ({ request }) => {
 
 export const actions = {
   create: async ({ request }) => {
+    const currentAuth = await auth()
+    if (!currentAuth.authenticated || !currentAuth.user) redirect(303, '/login')
+    const authorId = currentAuth.user.id
     const formData = await request.formData()
     const data = await validate(formData, postForm)
     await authorize('create', Post)
@@ -33,7 +37,7 @@ export const actions = {
 
     const post = await DB.transaction(async () => {
       const post = await Post.create({
-        user_id: await ensureAuthorId(),
+        user_id: authorId,
         category_id: data.categoryId ? Number(data.categoryId) : null,
         title: data.title.trim(),
         slug: await uniqueSlug(Post, data.title),

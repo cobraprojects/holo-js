@@ -1,69 +1,36 @@
-import { describe, expect, it, vi } from 'vitest'
-import { MySQLAdapter, createMySQLAdapter, mysqlDatabaseDriverFactory } from '@holo-js/db-mysql'
-import { PostgresAdapter, createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
-import { SQLiteAdapter, sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
+import { describe, expect, it } from 'vitest'
+import { mysqlDatabaseDriverFactory } from '@holo-js/db-mysql'
+import { postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
+import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
+import { createDialect } from '../src'
 
-describe('concrete database driver factories', () => {
-  it('creates MySQL adapters from URLs and structured connection options', () => {
-    expect(mysqlDatabaseDriverFactory.create({ url: 'mysql://localhost/app' })).toBeInstanceOf(MySQLAdapter)
-    expect(mysqlDatabaseDriverFactory.create({
-      host: 'localhost', port: 3306, username: 'app', password: 'secret', database: 'app', ssl: true,
-    })).toBeInstanceOf(MySQLAdapter)
-    expect(mysqlDatabaseDriverFactory.create({ ssl: false })).toBeInstanceOf(MySQLAdapter)
-  })
+const postgresHost = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
+const postgresPort = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
+const postgresDatabase = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
+const mysqlHost = process.env.HOLO_MYSQL_HOST ?? '127.0.0.1'
+const mysqlPort = Number(process.env.HOLO_MYSQL_PORT ?? 3306)
+const mysqlDatabase = process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+const connections = [
+  { driver: 'sqlite', mode: 'url', factory: sqliteDatabaseDriverFactory, config: { url: ':memory:' } },
+  { driver: 'sqlite', mode: 'database', factory: sqliteDatabaseDriverFactory, config: { database: ':memory:' } },
+  { driver: 'postgres', mode: 'url', factory: postgresDatabaseDriverFactory, config: { url: `postgresql://postgres@${postgresHost}:${postgresPort}/${postgresDatabase}` } },
+  { driver: 'postgres', mode: 'structured', factory: postgresDatabaseDriverFactory, config: { host: postgresHost, port: postgresPort, username: 'postgres', database: postgresDatabase } },
+  { driver: 'mysql', mode: 'url', factory: mysqlDatabaseDriverFactory, config: { url: `mysql://root@${mysqlHost}:${mysqlPort}/${mysqlDatabase}` } },
+  { driver: 'mysql', mode: 'structured', factory: mysqlDatabaseDriverFactory, config: { host: mysqlHost, port: mysqlPort, username: 'root', database: mysqlDatabase } },
+] as const
 
-  it('creates Postgres adapters from URLs and structured connection options', () => {
-    expect(postgresDatabaseDriverFactory.create({ url: 'postgres://localhost/app' })).toBeInstanceOf(PostgresAdapter)
-    expect(postgresDatabaseDriverFactory.create({
-      host: 'localhost', port: 5432, username: 'app', password: 'secret', database: 'app', ssl: true,
-    })).toBeInstanceOf(PostgresAdapter)
-  })
-
-  it('creates SQLite adapters from URL, database, and default filenames', () => {
-    expect(sqliteDatabaseDriverFactory.create({ url: ':memory:' })).toBeInstanceOf(SQLiteAdapter)
-    expect(sqliteDatabaseDriverFactory.create({ database: ':memory:' })).toBeInstanceOf(SQLiteAdapter)
-    expect(sqliteDatabaseDriverFactory.create({})).toBeInstanceOf(SQLiteAdapter)
-  })
-
-  it('uses direct MySQL clients for nested transaction scopes without leasing', async () => {
-    const query = vi.fn(async () => [[], {}] as const)
-    const end = vi.fn(async () => {})
-    const adapter = createMySQLAdapter({ client: { query, end } })
-    await adapter.ensureDatabaseExists()
-    await adapter.runWithTransactionScope(async () => {
-      await adapter.runWithTransactionScope(async () => {
-        await adapter.query('select 1')
-      })
-    })
-    await adapter.disconnect()
-    expect(query).toHaveBeenCalledWith('select 1', [])
-    expect(end).toHaveBeenCalledOnce()
-  })
-
-  it('uses direct Postgres clients for nested transaction scopes without leasing', async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }))
-    const end = vi.fn(async () => {})
-    const adapter = createPostgresAdapter({ client: { query, end } })
-    await adapter.ensureDatabaseExists()
-    await adapter.runWithTransactionScope(async () => {
-      await adapter.runWithTransactionScope(async () => {
-        await adapter.query('select 1')
-      })
-    })
-    await adapter.disconnect()
-    expect(query).toHaveBeenCalledWith('select 1', [])
-    expect(end).toHaveBeenCalledOnce()
-  })
-
-  it('initializes default concrete pools without opening a connection', async () => {
-    const mysqlAdapter = createMySQLAdapter()
-    await mysqlAdapter.initialize()
-    expect(mysqlAdapter.isConnected()).toBe(true)
-    await mysqlAdapter.disconnect()
-
-    const postgresAdapter = createPostgresAdapter()
-    await postgresAdapter.initialize()
-    expect(postgresAdapter.isConnected()).toBe(true)
-    await postgresAdapter.disconnect()
+describe('native database driver factories', () => {
+  it.each(connections)('connects and binds values through $driver $mode configuration', async ({ driver, factory, config }) => {
+    const adapter = factory.create(config)
+    const sql = `SELECT ${createDialect(driver).createPlaceholder(1)} AS value`
+    const value = "bound'; DROP TABLE users; --"
+    try {
+      expect((await adapter.query(sql, [value])).rows).toEqual([{ value }])
+      await adapter.disconnect()
+      expect(adapter.isConnected()).toBe(false)
+      expect((await adapter.query(sql, [value])).rows).toEqual([{ value }])
+    } finally {
+      await adapter.disconnect()
+    }
   })
 })

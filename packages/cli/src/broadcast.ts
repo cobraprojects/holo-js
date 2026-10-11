@@ -269,7 +269,7 @@ function createRealtimeAuthRequestAccessors(headers: Headers): RealtimeAuthReque
   }
 }
 
-async function createRealtimeWorkerBindings(projectRoot: string): Promise<BroadcastRealtimeRuntimeBindings | undefined> {
+async function createRealtimeWorkerBindings(projectRoot: string): Promise<(BroadcastRealtimeRuntimeBindings & { shutdown(): Promise<void> }) | undefined> {
   if (!(await hasProjectPackageDependency(projectRoot, '@holo-js/realtime'))) {
     return undefined
   }
@@ -311,6 +311,9 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<Broadc
   }
 
   return {
+    async shutdown() {
+      await runtime.shutdown()
+    },
     async query(name, args, context) {
       return await withRealtimeRequest(context, async (authRequest) => {
         return await realtime.executeRealtimeQuery(await resolveDefinition(name), args, { authRequest })
@@ -351,47 +354,51 @@ export async function runBroadcastWorkCommand(
   const registry = await prepareProjectDiscovery(projectRoot, project.config)
   const broadcastModule = await loadModule(projectRoot)
   const realtime = await createRealtimeWorkerBindings(projectRoot)
-  const worker = await broadcastModule.startBroadcastWorker({
-    config: config.broadcast,
-    queue: config.queue,
-    ...(hasLoadedRedisConfigSection(config.loadedFiles)
-      ? { redis: config.redis }
-      : {}),
-    ...(registry
-      ? {
-        channelAuth: {
-          registry: {
-            projectRoot,
-            channels: registry.channels,
+  try {
+    const worker = await broadcastModule.startBroadcastWorker({
+      config: config.broadcast,
+      queue: config.queue,
+      ...(hasLoadedRedisConfigSection(config.loadedFiles)
+        ? { redis: config.redis }
+        : {}),
+      ...(registry
+        ? {
+          channelAuth: {
+            registry: {
+              projectRoot,
+              channels: registry.channels,
+            },
+            importModule: async (absolutePath: string) => await importProjectModule(projectRoot, absolutePath),
           },
-          importModule: async (absolutePath: string) => await importProjectModule(projectRoot, absolutePath),
-        },
+        }
+        : {}),
+      ...(realtime ? { realtime } : {}),
+    })
+
+    writeLine(io.stdout, `[broadcast] Worker listening on ${worker.host}:${worker.port}`)
+
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      let stopped = false
+      const stop = async () => {
+        if (stopped) {
+          return
+        }
+
+        stopped = true
+        process.off('SIGINT', onSignal)
+        process.off('SIGTERM', onSignal)
+        await worker.stop()
+        resolvePromise()
       }
-      : {}),
-    ...(realtime ? { realtime } : {}),
-  })
 
-  writeLine(io.stdout, `[broadcast] Worker listening on ${worker.host}:${worker.port}`)
-
-  await new Promise<void>((resolvePromise) => {
-    let stopped = false
-    const stop = async () => {
-      if (stopped) {
-        return
+      const onSignal = () => {
+        void stop().catch(rejectPromise)
       }
 
-      stopped = true
-      process.off('SIGINT', onSignal)
-      process.off('SIGTERM', onSignal)
-      await worker.stop()
-      resolvePromise()
-    }
-
-    const onSignal = () => {
-      void stop()
-    }
-
-    process.on('SIGINT', onSignal)
-    process.on('SIGTERM', onSignal)
-  })
+      process.on('SIGINT', onSignal)
+      process.on('SIGTERM', onSignal)
+    })
+  } finally {
+    await realtime?.shutdown()
+  }
 }

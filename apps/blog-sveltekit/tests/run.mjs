@@ -1,3 +1,4 @@
+import { stopExampleAppProcess as stopProcessTree } from '../../../tests/example-app-process.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -7,7 +8,7 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/session'
-import Database from 'better-sqlite3'
+import { assertExampleAppDatabaseBehavior, openExampleAppDatabase } from '../../../tests/example-app-database.mjs'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
@@ -19,7 +20,7 @@ import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
 const configCachePath = join(cwd, '.holo-js/generated/config-cache.json')
-const databasePath = join(cwd, 'storage/database.sqlite')
+let database
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 const escapeCharacter = String.fromCharCode(27)
@@ -101,16 +102,19 @@ function createChildEnv(overrides = {}) {
   return env
 }
 
-function run(command, args) {
+function run(command, args, timeout = 0) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
+      detached: true,
       env: createChildEnv(),
       stdio: 'inherit',
     })
 
+    const deadline = timeout > 0 ? setTimeout(() => { void stopProcessTree(child).catch(reject) }, timeout) : undefined
     child.once('error', reject)
     child.once('close', code => {
+      clearTimeout(deadline)
       if (code === 0) {
         resolve()
         return
@@ -196,72 +200,35 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
-function countCacheRows() {
-  const database = new Database(databasePath, { readonly: true })
-  try {
-    return database.prepare('select count(*) as count from cache').get().count
-  } finally {
-    database.close()
-  }
+async function countCacheRows() {
+  return await database.DB.table('cache').count()
 }
 
-function getUploadedPostImage(title) {
-  const database = new Database(databasePath, { readonly: true })
-  try {
-    const post = database.prepare('select id, slug from posts where title = ?').get(title)
-    assert.ok(post, 'Expected the uploaded-image post to exist.')
-
-    const mediaRows = database.prepare('select path, generated_conversions from media where model_id = ? and collection_name = ?').all(String(post.id), 'images')
-    assert.equal(mediaRows.length, 1, 'Expected the post image collection to keep exactly one image.')
-    const media = mediaRows[0]
-    assert.ok(media, 'Expected the uploaded post image to create a media record.')
-    assert.ok(existsSync(join(cwd, 'storage/app/public', media.path)), 'Expected the original image to be stored on the public disk.')
-
-    const conversions = typeof media.generated_conversions === 'string'
-      ? JSON.parse(media.generated_conversions)
-      : media.generated_conversions
-    const thumb = conversions.thumb
-    assert.ok(thumb?.path, 'Expected the image thumbnail conversion to be recorded.')
-    assert.ok(existsSync(join(cwd, 'storage/app/public', thumb.path)), 'Expected the image thumbnail conversion to be stored on the public disk.')
-
-    return {
-      id: post.id,
-      slug: post.slug,
-      thumbUrl: `/storage/${thumb.path}`,
-    }
-  } finally {
-    database.close()
-  }
+async function getPostByTitle(title) {
+  const post = await database.DB.table('posts').where('title', title).first()
+  assert.ok(post, `Expected post "${title}" to exist.`)
+  return post
 }
 
-function getPostByTitle(title) {
-  const database = new Database(databasePath, { readonly: true })
-  try {
-    const post = database.prepare('select id, slug from posts where title = ?').get(title)
-    assert.ok(post, `Expected post "${title}" to exist.`)
-    return post
-  } finally {
-    database.close()
-  }
+async function getUploadedPostImage(title) {
+  const post = await getPostByTitle(title)
+  const mediaRows = await database.DB.table('media').where('model_id', String(post.id)).where('collection_name', 'images').get()
+  assert.equal(mediaRows.length, 1, 'Expected the post image collection to keep exactly one image.')
+  const media = mediaRows[0]
+  assert.ok(media, 'Expected the uploaded post image to create a media record.')
+  assert.ok(existsSync(join(cwd, 'storage/app/public', media.path)), 'Expected the original image to be stored on the public disk.')
+  const conversions = typeof media.generated_conversions === 'string' ? JSON.parse(media.generated_conversions) : media.generated_conversions
+  const thumb = conversions.thumb
+  assert.ok(thumb?.path, 'Expected the image thumbnail conversion to be recorded.')
+  assert.ok(existsSync(join(cwd, 'storage/app/public', thumb.path)), 'Expected the image thumbnail conversion to be stored on the public disk.')
+  return { id: post.id, slug: post.slug, thumbUrl: `/storage/${thumb.path}` }
 }
 
-function countPostImages(postId) {
-  const database = new Database(databasePath, { readonly: true })
-  try {
-    return database.prepare('select count(*) as count from media where model_id = ? and collection_name = ?').get(String(postId), 'images').count
-  } finally {
-    database.close()
-  }
+async function countPostImages(postId) {
+  return await database.DB.table('media').where('model_id', String(postId)).where('collection_name', 'images').count()
 }
 
-function assignPostAuthor(postId, userId) {
-  const database = new Database(databasePath)
-  try {
-    database.prepare('update posts set user_id = ? where id = ?').run(userId, postId)
-  } finally {
-    database.close()
-  }
-}
+
 
 async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
   const response = await fetch(new URL(imageUrl, baseUrl))
@@ -288,20 +255,20 @@ async function assertConfigCacheCommands() {
 
 async function assertCacheBackedHttpBehavior(baseUrl) {
   await run('bun', ['x', 'holo', 'cache:clear'])
-  assert.equal(countCacheRows(), 0)
+  assert.equal(await countCacheRows(), 0)
 
   await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
-  const homeCacheRows = countCacheRows()
+  const homeCacheRows = await countCacheRows()
   assert.ok(homeCacheRows >= 1, 'Expected the home page request to store query cache rows.')
 
   await waitForText(`${baseUrl}/posts`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
-  assert.ok(countCacheRows() >= homeCacheRows, 'Expected the posts page request to reuse existing query cache rows.')
+  assert.ok(await countCacheRows() >= homeCacheRows, 'Expected the posts page request to reuse existing query cache rows.')
 
   await run('bun', ['x', 'holo', 'cache:clear'])
-  assert.equal(countCacheRows(), 0)
+  assert.equal(await countCacheRows(), 0)
 
   await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
-  assert.ok(countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
+  assert.ok(await countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
 }
 
 async function fetchJson(url, options = {}) {
@@ -351,7 +318,7 @@ async function fetchCsrfField(baseUrl, path = '/login') {
   const csrfValue = html.match(/<input[^>]+name="([^"]+)"[^>]+value="([^"]+)"/)?.[2]
 
   assert.ok(csrfCookie, 'Expected CSRF middleware to issue a cookie.')
-  assert.ok(csrfName, 'Expected CSRF input name to be rendered.')
+  assert.ok(csrfName, `Expected CSRF input name to be rendered. ${html}`)
   assert.ok(csrfValue, 'Expected CSRF input value to be rendered.')
 
   return {
@@ -448,8 +415,8 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
   assert.notEqual(createdWithoutImage.response.status, 422, createdWithoutImage.text)
   assertResponseRedirectsTo(createdWithoutImage, '/admin/posts')
 
-  const postWithoutImage = getPostByTitle(noImageTitle)
-  assert.equal(countPostImages(postWithoutImage.id), 0, 'Expected creating without selecting an image to skip media records.')
+  const postWithoutImage = await getPostByTitle(noImageTitle)
+  assert.equal(await countPostImages(postWithoutImage.id), 0, 'Expected creating without selecting an image to skip media records.')
 
   const oversizedFormData = new FormData()
   oversizedFormData.set('_token', csrfToken)
@@ -513,7 +480,7 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
   const postsPage = await fetchText('/admin/posts', { jar })
   assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created post.')
 
-  const uploaded = getUploadedPostImage(title)
+  const uploaded = await getUploadedPostImage(title)
   await assertAdminEditEndpointRendersImage({
     baseUrl,
     fetchText,
@@ -525,7 +492,7 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
 
   const currentUser = await fetchJson('/api/auth/user', { jar })
   assert.ok(currentUser.json.user?.id, 'Expected the authenticated user endpoint to return a user id.')
-  assignPostAuthor(uploaded.id, currentUser.json.user.id)
+  assert.equal((await database.DB.table('posts').where('id', uploaded.id).first()).user_id, currentUser.json.user.id, 'Created posts must belong to the authenticated author.')
 
   const editPage = await fetchText(`/admin/posts/${uploaded.id}/edit`, { jar })
   const editCsrfToken = findCsrfInput(editPage.text)
@@ -550,7 +517,8 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
   })
   assert.notEqual(updatedWithoutImage.response.status, 422, updatedWithoutImage.text)
   assertResponseRedirectsTo(updatedWithoutImage, '/admin/posts')
-  assert.equal(countPostImages(uploaded.id), 1, 'Expected updating without a replacement image to keep the existing image.')
+  assert.equal(await countPostImages(uploaded.id), 1, 'Expected updating without a replacement image to keep the existing image.')
+  return uploaded.id
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {
@@ -566,10 +534,11 @@ async function assertAuthenticatedAdminPostFlows(context) {
     appName: 'blog-sveltekit',
     cookieHeader: context.jar.header(),
   })
-  await assertAuthenticatedUserCanCreateAndUpdatePostImage(context)
+  const postId = await assertAuthenticatedUserCanCreateAndUpdatePostImage(context)
   await assertExampleAppRealtimeBrowserFlow({
     baseUrl: context.baseUrl,
     appName: 'blog-sveltekit',
+    postId,
     cookieHeader: context.jar.header(),
   })
   await assertAuthenticatedUserCannotDeletePost(context)
@@ -648,32 +617,6 @@ function waitForDevUrl(child, timeoutMs = 30000) {
 let child = null
 let broadcastChild = null
 
-function killProcessTree(target) {
-  if (!target || target.exitCode !== null) {
-    return
-  }
-
-  try {
-    process.kill(-target.pid, 'SIGTERM')
-  } catch {
-    try {
-      target.kill('SIGTERM')
-    } catch {
-      return
-    }
-  }
-}
-
-async function stopProcessTree(target) {
-  if (!target || target.exitCode !== null) {
-    return
-  }
-
-  const closed = new Promise(resolve => target.once('close', resolve))
-  killProcessTree(target)
-  await closed
-}
-
 async function startBroadcastWorker(appUrl) {
   if (broadcastChild) {
     return
@@ -700,7 +643,9 @@ try {
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)
   await startBroadcastWorker(`http://localhost:${port}`)
-  await run('npx', ['tsx', 'tests/blog-logic.mjs'])
+  await run('npx', ['tsx', 'tests/blog-logic.mjs'], 60000)
+  database = await openExampleAppDatabase(cwd)
+  await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService)
 
   child = spawn('bun', ['x', 'vite', 'dev', '--host', 'localhost', '--port', port], {
     cwd,
@@ -746,6 +691,7 @@ try {
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
+  await startBroadcastWorker(`http://localhost:${port}`)
   await assertExampleAppProductionFlow({
     cwd,
     baseUrl: `http://localhost:${port}`,
@@ -766,6 +712,7 @@ try {
     },
   })
 } finally {
+  await database?.close()
   await closeExampleAppBrowser()
   await writeFile(configPath, originalConfig)
   await stopProcessTree(child)

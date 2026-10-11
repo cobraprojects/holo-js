@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it, vi } from 'vitest'
+import { Client } from 'pg'
+import { describe, expect, it } from 'vitest'
 import {
   column, configureDB, createConnectionManager, createDialect, defineGeneratedTable,
-  defineModel, resetDB, type DriverAdapter,
+  defineModel, resetDB,
 } from '@holo-js/db'
 import { createPostgresAdapter } from '../src'
-
-const runLivePostgres = process.env.HOLO_POSTGRES_INTEGRATION === '1' ? it : it.skip
 
 const livePostgresConfig = {
   host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
@@ -16,7 +15,7 @@ const livePostgresConfig = {
 }
 
 describe('@holo-js/db-postgres', () => {
-  runLivePostgres('connects to the selected integration database', async () => {
+  it('connects to the selected integration database', async () => {
     const adapter = createPostgresAdapter({ config: livePostgresConfig })
     try {
       const result = await adapter.query<{ database: string }>('SELECT current_database() AS database')
@@ -26,224 +25,100 @@ describe('@holo-js/db-postgres', () => {
     }
   }, 30_000)
 
-  it('creates the configured database when explicitly ensured', async () => {
-    const bootstrapQuery = vi.fn(async (sql: string) => ({
-      rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
-      rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
+  it.each(['config', 'url'] as const)('creates and reopens a quoted database name through %s configuration', async mode => {
+    const database = `holo_quoted_${randomUUID().replaceAll('-', '')}"tenant`
+    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = createPostgresAdapter(mode === 'config'
+      ? { config: { ...livePostgresConfig, database } }
+      : { connectionString: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${encodeURIComponent(database)}` })
+    try {
+      await adapter.ensureDatabaseExists()
+      await adapter.ensureDatabaseExists()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database }])
+      await adapter.disconnect()
+      expect(adapter.isConnected()).toBe(false)
+      expect((await adapter.query('SELECT 1 AS value')).rows).toEqual([{ value: 1 }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database.replaceAll('"', '""')}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('reports real database creation permission failures', async () => {
+    const role = `holo_denied_${randomUUID().replaceAll('-', '')}`
+    const password = randomUUID()
+    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, user: role, password, database: role } })
+    try {
+      await admin.execute(`CREATE ROLE ${role} LOGIN NOCREATEDB PASSWORD '${password}'`)
+      await expect(adapter.ensureDatabaseExists()).rejects.toThrow(`Postgres database "${role}" could not be found or created`)
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP ROLE IF EXISTS ${role}`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('uses a real injected client for bound writes, commit, and rollback', async () => {
+    const client = new Client(livePostgresConfig)
+    await client.connect()
+    const adapter = createPostgresAdapter({ client })
+    try {
+      await adapter.execute('CREATE TEMP TABLE direct_records (id SERIAL PRIMARY KEY, value TEXT NOT NULL)')
+      await adapter.beginTransaction()
+      const inserted = await adapter.execute('INSERT INTO direct_records (value) VALUES ($1) RETURNING id', ["a'; DROP TABLE direct_records; --"])
+      await adapter.commit()
+      expect(inserted.affectedRows).toBe(1)
+      expect((await adapter.query('SELECT value FROM direct_records WHERE id = $1', [inserted.lastInsertId])).rows)
+        .toEqual([{ value: "a'; DROP TABLE direct_records; --" }])
+      await adapter.beginTransaction()
+      await adapter.execute('DELETE FROM direct_records')
+      await adapter.rollback()
+      expect((await adapter.query('SELECT count(*)::int AS count FROM direct_records')).rows).toEqual([{ count: 1 }])
+    } finally {
+      await adapter.disconnect()
+    }
+  }, 30_000)
+
+  it('returns the final statement result from real multi-statement execution and queries', async () => {
+    const adapter = createPostgresAdapter({ config: livePostgresConfig })
+    try {
+      expect(await adapter.execute('SELECT 1; SELECT 2;')).toEqual({ affectedRows: 1, lastInsertId: 2 })
+      expect(await adapter.query('SELECT 1 AS value; SELECT 2 AS value;')).toEqual({ rows: [{ value: 2 }], rowCount: 1 })
+      await expect(adapter.execute('SELECT 1; SELECT missing_column; SELECT 2;')).rejects.toThrow('missing_column')
+      expect((await adapter.query('SELECT 3 AS value')).rows).toEqual([{ value: 3 }])
+    } finally {
+      await adapter.disconnect()
+    }
+  }, 30_000)
+
+  it('hydrates numeric schema columns without losing integer precision', async () => {
+    const tableName = `holo_numeric_${randomUUID().replaceAll('-', '_')}`
+    const adapter = createPostgresAdapter({ config: livePostgresConfig })
+    const Item = defineModel(defineGeneratedTable(tableName, {
+      id: column.id(),
+      quantity: column.bigInteger(),
+      label: column.string(),
+    }), { timestamps: false })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
     }))
-    const bootstrapEnd = vi.fn(async () => {})
-    const applicationQuery = vi.fn(async () => ({
-      rows: [{ ok: 1 }],
-      rowCount: 1,
-    }))
-    const applicationEnd = vi.fn(async () => {})
-    const createPool = vi.fn((config) => {
-      if (config?.database === 'fresh_app') {
-        return {
-          query: applicationQuery,
-          connect: vi.fn(),
-          end: applicationEnd,
-        }
-      }
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id BIGSERIAL PRIMARY KEY, quantity BIGINT NOT NULL, label TEXT NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${tableName} (quantity, label) VALUES (9007199254740991, '001')`)
+      expect((await Item.first())?.toAttributes()).toEqual({ id: 1, quantity: 9007199254740991, label: '001' })
+      await adapter.execute(`INSERT INTO ${tableName} (quantity, label) VALUES (9007199254740993, 'unsafe')`)
+      await expect(Item.where('label', 'unsafe').first()).rejects.toThrow('safe integer')
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
 
-      return {
-        query: bootstrapQuery,
-        connect: vi.fn(),
-        end: bootstrapEnd,
-      }
-    })
-    const adapter = createPostgresAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 5432,
-        user: 'postgres',
-        database: 'fresh_app',
-      },
-      createPool,
-    })
-
-    await adapter.ensureDatabaseExists()
-    await expect(adapter.query('select 1')).resolves.toEqual({
-      rows: [{ ok: 1 }],
-      rowCount: 1,
-    })
-
-    expect(createPool).toHaveBeenNthCalledWith(1, {
-      host: '127.0.0.1',
-      port: 5432,
-      user: 'postgres',
-      database: 'postgres',
-    })
-    expect(createPool).toHaveBeenNthCalledWith(2, {
-      host: '127.0.0.1',
-      port: 5432,
-      user: 'postgres',
-      database: 'fresh_app',
-    })
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(1, 'select 1 from pg_database where datname = $1', ['fresh_app'])
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'create database "fresh_app"')
-    expect(bootstrapEnd).toHaveBeenCalledTimes(1)
-    expect(applicationQuery).toHaveBeenCalledWith('select 1', [])
-  })
-
-  it('escapes configured database names during bootstrap', async () => {
-    const bootstrapQuery = vi.fn(async (sql: string) => ({
-      rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
-      rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
-    }))
-    const createPool = vi.fn((config) => {
-      if (config?.database === 'tenant"prod') {
-        return {
-          query: vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 })),
-          connect: vi.fn(),
-          end: vi.fn(async () => {}),
-        }
-      }
-
-      return {
-        query: bootstrapQuery,
-        connect: vi.fn(),
-        end: vi.fn(async () => {}),
-      }
-    })
-    const adapter = createPostgresAdapter({
-      config: {
-        host: '127.0.0.1',
-        database: 'tenant"prod',
-      },
-      createPool,
-    })
-
-    await adapter.ensureDatabaseExists()
-
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'create database "tenant""prod"')
-  })
-
-  it('creates databases from connection strings when explicitly ensured', async () => {
-    const bootstrapQuery = vi.fn(async (sql: string) => ({
-      rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
-      rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
-    }))
-    const createPool = vi.fn((config) => {
-      if (config?.connectionString?.includes('/fresh_app')) {
-        return {
-          query: vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 })),
-          connect: vi.fn(),
-          end: vi.fn(async () => {}),
-        }
-      }
-
-      return {
-        query: bootstrapQuery,
-        connect: vi.fn(),
-        end: vi.fn(async () => {}),
-      }
-    })
-    const adapter = createPostgresAdapter({
-      connectionString: 'postgres://postgres:secret@127.0.0.1:5432/fresh_app?sslmode=disable',
-      createPool,
-    })
-
-    await adapter.ensureDatabaseExists()
-    await adapter.initialize()
-
-    expect(createPool).toHaveBeenNthCalledWith(1, {
-      connectionString: 'postgres://postgres:secret@127.0.0.1:5432/postgres?sslmode=disable',
-    })
-    expect(createPool).toHaveBeenNthCalledWith(2, {
-      connectionString: 'postgres://postgres:secret@127.0.0.1:5432/fresh_app?sslmode=disable',
-    })
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(1, 'select 1 from pg_database where datname = $1', ['fresh_app'])
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'create database "fresh_app"')
-  })
-
-  it('initializes without checking whether a Postgres database already exists', async () => {
-    const applicationQuery = vi.fn(async () => ({
-      rows: [{ '?column?': 1 }],
-      rowCount: 1,
-    }))
-    const bootstrapQuery = vi.fn(async () => ({
-      rows: [{ '?column?': 1 }],
-      rowCount: 1,
-    }))
-    const createPool = vi.fn((config) => ({
-      query: config?.database === 'existing_app' ? applicationQuery : bootstrapQuery,
-      connect: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
-    const adapter = createPostgresAdapter({
-      config: {
-        database: 'existing_app',
-      },
-      createPool,
-    })
-
-    await adapter.initialize()
-
-    expect(createPool).toHaveBeenCalledTimes(1)
-    expect(applicationQuery).not.toHaveBeenCalled()
-    expect(bootstrapQuery).not.toHaveBeenCalled()
-  })
-
-  it('reports Postgres database bootstrap failures with the configured database name', async () => {
-    const createPool = vi.fn(() => ({
-      query: vi.fn(async () => {
-        throw new Error('permission denied')
-      }),
-      connect: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
-    const adapter = createPostgresAdapter({
-      config: {
-        database: 'private_app',
-      },
-      createPool,
-    })
-
-    await expect(adapter.ensureDatabaseExists()).rejects.toThrow(
-      'Postgres database "private_app" could not be found or created. Please create the database and try again. Original error: permission denied',
-    )
-  })
-
-  it('supports direct clients without creating a pool', async () => {
-    const query = vi.fn(async (sql: string) => {
-      if (sql === 'insert into logs values ($1) returning id') {
-        return {
-          rows: [{ id: 9 }],
-          rowCount: 1,
-        }
-      }
-
-      return {
-        rows: [{ sql }],
-        rowCount: 1,
-      }
-    })
-    const adapter = createPostgresAdapter({
-      client: {
-        query,
-        end: vi.fn(async () => {}),
-      },
-    })
-    const canonicalAdapter: DriverAdapter = adapter
-
-    await expect(adapter.query('select 1')).resolves.toEqual({
-      rows: [{ sql: 'select 1' }],
-      rowCount: 1,
-    })
-    await expect(adapter.execute('insert into logs values ($1) returning id', ['value'])).resolves.toEqual({
-      affectedRows: 1,
-      lastInsertId: 9,
-    })
-
-    await adapter.beginTransaction()
-    await adapter.commit()
-    expect(query).toHaveBeenNthCalledWith(3, 'BEGIN')
-    expect(query).toHaveBeenNthCalledWith(4, 'COMMIT')
-    void canonicalAdapter
-  })
-
-  runLivePostgres('chunks grouped projections without selecting the primary key', async () => {
+  it('chunks grouped projections without selecting the primary key', async () => {
     const tableName = `holo_grouped_chunks_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
       config: livePostgresConfig,
@@ -268,7 +143,7 @@ describe('@holo-js/db-postgres', () => {
     }
   }, 30_000)
 
-  runLivePostgres.each((['union', 'unionAll'] as const).flatMap(operation => [
+  it.each((['union', 'unionAll'] as const).flatMap(operation => [
     { operation, selection: 'id' as const, attribute: 'id' },
     { operation, selection: 'id as other' as const, attribute: 'other' },
   ]))('chunks $operation model results selecting $selection in ascending ID order', async ({ operation, selection, attribute }) => {
@@ -297,7 +172,7 @@ describe('@holo-js/db-postgres', () => {
     }
   }, 30_000)
 
-  runLivePostgres('runs queries against a local Postgres server through the public adapter', async () => {
+  it('runs queries against a local Postgres server through the public adapter', async () => {
     const tableName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
       config: livePostgresConfig,
@@ -322,7 +197,7 @@ describe('@holo-js/db-postgres', () => {
     }
   }, 30_000)
 
-  runLivePostgres('creates a missing configured database against a real Postgres server', async () => {
+  it('creates a missing configured database against a real Postgres server', async () => {
     const databaseName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const tableName = 'users'
     const admin = createPostgresAdapter({

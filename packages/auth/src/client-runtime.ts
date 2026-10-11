@@ -97,7 +97,7 @@ function normalizeHeaders(
 
 async function fetchCurrentUser(
   options: AuthClientRequestOptions = {},
-  fetchOptions: { readonly force?: boolean } = {},
+  fetchOptions: { readonly force?: boolean, readonly signal?: AbortSignal } = {},
 ): Promise<CurrentAuthResponse> {
   const config = resolveClientConfig(options)
   const cacheKey = createCacheKey(config)
@@ -111,6 +111,7 @@ async function fetchCurrentUser(
   const response = await config.fetchImpl.call(globalThis, createRequestUrl(config), {
     method: 'GET',
     headers: normalizeHeaders(config.headers),
+    signal: fetchOptions.signal,
   })
 
   if (!response.ok) {
@@ -124,6 +125,7 @@ async function fetchCurrentUser(
     throw new Error('[@holo-js/auth/client] Current-auth response body was not valid JSON.')
   }
 
+  fetchOptions.signal?.throwIfAborted()
   clientState.cache.set(cacheKey, payload)
   return payload
 }

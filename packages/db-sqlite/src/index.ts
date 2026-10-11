@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import {
   DatabaseError,
@@ -12,6 +13,8 @@ import {
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
 class TransactionError extends Error {}
+
+const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
 type SQLiteTransactionMode = 'deferred' | 'immediate' | 'exclusive'
 
@@ -43,7 +46,7 @@ export interface SQLiteAdapterOptions {
 export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
   private connected: boolean
-  private transactionTail: Promise<void> = Promise.resolve()
+  private readonly transactionKey: string | SQLiteAdapter
   private readonly transactionScope = new AsyncLocalStorage<boolean>()
   private readonly filename: string
   private readonly createDatabaseInstance: (filename: string) => SQLiteDatabaseLike
@@ -52,7 +55,17 @@ export class SQLiteAdapter implements DriverAdapter {
     this.database = options.database
     this.connected = !!options.database
     this.filename = options.filename ?? ':memory:'
-    this.createDatabaseInstance = options.createDatabase ?? (filename => new Database(filename))
+    this.transactionKey = options.database || this.filename === ':memory:' ? this : resolve(this.filename)
+    this.createDatabaseInstance = options.createDatabase ?? ((filename) => {
+      const database = new Database(filename)
+      try {
+        database.exec('PRAGMA journal_mode = WAL')
+        return database
+      } catch (error) {
+        database.close()
+        throw error
+      }
+    })
   }
 
   async initialize(): Promise<void> {
@@ -88,12 +101,12 @@ export class SQLiteAdapter implements DriverAdapter {
       return callback()
     }
 
-    const previous = this.transactionTail
+    const previous = transactionTails.get(this.transactionKey) ?? Promise.resolve()
     let release!: () => void
     const current = previous.then(() => new Promise<void>((resolve) => {
       release = resolve
     }))
-    this.transactionTail = current
+    transactionTails.set(this.transactionKey, current)
 
     await previous
 
@@ -101,9 +114,7 @@ export class SQLiteAdapter implements DriverAdapter {
       return await this.transactionScope.run(true, callback)
     } finally {
       release()
-      if (this.transactionTail === current) {
-        this.transactionTail = Promise.resolve()
-      }
+      if (transactionTails.get(this.transactionKey) === current) transactionTails.delete(this.transactionKey)
     }
   }
 
@@ -160,14 +171,16 @@ export class SQLiteAdapter implements DriverAdapter {
     sql: string,
     bindings: readonly unknown[] = [],
   ): Promise<DriverExecutionResult> {
-    const statement = this.getDatabase().prepare(sql)
-    const result = statement.run(...bindings)
-    return {
-      affectedRows: result.changes,
-      lastInsertId: typeof result.lastInsertRowid === 'bigint'
-        ? Number(result.lastInsertRowid)
-        : result.lastInsertRowid as number | string | undefined,
-    }
+    return this.runWithTransactionScope(async () => {
+      const statement = this.getDatabase().prepare(sql)
+      const result = statement.run(...bindings)
+      return {
+        affectedRows: result.changes,
+        lastInsertId: typeof result.lastInsertRowid === 'bigint'
+          ? Number(result.lastInsertRowid)
+          : result.lastInsertRowid as number | string | undefined,
+      }
+    })
   }
 
   async beginTransaction(options?: SQLiteTransactionOptions): Promise<void> {

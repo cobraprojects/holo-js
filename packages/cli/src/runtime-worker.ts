@@ -4,7 +4,6 @@ import { initializeHolo } from '@holo-js/core'
 import {
   configureDB,
   createMigrationService,
-  createSchemaRegistry,
   createSchemaService,
   createSeederService,
   registerGeneratedTables,
@@ -15,7 +14,7 @@ import {
   type TableDefinition,
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
-import { replayRanMigrationsInDryRunScope } from './runtime-schema-hydration'
+import { createSchemaHydrationConnection, replayRanMigrationsInDryRunScope } from './runtime-schema-hydration'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { regenerateMediaConversions, type MediaRegenerationOptions } from './media-regeneration'
 import type * as MediaModule from '@holo-js/media'
@@ -75,18 +74,6 @@ type FreshDropSchema = {
   withoutForeignKeyConstraints<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
 }
 
-type DryRunSchemaConnection = {
-  getConnectionName(): string
-  getDriver(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getDriver'] extends () => infer TDriver ? TDriver : never
-  getDialect(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getDialect'] extends () => infer TDialect ? TDialect : never
-  getCapabilities(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getCapabilities'] extends () => infer TCapabilities ? TCapabilities : never
-  getSchemaName(): string | undefined
-  getSchemaRegistry(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getSchemaRegistry'] extends () => infer TRegistry ? TRegistry : never
-  queryCompiled: ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['queryCompiled']
-  executeCompiled(): Promise<{ affectedRows: 0 }>
-  introspectCompiled(): Promise<{ rows: never[], rowCount: 0 }>
-  transaction<TResult>(callback: (connection: DryRunSchemaConnection) => TResult | Promise<TResult>): Promise<TResult>
-}
 
 const payload = JSON.parse(process.env.HOLO_RUNTIME_PAYLOAD ?? '{}') as RuntimePayload
 
@@ -280,41 +267,17 @@ async function hydrateGeneratedSchemaFromRanMigrations(
   }
 
   const realConnection = manager.connection()
-  const hydratedRegistry = createSchemaRegistry()
-  for (const table of realConnection.getSchemaRegistry().list()) {
-    hydratedRegistry.replace(table)
-  }
-  const replayRegistry = {
-    register: (table: TableDefinition) => hydratedRegistry.replace(table),
-    has: () => false,
-    replace: (table: TableDefinition) => hydratedRegistry.replace(table),
-    delete: (name: string) => hydratedRegistry.delete(name),
-    get: (name: string) => hydratedRegistry.get(name),
-    list: () => hydratedRegistry.list(),
-    clear: () => hydratedRegistry.clear(),
-  }
-  const dryRunConnection: DryRunSchemaConnection = {
-    getConnectionName: () => realConnection.getConnectionName(),
-    getDriver: () => realConnection.getDriver(),
-    getDialect: () => realConnection.getDialect(),
-    getCapabilities: () => realConnection.getCapabilities(),
-    getSchemaName: () => realConnection.getSchemaName(),
-    getSchemaRegistry: () => replayRegistry as never,
-    queryCompiled: realConnection.queryCompiled.bind(realConnection),
-    executeCompiled: async () => ({ affectedRows: 0 }),
-    introspectCompiled: async () => ({ rows: [], rowCount: 0 }),
-    transaction: async <TResult>(callback: (connection: typeof dryRunConnection) => TResult | Promise<TResult>) => callback(dryRunConnection),
-  }
-  const schema = createSchemaService(dryRunConnection as never)
+  const dryRunConnection = createSchemaHydrationConnection(realConnection)
+  const schema = createSchemaService(dryRunConnection)
 
   await replayRanMigrationsInDryRunScope(
-    dryRunConnection as never,
+    dryRunConnection,
     migrations,
     ranNames,
     { db: dryRunConnection, schema },
   )
 
-  for (const table of hydratedRegistry.list()) {
+  for (const table of dryRunConnection.getSchemaRegistry().list()) {
     realConnection.getSchemaRegistry().replace(table)
   }
 }

@@ -315,6 +315,14 @@ async function withDatabaseCacheTableGuard<TValue>(
   }
 }
 
+function normalizeDatabaseTimestamp(value: number | string): number {
+  const timestamp = Number(value)
+  if (!Number.isSafeInteger(timestamp)) {
+    throw new CacheConfigError('[@holo-js/cache] Database cache expiration must be a safe integer timestamp.')
+  }
+  return timestamp
+}
+
 async function readEntry(
   connection: DatabaseContext,
   tableName: string,
@@ -323,13 +331,14 @@ async function readEntry(
 ): Promise<DatabaseReadResult<DatabaseCacheEntryRow>> {
   const row = await new TableQueryBuilder(tableName, connection)
     .where('key', key)
-    .first<DatabaseCacheEntryRow>()
+    .first<Omit<DatabaseCacheEntryRow, 'expires_at'> & { expires_at: number | string | null }>()
 
   if (!row) {
     return { state: 'missing' }
   }
 
-  if (typeof row.expires_at === 'number' && row.expires_at <= now) {
+  const expiresAt = row.expires_at === null ? null : normalizeDatabaseTimestamp(row.expires_at)
+  if (expiresAt !== null && expiresAt <= now) {
     await new TableQueryBuilder(tableName, connection)
       .where('key', key)
       .delete()
@@ -338,7 +347,7 @@ async function readEntry(
 
   return {
     state: 'hit',
-    value: row,
+    value: { ...row, expires_at: expiresAt },
   }
 }
 
@@ -350,13 +359,14 @@ async function readLock(
 ): Promise<DatabaseReadResult<DatabaseCacheLockRow>> {
   const row = await new TableQueryBuilder(tableName, connection)
     .where('name', name)
-    .first<DatabaseCacheLockRow>()
+    .first<Omit<DatabaseCacheLockRow, 'expires_at'> & { expires_at: number | string }>()
 
   if (!row) {
     return { state: 'missing' }
   }
 
-  if (row.expires_at <= now) {
+  const expiresAt = normalizeDatabaseTimestamp(row.expires_at)
+  if (expiresAt <= now) {
     await new TableQueryBuilder(tableName, connection)
       .where('name', name)
       .delete()
@@ -365,7 +375,7 @@ async function readLock(
 
   return {
     state: 'hit',
-    value: row,
+    value: { ...row, expires_at: expiresAt },
   }
 }
 
@@ -521,7 +531,7 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
     return result
   }
 
-  return {
+  const driver: CacheDriverContract = {
     name: options.name,
     driver: 'database',
     async get(key: string): Promise<CacheDriverGetResult> {
@@ -612,6 +622,14 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
       return createDatabaseLock(connection, lockTableName, entryTableName, name, seconds, now, sleep, ownerFactory)
     },
   }
+  Object.defineProperty(driver, Symbol.for('holo.cache.driver.dispose'), {
+    value() {
+      void connection.disconnect().catch(error => {
+        console.error(`[@holo-js/cache-db] Failed to disconnect cache driver "${options.name}".`, error)
+      })
+    },
+  })
+  return driver
 }
 
 export const databaseCacheDriverFactory = Object.freeze({

@@ -1,5 +1,5 @@
 import { holoRuntimeInternals } from '@holo-js/db'
-import { Pool, types, type PoolConfig, type QueryResult } from 'pg'
+import { Pool, types, type PoolConfig } from 'pg'
 import type {
   DatabaseDriverFactory,
   DriverAdapter,
@@ -11,11 +11,17 @@ export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@h
 
 class TransactionError extends Error {}
 
+type PostgresQueryResult = {
+  rows: Record<string, unknown>[]
+  rowCount?: number | null
+}
+
+function finalQueryResult(result: PostgresQueryResult | PostgresQueryResult[]): PostgresQueryResult {
+  return Array.isArray(result) ? result.at(-1) ?? { rows: [], rowCount: 0 } : result
+}
+
 export interface PostgresQueryableLike {
-  query(sql: string, bindings?: readonly unknown[]): Promise<QueryResult<Record<string, unknown>> | {
-    rows: Record<string, unknown>[]
-    rowCount?: number | null
-  }>
+  query(sql: string, bindings?: readonly unknown[]): Promise<PostgresQueryResult | PostgresQueryResult[]>
 }
 
 export interface PostgresClientLike extends PostgresQueryableLike {
@@ -186,8 +192,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     sql: string,
     bindings: readonly unknown[] = [],
   ): Promise<DriverQueryResult<TRow>> {
-    const client = await this.getQueryable()
-    const result = await client.query(sql, bindings)
+    const result = await this.queryResult(sql, bindings)
     return {
       rows: result.rows as TRow[],
       rowCount: result.rowCount ?? result.rows.length,
@@ -205,8 +210,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     sql: string,
     bindings: readonly unknown[] = [],
   ): Promise<DriverExecutionResult> {
-    const client = await this.getQueryable()
-    const result = await client.query(sql, bindings)
+    const result = await this.queryResult(sql, bindings)
     const firstRow = result.rows[0]
     const firstValue = firstRow ? Object.values(firstRow)[0] : undefined
     return {
@@ -263,6 +267,12 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     return this.pool
   }
 
+  private async queryResult(sql: string, bindings: readonly unknown[]): Promise<PostgresQueryResult> {
+    const client = await this.getQueryable()
+    const result = await client.query(sql, bindings)
+    return finalQueryResult(result)
+  }
+
   async ensureDatabaseExists(): Promise<void> {
     if (!this.createPoolInstance) {
       return
@@ -276,7 +286,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     const bootstrapPool = this.createPoolInstance(target.config as TConfig)
 
     try {
-      const existing = await bootstrapPool.query('select 1 from pg_database where datname = $1', [target.database])
+      const existing = finalQueryResult(await bootstrapPool.query('select 1 from pg_database where datname = $1', [target.database]))
       if (existing.rows.length === 0) {
         await bootstrapPool.query(`create database ${quoteDatabaseIdentifier(target.database)}`)
       }

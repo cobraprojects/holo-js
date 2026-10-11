@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useForm } from '@holo-js/adapter-nuxt/client'
+import { logoutForm } from '#shared/schemas/auth'
 import { useAuth } from '@holo-js/auth/nuxt'
 
 definePageMeta({
@@ -14,7 +16,11 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function logout() {
+const form = useForm(logoutForm, {
+  submitter: ({ formData }) => logout(formData),
+})
+
+async function logout(formData: FormData) {
   if (isLoggingOut.value) {
     return
   }
@@ -22,7 +28,7 @@ async function logout() {
   isLoggingOut.value = true
   logoutError.value = null
   try {
-    await $fetch('/api/super-admin/logout', { method: 'POST' })
+    await $fetch('/api/super-admin/logout', { method: 'POST', body: formData })
     try {
       await refreshUser()
     } catch (error) {
@@ -45,7 +51,7 @@ async function logout() {
     <p>Signed in as {{ displayName }} through the admin guard.</p>
     <p v-if="logoutError" class="error-message">{{ logoutError }}</p>
     <div>
-      <button type="button" :disabled="isLoggingOut" @click="logout">
+      <button type="button" :disabled="isLoggingOut" @click="form.submit()">
         {{ isLoggingOut ? 'Signing out...' : 'Sign out of super admin' }}
       </button>
     </div>

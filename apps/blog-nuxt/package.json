@@ -13,7 +13,7 @@
     "typecheck": "nuxt typecheck",
     "config:cache": "holo config:cache",
     "config:clear": "holo config:clear",
-    "test": "node ./tests/run.mjs"
+    "test": "HOLO_TEST_FRAMEWORK=nuxt node --test --test-concurrency=3 ../../tests/example-app-matrix.mjs"
   },
   "dependencies": {
     "@holo-js/adapter-nuxt": "workspace:*",
@@ -31,6 +31,8 @@
     "@holo-js/config": "workspace:*",
     "@holo-js/core": "workspace:*",
     "@holo-js/db": "workspace:*",
+    "@holo-js/db-mysql": "workspace:*",
+    "@holo-js/db-postgres": "workspace:*",
     "@holo-js/db-sqlite": "workspace:*",
     "@holo-js/events": "workspace:*",
     "@holo-js/flux": "workspace:*",

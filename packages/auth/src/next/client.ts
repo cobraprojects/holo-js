@@ -45,38 +45,50 @@ function useAuthState(
 
   requestOptionsRef.current = requestOptions
 
-  const refreshUser = useCallback(async () => {
+  const refreshAuth = useCallback(async (signal?: AbortSignal) => {
     try {
       const currentAuth = await authClientInternals.fetchCurrentUser(requestOptionsRef.current, {
         force: true,
+        signal,
       })
+      if (signal?.aborted) {
+        return null
+      }
       setCurrentProvider(currentAuth.provider)
       setCurrentUser(currentAuth.user)
       return currentAuth.user
     } catch (error) {
+      if (signal?.aborted) {
+        return null
+      }
       console.error('Failed to refresh auth user.', error)
       throw error
     }
   }, [])
 
-  useEffect(() => {
-    if (stateOptions.refreshOnMount !== false && typeof initialUser === 'undefined') {
-      void refreshUser()
-    }
-  }, [initialUser, refreshUser, stateOptions.refreshOnMount])
+  const refreshUser = useCallback(() => refreshAuth(), [refreshAuth])
 
   useEffect(() => {
-    if (stateOptions.refreshOnRouteChange === false) {
-      return
-    }
-
     if (!observedInitialPathname.current) {
       observedInitialPathname.current = true
+      if (stateOptions.refreshOnMount === false || typeof initialUser !== 'undefined') {
+        return
+      }
+    } else if (stateOptions.refreshOnRouteChange === false) {
       return
     }
 
-    void refreshUser()
-  }, [pathname, refreshUser, stateOptions.refreshOnRouteChange])
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const browser = globalThis as typeof globalThis & Partial<Pick<EventTarget, 'addEventListener' | 'removeEventListener'>>
+    browser.addEventListener?.('pagehide', abort)
+    void refreshAuth(controller.signal).catch(() => {})
+
+    return () => {
+      browser.removeEventListener?.('pagehide', abort)
+      abort()
+    }
+  }, [pathname, initialUser, refreshAuth, stateOptions.refreshOnMount, stateOptions.refreshOnRouteChange])
 
   useEffect(() => {
     if (typeof initialProvider !== 'undefined') {

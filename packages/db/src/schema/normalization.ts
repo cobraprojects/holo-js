@@ -41,6 +41,19 @@ function coerceBoolean(value: unknown): boolean | null | undefined {
   return Boolean(value)
 }
 
+function parseInteger(value: unknown): unknown {
+  if (value == null) {
+    return value
+  }
+
+  const integer = Number(value)
+  if (!Number.isSafeInteger(integer)) {
+    throw new HydrationError(`Integer value "${String(value)}" cannot be represented as a safe integer.`)
+  }
+
+  return integer
+}
+
 function parseJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value
 }
@@ -166,6 +179,11 @@ export function normalizeDialectReadValue(
   value: unknown,
 ): unknown {
   switch (column.kind) {
+    case 'id':
+      return column.idStrategy === 'autoIncrement' ? parseInteger(value) : value
+    case 'integer':
+    case 'bigInteger':
+      return parseInteger(value)
     case 'boolean':
       return coerceBoolean(value)
     case 'json':

@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it, vi } from 'vitest'
+import { createConnection } from 'mysql2/promise'
+import { describe, expect, it } from 'vitest'
 import {
   createDatabase,
+  TableQueryBuilder,
   createDialect,
   createMigrationService,
   createSchemaService,
   column,
   defineMigration,
   MySQLSchemaCompiler,
-  type DriverAdapter,
 } from '@holo-js/db'
 import { createMySQLAdapter } from '../src'
-
-const runLiveMySql = process.env.HOLO_MYSQL_INTEGRATION === '1' ? it : it.skip
 
 const liveMySqlConfig = {
   host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
@@ -22,7 +21,7 @@ const liveMySqlConfig = {
 }
 
 describe('@holo-js/db-mysql', () => {
-  runLiveMySql('connects to the selected integration database', async () => {
+  it('connects to the selected integration database', async () => {
     const adapter = createMySQLAdapter({ config: liveMySqlConfig })
     try {
       const result = await adapter.query<{ selected_database: string }>('SELECT DATABASE() AS selected_database')
@@ -32,7 +31,7 @@ describe('@holo-js/db-mysql', () => {
     }
   }, 30_000)
 
-  runLiveMySql.each(['create', 'add', 'compiled-add'] as const)('enforces constrained foreign keys when using %s columns', async (operation) => {
+  it.each(['create', 'add', 'compiled-add'] as const)('enforces constrained foreign keys when using %s columns', async (operation) => {
     const databaseName = `holo_foreign_keys_${randomUUID().replaceAll('-', '_')}`
     const admin = createMySQLAdapter({
       config: liveMySqlConfig,
@@ -91,219 +90,105 @@ describe('@holo-js/db-mysql', () => {
     }
   }, 30_000)
 
-  it('creates the configured database when explicitly ensured', async () => {
-    const bootstrapQuery = vi.fn(async (sql: string) => [
-      sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },
-      undefined,
-    ] as const)
-    const bootstrapEnd = vi.fn(async () => {})
-    const applicationQuery = vi.fn(async () => [[{ ok: 1 }], undefined] as const)
-    const applicationEnd = vi.fn(async () => {})
-    const createPool = vi.fn((config) => {
-      if ('database' in config) {
-        return {
-          query: applicationQuery,
-          getConnection: vi.fn(),
-          end: applicationEnd,
-        }
-      }
+  it.each(['config', 'uri'] as const)('creates and reopens a quoted database name through %s configuration', async mode => {
+    const database = `holo_quoted_${randomUUID().replaceAll('-', '')}\`tenant`
+    const admin = createMySQLAdapter({ config: liveMySqlConfig })
+    const adapter = createMySQLAdapter(mode === 'config'
+      ? { config: { ...liveMySqlConfig, database } }
+      : { uri: `mysql://${liveMySqlConfig.user}@${liveMySqlConfig.host}:${liveMySqlConfig.port}/${encodeURIComponent(database)}` })
+    try {
+      await adapter.ensureDatabaseExists()
+      await adapter.ensureDatabaseExists()
+      expect((await adapter.query('SELECT DATABASE() AS selected_database')).rows).toEqual([{ selected_database: database }])
+      await adapter.disconnect()
+      expect(adapter.isConnected()).toBe(false)
+      expect((await adapter.query('SELECT 1 AS value')).rows).toEqual([{ value: 1 }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS \`${database.replaceAll('`', '``')}\``)
+      await admin.disconnect()
+    }
+  }, 30_000)
 
-      return {
-        query: bootstrapQuery,
-        getConnection: vi.fn(),
-        end: bootstrapEnd,
-      }
-    })
-    const adapter = createMySQLAdapter({
-      config: {
-        host: '127.0.0.1',
-        port: 3306,
-        user: 'root',
-        database: 'fresh_app',
-      },
-      createPool,
-    })
-
-    await adapter.ensureDatabaseExists()
-    await expect(adapter.query('select 1')).resolves.toEqual({
-      rows: [{ ok: 1 }],
-      rowCount: 1,
-    })
-
-    expect(createPool).toHaveBeenNthCalledWith(1, {
-      host: '127.0.0.1',
-      port: 3306,
-      user: 'root',
-    })
-    expect(createPool).toHaveBeenNthCalledWith(2, {
-      host: '127.0.0.1',
-      port: 3306,
-      user: 'root',
-      database: 'fresh_app',
-    })
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(
-      1,
-      'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
-      ['fresh_app'],
-    )
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'CREATE DATABASE `fresh_app`', [])
-    expect(bootstrapEnd).toHaveBeenCalledTimes(1)
-    expect(applicationQuery).toHaveBeenCalledWith('select 1', [])
+  it.each(['update', 'shared'] as const)('reads a paginated row under a native %s lock', async mode => {
+    const adapter = createMySQLAdapter({ config: liveMySqlConfig })
+    const database = createDatabase({ adapter, dialect: createDialect('mysql') })
+    const schema = createSchemaService(database)
+    const tableName = `locked_rows_${randomUUID().replaceAll('-', '')}`
+    try {
+      await schema.createTable(tableName, table => {
+        table.integer('id').primaryKey()
+      })
+      await new TableQueryBuilder(tableName, database).insert([{ id: 1 }, { id: 2 }])
+      await database.transaction(async transaction => {
+        const query = new TableQueryBuilder(tableName, transaction).orderBy('id').offset(1)
+        const locked = mode === 'update' ? query.lockForUpdate() : query.sharedLock()
+        expect(await locked.first()).toEqual({ id: 2 })
+      })
+    } finally {
+      await schema.dropTable(tableName)
+      await adapter.disconnect()
+    }
   })
 
-  it('escapes configured database names during bootstrap', async () => {
-    const bootstrapQuery = vi.fn(async (sql: string) => [
-      sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },
-      undefined,
-    ] as const)
-    const createPool = vi.fn((config) => {
-      if ('database' in config) {
-        return {
-          query: vi.fn(async () => [[{ ok: 1 }], undefined] as const),
-          getConnection: vi.fn(),
-          end: vi.fn(async () => {}),
-        }
-      }
+  it('reports real database creation permission failures', async () => {
+    const user = `holo_denied_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+    const password = randomUUID()
+    const admin = createMySQLAdapter({ config: liveMySqlConfig })
+    const adapter = createMySQLAdapter({ config: { ...liveMySqlConfig, user, password, database: user } })
+    try {
+      await admin.execute(`CREATE USER '${user}'@'%' IDENTIFIED BY '${password}'`)
+      await expect(adapter.ensureDatabaseExists()).rejects.toThrow(`MySQL database "${user}" could not be found or created`)
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP USER IF EXISTS '${user}'@'%'`)
+      await admin.disconnect()
+    }
+  }, 30_000)
 
-      return {
-        query: bootstrapQuery,
-        getConnection: vi.fn(),
-        end: vi.fn(async () => {}),
-      }
-    })
-    const adapter = createMySQLAdapter({
-      config: {
-        host: '127.0.0.1',
-        database: 'tenant`prod',
-      },
-      createPool,
-    })
+  it('uses a real injected client for bound writes, commit, and rollback', async () => {
+    const client = await createConnection(liveMySqlConfig)
+    const adapter = createMySQLAdapter({ client: {
+      query: (sql, bindings = []) => client.query(sql, [...bindings]),
+      end: () => client.end(),
+    } })
+    try {
+      await adapter.execute('CREATE TEMPORARY TABLE direct_records (id INT AUTO_INCREMENT PRIMARY KEY, value TEXT NOT NULL)')
+      await adapter.beginTransaction()
+      const inserted = await adapter.execute('INSERT INTO direct_records (value) VALUES (?)', ["a'; DROP TABLE direct_records; --"])
+      await adapter.commit()
+      expect(inserted.affectedRows).toBe(1)
+      expect((await adapter.query('SELECT value FROM direct_records WHERE id = ?', [inserted.lastInsertId])).rows)
+        .toEqual([{ value: "a'; DROP TABLE direct_records; --" }])
+      await adapter.beginTransaction()
+      await adapter.execute('DELETE FROM direct_records')
+      await adapter.rollback()
+      expect((await adapter.query('SELECT count(*) AS count FROM direct_records')).rows).toEqual([{ count: 1 }])
+    } finally {
+      await adapter.disconnect()
+    }
+  }, 30_000)
 
-    await adapter.ensureDatabaseExists()
+  it('applies JSON and text defaults from native schema migrations', async () => {
+    const tableName = `holo_defaults_${randomUUID().replaceAll('-', '_')}`
+    const adapter = createMySQLAdapter({ config: liveMySqlConfig })
+    const db = createDatabase({ adapter, dialect: createDialect('mysql') })
+    const schema = createSchemaService(db)
+    try {
+      await schema.createTable(tableName, table => {
+        table.id()
+        table.json('data').default({ active: true })
+        table.text('label').default('default label')
+      })
+      await new TableQueryBuilder(tableName, db).insert({ id: 1 })
+      expect(await new TableQueryBuilder(tableName, db).first()).toEqual({ id: 1, data: { active: true }, label: 'default label' })
+    } finally {
+      await schema.dropTable(tableName)
+      await adapter.disconnect()
+    }
+  }, 30_000)
 
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'CREATE DATABASE `tenant``prod`', [])
-  })
-
-  it('creates databases from connection URIs when explicitly ensured', async () => {
-    const bootstrapQuery = vi.fn(async (sql: string) => [
-      sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },
-      undefined,
-    ] as const)
-    const createPool = vi.fn((config) => {
-      if ('uri' in config && String(config.uri).includes('/fresh_app')) {
-        return {
-          query: vi.fn(async () => [[{ ok: 1 }], undefined] as const),
-          getConnection: vi.fn(),
-          end: vi.fn(async () => {}),
-        }
-      }
-
-      return {
-        query: bootstrapQuery,
-        getConnection: vi.fn(),
-        end: vi.fn(async () => {}),
-      }
-    })
-    const adapter = createMySQLAdapter({
-      uri: 'mysql://root:secret@127.0.0.1:3306/fresh_app?timezone=Z',
-      createPool,
-    })
-
-    await adapter.ensureDatabaseExists()
-    await adapter.initialize()
-
-    expect(createPool).toHaveBeenNthCalledWith(1, {
-      uri: 'mysql://root:secret@127.0.0.1:3306?timezone=Z',
-    })
-    expect(createPool).toHaveBeenNthCalledWith(2, {
-      uri: 'mysql://root:secret@127.0.0.1:3306/fresh_app?timezone=Z',
-    })
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(
-      1,
-      'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
-      ['fresh_app'],
-    )
-    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'CREATE DATABASE `fresh_app`', [])
-  })
-
-  it('initializes without checking whether a MySQL database already exists', async () => {
-    const applicationQuery = vi.fn(async () => [[{ ok: 1 }], undefined] as const)
-    const bootstrapQuery = vi.fn(async () => [[{ SCHEMA_NAME: 'existing_app' }], undefined] as const)
-    const createPool = vi.fn((config) => ({
-      query: 'database' in config ? applicationQuery : bootstrapQuery,
-      getConnection: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
-    const adapter = createMySQLAdapter({
-      config: {
-        database: 'existing_app',
-      },
-      createPool,
-    })
-
-    await adapter.initialize()
-
-    expect(createPool).toHaveBeenCalledTimes(1)
-    expect(applicationQuery).not.toHaveBeenCalled()
-    expect(bootstrapQuery).not.toHaveBeenCalled()
-  })
-
-  it('reports MySQL database bootstrap failures with the configured database name', async () => {
-    const createPool = vi.fn(() => ({
-      query: vi.fn(async () => {
-        throw new Error('access denied')
-      }),
-      getConnection: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
-    const adapter = createMySQLAdapter({
-      config: {
-        database: 'private_app',
-      },
-      createPool,
-    })
-
-    await expect(adapter.ensureDatabaseExists()).rejects.toThrow(
-      'MySQL database "private_app" could not be found or created. Please create the database and try again. Original error: access denied',
-    )
-  })
-
-  it('supports direct clients without creating a pool', async () => {
-    const query = vi.fn(async (sql: string) => {
-      if (sql === 'insert into logs values (?)') {
-        return [{
-          affectedRows: 1,
-          insertId: 13,
-        }, undefined] as const
-      }
-
-      return [[{ sql }], undefined] as const
-    })
-    const adapter = createMySQLAdapter({
-      client: {
-        query,
-        end: vi.fn(async () => {}),
-      },
-    })
-    const canonicalAdapter: DriverAdapter = adapter
-
-    await expect(adapter.query('select 1')).resolves.toEqual({
-      rows: [{ sql: 'select 1' }],
-      rowCount: 1,
-    })
-    await expect(adapter.execute('insert into logs values (?)', ['value'])).resolves.toEqual({
-      affectedRows: 1,
-      lastInsertId: 13,
-    })
-
-    await adapter.beginTransaction()
-    await adapter.rollback()
-    expect(query).toHaveBeenNthCalledWith(3, 'START TRANSACTION', [])
-    expect(query).toHaveBeenNthCalledWith(4, 'ROLLBACK', [])
-    void canonicalAdapter
-  })
-
-  runLiveMySql('runs queries against a local MySQL server through the public adapter', async () => {
+  it('runs queries against a local MySQL server through the public adapter', async () => {
     const tableName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const adapter = createMySQLAdapter({
       config: liveMySqlConfig,
@@ -328,7 +213,7 @@ describe('@holo-js/db-mysql', () => {
     }
   }, 30_000)
 
-  runLiveMySql('creates a missing configured database against a real MySQL server', async () => {
+  it('creates a missing configured database against a real MySQL server', async () => {
     const databaseName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const tableName = 'users'
     const admin = createMySQLAdapter({
@@ -362,7 +247,7 @@ describe('@holo-js/db-mysql', () => {
     }
   }, 30_000)
 
-  runLiveMySql('runs migration tracking against a real MySQL server', async () => {
+  it('runs migration tracking against a real MySQL server', async () => {
     const databaseName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const migration = defineMigration({
       name: '2026_05_31_000001_create_users',

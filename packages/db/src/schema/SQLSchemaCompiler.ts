@@ -244,7 +244,7 @@ export abstract class SQLSchemaCompiler {
 
     if (column.defaultKind === 'value') {
       this.assertSupportedDefaultValue(column.defaultValue, column)
-      parts.push(`DEFAULT ${this.compileDefaultValue(column.defaultValue)}`)
+      parts.push(`DEFAULT ${this.compileDefaultValue(column.defaultValue, column)}`)
     } else if (column.defaultKind === 'now') {
       parts.push(`DEFAULT ${this.compileCurrentTimestamp()}`)
     }
@@ -348,5 +348,5 @@ export abstract class SQLSchemaCompiler {
 
   protected abstract getDialectLabel(): string
   protected abstract compileColumnType(column: AnyColumnDefinition): string
-  protected abstract compileDefaultValue(value: unknown): string
+  protected abstract compileDefaultValue(value: unknown, column: AnyColumnDefinition): string
 }

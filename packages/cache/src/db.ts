@@ -100,6 +100,7 @@ function createDatabaseCacheDriver(
   return createLazyOptionalCacheDriver({
     name: options.name,
     driver: 'database',
+    disposeDriver: true,
     options,
     loadModule: databaseDriverModuleLoader,
     createDriver: (module, driverOptions) => module.createDatabaseCacheDriver(driverOptions),

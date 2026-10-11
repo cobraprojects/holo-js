@@ -138,7 +138,7 @@
     "test:example:blog-nuxt": "bun run --cwd apps/blog-nuxt test",
     "test:example:blog-next": "bun run --cwd apps/blog-next test",
     "test:example:blog-sveltekit": "bun run --cwd apps/blog-sveltekit test",
-    "test:examples": "bun run test:example:blog-nuxt && bun run test:example:blog-next && bun run test:example:blog-sveltekit",
+    "test:examples": "node --test --test-concurrency=3 tests/example-app-matrix.mjs",
     "test:smoke:scaffold": "node scripts/validate-scaffold-user-journey-smoke.mjs",
     "test:dependency-policy": "node --test scripts/build-libraries.test.mjs scripts/validate-dependency-version-policy.test.mjs scripts/validate-architecture.test.mjs scripts/validate-docs.test.mjs scripts/validate-published-package-smoke.test.mjs scripts/validate-scaffold-user-journey-smoke.test.mjs scripts/local-workspace-packages.test.mjs scripts/publish-with-resolved-catalogs.test.mjs scripts/generate-cli-workspace-catalog.test.mjs scripts/sync-workspace-catalog-versions.test.mjs scripts/version-packages.test.mjs scripts/run-coverage.test.mjs && node scripts/validate-dependency-version-policy.mjs && node scripts/validate-architecture.mjs && node scripts/validate-docs.mjs",
     "test:config:coverage": "rm -rf coverage/config && bun run --cwd packages/config test -- --coverage --coverage.clean=false --coverage.reportsDirectory='../../coverage/config' --coverage.include='src/**/*.ts' --coverage.exclude='src/**/types.ts'",
@@ -180,10 +180,11 @@
     "changeset": "changeset",
     "version-packages": "node scripts/version-packages.mjs",
     "test:integration:postgres": "HOLO_POSTGRES_INTEGRATION=1 bun run --cwd packages/core test -- tests/postgres-rls.test.ts --pool forks --fileParallelism --reporter=json",
-    "release": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run build && bun run test:integration:postgres && bun run test:examples && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/publish-with-resolved-catalogs.mjs",
-    "release:skip-build": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run test:integration:postgres && bun run test:examples && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/publish-with-resolved-catalogs.mjs",
+    "release": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run build && bun run test:libraries && bun run test:examples && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/validate-published-package-smoke.mjs --skip-build && node scripts/validate-browser-bundle.mjs --skip-build && node scripts/publish-with-resolved-catalogs.mjs",
+    "release:skip-build": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run test:libraries && bun run test:examples && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/validate-published-package-smoke.mjs --skip-build && node scripts/validate-browser-bundle.mjs --skip-build && node scripts/publish-with-resolved-catalogs.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules packages/*/dist apps/*/dist .nuxt apps/*/.nuxt",
-    "test:smoke:browser-bundle": "node scripts/validate-browser-bundle.mjs"
+    "test:smoke:browser-bundle": "node scripts/validate-browser-bundle.mjs",
+    "test:libraries": "node tests/native-library-suite.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",

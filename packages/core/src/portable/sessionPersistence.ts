@@ -121,7 +121,7 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
     async write(record: CoreSessionRecord): Promise<void> {
       await inSessionWriteTransaction(connectionName, async (transaction) => {
         const publicData = Object.freeze({ ...record.data })
-        const normalized = serializeSessionRecordForRow({ ...record, data: publicData })
+        const normalized = serializeSessionRecordForRow({ ...record, data: publicData }, transaction.getDialect().name)
         const existing = await createSessionQuery(transaction, tableName, record.id, false)
           .first<Record<string, unknown>>()
         if (!existing) {
@@ -165,7 +165,7 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         const normalized = serializeSessionRecordForRow({
           ...record,
           data: Object.freeze({ ...record.data }),
-        })
+        }, transaction.getDialect().name)
         const nextData = serializeStoredSessionData({
           publicData: Object.freeze({ ...record.data }),
           flashEntries: stored.flashEntries,

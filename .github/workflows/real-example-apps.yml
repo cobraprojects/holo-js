@@ -1,0 +1,82 @@
+name: Real example apps
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  app-journeys:
+    name: ${{ matrix.framework }} / native integrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        framework:
+          - libraries
+          - next
+          - nuxt
+          - sveltekit
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: npm rebuild better-sqlite3
+      - run: node scripts/build-libraries.mjs
+      - run: bun x playwright install --with-deps chromium
+        if: matrix.framework != 'libraries'
+      - name: Test libraries against native services
+        if: matrix.framework == 'libraries'
+        run: bun run test:libraries
+      - name: Test existing app against native databases and production servers
+        if: matrix.framework != 'libraries'
+        env:
+          HOLO_TEST_FRAMEWORK: ${{ matrix.framework }}
+        run: node --test --test-concurrency=3 tests/example-app-matrix.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.framework }}-app-logs
+          path: |
+            coverage/app-${{ matrix.framework }}-*.log
+            coverage/native-libraries/

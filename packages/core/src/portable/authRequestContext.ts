@@ -44,6 +44,7 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
   context: TContext,
   accessors?: AuthRequestAccessors,
 ): RequestAwareContext<TContext> & {
+  isRequestScoped(): boolean
   setRequestAccessors(accessors?: AuthRequestAccessors): void
   runWithRequestAccessors<TValue>(accessors: AuthRequestAccessors, callback: () => TValue): TValue
 } {
@@ -70,6 +71,9 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
     },
     redirectResponse(url, status) {
       return resolveRequestContext().redirectResponse?.(url, status)
+    },
+    isRequestScoped() {
+      return requestAccessorStorage.getStore()?.requestScoped === true
     },
     setRequestAccessors(nextAccessors) {
       defaultAccessors = nextAccessors

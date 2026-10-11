@@ -1322,6 +1322,7 @@ function unregisterProjectEventsAndListeners(
 
 type RuntimeAuthContext = ReturnType<AuthModule['createAsyncAuthContext']> & {
   setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+  isRequestScoped?(): boolean
   runWithRequestAccessors?<TValue>(accessors: NonNullable<CreateHoloOptions['authRequest']>, callback: () => TValue): TValue
 }
 
@@ -1673,12 +1674,19 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     const authRuntime = authModule.getAuthRuntime()
 
     if (authorizationModule) {
+      const resolveAuthorizationActor = async (guardName?: string) => {
+        const cached = authContext?.isRequestScoped?.()
+          ? authContext.getCachedUser(guardName ?? loadedConfig.auth.defaults.guard)
+          : undefined
+        if (cached !== undefined) return cached
+        return guardName === undefined ? authRuntime.user() : authRuntime.guard(guardName).user()
+      }
       authorizationModule.authorizationInternals.configureAuthorizationAuthIntegration({
         hasGuard(guardName: string) {
           return guardName in loadedConfig.auth.guards
         },
-        resolveDefaultActor: async () => authRuntime.user(),
-        resolveGuardActor: async (guardName: string) => authRuntime.guard(guardName).user(),
+        resolveDefaultActor: async () => resolveAuthorizationActor(),
+        resolveGuardActor: resolveAuthorizationActor,
         ...(options.authorizationError?.createError
           ? { createError: options.authorizationError.createError }
           : {}),

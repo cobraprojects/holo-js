@@ -1,6 +1,12 @@
+import Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DatabaseError,
+  TableQueryBuilder,
   createDatabase,
   createDialect,
   createMigrationService,
@@ -9,73 +15,75 @@ import {
 import { createSQLiteAdapter } from '../src'
 
 describe('@holo-js/db-sqlite', () => {
-  it('supports querying and transactions against an injected database', async () => {
-    const executed: string[] = []
-    const adapter = createSQLiteAdapter({
-      database: {
-        prepare(sql: string) {
-          return {
-            all(...bindings: readonly unknown[]) {
-              return [{ sql, bindingsCount: bindings.length }]
-            },
-            run(...bindings: readonly unknown[]) {
-              return {
-                changes: bindings.length,
-                lastInsertRowid: 7,
-              }
-            },
-          }
-        },
-        exec(sql: string) {
-          executed.push(sql)
-        },
-        close() {},
-      },
-    })
+  it('completes concurrent write transactions from separate connections to the same file', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-sqlite-writers-'))
+    const filename = join(directory, 'database.sqlite')
+    const adapters = [createSQLiteAdapter({ filename }), createSQLiteAdapter({ filename })]
+    const connections = adapters.map(adapter => createDatabase({ adapter, dialect: createDialect('sqlite') }))
+    try {
+      await adapters[0]!.execute('CREATE TABLE records (id INTEGER PRIMARY KEY)')
+      await Promise.all([
+        ...connections.map((connection, index) => connection.writeTransaction(async tx => {
+          await new TableQueryBuilder('records', tx).insert({ id: index + 1 })
+          await new Promise(resolve => setTimeout(resolve, 10))
+        })),
+        adapters[1]!.execute('INSERT INTO records VALUES (?)', [3]),
+      ])
+      expect((await adapters[0]!.query('SELECT id FROM records ORDER BY id')).rows).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }])
+    } finally {
+      await Promise.all(adapters.map(adapter => adapter.disconnect()))
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 15000)
 
-    await expect(adapter.query('select 1', [1])).resolves.toEqual({
-      rows: [{ sql: 'select 1', bindingsCount: 1 }],
-      rowCount: 1,
-    })
-    await expect(adapter.execute('insert into test values (?)', ['value'])).resolves.toEqual({
-      affectedRows: 1,
-      lastInsertId: 7,
-    })
+  it('commits writes while another native connection holds a read snapshot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-sqlite-concurrency-'))
+    const filename = join(directory, 'database.sqlite')
+    const reader = createSQLiteAdapter({ filename })
+    const writer = createSQLiteAdapter({ filename })
+    try {
+      await writer.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)')
+      await writer.execute('INSERT INTO records VALUES (?, ?)', [1, 'before'])
+      await reader.beginTransaction()
+      expect((await reader.query('SELECT value FROM records')).rows).toEqual([{ value: 'before' }])
+      await writer.beginTransaction({ mode: 'immediate' })
+      await writer.execute('UPDATE records SET value = ? WHERE id = ?', ['after', 1])
+      await expect(writer.commit()).resolves.toBeUndefined()
+      expect((await reader.query('SELECT value FROM records')).rows).toEqual([{ value: 'before' }])
+      await reader.commit()
+      expect((await reader.query('SELECT value FROM records')).rows).toEqual([{ value: 'after' }])
+    } finally {
+      await Promise.all([reader.disconnect(), writer.disconnect()])
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 15000)
 
-    await adapter.beginTransaction()
-    await adapter.beginTransaction({ mode: 'immediate' })
-    await adapter.beginTransaction({ mode: 'exclusive' })
-    await expect(adapter.beginTransaction({ mode: 'invalid' as never })).rejects.toThrow('Unsupported SQLite transaction mode "invalid".')
-    await adapter.createSavepoint?.('nested')
-    await expect(adapter.createSavepoint?.('not-valid;')).rejects.toThrow('Invalid savepoint name "not-valid;".')
-    await adapter.rollbackToSavepoint?.('nested')
-    await adapter.releaseSavepoint?.('nested')
-    await adapter.rollback()
-    await adapter.commit()
-
-    expect(executed).toEqual([
-      'BEGIN',
-      'BEGIN IMMEDIATE',
-      'BEGIN EXCLUSIVE',
-      'SAVEPOINT nested',
-      'ROLLBACK TO SAVEPOINT nested',
-      'RELEASE SAVEPOINT nested',
-      'ROLLBACK',
-      'COMMIT',
-    ])
+  it('uses a real injected database for bound writes and rollback in each transaction mode', async () => {
+    const adapter = createSQLiteAdapter({ database: new Database(':memory:') })
+    try {
+      await adapter.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)')
+      for (const mode of ['deferred', 'immediate', 'exclusive'] as const) {
+        await adapter.beginTransaction({ mode })
+        await adapter.execute('INSERT INTO records (value) VALUES (?)', ["a'; DROP TABLE records; --"])
+        await adapter.createSavepoint('nested')
+        await adapter.execute('DELETE FROM records')
+        await adapter.rollbackToSavepoint('nested')
+        await adapter.releaseSavepoint('nested')
+        expect((await adapter.query('SELECT value FROM records')).rows).toEqual([{ value: "a'; DROP TABLE records; --" }])
+        await adapter.rollback()
+        expect((await adapter.query('SELECT * FROM records')).rows).toEqual([])
+      }
+      await expect(adapter.createSavepoint('not-valid;')).rejects.toThrow('Invalid savepoint name')
+    } finally {
+      await adapter.disconnect()
+    }
   })
 
-  it('reports SQLite open failures with the configured database path', async () => {
-    const adapter = createSQLiteAdapter({
-      filename: '/tmp/missing/database.sqlite',
-      createDatabase() {
-        throw new Error('cannot open database file')
-      },
-    })
-
-    await expect(adapter.initialize()).rejects.toThrow(
-      'Unable to open SQLite database "/tmp/missing/database.sqlite": cannot open database file',
-    )
+  it('reports a real SQLite open failure for a missing directory', async () => {
+    const filename = join(tmpdir(), `holo-missing-${randomUUID()}`, 'database.sqlite')
+    const adapter = createSQLiteAdapter({ filename })
+    await expect(adapter.initialize()).rejects.toThrow(`Unable to open SQLite database "${filename}"`)
+    expect(adapter.isConnected()).toBe(false)
   })
 
   it('runs queries against a real in-memory SQLite database through the public adapter', async () => {

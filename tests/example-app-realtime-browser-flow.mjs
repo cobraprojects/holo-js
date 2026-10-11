@@ -67,6 +67,7 @@ function observeWebSockets(page) {
   const receivedFrames = []
 
   page.on('websocket', (socket) => {
+    if (!socket.url().includes('/app/')) return
     urls.push(socket.url())
     socket.on('framesent', (frame) => {
       sentFrames.push(String(frame.payload))
@@ -100,7 +101,7 @@ async function openRealtimePage(page, failures) {
   return sockets
 }
 
-export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, cookieHeader }) {
+export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, cookieHeader, postId }) {
   const browser = await getExampleAppBrowser()
   const context = await browser.newContext({ baseURL: baseUrl })
 
@@ -110,20 +111,26 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
     const editorPage = await context.newPage()
     const observerResult = collectPageFailures(observerPage)
     const editorResult = collectPageFailures(editorPage)
-    await openRealtimePage(observerPage, observerResult.failures)
-    await openRealtimePage(editorPage, editorResult.failures)
-    const firstPost = editorPage.locator(postSelector).first()
-    const postId = await firstPost.getAttribute('data-post-id')
+    const observerSockets = await openRealtimePage(observerPage, observerResult.failures)
+    const editorSockets = await openRealtimePage(editorPage, editorResult.failures)
+    const firstPost = editorPage.locator(`[data-post-id="${postId}"]`)
     assert.ok(postId, 'Expected the realtime page to render post ids.')
 
     const title = `Realtime ${appName} ${Date.now()}`
     await firstPost.getByRole('button', { name: /edit title/i }).click()
     await editorPage.getByLabel('Realtime post title').fill(title)
     await editorPage.getByRole('button', { name: /save realtime title/i }).click()
-    await waitFor(
-      async () => (await observerPage.locator(`[data-post-id="${postId}"] h2`).textContent()) === title,
-      `Expected realtime subscriber to show updated title "${title}".`,
-    )
+    try {
+      await waitFor(
+        async () => (await observerPage.locator(`[data-post-id="${postId}"] h2`).textContent()) === title,
+        `Expected realtime subscriber to show updated title "${title}".`,
+      )
+    } catch (error) {
+      throw new Error([
+        formatRealtimeFailure('Observer failed to receive the mutation.', observerSockets, observerResult.failures),
+        formatRealtimeFailure('Editor failed to publish the mutation.', editorSockets, editorResult.failures),
+      ].join('\n'), { cause: error })
+    }
 
     assert.deepEqual([...observerResult.failures, ...editorResult.failures], [])
   } finally {

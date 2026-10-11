@@ -1,5 +1,7 @@
 import { field, schema } from '@holo-js/validation'
 
+export const logoutForm = schema({})
+
 export const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
   password: field.password().required('Password is required.').min(8, 'Password must be at least 8 characters.'),

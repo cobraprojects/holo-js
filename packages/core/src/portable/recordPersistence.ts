@@ -1,4 +1,4 @@
-import { normalizeJsonValue } from './authPersistence'
+import { normalizeJsonValue, serializeAuthTimestamp } from './authPersistence'
 
 export type CoreNotificationJsonPrimitive = string | number | boolean | null
 export type CoreNotificationJsonValue
@@ -64,14 +64,14 @@ export function serializeSessionRecordForRow(record: {
   readonly lastActivityAt: Date
   readonly expiresAt: Date
   readonly rememberTokenHash?: string
-}): Record<string, unknown> {
+}, driver: string): Record<string, unknown> {
   return {
     id: record.id,
     store: record.store,
     data: JSON.stringify(record.data ?? {}),
-    created_at: record.createdAt.toISOString(),
-    last_activity_at: record.lastActivityAt.toISOString(),
-    expires_at: record.expiresAt.toISOString(),
+    created_at: serializeAuthTimestamp(record.createdAt, driver),
+    last_activity_at: serializeAuthTimestamp(record.lastActivityAt, driver),
+    expires_at: serializeAuthTimestamp(record.expiresAt, driver),
     invalidated_at: null,
     remember_token_hash: record.rememberTokenHash ?? null,
   }

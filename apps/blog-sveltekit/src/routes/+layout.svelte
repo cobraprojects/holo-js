@@ -25,16 +25,19 @@
         <span class="user-name">{displayName}</span>
         {#if !usesHostedLogout}
           <form action="/logout" method="post" class="logout-form">
+            <input {...data.csrf.input} />
             <button type="submit" class="logout-button">Logout</button>
           </form>
         {/if}
         {#if auth.provider === 'workos'}
           <form action="/api/auth/workos/logout" method="post" class="logout-form">
+            <input {...data.csrf.input} />
             <button type="submit" class="logout-button">Logout from WorkOS</button>
           </form>
         {/if}
         {#if auth.provider === 'clerk'}
           <form action="/api/auth/clerk/logout" method="post" class="logout-form">
+            <input {...data.csrf.input} />
             <button type="submit" class="logout-button">Logout from Clerk</button>
           </form>
         {/if}

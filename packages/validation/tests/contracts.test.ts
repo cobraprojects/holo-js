@@ -256,12 +256,21 @@ describe('@holo-js/validation contracts', () => {
     expect(registerUser.fields.profile.city.definition.kind).toBe('string')
   })
 
+  it('validates forms with no application fields and excludes transport fields', async () => {
+    const logout = schema({})
+    const formData = new FormData()
+    formData.set('_token', 'csrf-token')
+    formData.set('isAdmin', 'true')
+
+    expect(await validate(formData, logout)).toEqual({})
+    expect(await validate({}, logout)).toEqual({})
+  })
+
   it('rejects invalid builder declarations and malformed schema shapes', () => {
     expect(() => field.number().min(Number.NaN)).toThrow(ValidationContractError)
     expect(() => field.string().regex('^bad$' as never)).toThrow('regex must be a RegExp instance.')
     expect(() => field.string().in([])).toThrow('in must contain at least one value.')
     expect(() => field.string().required('   ')).toThrow('Custom error messages must not be empty.')
-    expect(() => schema({})).toThrow('schema must declare at least one field.')
     expect(() => schema({ broken: '' as never })).toThrow('schema.broken must be a field builder or nested schema object.')
   })
 
