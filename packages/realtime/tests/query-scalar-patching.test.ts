@@ -17,8 +17,8 @@ import type {
 type TestRow = Readonly<Record<string, unknown>>
 
 const rows = Object.freeze([
-  Object.freeze({ id: 1, title: 'First', status: 'open', priority: 1 }),
-  Object.freeze({ id: 2, title: 'Second', status: 'open', priority: 2 }),
+  Object.freeze({ id: 1, title: 'First', status: 1, priority: 1 }),
+  Object.freeze({ id: 2, title: 'Second', status: 1, priority: 2 }),
 ]) satisfies readonly TestRow[]
 
 function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): DatabaseQueryObservation {
@@ -87,7 +87,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: [
-            { id: 1, status: 'open', title: 'Updated' },
+            { id: 1, status: 1, title: 'Updated' },
           ],
           values: { title: 'Updated' },
           valueKeys: ['title'],
@@ -105,7 +105,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: [
-            { id: 2, status: 'open', title: 'Second' },
+            { id: 2, status: 1, title: 'Second' },
           ],
           values: { title: 'Value update' },
           valueKeys: ['title'],
@@ -130,7 +130,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 2,
           rows: [
-            { id: 2, status: 'open', title: 'Second' },
+            { id: 2, status: 1, title: 'Second' },
           ],
           values: { title: 'Second' },
           valueKeys: ['title'],
@@ -156,7 +156,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: [
-            { id: 1, status: 'open', title: 'First' },
+            { id: 1, status: 1, title: 'First' },
           ],
           values: { title: 'First' },
           valueKeys: ['title'],
@@ -177,7 +177,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', title: 'First' },
+            { id: 1, status: 1, title: 'First' },
           ],
         }),
       ],
@@ -193,7 +193,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 2, status: 'open', title: 'Second' },
+            { id: 2, status: 1, title: 'Second' },
           ],
         }),
       ],
@@ -205,7 +205,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { status: 'open', title: 'First' },
+            { status: 1, title: 'First' },
           ],
         }),
       ],
@@ -216,10 +216,10 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           previousRows: [
-            { id: 1, status: 'open', title: 'First' },
+            { id: 1, status: 1, title: 'First' },
           ],
           rows: [
-            { id: 2, status: 'open', title: 'Second' },
+            { id: 2, status: 1, title: 'Second' },
           ],
           valueKeys: ['title'],
           values: { title: 'Updated' },
@@ -299,7 +299,7 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'open' },
+            { id: 1, status: 1 },
           ],
         }),
       ],
@@ -310,7 +310,7 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'open' },
+            { id: 1, status: 1 },
           ],
           values: { title: 'Updated' },
           valueKeys: ['title'],
@@ -328,7 +328,7 @@ describe('@holo-js/realtime scalar patching', () => {
       exactId: 1,
       predicates: [
         { column: 'id', operator: '=', value: 1 },
-        { column: 'status', operator: '=', value: 'open' },
+        { column: 'status', operator: '=', value: 1 },
       ],
       scalarColumn: 'title',
     })
@@ -340,7 +340,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: undefined,
-          values: { status: 'open', title: 'Updated' },
+          values: { status: 1, title: 'Updated' },
           valueKeys: ['status', 'title'],
         }),
       ],
@@ -356,7 +356,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: undefined,
-          values: { status: 'closed', title: 'Updated' },
+          values: { status: 0, title: 'Updated' },
           valueKeys: ['status', 'title'],
         }),
       ],
@@ -384,7 +384,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: undefined,
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -400,7 +400,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: undefined,
-          values: { status: 'open' },
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -410,9 +410,9 @@ describe('@holo-js/realtime scalar patching', () => {
       'First',
       [
         createMutation({
-          previousRows: [{ id: 1, status: 'open', title: 'First' }],
+          previousRows: [{ id: 1, status: 1, title: 'First' }],
           rows: undefined,
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -427,7 +427,7 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: undefined,
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -444,9 +444,9 @@ describe('@holo-js/realtime scalar patching', () => {
       'First',
       [
         createMutation({
-          previousRows: [{ id: 1, status: 'open', title: 'First' }],
+          previousRows: [{ id: 1, status: 1, title: 'First' }],
           rows: undefined,
-          values: { status: 'open' },
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -456,9 +456,9 @@ describe('@holo-js/realtime scalar patching', () => {
       'First',
       [
         createMutation({
-          previousRows: [{ status: 'open', title: 'First' }],
+          previousRows: [{ status: 1, title: 'First' }],
           rows: undefined,
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -468,9 +468,9 @@ describe('@holo-js/realtime scalar patching', () => {
       'First',
       [
         createMutation({
-          previousRows: [{ id: 2, status: 'open', title: 'Second' }],
+          previousRows: [{ id: 2, status: 1, title: 'Second' }],
           rows: undefined,
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -480,7 +480,7 @@ describe('@holo-js/realtime scalar patching', () => {
         exactId: 1,
         predicates: [
           { column: 'id', operator: '=', value: 1 },
-          { column: 'status', operator: 'unknown', value: 'open' },
+          { column: 'status', operator: 'unknown', value: 1 },
         ],
         scalarColumn: 'title',
       }),
@@ -489,7 +489,7 @@ describe('@holo-js/realtime scalar patching', () => {
         createMutation({
           exactId: 1,
           rows: undefined,
-          values: { status: 'open', title: 'Updated' },
+          values: { status: 1, title: 'Updated' },
           valueKeys: ['status', 'title'],
         }),
       ],
@@ -547,7 +547,7 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'open', title: 'Updated' },
+            { id: 1, status: 1, title: 'Updated' },
           ],
         }),
       ],
@@ -556,7 +556,7 @@ describe('@holo-js/realtime scalar patching', () => {
       exactId: 1,
       predicates: [
         { column: 'id', operator: '=', value: 1 },
-        { column: 'status', operator: '=', value: 'open' },
+        { column: 'status', operator: '=', value: 1 },
       ],
       scalarColumn: 'title',
     })
@@ -566,7 +566,7 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'closed', title: 'Updated' },
+            { id: 1, status: 0, title: 'Updated' },
           ],
         }),
       ],
@@ -581,9 +581,9 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'open' },
+            { id: 1, status: 1 },
           ],
-          values: { status: 'open', title: 'Updated' },
+          values: { status: 1, title: 'Updated' },
           valueKeys: ['status', 'title'],
         }),
       ],
@@ -605,7 +605,7 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'open' },
+            { id: 1, status: 1 },
           ],
           values: { title: 'Updated' },
           valueKeys: ['title'],
@@ -618,9 +618,9 @@ describe('@holo-js/realtime scalar patching', () => {
       [
         createMutation({
           rows: [
-            { id: 1, status: 'open' },
+            { id: 1, status: 1 },
           ],
-          values: { status: 'closed', title: 'Updated' },
+          values: { status: 0, title: 'Updated' },
           valueKeys: ['status', 'title'],
         }),
       ],

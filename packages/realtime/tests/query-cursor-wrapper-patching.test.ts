@@ -5,9 +5,9 @@ import type { DatabaseQueryObservation } from '../src/runtime/query-state'
 import type { BackfillCache } from '../src/runtime/state'
 
 const cursorRows = Object.freeze([
-  Object.freeze({ id: 3, status: 'open', title: 'Third' }),
-  Object.freeze({ id: 2, status: 'open', title: 'Second' }),
-  Object.freeze({ id: 1, status: 'open', title: 'First' }),
+  Object.freeze({ id: 3, status: 1, title: 'Third' }),
+  Object.freeze({ id: 2, status: 1, title: 'Second' }),
+  Object.freeze({ id: 1, status: 1, title: 'First' }),
 ])
 
 function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): DatabaseQueryObservation {
@@ -19,7 +19,7 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
     limit: 2,
     orderBy: [{ column: 'id', direction: 'desc' }],
     patchable: true,
-    predicates: [{ column: 'status', operator: '=', value: 'open' }],
+    predicates: [{ column: 'status', operator: '=', value: 1 }],
     tableName: 'posts',
     ...overrides,
   }
@@ -53,7 +53,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
     const query = createQuery({ cursorRowCountKnown: false })
     for (const mutation of [
       createMutation({ kind: 'delete', rows: [cursorRows[0]!] }),
-      createMutation({ kind: 'update', values: { status: 'closed' }, previousRows: [cursorRows[0]!] }),
+      createMutation({ kind: 'update', values: { status: 0 }, previousRows: [cursorRows[0]!] }),
       createMutation({ kind: 'update', values: { id: 0 }, previousRows: [cursorRows[0]!] }),
     ]) {
       await expect(tryPatchCursorWrapperDataRows(query, [mutation], createBackfills())).resolves.toMatchObject({ patched: false })
@@ -86,7 +86,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, status: 'open', title: 'Fourth' },
+          { id: 4, status: 1, title: 'Fourth' },
         ],
       }),
     ], createBackfills())).resolves.toEqual({
@@ -94,7 +94,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
         ...query,
         cursorRowCount: 4,
         cursorRows: [
-          { id: 4, status: 'open', title: 'Fourth' },
+          { id: 4, status: 1, title: 'Fourth' },
           cursorRows[0],
           cursorRows[1],
         ],
@@ -102,7 +102,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       patched: true,
       query,
       value: [
-        { id: 4, status: 'open', title: 'Fourth' },
+        { id: 4, status: 1, title: 'Fourth' },
         cursorRows[0],
       ],
     })
@@ -113,13 +113,13 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, status: 0, title: 'Fourth' },
         ],
       }),
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 9, status: 'closed', title: 'Outside' },
+          { id: 9, status: 0, title: 'Outside' },
         ],
       }),
     ], createBackfills())).resolves.toEqual({ patched: true, unchanged: true })
@@ -132,7 +132,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 3, status: 'open', title: 'Third' },
+          { id: 3, status: 1, title: 'Third' },
         ],
       }),
     ], createBackfills())).resolves.toEqual({
@@ -160,7 +160,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 99, status: 'open', title: 'Outside retained rows' },
+          { id: 99, status: 1, title: 'Outside retained rows' },
         ],
       }),
     ], createBackfills())).resolves.toEqual({
@@ -196,7 +196,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { author_id: 1, id: 4, status: 'open', title: 'Fourth' },
+          { author_id: 1, id: 4, status: 1, title: 'Fourth' },
         ],
       }),
     ], createBackfills())).resolves.toBeUndefined()
@@ -228,30 +228,30 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, status: 'open', title: 'Second updated' },
-          { id: 1, status: 'closed', title: 'First closed' },
-          { id: 4, status: 'open', title: 'Fourth' },
+          { id: 2, status: 1, title: 'Second updated' },
+          { id: 1, status: 0, title: 'First closed' },
+          { id: 4, status: 1, title: 'Fourth' },
         ],
       }),
       createMutation({
         kind: 'upsert',
         rows: [
-          { id: 5, status: 'closed', title: 'Ignored' },
+          { id: 5, status: 0, title: 'Ignored' },
         ],
       }),
     ], createBackfills())).resolves.toEqual({
       nextQuery: {
         ...query,
         cursorRows: [
-          { id: 4, status: 'open', title: 'Fourth' },
+          { id: 4, status: 1, title: 'Fourth' },
           cursorRows[0],
-          { id: 2, status: 'open', title: 'Second updated' },
+          { id: 2, status: 1, title: 'Second updated' },
         ],
       },
       patched: true,
       query,
       value: [
-        { id: 4, status: 'open', title: 'Fourth' },
+        { id: 4, status: 1, title: 'Fourth' },
         cursorRows[0],
       ],
     })
@@ -283,7 +283,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { status: 'open', title: 'Missing id' },
+          { status: 1, title: 'Missing id' },
         ],
       }),
       createMutation({
@@ -293,7 +293,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { status: 'open', title: 'Missing id' },
+          { status: 1, title: 'Missing id' },
         ],
       }),
       createMutation({
@@ -317,7 +317,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 3, status: 'open', title: 'Third' },
+          { id: 3, status: 1, title: 'Third' },
         ],
       }),
     ], createBackfills())).resolves.toBeUndefined()
@@ -330,14 +330,14 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, status: 'open', title: 'Fourth' },
+          { id: 4, status: 1, title: 'Fourth' },
         ],
       }),
     ], createBackfills())).resolves.toBeUndefined()
 
     await expect(tryPatchCursorWrapperDataRows(createQuery({
       cursorRows: [
-        { id: 1, status: 'open', title: 'First' },
+        { id: 1, status: 1, title: 'First' },
       ],
       cursorRowCount: 2,
       limit: 2,
@@ -346,7 +346,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
       createMutation({
         kind: 'delete',
         rows: [
-          { id: 1, status: 'open', title: 'First' },
+          { id: 1, status: 1, title: 'First' },
         ],
       }),
     ], createBackfills())).resolves.toBeUndefined()

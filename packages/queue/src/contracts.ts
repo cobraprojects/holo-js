@@ -536,6 +536,10 @@ export function defineJob<TPayload extends QueueJsonValue, TResult = unknown>(
   job: QueueJobDefinition<TPayload, TResult>,
 ): DefinedQueueJobDefinition<TPayload, TResult> {
   const normalized = normalizeQueueJobDefinition<TPayload, TResult, QueueJobDefinition<TPayload, TResult>>(job) as DefinedQueueJobDefinition<TPayload, TResult>
+  const registeredName = getQueueJobDefinitionNames().get(job)
+  if (registeredName) {
+    setQueueJobDefinitionName(normalized, registeredName)
+  }
   Object.defineProperty(normalized, 'dispatch', {
     value(payload: TPayload): QueuePendingDispatch<TPayload> {
       return dispatchDefinedQueueJob(normalized, payload)

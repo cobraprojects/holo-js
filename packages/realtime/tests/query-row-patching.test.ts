@@ -13,9 +13,9 @@ import type {
 type TestRow = Readonly<Record<string, unknown>>
 
 const rows = Object.freeze([
-  Object.freeze({ id: 1, title: 'First', status: 'open', priority: 1 }),
-  Object.freeze({ id: 2, title: 'Second', status: 'open', priority: 2 }),
-  Object.freeze({ id: 3, title: 'Third', status: 'closed', priority: 3 }),
+  Object.freeze({ id: 1, title: 'First', status: 1, priority: 1 }),
+  Object.freeze({ id: 2, title: 'Second', status: 1, priority: 2 }),
+  Object.freeze({ id: 3, title: 'Third', status: 0, priority: 3 }),
 ]) satisfies readonly TestRow[]
 
 const emptyPredicateContext = Object.freeze({
@@ -26,9 +26,9 @@ const emptyPredicateContext = Object.freeze({
 
 const openPredicateContext = Object.freeze({
   exactId: NO_EXACT_ID_PREDICATE,
-  firstPredicate: { column: 'status', operator: '=', value: 'open' },
+  firstPredicate: { column: 'status', operator: '=', value: 1 },
   predicateCount: 1,
-  predicates: [{ column: 'status', operator: '=', value: 'open' }],
+  predicates: [{ column: 'status', operator: '=', value: 1 }],
 }) satisfies PredicateMatchContext
 
 function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): DatabaseQueryObservation {
@@ -99,7 +99,7 @@ function applyCustomRows(
 describe('@holo-js/realtime plain row patching', () => {
   it('rejects plain unordered inserts unless they are known update-style upserts', () => {
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     expect(applyRows(
@@ -107,7 +107,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -120,10 +120,10 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -141,7 +141,7 @@ describe('@holo-js/realtime plain row patching', () => {
   it('patches ordered inserts and falls back when predicate matches cannot be evaluated', () => {
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     expect(applyRows(
@@ -149,7 +149,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -160,7 +160,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 0, status: 1, title: 'Fourth' },
         rows[0],
         rows[1],
         rows[2],
@@ -187,12 +187,12 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, status: 'open', title: 'Missing priority' },
+          { id: 4, status: 1, title: 'Missing priority' },
         ],
       }),
       createContext({
@@ -225,7 +225,7 @@ describe('@holo-js/realtime plain row patching', () => {
         exactId: 99,
         kind: 'insert',
         rows: [
-          { id: 99, priority: 99, status: 'open', title: 'Outside' },
+          { id: 99, priority: 99, status: 1, title: 'Outside' },
         ],
       }),
       createContext({
@@ -241,12 +241,12 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -262,15 +262,15 @@ describe('@holo-js/realtime plain row patching', () => {
       createQuery({
         limit: 3,
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -290,7 +290,7 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('patches exact returned updates without scanning every row', () => {
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     expect(applyRows(
@@ -298,9 +298,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -317,7 +317,7 @@ describe('@holo-js/realtime plain row patching', () => {
       patched: true,
       rows: [
         ...rows,
-        { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 4, status: 1, title: 'Fourth' },
       ],
     })
   })
@@ -328,9 +328,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -348,14 +348,14 @@ describe('@holo-js/realtime plain row patching', () => {
   it('falls back when exact returned update rows cannot be evaluated', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
           { id: 2, priority: 2, title: 'Missing status' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -374,14 +374,14 @@ describe('@holo-js/realtime plain row patching', () => {
   it('keeps returned updates unchanged when exact query rows are excluded', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -401,7 +401,7 @@ describe('@holo-js/realtime plain row patching', () => {
   it('handles generic returned updates that are invalid, unchanged, or unsortable', () => {
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const context = createContext({
       orderColumns: ['priority'],
@@ -418,7 +418,7 @@ describe('@holo-js/realtime plain row patching', () => {
         rows: [
           { id: 5, priority: 5, title: 'Missing status' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       context,
@@ -429,9 +429,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 5, priority: 5, status: 'closed', title: 'Closed' },
+          { id: 5, priority: 5, status: 0, title: 'Closed' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       context,
@@ -442,20 +442,20 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: {}, status: 'open', title: 'Second' },
+          { id: 2, priority: {}, status: 1, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       context,
     )).toEqual({ patched: false })
 
     const sparseRows: Readonly<Record<string, unknown>>[] = [
-      { id: 2, priority: 2, status: 'closed', title: 'Second' },
+      { id: 2, priority: 2, status: 0, title: 'Second' },
     ]
     sparseRows.length = 2
     const sparsePreviousRows: Readonly<Record<string, unknown>>[] = [
-      { id: 2, priority: 2, status: 'open', title: 'Second' },
+      { id: 2, priority: 2, status: 1, title: 'Second' },
     ]
     sparsePreviousRows.length = 2
 
@@ -473,14 +473,14 @@ describe('@holo-js/realtime plain row patching', () => {
   it('keeps exact returned updates unchanged when returned rows do not change local rows', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -500,14 +500,14 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: {}, status: 'open', title: 'Second' },
+          { id: 2, priority: {}, status: 1, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -536,9 +536,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Updated' },
+          { id: 2, priority: 2, status: 1, title: 'Updated' },
         ],
-        values: { status: 'open', title: 'Updated' },
+        values: { status: 1, title: 'Updated' },
         valueKeys: ['status', 'title'],
       }),
       createContext({
@@ -555,7 +555,7 @@ describe('@holo-js/realtime plain row patching', () => {
       patched: true,
       rows: [
         rows[0],
-        { id: 2, priority: 2, status: 'open', title: 'Updated' },
+        { id: 2, priority: 2, status: 1, title: 'Updated' },
         rows[2],
       ],
     })
@@ -564,14 +564,14 @@ describe('@holo-js/realtime plain row patching', () => {
   it('keeps exact returned updates unchanged when returned rows no longer match the query', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -590,14 +590,14 @@ describe('@holo-js/realtime plain row patching', () => {
   it('falls back to generic returned updates when exact returned row ids differ', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 5, priority: 5, status: 'open', title: 'Fifth' },
+          { id: 5, priority: 5, status: 1, title: 'Fifth' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -614,15 +614,15 @@ describe('@holo-js/realtime plain row patching', () => {
       patched: true,
       rows: [
         ...rows,
-        { id: 5, priority: 5, status: 'open', title: 'Fifth' },
+        { id: 5, priority: 5, status: 1, title: 'Fifth' },
       ],
     })
   })
 
   it('keeps returned updates unchanged when duplicate identities prevent exact indexing', () => {
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 2, status: 'open', title: 'Duplicate' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 1, priority: 2, status: 1, title: 'Duplicate' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       result: duplicateRows,
@@ -635,9 +635,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 1, title: 'Updated' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -663,7 +663,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         values: { priority: 'unknown' },
         valueKeys: ['priority'],
@@ -683,11 +683,11 @@ describe('@holo-js/realtime plain row patching', () => {
   it('rejects predicate-changing updates without returned rows', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -698,12 +698,12 @@ describe('@holo-js/realtime plain row patching', () => {
 
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         exactId: 99,
         kind: 'update',
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -719,21 +719,21 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({ patched: false })
 
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 2, status: 'open', title: 'Duplicate' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 1, priority: 2, status: 1, title: 'Duplicate' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyCustomRows(
       duplicateRows,
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         result: duplicateRows,
         rowIdentityIndex: undefined,
       }),
       createMutation({
         exactId: 1,
         kind: 'update',
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -750,13 +750,13 @@ describe('@holo-js/realtime plain row patching', () => {
 
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         rowIdentityIndex: new Map([[1, 99]]),
       }),
       createMutation({
         exactId: 1,
         kind: 'update',
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -774,19 +774,19 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('patches previous-row predicate-changing retained updates without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 1,
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     } satisfies PredicateMatchContext
 
     expect(applyCustomRows(
@@ -794,8 +794,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 2, priority: 2, status: 'open', title: 'Second' }],
-        values: { status: 'pending' },
+        previousRows: [{ id: 2, priority: 2, status: 1, title: 'Second' }],
+        values: { status: 3 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -806,18 +806,18 @@ describe('@holo-js/realtime plain row patching', () => {
       patched: true,
       rows: [
         queryRows[0],
-        { id: 2, priority: 2, status: 'pending', title: 'Second' },
+        { id: 2, priority: 2, status: 3, title: 'Second' },
       ],
     })
   })
 
   it('removes previous-row predicate-changing updates without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -827,8 +827,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 2, priority: 2, status: 'open', title: 'Second' }],
-        values: { status: 'closed' },
+        previousRows: [{ id: 2, priority: 2, status: 1, title: 'Second' }],
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -845,12 +845,12 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('patches ordered previous-row predicate entries without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -860,8 +860,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 3, priority: 0, status: 'closed', title: 'Third' }],
-        values: { status: 'open' },
+        previousRows: [{ id: 3, priority: 0, status: 0, title: 'Third' }],
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -873,7 +873,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 3, priority: 0, status: 'open', title: 'Third' },
+        { id: 3, priority: 0, status: 1, title: 'Third' },
         queryRows[0],
         queryRows[1],
       ],
@@ -882,11 +882,11 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back for unordered previous-row predicate entries without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -896,8 +896,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 3, priority: 3, status: 'closed', title: 'Third' }],
-        values: { status: 'open' },
+        previousRows: [{ id: 3, priority: 3, status: 0, title: 'Third' }],
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -909,11 +909,11 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('keeps previous-row updates unchanged when affected rows stay outside the query', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -923,7 +923,7 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 3, priority: 3, status: 'closed', title: 'Third' }],
+        previousRows: [{ id: 3, priority: 3, status: 0, title: 'Third' }],
         values: { title: 'Archived' },
         valueKeys: ['title'],
       }),
@@ -938,8 +938,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 3, priority: 3, status: 'open', title: 'Third' }],
-        values: { status: 'closed' },
+        previousRows: [{ id: 3, priority: 3, status: 1, title: 'Third' }],
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -953,8 +953,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 2, priority: 2, status: 'open', title: 'Second' }],
-        values: { status: 'open' },
+        previousRows: [{ id: 2, priority: 2, status: 1, title: 'Second' }],
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -966,19 +966,19 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('patches multiple previous-row updates after the first mutation changes retained rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 1,
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     } satisfies PredicateMatchContext
 
     expect(applyCustomRows(
@@ -987,11 +987,11 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [
-          { id: 1, priority: 1, status: 'open', title: 'First' },
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
-          { id: 3, priority: 3, status: 'open', title: 'Third' },
+          { id: 1, priority: 1, status: 1, title: 'First' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
+          { id: 3, priority: 3, status: 1, title: 'Third' },
         ],
-        values: { status: 'pending' },
+        values: { status: 3 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1001,20 +1001,20 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'pending', title: 'First' },
-        { id: 2, priority: 2, status: 'pending', title: 'Second' },
+        { id: 1, priority: 1, status: 3, title: 'First' },
+        { id: 2, priority: 2, status: 3, title: 'Second' },
       ],
     })
   })
 
   it('relocates ordered previous-row retained updates without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -1024,7 +1024,7 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 2, priority: 2, status: 'open', title: 'Second' }],
+        previousRows: [{ id: 2, priority: 2, status: 1, title: 'Second' }],
         values: { priority: 0 },
         valueKeys: ['priority'],
       }),
@@ -1038,7 +1038,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 2, priority: 0, status: 'open', title: 'Second' },
+        { id: 2, priority: 0, status: 1, title: 'Second' },
         queryRows[0],
       ],
     })
@@ -1046,13 +1046,13 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('keeps full ordered windows unchanged when previous-row entries remain past the tail', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       limit: 2,
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -1062,8 +1062,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 3, priority: 3, status: 'closed', title: 'Third' }],
-        values: { status: 'open' },
+        previousRows: [{ id: 3, priority: 3, status: 0, title: 'Third' }],
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1077,15 +1077,15 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back for malformed previous-row updates without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 2, status: 'open', title: 'Duplicate' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 1, priority: 2, status: 1, title: 'Duplicate' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -1093,14 +1093,14 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyCustomRows(
       duplicateRows,
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         result: duplicateRows,
         rowIdentityIndex: undefined,
       }),
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 1, priority: 1, status: 'open', title: 'First' }],
-        values: { status: 'closed' },
+        previousRows: [{ id: 1, priority: 1, status: 1, title: 'First' }],
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1115,7 +1115,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         previousRows: [undefined as unknown as Readonly<Record<string, unknown>>],
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1129,8 +1129,8 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ priority: 2, status: 'open', title: 'Second' }],
-        values: { status: 'closed' },
+        previousRows: [{ priority: 2, status: 1, title: 'Second' }],
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1143,7 +1143,7 @@ describe('@holo-js/realtime plain row patching', () => {
       queryRows,
       createQuery({
         predicates: [
-          { column: 'status', operator: '=', value: 'open' },
+          { column: 'status', operator: '=', value: 1 },
           { column: 'priority', operator: '>', value: 1 },
         ],
         result: queryRows,
@@ -1151,17 +1151,17 @@ describe('@holo-js/realtime plain row patching', () => {
       }),
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 2, priority: 2, status: 'open', title: 'Second' }],
-        values: { priority: {}, status: 'open' },
+        previousRows: [{ id: 2, priority: 2, status: 1, title: 'Second' }],
+        values: { priority: {}, status: 1 },
         valueKeys: ['priority', 'status'],
       }),
       createContext({
         queryPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'status', operator: '=', value: 'open' },
+          firstPredicate: { column: 'status', operator: '=', value: 1 },
           predicateCount: 2,
           predicates: [
-            { column: 'status', operator: '=', value: 'open' },
+            { column: 'status', operator: '=', value: 1 },
             { column: 'priority', operator: '>', value: 1 },
           ],
         },
@@ -1172,13 +1172,13 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back for ambiguous ordered previous-row updates without returned rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 2, priority: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 1, priority: 1, status: 1, title: 'First' }),
+      Object.freeze({ id: 2, priority: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       limit: 2,
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: queryRows,
       rowIdentityIndex: new Map([[1, 0], [2, 1]]),
     })
@@ -1188,7 +1188,7 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 3, priority: 3, status: 'open', title: 'Third' }],
+        previousRows: [{ id: 3, priority: 3, status: 1, title: 'Third' }],
         values: { priority: 0 },
         valueKeys: ['priority'],
       }),
@@ -1206,7 +1206,7 @@ describe('@holo-js/realtime plain row patching', () => {
       query,
       createMutation({
         kind: 'update',
-        previousRows: [{ id: 2, priority: 2, status: 'open', title: 'Second' }],
+        previousRows: [{ id: 2, priority: 2, status: 1, title: 'Second' }],
         values: { priority: {} },
         valueKeys: ['priority'],
       }),
@@ -1222,13 +1222,13 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('patches exact existing predicate-changing updates without returned rows', () => {
     const query = createQuery({
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 1,
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     } satisfies PredicateMatchContext
 
     expect(applyRows(
@@ -1236,7 +1236,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         exactId: 1,
         kind: 'update',
-        values: { status: 'pending' },
+        values: { status: 3 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1252,7 +1252,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'pending', title: 'First' },
+        { id: 1, priority: 1, status: 3, title: 'First' },
         rows[1],
         rows[2],
       ],
@@ -1260,12 +1260,12 @@ describe('@holo-js/realtime plain row patching', () => {
 
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         exactId: 1,
         kind: 'update',
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1284,17 +1284,17 @@ describe('@holo-js/realtime plain row patching', () => {
   it('removes exact existing predicate-changing updates without returned rows when patched rows no longer match', () => {
     const query = createQuery({
       predicates: [
-        { column: 'status', operator: 'in', value: ['open', 'pending'] },
-        { column: 'title', operator: '=', value: 'Expected' },
+        { column: 'status', operator: 'in', value: [1, 3] },
+        { column: 'priority', operator: '=', value: 99 },
       ],
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 2,
       predicates: [
-        { column: 'status', operator: 'in', value: ['open', 'pending'] },
-        { column: 'title', operator: '=', value: 'Expected' },
+        { column: 'status', operator: 'in', value: [1, 3] },
+        { column: 'priority', operator: '=', value: 99 },
       ],
     } satisfies PredicateMatchContext
 
@@ -1303,7 +1303,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         exactId: 1,
         kind: 'update',
-        values: { status: 'pending' },
+        values: { status: 3 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1327,11 +1327,11 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back when exact existing predicate-changing updates cannot evaluate patched rows', () => {
     const queryRows = Object.freeze([
-      Object.freeze({ id: 1, status: 'open', title: 'First' }),
+      Object.freeze({ id: 1, status: 1, title: 'First' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       predicates: [
-        { column: 'status', operator: 'in', value: ['open', 'pending'] },
+        { column: 'status', operator: 'in', value: [1, 3] },
         { column: 'priority', operator: '>', value: 1 },
       ],
       result: queryRows,
@@ -1339,10 +1339,10 @@ describe('@holo-js/realtime plain row patching', () => {
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 2,
       predicates: [
-        { column: 'status', operator: 'in', value: ['open', 'pending'] },
+        { column: 'status', operator: 'in', value: [1, 3] },
         { column: 'priority', operator: '>', value: 1 },
       ],
     } satisfies PredicateMatchContext
@@ -1353,7 +1353,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         exactId: 1,
         kind: 'update',
-        values: { status: 'pending' },
+        values: { status: 3 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1372,13 +1372,13 @@ describe('@holo-js/realtime plain row patching', () => {
   it('relocates exact existing predicate-changing ordered updates without returned rows', () => {
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 1,
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     } satisfies PredicateMatchContext
 
     expect(applyRows(
@@ -1386,7 +1386,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         exactId: 2,
         kind: 'update',
-        values: { priority: 0, status: 'pending' },
+        values: { priority: 0, status: 3 },
         valueKeys: ['priority', 'status'],
       }),
       createContext({
@@ -1405,7 +1405,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 2, priority: 0, status: 'pending', title: 'Second' },
+        { id: 2, priority: 0, status: 3, title: 'Second' },
         rows[0],
         rows[2],
       ],
@@ -1415,13 +1415,13 @@ describe('@holo-js/realtime plain row patching', () => {
   it('falls back when exact existing predicate-changing ordered updates cannot be relocated', () => {
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     })
     const queryPredicates = {
       exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: { column: 'status', operator: 'in', value: ['open', 'pending'] },
+      firstPredicate: { column: 'status', operator: 'in', value: [1, 3] },
       predicateCount: 1,
-      predicates: [{ column: 'status', operator: 'in', value: ['open', 'pending'] }],
+      predicates: [{ column: 'status', operator: 'in', value: [1, 3] }],
     } satisfies PredicateMatchContext
 
     expect(applyRows(
@@ -1429,7 +1429,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         exactId: 2,
         kind: 'update',
-        values: { priority: {}, status: 'pending' },
+        values: { priority: {}, status: 3 },
         valueKeys: ['priority', 'status'],
       }),
       createContext({
@@ -1459,16 +1459,16 @@ describe('@holo-js/realtime plain row patching', () => {
       createContext({
         mutationPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'status', operator: '=', value: 'open' },
+          firstPredicate: { column: 'status', operator: '=', value: 1 },
           predicateCount: 1,
-          predicates: [{ column: 'status', operator: '=', value: 'open' }],
+          predicates: [{ column: 'status', operator: '=', value: 1 }],
         },
         valueKeys: ['title'],
       }),
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'open', title: 'Second' },
+        { id: 1, priority: 1, status: 1, title: 'Second' },
         rows[1],
         rows[2],
       ],
@@ -1502,7 +1502,7 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back when scanned update mutation predicates cannot be evaluated', () => {
     const invalidRows = Object.freeze([
-      Object.freeze({ id: 1, priority: {}, status: 'open', title: 'First' }),
+      Object.freeze({ id: 1, priority: {}, status: 1, title: 'First' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyCustomRows(
@@ -1530,7 +1530,7 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back when scanned update query predicates cannot be evaluated after patching', () => {
     const invalidRows = Object.freeze([
-      Object.freeze({ id: 2, priority: {}, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 2, priority: {}, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       predicates: [{ column: 'priority', operator: '>', value: 1 }],
@@ -1567,14 +1567,14 @@ describe('@holo-js/realtime plain row patching', () => {
     const query = createQuery({
       limit: 3,
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     expect(applyRows(
       query,
       createMutation({
         kind: 'update',
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1602,11 +1602,11 @@ describe('@holo-js/realtime plain row patching', () => {
       createQuery({
         limit: 2,
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1626,9 +1626,9 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('requests bounded backfill for sorted plain updates that shrink full limited windows', () => {
     const unsortedRows = Object.freeze([
-      Object.freeze({ group: 'keep', id: 1, status: 'open', title: 'First' }),
-      Object.freeze({ group: 'remove', id: 2, status: 'open', title: 'Second' }),
-      Object.freeze({ group: 'keep', id: 3, status: 'open', title: 'Third' }),
+      Object.freeze({ group: 1, id: 1, status: 1, title: 'First' }),
+      Object.freeze({ group: 0, id: 2, status: 1, title: 'Second' }),
+      Object.freeze({ group: 1, id: 3, status: 1, title: 'Third' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyCustomRows(
@@ -1636,7 +1636,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createQuery({
         limit: 3,
         orderBy: [{ column: 'id', direction: 'desc' }],
-        predicates: [{ column: 'group', operator: '!=', value: 'remove' }],
+        predicates: [{ column: 'group', operator: '!=', value: 0 }],
       }),
       createMutation({
         kind: 'update',
@@ -1646,18 +1646,18 @@ describe('@holo-js/realtime plain row patching', () => {
       createContext({
         mutationPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'status', operator: '=', value: 'open' },
+          firstPredicate: { column: 'status', operator: '=', value: 1 },
           predicateCount: 1,
-          predicates: [{ column: 'status', operator: '=', value: 'open' }],
+          predicates: [{ column: 'status', operator: '=', value: 1 }],
         },
         orderColumns: ['id'],
         orderMultipliers: [-1],
         queryOrderChanged: true,
         queryPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'group', operator: '!=', value: 'remove' },
+          firstPredicate: { column: 'group', operator: '!=', value: 0 },
           predicateCount: 1,
-          predicates: [{ column: 'group', operator: '!=', value: 'remove' }],
+          predicates: [{ column: 'group', operator: '!=', value: 0 }],
         },
         valueKeys: ['title'],
       }),
@@ -1665,15 +1665,15 @@ describe('@holo-js/realtime plain row patching', () => {
       backfill: true,
       patched: true,
       rows: [
-        { group: 'keep', id: 3, status: 'open', title: 'Updated' },
-        { group: 'keep', id: 1, status: 'open', title: 'Updated' },
+        { group: 1, id: 3, status: 1, title: 'Updated' },
+        { group: 1, id: 1, status: 1, title: 'Updated' },
       ],
     })
   })
 
   it('rejects unsafe known-upsert metadata for unordered queries', () => {
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
     const context = createContext({
       queryPredicates: openPredicateContext,
@@ -1684,11 +1684,11 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
       }),
       context,
@@ -1699,10 +1699,10 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
       }),
       context,
@@ -1716,18 +1716,18 @@ describe('@holo-js/realtime plain row patching', () => {
           { id: 4, priority: 4, title: 'Fourth' },
         ],
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
       }),
       context,
     )).toEqual({ patched: false })
 
     const sparseRows: Readonly<Record<string, unknown>>[] = [
-      { id: 2, priority: 2, status: 'closed', title: 'Second' },
+      { id: 2, priority: 2, status: 0, title: 'Second' },
     ]
     sparseRows.length = 2
     const sparsePreviousRows: Readonly<Record<string, unknown>>[] = [
-      { id: 2, priority: 2, status: 'open', title: 'Second' },
+      { id: 2, priority: 2, status: 1, title: 'Second' },
     ]
     sparsePreviousRows.length = 2
 
@@ -1748,7 +1748,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext(),
@@ -1803,7 +1803,7 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('patches exact existing rows by merging partial returned rows with mutation values', () => {
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
     })
 
     expect(applyRows(
@@ -1811,7 +1811,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, status: 'open' },
+          { id: 1, status: 1 },
         ],
         values: { title: 'Updated' },
         valueKeys: ['title'],
@@ -1829,7 +1829,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'open', title: 'Updated' },
+        { id: 1, priority: 1, status: 1, title: 'Updated' },
         rows[1],
         rows[2],
       ],
@@ -1842,12 +1842,12 @@ describe('@holo-js/realtime plain row patching', () => {
 
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: sparseRows,
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1865,10 +1865,10 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('continues exact updated mutation rows when current row identity cannot be indexed', () => {
     const noIdentityRows = Object.freeze([
-      Object.freeze({ priority: 1, status: 'open', title: 'First' }),
+      Object.freeze({ priority: 1, status: 1, title: 'First' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: noIdentityRows,
       rowIdentityIndex: undefined,
     })
@@ -1879,9 +1879,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 1, title: 'Updated' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -1898,7 +1898,7 @@ describe('@holo-js/realtime plain row patching', () => {
       patched: true,
       rows: [
         noIdentityRows[0],
-        { id: 1, priority: 1, status: 'open', title: 'Updated' },
+        { id: 1, priority: 1, status: 1, title: 'Updated' },
       ],
     })
   })
@@ -1915,7 +1915,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
         values: { title: 'Fourth' },
         valueKeys: ['title'],
@@ -1945,7 +1945,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, status: 'open', title: 'Fourth' },
+          { id: 4, status: 1, title: 'Fourth' },
         ],
         values: { title: 'Fourth' },
         valueKeys: ['title'],
@@ -1967,11 +1967,11 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back when appended exact updated mutation rows cannot be sorted with current rows', () => {
     const invalidRows = Object.freeze([
-      Object.freeze({ id: 1, status: 'open', title: 'First' }),
+      Object.freeze({ id: 1, status: 1, title: 'First' }),
     ]) satisfies readonly TestRow[]
     const query = createQuery({
       orderBy: [{ column: 'priority', direction: 'asc' }],
-      predicates: [{ column: 'status', operator: '=', value: 'open' }],
+      predicates: [{ column: 'status', operator: '=', value: 1 }],
       result: invalidRows,
       rowIdentityIndex: new Map([[1, 0]]),
     })
@@ -1982,9 +1982,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 4, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 4, status: 1, title: 'Fourth' },
         ],
-        values: { status: 'open', title: 'Fourth' },
+        values: { status: 1, title: 'Fourth' },
         valueKeys: ['status', 'title'],
       }),
       createContext({
@@ -2028,15 +2028,15 @@ describe('@holo-js/realtime plain row patching', () => {
   it('falls through stale exact updated mutation row identity indexes', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         rowIdentityIndex: new Map([[1, 9]]),
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 1, title: 'Updated' },
         ],
-        values: { status: 'open', title: 'Updated' },
+        values: { status: 1, title: 'Updated' },
         valueKeys: ['status', 'title'],
       }),
       createContext({
@@ -2052,7 +2052,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 1, priority: 1, status: 'open', title: 'Updated' },
+        { id: 1, priority: 1, status: 1, title: 'Updated' },
         rows[1],
         rows[2],
       ],
@@ -2063,14 +2063,14 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         offset: 1,
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
+          { id: 1, priority: 1, status: 1, title: 'Updated' },
         ],
-        values: { status: 'open', title: 'Updated' },
+        values: { status: 1, title: 'Updated' },
         valueKeys: ['status', 'title'],
       }),
       createContext({
@@ -2088,7 +2088,7 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back when exact update query predicates cannot be evaluated from stored rows', () => {
     const invalidRows = Object.freeze([
-      Object.freeze({ id: 2, status: 'open', title: 'Second' }),
+      Object.freeze({ id: 2, status: 1, title: 'Second' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyCustomRows(
@@ -2145,11 +2145,11 @@ describe('@holo-js/realtime plain row patching', () => {
   it('patches exact-id removals when changed values move rows out of the query', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -2180,7 +2180,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
         values: { title: 'No row matches this title' },
         valueKeys: ['title'],
@@ -2188,9 +2188,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createContext({
         mutationPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'title', operator: '=', value: 'No row matches this title' },
+          firstPredicate: { column: 'id', operator: '=', value: 99 },
           predicateCount: 1,
-          predicates: [{ column: 'title', operator: '=', value: 'No row matches this title' }],
+          predicates: [{ column: 'id', operator: '=', value: 99 }],
         },
         orderColumns: ['priority'],
         orderMultipliers: [1],
@@ -2200,7 +2200,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 0, status: 1, title: 'Fourth' },
         rows[0],
         rows[1],
       ],
@@ -2216,9 +2216,9 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
-        values: { priority: 0, status: 'open' },
+        values: { priority: 0, status: 1 },
         valueKeys: ['priority', 'status'],
       }),
       createContext({
@@ -2236,7 +2236,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+        { id: 4, priority: 0, status: 1, title: 'Fourth' },
         rows[0],
         rows[1],
       ],
@@ -2252,7 +2252,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 0, status: 'open', title: 'Second' },
+          { id: 2, priority: 0, status: 1, title: 'Second' },
         ],
         values: { title: 'Second' },
         valueKeys: ['title'],
@@ -2272,7 +2272,7 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({
       patched: true,
       rows: [
-        { id: 2, priority: 0, status: 'open', title: 'Second' },
+        { id: 2, priority: 0, status: 1, title: 'Second' },
         rows[0],
         rows[2],
       ],
@@ -2283,15 +2283,15 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
       }),
       createContext({
@@ -2305,15 +2305,15 @@ describe('@holo-js/realtime plain row patching', () => {
   it('keeps unordered known upserts unchanged when non-matching rows are absent locally', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
         rows: [
-          { id: 4, priority: 4, status: 'closed', title: 'Fourth' },
+          { id: 4, priority: 4, status: 0, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -2327,15 +2327,15 @@ describe('@holo-js/realtime plain row patching', () => {
       createQuery({
         limit: 2,
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'upsert',
         previousRows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
         rows: [
-          { id: 2, priority: 2, status: 'closed', title: 'Second' },
+          { id: 2, priority: 2, status: 0, title: 'Second' },
         ],
       }),
       createContext({
@@ -2355,7 +2355,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createMutation({
         kind: 'insert',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
       }),
       createContext({
@@ -2369,14 +2369,14 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 2, priority: 2, status: 'open', title: 'Second' },
+          { id: 2, priority: 2, status: 1, title: 'Second' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -2393,15 +2393,15 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         rowWindowMode: 'limited',
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
-        values: { status: 'open' },
+        values: { status: 1 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -2418,15 +2418,15 @@ describe('@holo-js/realtime plain row patching', () => {
     expect(applyRows(
       createQuery({
         orderBy: [{ column: 'priority', direction: 'asc' }],
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         rowWindowMode: 'limited',
       }),
       createMutation({
         kind: 'update',
         rows: [
-          { id: 4, priority: 0, status: 'open', title: 'Fourth' },
+          { id: 4, priority: 0, status: 1, title: 'Fourth' },
         ],
-        values: { priority: 0, status: 'open' },
+        values: { priority: 0, status: 1 },
         valueKeys: ['priority', 'status'],
       }),
       createContext({
@@ -2473,12 +2473,12 @@ describe('@holo-js/realtime plain row patching', () => {
   it('falls back when exact update removal windows cannot be resolved from cached metadata', () => {
     expect(applyRows(
       createQuery({
-        predicates: [{ column: 'status', operator: '=', value: 'open' }],
+        predicates: [{ column: 'status', operator: '=', value: 1 }],
         rowWindowMode: 'limited',
       }),
       createMutation({
         kind: 'update',
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
       createContext({
@@ -2496,9 +2496,9 @@ describe('@holo-js/realtime plain row patching', () => {
 
   it('falls back when sorted shrinking updates cannot be backfilled safely', () => {
     const unsortedRows = Object.freeze([
-      Object.freeze({ group: 'keep', id: 1, status: 'open', title: 'First' }),
-      Object.freeze({ group: 'remove', id: 2, status: 'open', title: 'Second' }),
-      Object.freeze({ group: 'keep', id: 3, status: 'open', title: 'Third' }),
+      Object.freeze({ group: 1, id: 1, status: 1, title: 'First' }),
+      Object.freeze({ group: 0, id: 2, status: 1, title: 'Second' }),
+      Object.freeze({ group: 1, id: 3, status: 1, title: 'Third' }),
     ]) satisfies readonly TestRow[]
 
     expect(applyCustomRows(
@@ -2506,7 +2506,7 @@ describe('@holo-js/realtime plain row patching', () => {
       createQuery({
         limit: 2,
         orderBy: [{ column: 'id', direction: 'desc' }],
-        predicates: [{ column: 'group', operator: '!=', value: 'remove' }],
+        predicates: [{ column: 'group', operator: '!=', value: 0 }],
       }),
       createMutation({
         kind: 'update',
@@ -2516,18 +2516,18 @@ describe('@holo-js/realtime plain row patching', () => {
       createContext({
         mutationPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'status', operator: '=', value: 'open' },
+          firstPredicate: { column: 'status', operator: '=', value: 1 },
           predicateCount: 1,
-          predicates: [{ column: 'status', operator: '=', value: 'open' }],
+          predicates: [{ column: 'status', operator: '=', value: 1 }],
         },
         orderColumns: ['id'],
         orderMultipliers: [-1],
         queryOrderChanged: true,
         queryPredicates: {
           exactId: NO_EXACT_ID_PREDICATE,
-          firstPredicate: { column: 'group', operator: '!=', value: 'remove' },
+          firstPredicate: { column: 'group', operator: '!=', value: 0 },
           predicateCount: 1,
-          predicates: [{ column: 'group', operator: '!=', value: 'remove' }],
+          predicates: [{ column: 'group', operator: '!=', value: 0 }],
         },
         valueKeys: ['title'],
       }),

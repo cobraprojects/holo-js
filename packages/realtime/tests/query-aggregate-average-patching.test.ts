@@ -24,7 +24,7 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
     dependencies: ['db:main:posts'],
     orderBy: [],
     patchable: true,
-    predicates: [{ column: 'status', operator: '=', value: 'open' }],
+    predicates: [{ column: 'status', operator: '=', value: 1 }],
     tableName: 'posts',
     ...overrides,
   }
@@ -73,7 +73,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -106,16 +106,16 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
         }),
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 2, status: 'open', views: 7 },
+            { id: 2, status: 1, views: 7 },
           ],
           rows: [
-            { id: 2, status: 'open', views: 11 },
+            { id: 2, status: 1, views: 11 },
           ],
           values: { views: 11 },
           valueKeys: ['views'],
@@ -150,7 +150,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open', views: 6 },
+            { id: 3, status: 1, views: 6 },
           ],
         }),
       ],
@@ -201,13 +201,13 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
         }),
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 4, status: 'closed', views: 4 },
+            { id: 4, status: 0, views: 4 },
           ],
         }),
       ],
@@ -234,7 +234,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
         }),
       ],
@@ -278,7 +278,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -350,10 +350,10 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open' },
+            { id: 1, status: 1 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
           values: { views: 7 },
           valueKeys: ['views'],
@@ -373,7 +373,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
             { id: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
           values: { views: 7 },
           valueKeys: ['views'],
@@ -430,7 +430,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'update',
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
           values: { views: 7 },
           valueKeys: ['views'],
@@ -450,7 +450,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
             { id: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
           values: { views: 7 },
           valueKeys: ['views'],
@@ -472,7 +472,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -490,7 +490,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
             { id: 3, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -505,10 +505,10 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'open' },
+            { id: 3, status: 1 },
           ],
         }),
       ],
@@ -533,7 +533,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -551,7 +551,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
             { id: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
           values: { views: 7 },
           valueKeys: ['views'],
@@ -573,19 +573,19 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'closed', views: 5 },
+            { id: 1, status: 0, views: 5 },
           ],
         }),
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -623,19 +623,19 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'closed', views: 10 },
+            { id: 3, status: 0, views: 10 },
           ],
         }),
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 4, status: 'closed', views: 4 },
+            { id: 4, status: 0, views: 4 },
           ],
           rows: [
-            { id: 4, status: 'closed', views: 5 },
+            { id: 4, status: 0, views: 5 },
           ],
           values: { views: 5 },
           valueKeys: ['views'],
@@ -668,10 +668,10 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'closed', views: 5 },
+            { id: 1, status: 0, views: 5 },
           ],
         }),
       ],
@@ -697,10 +697,10 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -739,7 +739,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
             { id: 3, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
           values: { views: 9 },
           valueKeys: ['views'],
@@ -759,7 +759,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
             { id: 3, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
         }),
       ],
@@ -774,7 +774,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open' },
+            { id: 3, status: 1 },
           ],
         }),
       ],
@@ -789,7 +789,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open', views: Number.NaN },
+            { id: 3, status: 1, views: Number.NaN },
           ],
         }),
       ],
@@ -820,12 +820,12 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'closed', views: 5 },
+            { id: 1, status: 0, views: 5 },
           ],
-          values: { status: 'closed' },
+          values: { status: 0 },
           valueKeys: ['status'],
         }),
       ],
@@ -851,12 +851,12 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 3, status: 'closed', views: 9 },
+            { id: 3, status: 0, views: 9 },
           ],
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
-          values: { status: 'open' },
+          values: { status: 1 },
           valueKeys: ['status'],
         }),
       ],
@@ -894,7 +894,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open', views: 9 },
+            { id: 3, status: 1, views: 9 },
           ],
         }),
       ],
@@ -928,7 +928,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
         }),
       ],
@@ -948,7 +948,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open' },
+            { id: 3, status: 1 },
           ],
         }),
       ],
@@ -978,7 +978,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         createMutation({
           kind: 'insert',
           rows: [
-            { id: 3, status: 'open', views: Number.NaN },
+            { id: 3, status: 1, views: Number.NaN },
           ],
         }),
       ],

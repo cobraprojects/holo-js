@@ -72,7 +72,6 @@ export type RuntimeEnvironment = {
 export type QueueRuntimeEnvironment = {
   readonly runtime: HoloRuntime
   readonly project: LoadedProjectConfig
-  readonly bundledJobs: readonly string[]
   cleanup(): Promise<void>
 }
 

@@ -19,7 +19,7 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
     dependencies: ['db:main:posts'],
     orderBy: [],
     patchable: true,
-    predicates: [{ column: 'status', operator: '=', value: 'open' }],
+    predicates: [{ column: 'status', operator: '=', value: 1 }],
     tableName: 'posts',
     ...overrides,
   }
@@ -92,7 +92,7 @@ describe('@holo-js/realtime aggregate common helpers', () => {
       { column: 'views', kind: 'sum' },
       createMutation({
         kind: 'update',
-        values: { status: 'closed' },
+        values: { status: 0 },
         valueKeys: ['status'],
       }),
     )).toBe(false)
@@ -101,7 +101,7 @@ describe('@holo-js/realtime aggregate common helpers', () => {
       { column: 'views', kind: 'sum' },
       createMutation({
         kind: 'insert',
-        rows: [{ id: 1, status: 'open', views: 3 }],
+        rows: [{ id: 1, status: 1, views: 3 }],
       }),
     )).toBe(false)
   })
@@ -115,40 +115,40 @@ describe('@holo-js/realtime aggregate common helpers', () => {
     expect(readAggregateMutationDelta(countQuery, createMutation({
       kind: 'insert',
       rows: [
-        { id: 1, status: 'open' },
-        { id: 2, status: 'closed' },
+        { id: 1, status: 1 },
+        { id: 2, status: 0 },
       ],
     }))).toBe(1)
 
     expect(readAggregateMutationDelta(query, createMutation({
       kind: 'insert',
       rows: [
-        { id: 1, status: 'open', views: 3 },
-        { id: 2, status: 'closed', views: 7 },
+        { id: 1, status: 1, views: 3 },
+        { id: 2, status: 0, views: 7 },
       ],
     }))).toBe(3)
     expect(readAggregateMutationDelta(query, createMutation({
       kind: 'delete',
       rows: [
-        { id: 1, status: 'open', views: 3 },
+        { id: 1, status: 1, views: 3 },
       ],
     }))).toBe(-3)
     expect(readAggregateMutationDelta(query, createMutation({
       kind: 'upsert',
       previousRows: [
-        { id: 1, status: 'open', views: 3 },
+        { id: 1, status: 1, views: 3 },
       ],
       rows: [
-        { id: 1, status: 'open', views: 9 },
+        { id: 1, status: 1, views: 9 },
       ],
     }))).toBe(6)
     expect(readAggregateMutationDelta(query, createMutation({
       kind: 'update',
       previousRows: [
-        { id: 1, status: 'open', views: 3 },
+        { id: 1, status: 1, views: 3 },
       ],
       rows: [
-        { id: 1, status: 'open', views: 9 },
+        { id: 1, status: 1, views: 9 },
       ],
       values: { views: 9 },
       valueKeys: ['views'],
@@ -163,7 +163,7 @@ describe('@holo-js/realtime aggregate common helpers', () => {
   it('returns undefined when aggregate delta inputs cannot be evaluated', () => {
     expect(readAggregateMutationDelta(createQuery({ aggregate: undefined }), createMutation({
       kind: 'insert',
-      rows: [{ id: 1, status: 'open', views: 3 }],
+      rows: [{ id: 1, status: 1, views: 3 }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'insert',
@@ -171,57 +171,57 @@ describe('@holo-js/realtime aggregate common helpers', () => {
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'insert',
-      rows: [{ id: 1, status: 'closed', views: 3 }],
+      rows: [{ id: 1, status: 0, views: 3 }],
     }))).toBe(0)
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'insert',
-      rows: [{ id: 1, status: 'open' }],
+      rows: [{ id: 1, status: 1 }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'insert',
-      rows: [{ id: 1, status: 'open', views: Number.NaN }],
+      rows: [{ id: 1, status: 1, views: Number.NaN }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'delete',
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'delete',
-      rows: [{ id: 1, status: 'open' }],
+      rows: [{ id: 1, status: 1 }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'upsert',
-      rows: [{ id: 1, status: 'open', views: 3 }],
+      rows: [{ id: 1, status: 1, views: 3 }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'upsert',
-      previousRows: [{ id: 1, status: 'open' }],
-      rows: [{ id: 1, status: 'open', views: 3 }],
+      previousRows: [{ id: 1, status: 1 }],
+      rows: [{ id: 1, status: 1, views: 3 }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'upsert',
-      previousRows: [{ id: 1, status: 'open', views: 3 }],
-      rows: [{ id: 1, status: 'open' }],
+      previousRows: [{ id: 1, status: 1, views: 3 }],
+      rows: [{ id: 1, status: 1 }],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'update',
-      previousRows: [{ id: 1, status: 'open' }],
-      rows: [{ id: 1, status: 'open', views: 4 }],
+      previousRows: [{ id: 1, status: 1 }],
+      rows: [{ id: 1, status: 1, views: 4 }],
       values: { views: 4 },
       valueKeys: ['views'],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'update',
-      previousRows: [{ id: 1, status: 'open', views: 3 }],
-      rows: [{ id: 1, status: 'open' }],
+      previousRows: [{ id: 1, status: 1, views: 3 }],
+      rows: [{ id: 1, status: 1 }],
       values: { views: 4 },
       valueKeys: ['views'],
     }))).toBeUndefined()
     expect(readAggregateMutationDelta(createQuery(), createMutation({
       kind: 'update',
-      previousRows: [{ id: 1, status: 'open', views: 3 }],
+      previousRows: [{ id: 1, status: 1, views: 3 }],
       rows: [
-        { id: 1, status: 'open', views: 4 },
-        { id: 2, status: 'open', views: 5 },
+        { id: 1, status: 1, views: 4 },
+        { id: 2, status: 1, views: 5 },
       ],
       values: { views: 4 },
       valueKeys: ['views'],

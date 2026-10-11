@@ -892,12 +892,15 @@ export default {
     async (operation) => {
       const original = defineJob({ async handle() { return 'original' } })
       const replacement = defineJob({ async handle() { return 'replacement' } })
-      registerNamedJob('jobs.lifetime', original)
+      const registration = registerQueueJob(original, { name: 'jobs.lifetime' })
+      const registeredDefinition = defineJob(registration.definition)
+      await expect(registeredDefinition.dispatchSync({})).resolves.toBe('original')
       if (operation === 'unregister') unregisterQueueJob('jobs.lifetime')
       if (operation === 'reset') resetQueueRegistry()
       registerQueueJob(replacement, { name: 'jobs.lifetime', replaceExisting: operation === 'replace' })
 
       expect(() => original.dispatchSync({})).toThrow('cannot dispatch before the job is registered')
+      expect(() => registeredDefinition.dispatchSync({})).toThrow('cannot dispatch before the job is registered')
       await expect(replacement.dispatchSync({})).resolves.toBe('replacement')
     },
   )

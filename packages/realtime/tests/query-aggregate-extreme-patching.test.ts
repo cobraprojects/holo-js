@@ -21,7 +21,7 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
     dependencies: ['db:main:posts'],
     orderBy: [],
     patchable: true,
-    predicates: [{ column: 'status', operator: '=', value: 'open' }],
+    predicates: [{ column: 'status', operator: '=', value: 1 }],
     tableName: 'posts',
     ...overrides,
   }
@@ -88,7 +88,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 3 },
+            { id: 2, status: 1, views: 3 },
           ],
         }),
       ],
@@ -111,7 +111,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 9 },
+            { id: 2, status: 1, views: 9 },
           ],
         }),
       ],
@@ -130,8 +130,8 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 4 },
-            { id: 3, status: 'open', views: 3 },
+            { id: 2, status: 1, views: 4 },
+            { id: 3, status: 1, views: 3 },
           ],
         }),
       ],
@@ -154,8 +154,8 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 9 },
-            { id: 3, status: 'open', views: 6 },
+            { id: 2, status: 1, views: 9 },
+            { id: 3, status: 1, views: 6 },
           ],
         }),
       ],
@@ -174,8 +174,8 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 3 },
-            { id: 3, status: 'open', views: 3 },
+            { id: 2, status: 1, views: 3 },
+            { id: 3, status: 1, views: 3 },
           ],
         }),
       ],
@@ -206,7 +206,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 5 },
+            { id: 2, status: 1, views: 5 },
           ],
         }),
       ],
@@ -242,10 +242,10 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 4 },
+            { id: 1, status: 1, views: 4 },
           ],
         }),
       ],
@@ -269,7 +269,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 4 },
+            { id: 2, status: 1, views: 4 },
           ],
         }),
       ],
@@ -300,7 +300,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
         }),
       ],
@@ -335,7 +335,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
         }),
       ],
@@ -374,7 +374,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
         }),
       ],
@@ -420,10 +420,10 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 6 },
+            { id: 1, status: 1, views: 6 },
           ],
           values: { views: 6 },
           valueKeys: ['views'],
@@ -471,14 +471,14 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open', views: 2 },
-            { id: 2, status: 'open', views: 4 },
-            { id: 3, status: 'open', views: 6 },
+            { id: 1, status: 1, views: 2 },
+            { id: 2, status: 1, views: 4 },
+            { id: 3, status: 1, views: 6 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 3 },
-            { id: 2, status: 'open', views: 3 },
-            { id: 3, status: 'open', views: 6 },
+            { id: 1, status: 1, views: 3 },
+            { id: 2, status: 1, views: 3 },
+            { id: 3, status: 1, views: 6 },
           ],
           values: { views: 3 },
           valueKeys: ['views'],
@@ -526,14 +526,14 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open', views: 2 },
-            { id: 2, status: 'open', views: 5 },
-            { id: 3, status: 'open', views: 6 },
+            { id: 1, status: 1, views: 2 },
+            { id: 2, status: 1, views: 5 },
+            { id: 3, status: 1, views: 6 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 3 },
-            { id: 2, status: 'open', views: 4 },
-            { id: 3, status: 'open', views: 6 },
+            { id: 1, status: 1, views: 3 },
+            { id: 2, status: 1, views: 4 },
+            { id: 3, status: 1, views: 6 },
           ],
           values: { views: 3 },
           valueKeys: ['views'],
@@ -581,10 +581,10 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           values: { views: 5 },
           valueKeys: ['views'],
@@ -618,7 +618,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
         }),
       ],
@@ -664,7 +664,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
         }),
       ],
@@ -710,7 +710,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
         }),
       ],
@@ -739,7 +739,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: 8 },
+            { id: 2, status: 1, views: 8 },
           ],
         }),
       ],
@@ -768,7 +768,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
         }),
       ],
@@ -788,10 +788,10 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 4 },
+            { id: 1, status: 1, views: 4 },
           ],
         }),
       ],
@@ -811,10 +811,10 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'upsert',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 7 },
+            { id: 1, status: 1, views: 7 },
           ],
         }),
       ],
@@ -833,7 +833,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'closed', views: 3 },
+            { id: 2, status: 0, views: 3 },
           ],
         }),
       ],
@@ -851,7 +851,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 2, status: 'open', views: 7 },
+            { id: 2, status: 1, views: 7 },
           ],
         }),
       ],
@@ -887,7 +887,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open' },
+            { id: 2, status: 1 },
           ],
         }),
       ],
@@ -901,7 +901,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       [
         createMutation({
           rows: [
-            { id: 2, status: 'open', views: Number.NaN },
+            { id: 2, status: 1, views: Number.NaN },
           ],
         }),
       ],
@@ -925,7 +925,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       createQuery({ aggregate: undefined }),
       aggregate,
       5,
-      [createMutation({ rows: [{ id: 2, status: 'open', views: 3 }] })],
+      [createMutation({ rows: [{ id: 2, status: 1, views: 3 }] })],
       createBackfills(query),
     )).resolves.toEqual({ patched: false })
 
@@ -949,7 +949,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       query,
       aggregate,
       5,
-      [createMutation({ kind: 'upsert', rows: [{ id: 2, status: 'open', views: 3 }] })],
+      [createMutation({ kind: 'upsert', rows: [{ id: 2, status: 1, views: 3 }] })],
       createBackfills(query),
     )).resolves.toEqual({ patched: false })
 
@@ -964,7 +964,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
             { id: 2, views: 3 },
           ],
           rows: [
-            { id: 2, status: 'open', views: 3 },
+            { id: 2, status: 1, views: 3 },
           ],
         }),
       ],
@@ -977,7 +977,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
       5,
       [createMutation({
         kind: 'update',
-        rows: [{ id: 2, status: 'open', views: 3 }],
+        rows: [{ id: 2, status: 1, views: 3 }],
         values: { views: 3 },
         valueKeys: ['views'],
       })],
@@ -995,7 +995,7 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
             { id: 2, views: 3 },
           ],
           rows: [
-            { id: 2, status: 'open', views: 3 },
+            { id: 2, status: 1, views: 3 },
           ],
           values: { views: 3 },
           valueKeys: ['views'],
@@ -1042,10 +1042,10 @@ describe('@holo-js/realtime extreme aggregate patching', () => {
         createMutation({
           kind: 'update',
           previousRows: [
-            { id: 1, status: 'open', views: 5 },
+            { id: 1, status: 1, views: 5 },
           ],
           rows: [
-            { id: 1, status: 'open', views: 4 },
+            { id: 1, status: 1, views: 4 },
           ],
           values: { views: 4 },
           valueKeys: ['views'],

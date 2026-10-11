@@ -22,7 +22,7 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
     dependencies: ['db:main:posts'],
     orderBy: [],
     patchable: true,
-    predicates: [{ column: 'status', operator: '=', value: 'open' }],
+    predicates: [{ column: 'status', operator: '=', value: 1 }],
     tableName: 'posts',
     ...overrides,
   }
@@ -114,7 +114,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       5,
       [
         createMutation({
-          rows: [{ id: 1, status: 'open', views: 4 }],
+          rows: [{ id: 1, status: 1, views: 4 }],
         }),
       ],
       createBackfills(query),
@@ -130,7 +130,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       5,
       [
         createMutation({
-          rows: [{ id: 1, status: 'closed', views: 4 }],
+          rows: [{ id: 1, status: 0, views: 4 }],
         }),
       ],
       createBackfills(query),
@@ -145,7 +145,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       5,
       [
         createMutation({
-          rows: [{ id: 1, status: 'open' }],
+          rows: [{ id: 1, status: 1 }],
         }),
       ],
       createBackfills(query, backfillResult),
@@ -176,11 +176,11 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       [
         createMutation({
           kind: 'delete',
-          rows: [{ id: 1, status: 'open', views: 4 }],
+          rows: [{ id: 1, status: 1, views: 4 }],
         }),
         createMutation({
           kind: 'insert',
-          rows: [{ id: 2, status: 'open', views: 5 }],
+          rows: [{ id: 2, status: 1, views: 5 }],
         }),
       ],
       createBackfills(query),
@@ -203,7 +203,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       5,
       [
         createMutation({
-          rows: [{ id: 2, status: 'open', views: 7 }],
+          rows: [{ id: 2, status: 1, views: 7 }],
         }),
       ],
       createBackfills(averageQuery),
@@ -236,7 +236,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       5,
       [
         createMutation({
-          rows: [{ id: 2, status: 'open', views: 3 }],
+          rows: [{ id: 2, status: 1, views: 3 }],
         }),
       ],
       createBackfills(extremeQuery),
@@ -331,8 +331,8 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
         createMutation({
           kind: 'delete',
           rows: [
-            { id: 1, status: 'open' },
-            { id: 2, status: 'open' },
+            { id: 1, status: 1 },
+            { id: 2, status: 1 },
           ],
         }),
       ],
@@ -360,7 +360,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       true,
       [
         createMutation({
-          rows: [{ id: 1, status: 'open' }],
+          rows: [{ id: 1, status: 1 }],
         }),
       ],
       createBackfills(query),
@@ -394,7 +394,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
       false,
       [
         createMutation({
-          rows: [{ id: 1, status: 'open' }],
+          rows: [{ id: 1, status: 1 }],
         }),
       ],
       createBackfills(query),

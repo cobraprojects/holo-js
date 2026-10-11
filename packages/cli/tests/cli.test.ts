@@ -12532,7 +12532,7 @@ export default defineDatabaseConfig({
     expect(io.read().stdout).toContain('Cleared 0 pending job(s).')
   })
 
-  it('boots queued job runtime environments and cleans up bundled jobs on success and failure', async () => {
+  it('registers discovered queue jobs for default and custom paths and rejects invalid definitions', async () => {
     const successRoot = await createTempProject()
     tempDirs.push(successRoot)
     ;(globalThis as typeof globalThis & { __holoQueueModelLoaded__?: number }).__holoQueueModelLoaded__ = 0
@@ -12568,43 +12568,24 @@ export default defineJob({
 })
 `)
 
-    vi.resetModules()
-    vi.doMock('@holo-js/core', async () => {
-      const actual = await vi.importActual('@holo-js/core') as typeof HoloCoreModule
-      return {
-        ...actual,
-        initializeHolo: vi.fn(async () => mockedRuntime),
+    const isolatedCliInternals = await import('../src/queue')
+    const queueModule = await import('@holo-js/queue')
+    await withFakeBun(async () => {
+      await prepareProjectDiscovery(successRoot)
+      const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(successRoot)
+      try {
+        expect(environment.project.config.paths.jobs).toBe('server/jobs')
+        expect(queueModule.listRegisteredQueueJobs().map(job => job.name)).toContain('reports.send')
+        expect((globalThis as typeof globalThis & { __holoQueueModelLoaded__?: number }).__holoQueueModelLoaded__).toBeGreaterThanOrEqual(1)
+      } finally {
+        await environment.cleanup()
       }
     })
 
-    const mockedRuntime = {
-      shutdown: vi.fn(async () => {}),
-    } as unknown as Awaited<ReturnType<typeof initializeHolo>>
-
-    try {
-      const isolatedCliInternals = await import('../src/queue')
-      const queueModule = await import('@holo-js/queue')
-      mockedRuntime.shutdown = vi.fn(async () => {
-        queueModule.resetQueueRuntime()
-      })
-
-      await withFakeBun(async () => {
-        await prepareProjectDiscovery(successRoot)
-        const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(successRoot)
-        try {
-          expect(environment.project.config.paths.jobs).toBe('server/jobs')
-          expect(environment.bundledJobs).toHaveLength(1)
-          expect(queueModule.listRegisteredQueueJobs().map(job => job.name)).toContain('reports.send')
-          expect((globalThis as typeof globalThis & { __holoQueueModelLoaded__?: number }).__holoQueueModelLoaded__).toBeGreaterThanOrEqual(1)
-        } finally {
-          await environment.cleanup()
-        }
-      })
-      expect(mockedRuntime.shutdown).toHaveBeenCalledTimes(1)
-
-      const customJobsRoot = await createTempProject()
-      tempDirs.push(customJobsRoot)
-      await writeProjectFile(customJobsRoot, 'config/app.ts', `
+    const customJobsRoot = await createTempProject()
+    tempDirs.push(customJobsRoot)
+    await writeProjectFile(customJobsRoot, 'config/database.ts', await readFile(join(successRoot, 'config/database.ts'), 'utf8'))
+    await writeProjectFile(customJobsRoot, 'config/app.ts', `
 import { defineAppConfig } from '@holo-js/config'
 
 export default defineAppConfig({
@@ -12613,7 +12594,7 @@ export default defineAppConfig({
   },
 })
 `)
-      await writeProjectFile(customJobsRoot, 'queue/send-email.mjs', `
+    await writeProjectFile(customJobsRoot, 'queue/send-email.mjs', `
 import { defineJob } from '@holo-js/queue'
 
 export default defineJob({
@@ -12623,26 +12604,24 @@ export default defineJob({
 })
 `)
 
-      await withFakeBun(async () => {
-        await prepareProjectDiscovery(
-          customJobsRoot,
-          (await loadProjectConfig(customJobsRoot, { required: true })).config,
-        )
-        const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(customJobsRoot)
-        try {
-          expect(environment.project.config.paths.jobs).toBe('queue')
-          expect(environment.bundledJobs).toHaveLength(1)
-          expect(queueModule.listRegisteredQueueJobs().map(job => job.name)).toContain('send-email')
-          expect(queueModule.listRegisteredQueueJobs().map(job => job.name)).not.toContain('queue.send-email')
-        } finally {
-          await environment.cleanup()
-        }
-      })
-      expect(mockedRuntime.shutdown).toHaveBeenCalledTimes(2)
+    await withFakeBun(async () => {
+      await prepareProjectDiscovery(
+        customJobsRoot,
+        (await loadProjectConfig(customJobsRoot, { required: true })).config,
+      )
+      const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(customJobsRoot)
+      try {
+        expect(environment.project.config.paths.jobs).toBe('queue')
+        expect(queueModule.listRegisteredQueueJobs().map(job => job.name)).toContain('send-email')
+        expect(queueModule.listRegisteredQueueJobs().map(job => job.name)).not.toContain('queue.send-email')
+      } finally {
+        await environment.cleanup()
+      }
+    })
 
-      const emptyRoot = await createTempProject()
-      tempDirs.push(emptyRoot)
-      await writeProjectFile(emptyRoot, 'config/database.ts', `
+    const emptyRoot = await createTempProject()
+    tempDirs.push(emptyRoot)
+    await writeProjectFile(emptyRoot, 'config/database.ts', `
 import { defineDatabaseConfig } from '@holo-js/db'
 
 export default defineDatabaseConfig({
@@ -12656,20 +12635,19 @@ export default defineDatabaseConfig({
 })
 `)
 
-      await withFakeBun(async () => {
-        await prepareProjectDiscovery(emptyRoot)
-        const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(emptyRoot)
-        try {
-          expect(environment.bundledJobs).toEqual([])
-        } finally {
-          await environment.cleanup()
-        }
-      })
-      expect(mockedRuntime.shutdown).toHaveBeenCalledTimes(3)
+    await withFakeBun(async () => {
+      await prepareProjectDiscovery(emptyRoot)
+      const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(emptyRoot)
+      try {
+        expect(queueModule.listRegisteredQueueJobs().filter(job => job.sourcePath)).toEqual([])
+      } finally {
+        await environment.cleanup()
+      }
+    })
 
-      const failingRoot = await createTempProject()
-      tempDirs.push(failingRoot)
-      await writeProjectFile(failingRoot, 'config/database.ts', `
+    const failingRoot = await createTempProject()
+    tempDirs.push(failingRoot)
+    await writeProjectFile(failingRoot, 'config/database.ts', `
 import { defineDatabaseConfig } from '@holo-js/db'
 
 export default defineDatabaseConfig({
@@ -12690,16 +12668,11 @@ export default defineJob({
 })
 `)
 
-      await withFakeBun(async () => {
-        await prepareProjectDiscovery(failingRoot)
-        await writeProjectFile(failingRoot, 'server/jobs/broken.mjs', 'export default { nope: true }\n')
-        await expect(isolatedCliInternals.getQueueRuntimeEnvironment(failingRoot)).rejects.toThrow('does not export a Holo job')
-      })
-      expect(mockedRuntime.shutdown).toHaveBeenCalledTimes(3)
-    } finally {
-      vi.doUnmock('@holo-js/core')
-      vi.resetModules()
-    }
+    await withFakeBun(async () => {
+      await prepareProjectDiscovery(failingRoot)
+      await writeProjectFile(failingRoot, 'server/jobs/broken.mjs', 'export default { nope: true }\n')
+      await expect(isolatedCliInternals.getQueueRuntimeEnvironment(failingRoot)).rejects.toThrow('does not export a Holo job')
+    })
   })
 
   it('runs queue worker helpers with injected dependencies and reports failures and summaries', async () => {
@@ -12715,7 +12688,6 @@ export default defineJob({
       getEnvironment: async () => ({
         runtime: {} as never,
         project: await loadProjectConfig(projectRoot, { required: true }),
-        bundledJobs: [],
         cleanup,
       }),
       hasRestartSignal: async () => true,
@@ -12760,7 +12732,6 @@ export default defineJob({
       getEnvironment: async () => ({
         runtime: {} as never,
         project: await loadProjectConfig(projectRoot, { required: true }),
-        bundledJobs: [],
         cleanup,
       }),
       hasRestartSignal: async () => false,
@@ -12802,7 +12773,6 @@ export default defineJob({
       getEnvironment: async () => ({
         runtime: {} as never,
         project: await loadProjectConfig(projectRoot, { required: true }),
-        bundledJobs: [],
         cleanup,
       }),
       runWorker: async (options?: QueueWorkerRunOptions) => {
@@ -12832,7 +12802,6 @@ export default defineJob({
       getEnvironment: async () => ({
         runtime: {} as never,
         project: await loadProjectConfig(projectRoot, { required: true }),
-        bundledJobs: [],
         cleanup,
       }),
       runWorker: async (options?: QueueWorkerRunOptions) => {
@@ -14333,7 +14302,6 @@ export default defineDatabaseConfig({
     try {
       const isolatedCliInternals = await import('../src/queue')
       const environment = await withFakeBun(async () => isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot))
-      expect(environment.bundledJobs).toEqual([])
       await environment.cleanup()
     } finally {
       vi.doUnmock('../src/project')

@@ -763,13 +763,13 @@ export default defineNuxtModule<ModuleOptions>({
     applyStorageRuntimeConfig(opts.runtimeConfig, normalizedStorage)
 
     if (!opts._holoCoreRuntimeRegistered) {
-      if (existsSync(resolve(rootDir, '.holo-js/generated/job-importer.ts'))) {
+      if (existsSync(resolve(rootDir, '.holo-js/generated/definition-importer.ts'))) {
         const initPluginPath = resolve(rootDir, '.holo-js/generated/nuxt-init.ts')
         await writeFile(initPluginPath, [
           `import init from ${JSON.stringify(resolver.resolve('./runtime/plugins/init'))}`,
-          "import { installProjectQueueJobImporter } from './job-importer'",
+          "import { installProjectDefinitionImporter } from './definition-importer'",
           '',
-          `installProjectQueueJobImporter(${JSON.stringify(rootDir)})`,
+          `installProjectDefinitionImporter(${JSON.stringify(rootDir)})`,
           '',
           'export default init',
           '',
