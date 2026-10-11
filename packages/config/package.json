@@ -26,12 +26,12 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/kernel": "^0.3.18"
+    "@holo-js/kernel": "catalog:"
   },
   "devDependencies": {
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
-    "vitest": "^4.1.5"
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

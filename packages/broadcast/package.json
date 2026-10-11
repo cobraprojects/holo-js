@@ -48,14 +48,14 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.3.18",
-    "@holo-js/kernel": "^0.3.18",
-    "@holo-js/queue": "^0.3.18",
-    "@holo-js/validation": "^0.3.18",
-    "ws": "^8.18.3"
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:",
+    "@holo-js/queue": "catalog:",
+    "@holo-js/validation": "catalog:",
+    "ws": "catalog:"
   },
   "peerDependencies": {
-    "ioredis": "^5.4.2"
+    "ioredis": "catalog:"
   },
   "peerDependenciesMeta": {
     "ioredis": {
@@ -63,12 +63,12 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "@types/ws": "^8.18.1",
-    "ioredis": "^5.4.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
-    "vitest": "^4.1.5"
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "ioredis": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

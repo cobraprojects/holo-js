@@ -23,13 +23,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/broadcast": "^0.3.18"
+    "@holo-js/broadcast": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
-    "vitest": "^4.1.5"
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
