@@ -45,6 +45,16 @@ const svelteKitAdapter = createHoloFrameworkAdapter<SvelteKitHoloOptions>({
   stateKey: '__holoSvelteKitAdapter__',
   displayName: 'SvelteKit',
 })
+
+if (typeof process !== 'undefined') {
+  process.once('sveltekit:shutdown', () => {
+    void svelteKitAdapter.resetProject().catch((error: Error) => {
+      console.error(error)
+      process.exitCode = 1
+    })
+  })
+}
+
 const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let validationExceptionThrowerRegistered = false
 type ValidationRequestState = {
