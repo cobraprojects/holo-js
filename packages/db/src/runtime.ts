@@ -2,6 +2,7 @@ import { createConnectionManager, type ConnectionManager } from './connection/Co
 import { createDeferredDatabaseDriverAdapter } from './drivers/registry'
 import type { DatabaseCapabilities } from './core/capabilities'
 import type { DatabaseContextOptions, DatabaseLogger, Dialect, DriverAdapter } from './core/types'
+import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 
 export type SupportedDatabaseDriver = 'sqlite' | 'postgres' | 'mysql'
 
@@ -17,6 +18,7 @@ export interface RuntimeConnectionConfig {
   schema?: string
   ssl?: boolean | Record<string, unknown>
   logging?: boolean
+  security?: HoloProjectConnectionConfig['security']
 }
 
 export interface RuntimeDatabaseConfig {
@@ -56,6 +58,10 @@ function normalizeConnectionInput(input: RuntimeConnectionConfig | string | unde
     return { url: input }
   }
 
+  const allowUnsafeRawSql = input?.security?.allowUnsafeRawSql
+  if (allowUnsafeRawSql !== undefined && typeof allowUnsafeRawSql !== 'boolean') {
+    throw new Error('Database connection security.allowUnsafeRawSql must be a boolean.')
+  }
   return input ?? {}
 }
 
@@ -184,7 +190,11 @@ function resolveConnectionConfig(
         ssl,
       }
 
-  return createRuntimeConnectionOptions(driver, connection, logging, schemaName, name)
+  const options = createRuntimeConnectionOptions(driver, connection, logging, schemaName, name)
+  return {
+    ...options,
+    security: normalized.security ? { ...options.security, ...normalized.security } : options.security,
+  }
 }
 
 export function isSupportedDatabaseDriver(value: string): value is SupportedDatabaseDriver {

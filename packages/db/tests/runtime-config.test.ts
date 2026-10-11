@@ -15,6 +15,14 @@ afterEach(() => {
 })
 
 describe('runtime config helpers', () => {
+  it('rejects a non-boolean raw SQL opt-in in application configuration', () => {
+    const connections = {
+      main: { driver: 'postgres' as const, url: 'postgres://localhost/app', security: { allowUnsafeRawSql: true } },
+    }
+    Object.assign(connections.main.security, { allowUnsafeRawSql: 'false' })
+    expect(() => resolveRuntimeConnectionManagerOptions({ db: { connections } })).toThrow('allowUnsafeRawSql must be a boolean')
+  })
+
   it('normalizes and defines Holo project configuration', () => {
     const normalized = normalizeHoloProjectConfig()
     expect(normalized.paths).toEqual(DEFAULT_HOLO_PROJECT_PATHS)

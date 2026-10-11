@@ -280,7 +280,7 @@ export type MediaEnabledModel<
         MediaCollectionName<TDefinition>,
         MediaConversionName<TDefinition>
       >
-} & TModel
+}
 
 export function defineMediaModel<
   TModel extends MediaModelStatic,

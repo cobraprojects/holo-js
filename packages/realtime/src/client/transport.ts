@@ -95,6 +95,11 @@ async function executeRealtimeRequest<TResult>(
     credentials: 'same-origin',
     headers: {
       'content-type': 'application/json',
+      ...(globals.document
+        ? await import('@holo-js/security/client')
+          .then(security => security.securityClientInternals.getCsrfRequestHeaders(globals.document?.cookie))
+          .catch(() => ({}))
+        : {}),
     },
     body: JSON.stringify({ name, args }),
   })

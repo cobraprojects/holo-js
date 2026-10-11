@@ -848,6 +848,8 @@ describe('@holo-js/media', () => {
       const firstOrFailPost = await Post.firstOrFail()
       const solePost = await Post.sole()
       const createdPost = await Post.create({ title: 'Created' })
+      const inferredCreatedPost: Awaited<ReturnType<typeof Post.create>> = createdPost
+      const inferredQueryPost: Awaited<ReturnType<ReturnType<typeof Post.query>['first']>> = queryFirstPost
       const updatedPost = await Post.update(1, { title: 'Updated' })
       const restoredPost = await Post.restore(1)
       const queryFoundPost = await Post.query().find(1)
@@ -868,6 +870,8 @@ describe('@holo-js/media', () => {
       acceptsPostMediaEntity(firstOrFailPost)
       acceptsPostMediaEntity(solePost)
       acceptsPostMediaEntity(createdPost)
+      acceptsPostMediaEntity(inferredCreatedPost)
+      acceptsPostMediaEntity(inferredQueryPost)
       acceptsPostMediaEntity(updatedPost)
       acceptsPostMediaEntity(restoredPost)
       acceptsPostMediaEntity(queryFoundPost)

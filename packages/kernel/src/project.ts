@@ -27,6 +27,9 @@ export interface HoloProjectConnectionConfig {
   schema?: string
   ssl?: boolean | Record<string, unknown>
   logging?: boolean
+  security?: {
+    allowUnsafeRawSql?: boolean
+  }
 }
 
 export interface HoloProjectDatabaseConfig {

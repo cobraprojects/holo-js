@@ -225,7 +225,7 @@ export class DatabaseContext {
 
   getSchedulingModeHint(): 'concurrent' | 'serialized' | 'worker' {
     return this._runtime.scheduler.preview({
-      transactional: this._scope.kind !== 'root',
+      transactional: this._scope.kind !== 'root' && this._adapter.supportsConcurrentTransactionScopes !== true,
       preferWorkerThreads: this._concurrency.workerThreads,
     })
   }
@@ -628,7 +628,7 @@ export class DatabaseContext {
     this._assertValidOperationOptions(options)
     const start = Date.now()
     const scheduled = await this._runtime.scheduler.schedule({
-      transactional: this._scope.kind !== 'root',
+      transactional: this._scope.kind !== 'root' && this._adapter.supportsConcurrentTransactionScopes !== true,
       preferWorkerThreads: this._concurrency.workerThreads,
       withinExclusive: this._scope.kind !== 'root',
     }, async (schedulingMode) => {

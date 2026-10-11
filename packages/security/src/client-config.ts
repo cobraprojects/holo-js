@@ -62,6 +62,7 @@ export function createSecurityClientConfig(config: NormalizedHoloSecurityConfig)
     csrf: Object.freeze({
       field: config.csrf.field,
       cookie: config.csrf.cookie,
+      header: config.csrf.header,
     }),
   })
 }
@@ -70,8 +71,7 @@ export function serializeSecurityClientConfig(config: SecurityClientConfig): str
   return JSON.stringify(config)
 }
 
-export function readSecurityClientConfigFromCookies(cookieHeader: string | null | undefined): SecurityClientConfig | undefined {
-  const raw = parseCookieHeader(cookieHeader)[SECURITY_CLIENT_CONFIG_COOKIE]
+function parseSecurityClientConfig(raw: string | undefined): SecurityClientConfig | undefined {
   if (!raw) {
     return undefined
   }
@@ -82,17 +82,33 @@ export function readSecurityClientConfigFromCookies(cookieHeader: string | null 
       return undefined
     }
 
-    return Object.freeze({
-      csrf: Object.freeze({
-        field: parsed.csrf.field,
-        cookie: parsed.csrf.cookie,
-      }),
-    })
+    return parsed
   } catch {
     return undefined
   }
 }
 
+export function readSecurityClientConfigFromCookies(cookieHeader: string | null | undefined): SecurityClientConfig | undefined {
+  const parsed = parseSecurityClientConfig(parseCookieHeader(cookieHeader)[SECURITY_CLIENT_CONFIG_COOKIE])
+  return parsed ? Object.freeze({
+      csrf: Object.freeze({
+        field: parsed.csrf.field,
+        cookie: parsed.csrf.cookie,
+        ...('header' in parsed.csrf && typeof parsed.csrf.header === 'string' ? { header: parsed.csrf.header } : {}),
+      }),
+    }) : undefined
+}
+
+function getCsrfRequestHeaders(cookieHeader: string | undefined): Readonly<Record<string, string>> {
+  const cookies = parseCookieHeader(cookieHeader)
+  const config = parseSecurityClientConfig(cookies[SECURITY_CLIENT_CONFIG_COOKIE]) ?? DEFAULT_SECURITY_CLIENT_CONFIG
+  const token = cookies[config.csrf.cookie]
+  const header = 'header' in config.csrf && typeof config.csrf.header === 'string'
+    ? config.csrf.header : 'X-CSRF-TOKEN'
+  return token ? { [header]: token } : {}
+}
+
 export const securityClientConfigInternals = {
   parseCookieHeader,
+  getCsrfRequestHeaders,
 }

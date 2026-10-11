@@ -39,15 +39,20 @@
     "esbuild": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/auth": "catalog:"
+    "@holo-js/auth": "catalog:",
+    "@holo-js/security": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/auth": {
+      "optional": true
+    },
+    "@holo-js/security": {
       "optional": true
     }
   },
   "devDependencies": {
     "@holo-js/auth": "catalog:",
+    "@holo-js/security": "catalog:",
     "@holo-js/db-sqlite": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",

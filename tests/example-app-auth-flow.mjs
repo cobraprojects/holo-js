@@ -374,11 +374,14 @@ export async function assertExampleAppAuthFlow({
       headers: Object.fromEntries(headers),
     }
   }
-  const fetchAuthJson = async (path, options = {}) => {
+  const protectAuthRequest = async (options = {}) => {
     const method = options.method ?? (options.fields ? 'POST' : 'GET')
-    const protectedOptions = loginRequiresCsrf && options.skipCsrf !== true && method !== 'GET'
+    return loginRequiresCsrf && options.skipCsrf !== true && !['GET', 'HEAD', 'OPTIONS'].includes(method)
       ? await applyCsrf(options)
       : options
+  }
+  const fetchAuthJson = async (path, options = {}) => {
+    const protectedOptions = await protectAuthRequest(options)
 
     return await fetchJson(baseUrl, path, {
       ...protectedOptions,
@@ -869,7 +872,7 @@ export async function assertExampleAppAuthFlow({
   await afterAuthenticated?.({
     baseUrl,
     jar: authenticatedJar,
-    fetchText: fetchAuthText,
+    fetchText: async (path, options = {}) => await fetchAuthText(path, await protectAuthRequest(options)),
     fetchJson: fetchAuthJson,
   })
 

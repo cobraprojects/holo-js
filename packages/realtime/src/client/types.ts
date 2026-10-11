@@ -145,6 +145,7 @@ export type RealtimeWebSocketLike = {
 export type RealtimeWebSocketConstructor = new (url: string) => RealtimeWebSocketLike
 
 export type RealtimeClientGlobals = typeof globalThis & {
+  readonly document?: { readonly cookie?: string }
   readonly WebSocket?: RealtimeWebSocketConstructor
   readonly fetch?: typeof fetch
   readonly location?: {

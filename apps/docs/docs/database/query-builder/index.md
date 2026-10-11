@@ -82,9 +82,39 @@ The builder supports:
 
 Unsafe SQL is supported, but it stays visibly separate from the safe query surface:
 
+Raw SQL is disabled by default. Enable it explicitly on each connection that needs it in `config/database.ts`:
+
+```ts
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: {
+      driver: 'postgres',
+      url: process.env.DATABASE_URL,
+      security: { allowUnsafeRawSql: true },
+    },
+  },
+})
+```
+
+This setting applies to native app boot, migrations, and transactions on that connection. Omitted or `false` settings keep raw SQL disabled; the opt-in must be a boolean.
+
 ```ts
 await DB.unsafeExecute(DB.raw('VACUUM'))
 ```
+
+For PostgreSQL tenant context, bind the tenant ID and keep it transaction-local:
+
+```ts
+await DB.transaction(async tx => {
+  await tx.unsafeQuery(DB.raw("SELECT set_config('app.tenant_id', $1, true)", [tenantId]))
+  return await DB.table('records').get()
+})
+```
+
+The database's RLS policies enforce row access. The transaction-local setting clears after commit or rollback.
 
 Use raw SQL deliberately and sparingly. Most application queries should remain on the safe fluent path.
 
