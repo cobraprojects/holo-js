@@ -7,15 +7,17 @@ import {
   getRequestURL,
   readRawBody,
   setCookie,
+  setResponseHeader,
   type H3Event,
 } from 'h3'
 import { protect } from '../index'
+import { cors } from '../cors'
 import { prepareCsrfCookies } from '../cookie-issuance'
 import { SecurityCsrfError } from '../contracts'
 
 function isSafeMethod(method: string): boolean {
   const normalized = method.trim().toUpperCase()
-  return normalized === 'GET' || normalized === 'HEAD'
+  return normalized === 'GET' || normalized === 'HEAD' || normalized === 'OPTIONS'
 }
 
 function createHeaders(event: H3Event): Headers {
@@ -70,6 +72,9 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
     }
 
     const request = await createRequest(event)
+    const preflight = cors.preflight(request)
+    if (preflight) return preflight
+    cors.headers(request).forEach((value, name) => setResponseHeader(event, name, value))
 
     try {
       await protect(request)

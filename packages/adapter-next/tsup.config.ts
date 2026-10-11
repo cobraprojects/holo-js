@@ -9,6 +9,7 @@ export default defineConfig({
     client: 'src/client.ts',
     realtime: 'src/realtime.ts',
     'validation-loader': 'src/validation-loader.ts',
+    'route-loader': 'src/route-loader.ts',
     'realtime-definition-loader': 'src/realtime-definition-loader.ts',
     runtime: 'src/runtime.ts',
   },

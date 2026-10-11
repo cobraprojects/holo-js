@@ -157,6 +157,10 @@ Validation failures, CSRF failures, and auth failures stay separate:
   `ValidationException` for expected auth failures.
 - Forms adapters handle those auth exceptions through the same status and field-error path as schema validation.
 
+A signed cookie and matching `Origin` or `Referer` do not replace the submitted CSRF token. Unsafe requests
+must submit the matching token in the configured header or form field. Framework middleware also applies
+the configured CORS headers and handles preflight requests from allowed origins.
+
 ### Login
 
 ```ts

@@ -1,4 +1,5 @@
 import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
+import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
 import { error as svelteKitError, type Handle, type HandleServerError } from '@sveltejs/kit'
 import {
   createHoloFrameworkAdapter,
@@ -82,7 +83,7 @@ function isSerializedValidationException(value: unknown): value is SerializedVal
 }
 
 function serializeValidationException(error: unknown): SerializedValidationException | undefined {
-  return validationInternals.serializeValidationException(error)
+  return validationInternals.serializeValidationException(error) ?? serializeRateLimitError(error)
 }
 
 function toSvelteKitValidationBody(payload: SerializedValidationException): SvelteKitErrorBody {
@@ -101,7 +102,12 @@ async function mapValidationActionResponse(
   if (isApiEvent(event)) {
     const apiPayload = takeValidationActionFailure(event)
     if (apiPayload) {
-      return Response.json(apiPayload, { status: apiPayload.status })
+      const headers = new Headers(response.headers)
+      headers.delete('content-length')
+      headers.delete('content-encoding')
+      headers.set('content-type', 'application/json')
+      if (apiPayload.retryAfterSeconds !== undefined) headers.set('Retry-After', String(apiPayload.retryAfterSeconds))
+      return Response.json(apiPayload, { status: apiPayload.status, headers })
     }
 
     return response
@@ -218,6 +224,7 @@ function createValidationActionFailureResponse(
 ): Response {
   const headers = new Headers(response.headers)
   headers.delete('content-length')
+  headers.delete('content-encoding')
   headers.set('content-type', 'application/json')
   if (reloadWithFlash) {
     headers.set('x-holo-validation-flash', '1')

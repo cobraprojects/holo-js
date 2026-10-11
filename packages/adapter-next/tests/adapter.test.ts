@@ -579,7 +579,6 @@ export default defineConfig({
         module: { rules: Array<{ test: RegExp, use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
       }
       expect(server.transformed).toBe(true)
-      expect(server.module.rules).toHaveLength(1)
       expect(server.module.rules[0]?.use[0]).toMatchObject({
         loader: expect.stringContaining('realtime-definition-loader'),
         options: { preserveServerHandlers: true },

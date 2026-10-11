@@ -679,6 +679,7 @@ describe('@holo-js/security csrf', () => {
       },
       body: new URLSearchParams({
         email: 'ava@example.com',
+        _token: formToken,
       }),
     })
     await expect(csrf.verify(nativeFormRequest)).resolves.toBeUndefined()
@@ -692,6 +693,23 @@ describe('@holo-js/security csrf', () => {
       },
       body: fileTokenFormData,
     }))).rejects.toBeInstanceOf(SecurityCsrfError)
+  })
+
+  it.each(['origin', 'referer'])('rejects tokenless same-origin login with a signed cookie and %s', async (header) => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true } }),
+      csrfSigningKey: 'test-signing-key',
+    })
+    const signedToken = await csrf.token(new Request('https://app.test/login'))
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${signedToken}`,
+        [header]: 'https://app.test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ email: 'ava@example.com', password: 'secret-secret' }),
+    }))).rejects.toMatchObject({ status: 419, name: 'SecurityCsrfError' })
   })
 
   it('rejects missing or mismatched csrf tokens with 419', async () => {

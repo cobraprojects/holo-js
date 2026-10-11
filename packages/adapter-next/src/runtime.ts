@@ -1,5 +1,7 @@
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
 import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
+import { validationInternals } from '@holo-js/validation'
+import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
 import { getCurrentNextRequest, setNextAuthRequestRunner, type NextRequestLike } from './request-context'
 export { runWithNextRequest, type NextRequestLike } from './request-context'
 
@@ -281,7 +283,23 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
   }
 }
 
+function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs) => Response | Promise<Response>): (...args: TArgs) => Promise<Response> {
+  return async (...args) => {
+    try {
+      return await handler(...args)
+    } catch (error) {
+      const payload = validationInternals.serializeValidationException(error) ?? serializeRateLimitError(error)
+      if (!payload) throw error
+      return Response.json(payload, {
+        status: payload.status,
+        ...(payload.retryAfterSeconds === undefined ? {} : { headers: { 'Retry-After': String(payload.retryAfterSeconds) } }),
+      })
+    }
+  }
+}
+
 export const adapterNextRuntimeInternals = {
+  routeHandler,
   safeDecodeCookieSegment,
   parseResponseCookie,
   parseRequestCookies,

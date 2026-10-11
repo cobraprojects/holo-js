@@ -38,6 +38,7 @@ declare module 'h3' {
   export function getMethod(event: H3Event): string
   export function getRequestHeaders(event: H3Event): Record<string, string | undefined>
   export function getRequestURL(event: H3Event): URL
+  export function setResponseHeader(event: H3Event, name: string, value: string): void
   export function readRawBody(event: H3Event, encoding: false): Promise<Buffer | undefined>
   export function setCookie(
     event: H3Event,

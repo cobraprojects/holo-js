@@ -174,33 +174,6 @@ function getHeaderToken(request: Request): string | undefined {
   return request.headers.get(header)?.trim() || undefined
 }
 
-function getRequestOrigin(request: Request): string | undefined {
-  const origin = request.headers.get('origin')?.trim()
-  if (origin) {
-    return origin
-  }
-
-  const referer = request.headers.get('referer')?.trim()
-  if (!referer) {
-    return undefined
-  }
-
-  try {
-    return new URL(referer).origin
-  } catch {
-    return undefined
-  }
-}
-
-function isSameOriginRequest(request: Request): boolean {
-  const requestOrigin = getRequestOrigin(request)
-  if (!requestOrigin) {
-    return false
-  }
-
-  return requestOrigin === new URL(request.url).origin
-}
-
 async function readFormToken(request: Request): Promise<string | undefined> {
   const { field } = getSecurityRuntime().config.csrf
   try {
@@ -235,10 +208,6 @@ async function verifyRequest(
       throw new SecurityCsrfError()
     }
 
-    return
-  }
-
-  if (isSameOriginRequest(request)) {
     return
   }
 
@@ -348,7 +317,6 @@ export const csrfInternals = {
   getCookieToken,
   getHeaderToken,
   isSecureRequest,
-  isSameOriginRequest,
   readFormToken,
   isExcludedPath,
   isSafeMethod,

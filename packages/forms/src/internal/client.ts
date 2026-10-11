@@ -89,6 +89,7 @@ type SvelteKitActionErrorResult = {
 type BrowserFormElement = {
   readonly action?: string
   readonly method?: string
+  getAttribute?(name: string): string | null
 }
 
 const browserFormSubmitSymbol: unique symbol = Symbol('browserFormSubmit')
@@ -762,7 +763,9 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
       const submitter = options.submitter
         ?? ((context: ClientSubmitContext<TData>) => defaultSubmitter<TData, TSuccess>(context, options))
       const liveForm = browserForm ?? getActiveElementBrowserForm()
-      const method = options.method ?? liveForm?.method ?? 'POST'
+      const method = options.method
+        ?? (liveForm?.getAttribute ? liveForm.getAttribute('method') : liveForm?.method)
+        ?? 'POST'
       const action = options.action ?? liveForm?.action
       const liveFormData = getActiveBrowserFormData(liveForm)
       const formData = liveFormData ?? buildFormData(state.values)

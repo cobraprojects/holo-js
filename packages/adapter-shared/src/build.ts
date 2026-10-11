@@ -225,3 +225,4 @@ export function createRealtimeClientDefinitionTransform(
 }
 
 export { compileBrowserValidation } from './validation-transform'
+export { compileNextRoute } from './next-route-transform'

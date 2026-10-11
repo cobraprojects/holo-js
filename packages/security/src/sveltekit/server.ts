@@ -1,4 +1,5 @@
 import { protect } from '../index'
+import { cors } from '../cors'
 import { prepareCsrfCookies } from '../cookie-issuance'
 import { SecurityCsrfError } from '../contracts'
 
@@ -57,6 +58,9 @@ function createCsrfErrorResponse(error: SecurityCsrfError): Response {
 
 export function csrfProtection(): SvelteKitCsrfHandle {
   return async ({ event, resolve }) => {
+    const preflight = cors.preflight(event.request)
+    if (preflight) return preflight
+
     if (event.request.method.trim().toUpperCase() === 'TRACE') {
       return new Response('Method Not Allowed', {
         status: 405,
@@ -68,7 +72,7 @@ export function csrfProtection(): SvelteKitCsrfHandle {
       await protect(event.request)
     } catch (error) {
       if (error instanceof SecurityCsrfError) {
-        return createCsrfErrorResponse(error)
+        return cors.apply(event.request, createCsrfErrorResponse(error))
       }
 
       throw error
@@ -76,7 +80,7 @@ export function csrfProtection(): SvelteKitCsrfHandle {
 
     await issueCsrfCookie(event)
 
-    return resolve(event)
+    return cors.apply(event.request, await resolve(event))
   }
 }
 

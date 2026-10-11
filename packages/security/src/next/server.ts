@@ -1,4 +1,6 @@
 import { protect } from '../index'
+import { cors } from '../cors'
+import { getSecurityRuntime } from '../runtime'
 import { prepareCsrfCookies } from '../cookie-issuance'
 import { SecurityCsrfError } from '../contracts'
 
@@ -64,8 +66,39 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
   return response
 }
 
+async function actionRequest(request: Request): Promise<Request> {
+  const { field, header } = getSecurityRuntime().config.csrf
+  if (!request.headers.has('next-action')
+    || request.headers.get(header)?.trim()
+    || !request.headers.get('content-type')?.startsWith('multipart/form-data')) return request
+
+  try {
+    const data = await request.clone().formData()
+    const root = data.get('0')
+    if (typeof root !== 'string') return request
+    const args: unknown = JSON.parse(root)
+    if (!Array.isArray(args)) return request
+    for (const argument of args) {
+      if (typeof argument !== 'string') continue
+      const part = /^\$K([0-9a-f]+)$/.exec(argument)?.[1]
+      if (!part) continue
+      const token = data.get(`_${Number.parseInt(part, 16)}_${field}`)
+      if (typeof token !== 'string') continue
+      const headers = new Headers(request.headers)
+      headers.set(header, token)
+      return new Request(request.clone(), { headers })
+    }
+  } catch {
+    return request
+  }
+  return request
+}
+
 export function csrfProtection(): NextCsrfMiddleware {
   return async (request) => {
+    const preflight = cors.preflight(request)
+    if (preflight) return preflight
+
     if (request.method.trim().toUpperCase() === 'TRACE') {
       return new Response('Method Not Allowed', {
         status: 405,
@@ -74,16 +107,20 @@ export function csrfProtection(): NextCsrfMiddleware {
     }
 
     try {
-      await protect(request)
+      await protect(await actionRequest(request))
     } catch (error) {
       if (error instanceof SecurityCsrfError) {
-        return createCsrfErrorResponse(error)
+        return cors.apply(request, createCsrfErrorResponse(error))
       }
 
       throw error
     }
 
-    return await issueCsrfCookie(request)
+    const response = await issueCsrfCookie(request)
+    if (response) return cors.apply(request, response)
+    if ([...cors.headers(request)].length === 0) return undefined
+    const { NextResponse } = await import('next/server.js') as NextServerModule
+    return cors.apply(request, NextResponse.next())
   }
 }
 

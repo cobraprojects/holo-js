@@ -537,6 +537,68 @@ async function waitForRenderedApp(journey, server) {
 }
 
 async function writeAuthSecurityRoutes(projectRoot, framework) {
+  if (framework === 'sveltekit') {
+    await writeProjectFile(projectRoot, 'src/hooks.server.ts', `
+import { gzipSync } from 'node:zlib'
+import { type Handle } from '@sveltejs/kit'
+
+export const handle: Handle = async ({ event, resolve }) => {
+  const response = await resolve(event)
+  if (response.status < 400) return response
+  const headers = new Headers(response.headers)
+  headers.set('Content-Encoding', 'gzip')
+  headers.delete('Content-Length')
+  return new Response(new Uint8Array(gzipSync(new Uint8Array(await response.arrayBuffer()))), {
+    status: response.status, headers,
+  })
+}
+`)
+  }
+  if (framework === 'next') {
+    await writeProjectFile(projectRoot, 'app/security-login/schema.ts', `
+import { field, schema } from '@holo-js/validation'
+
+export const loginSchema = schema({ email: field.string().required().email(), password: field.password().required() })
+`)
+    await writeProjectFile(projectRoot, 'app/security-login/actions.ts', `
+'use server'
+
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { loginSchema } from './schema'
+
+export async function loginAction(formData: FormData) {
+  const input = await validate(formData, loginSchema, { throttle: 'login' })
+  const result = await login(input)
+  return { email: result.user.email }
+}
+`)
+    await writeProjectFile(projectRoot, 'app/security-login/page.tsx', `
+'use client'
+
+import { useState } from 'react'
+import { useForm } from '@holo-js/adapter-next/client'
+import { loginAction } from './actions'
+import { loginSchema } from './schema'
+
+export default function LoginPage() {
+  const [email, setEmail] = useState('')
+  const form = useForm(loginSchema, {
+    initialValues: { email: 'csrf-journey@example.com', password: 'csrf-journey-password' },
+    async submitter({ formData }) {
+      const result = await loginAction(formData)
+      setEmail(result.email)
+    },
+  })
+  return <form onSubmit={event => { event.preventDefault(); void form.submit() }}>
+    <input name="email" value={form.values.email} onInput={event => form.fields.email.onInput(event.currentTarget.value)} />
+    <input name="password" type="password" value={form.values.password} onInput={event => form.fields.password.onInput(event.currentTarget.value)} />
+    <button type="submit">Sign in</button>
+    <output>{email}</output>
+  </form>
+}
+`)
+  }
   const authBody = `
   const credentials = {
     email: 'csrf-journey@example.com',
@@ -546,18 +608,32 @@ async function writeAuthSecurityRoutes(projectRoot, framework) {
     await register({ ...credentials, name: 'CSRF Journey', passwordConfirmation: credentials.password })
     return Response.json({ registered: true })
   }
-  const session = await login(credentials)
+  if (new URL(request.url).pathname.endsWith('/logout')) {
+    await logout()
+    return Response.json({ loggedOut: true })
+  }
+  if (new URL(request.url).pathname.endsWith('/throttle')) {
+    await protect(request, { throttle: 'register' })
+    return Response.json({ ok: true })
+  }
+  const input = await validate(request, loginSchema, { throttle: 'login' })
+  const session = await login(input)
   return Response.json({ email: session.user.email })
 `
-  for (const action of ['register', 'login']) {
+  for (const action of ['register', 'login', 'logout', 'throttle']) {
     if (framework === 'nuxt') {
       await writeProjectFile(projectRoot, `server/api/security-${action}.post.ts`, `
-import { login, register } from '@holo-js/auth'
-import { defineEventHandler, getRequestURL } from 'h3'
+import { login, logout, register } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
+import { protect } from '@holo-js/security'
+import { defineEventHandler, toWebRequest } from 'h3'
+
+const loginSchema = schema({ email: field.string().required().email(), password: field.password().required() })
 
 export default defineEventHandler(async (event) => {
-  const request = { url: getRequestURL(event).href }
-${authBody.replace("endsWith('/register')", "endsWith('-register')")}
+  const request = toWebRequest(event)
+${authBody.replace("endsWith('/register')", "endsWith('-register')").replace("endsWith('/logout')", "endsWith('-logout')").replace("endsWith('/throttle')", "endsWith('-throttle')").replace('validate(request,', 'validate(event,')}
 })
 `)
     } else {
@@ -568,8 +644,13 @@ ${authBody.replace("endsWith('/register')", "endsWith('-register')")}
         ? 'request: Request'
         : '{ request }: RequestEvent'
       await writeProjectFile(projectRoot, path, `
-import { login, register } from '@holo-js/auth'
+import { login, logout, register } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { field, schema } from '@holo-js/validation'
+import { protect } from '@holo-js/security'
 ${framework === 'sveltekit' ? "import { type RequestEvent } from '@sveltejs/kit'" : ''}
+
+const loginSchema = schema({ email: field.string().required().email(), password: field.password().required() })
 
 export async function POST(${signature}) {
 ${authBody}
@@ -579,8 +660,8 @@ ${authBody}
   }
 }
 
-async function assertAuthCsrfProtection(journey) {
-  const origin = `http://127.0.0.1:${journey.port}`
+async function assertAuthSecurity(journey) {
+  const origin = `http://localhost:${journey.port}`
   const route = action => journey.framework === 'nuxt'
     ? `${origin}/api/security-${action}`
     : `${origin}/api/security/${action}`
@@ -589,22 +670,30 @@ async function assertAuthCsrfProtection(journey) {
   assert.ok(tokenCookie, 'Generated app must issue its CSRF cookie on GET')
   const cookie = tokenCookie.split(';')[0]
   const token = decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
+  const credentials = { email: 'csrf-journey@example.com', password: 'csrf-journey-password' }
+  const headers = { Cookie: cookie, Origin: origin, 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }
+  const registration = await fetch(route('register'), { method: 'POST', headers })
+  assert.equal(registration.status, 200, await registration.text())
 
   const missingCookie = await fetch(route('login'), { method: 'POST', headers: { Origin: origin } })
   assert.equal(missingCookie.status, 419, 'Login without a CSRF cookie must be rejected')
-  const missingToken = await fetch(route('login'), { method: 'POST', headers: { Cookie: cookie } })
-  assert.equal(missingToken.status, 419, 'Login without a token or same-origin proof must be rejected')
+  const missingToken = await fetch(route('login'), {
+    method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'csrf-journey@example.com', password: 'csrf-journey-password' }),
+  })
+  assert.equal(missingToken.status, 419, 'Login without a submitted token must be rejected even with a signed cookie and matching Origin')
   const forgedToken = await fetch(route('login'), {
     method: 'POST',
     headers: { Cookie: cookie, Origin: origin, 'X-CSRF-TOKEN': 'forged' },
   })
   assert.equal(forgedToken.status, 419, 'Mismatched tokens must be rejected even with a same-origin header')
-  const headers = { Cookie: cookie, 'X-CSRF-TOKEN': token }
-  const registration = await fetch(route('register'), { method: 'POST', headers })
-  assert.equal(registration.status, 200, await registration.text())
-  const login = await fetch(route('login'), { method: 'POST', headers })
+  const login = await fetch(route('login'), {
+    method: 'POST', headers: { ...headers, Origin: 'http://localhost:3000' }, body: JSON.stringify(credentials),
+  })
   assert.equal(login.status, 200, await login.clone().text())
   assert.equal((await login.json()).email, 'csrf-journey@example.com')
+  assert.equal(login.headers.get('Access-Control-Allow-Origin'), 'http://localhost:3000')
   const sessionCookie = login.headers.getSetCookie().find(cookie => cookie.startsWith('holo_session='))
   assert.ok(sessionCookie, 'Login must issue its session cookie')
   const currentUser = await fetch(`${origin}/api/auth/user`, {
@@ -614,9 +703,119 @@ async function assertAuthCsrfProtection(journey) {
   const session = await currentUser.json()
   assert.equal(session.authenticated, true)
   assert.equal(session.user.email, 'csrf-journey@example.com')
+  assert.match(sessionCookie, /HttpOnly/i)
+  assert.match(sessionCookie, /SameSite=Lax/i)
+  const tamperedSession = await fetch(`${origin}/api/auth/user`, {
+    headers: { Cookie: `${cookie}; ${sessionCookie.split(';')[0]}tampered` },
+  })
+  assert.equal((await tamperedSession.json()).authenticated, false, 'A tampered session cookie must not authenticate')
+  const authenticatedHeaders = { ...headers, Cookie: `${cookie}; ${sessionCookie.split(';')[0]}` }
+  const relogin = await fetch(route('login'), { method: 'POST', headers: authenticatedHeaders, body: JSON.stringify(credentials) })
+  assert.equal(relogin.status, 200)
+  const rotatedCookie = relogin.headers.getSetCookie().find(value => value.startsWith('holo_session='))
+  assert.ok(rotatedCookie)
+  assert.notEqual(rotatedCookie.split(';')[0], sessionCookie.split(';')[0], 'Login must rotate the existing session')
+  const oldSession = await fetch(`${origin}/api/auth/user`, { headers: authenticatedHeaders })
+  assert.equal((await oldSession.json()).authenticated, false, 'Rotated session must not be reusable')
+  const logout = await fetch(route('logout'), {
+    method: 'POST', headers: { ...headers, Cookie: `${cookie}; ${rotatedCookie.split(';')[0]}` },
+  })
+  assert.equal(logout.status, 200)
+  const revoked = await fetch(`${origin}/api/auth/user`, {
+    headers: { Cookie: `${cookie}; ${rotatedCookie.split(';')[0]}` },
+  })
+  assert.equal((await revoked.json()).authenticated, false, 'Logout must revoke the stored session')
+  const allowedOrigin = 'http://localhost:3000'
+  const crossOrigin = await fetch(`${origin}/api/auth/user`, { headers: { Origin: allowedOrigin } })
+  assert.equal(crossOrigin.headers.get('Access-Control-Allow-Origin'), allowedOrigin)
+  assert.equal(crossOrigin.headers.get('Access-Control-Allow-Credentials'), 'true')
+  assert.match(crossOrigin.headers.get('Vary') ?? '', /Origin/i)
+  const preflight = await fetch(route('login'), {
+    method: 'OPTIONS',
+    headers: { Origin: allowedOrigin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'X-CSRF-TOKEN' },
+  })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), allowedOrigin)
+  assert.match(preflight.headers.get('Access-Control-Allow-Headers') ?? '', /X-CSRF-TOKEN/i)
+  const crossOriginRejected = await fetch(route('login'), {
+    method: 'POST', headers: { Cookie: cookie, Origin: allowedOrigin, 'Content-Type': 'application/json' },
+    body: JSON.stringify(credentials),
+  })
+  assert.equal(crossOriginRejected.status, 419)
+  assert.equal(crossOriginRejected.headers.get('Access-Control-Allow-Origin'), allowedOrigin)
+  const untrusted = await fetch(`${origin}/api/auth/user`, { headers: { Origin: 'https://untrusted.example' } })
+  assert.equal(untrusted.headers.get('Access-Control-Allow-Origin'), null)
+  if (journey.framework === 'next') {
+    const { chromium } = await import('playwright')
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const browserPage = await browser.newPage()
+      await browserPage.goto(`${origin}/security-login`)
+      await browserPage.locator('input[name="email"]').fill('csrf-journey@example.com')
+      await browserPage.locator('input[name="password"]').fill('csrf-journey-password')
+      const submission = browserPage.waitForResponse(response => response.request().method() === 'POST')
+      await browserPage.getByRole('button', { name: 'Sign in' }).click()
+      const response = await submission
+      assert.equal(response.status(), 200, 'Valid-token server-action login must succeed')
+      await browserPage.locator('output').filter({ hasText: 'csrf-journey@example.com' }).waitFor()
+      const browserSession = await browserPage.request.get(`${origin}/api/auth/user`)
+      assert.equal((await browserSession.json()).authenticated, true)
+      await browserPage.route('**/security-login', async (route) => {
+        const request = route.request()
+        if (request.method() !== 'POST') return route.continue()
+        const data = await new Request(request.url(), {
+          method: 'POST', headers: request.headers(), body: request.postDataBuffer(),
+        }).formData()
+        for (const name of [...data.keys()]) {
+          if (/^_\d+__token$/.test(name)) data.delete(name)
+        }
+        const tokenless = new Request(request.url(), { method: 'POST', body: data })
+        const headers = { ...request.headers(), 'content-type': tokenless.headers.get('content-type') }
+        delete headers['content-length']
+        await route.continue({ headers, postData: Buffer.from(await tokenless.arrayBuffer()) })
+      })
+      await browserPage.locator('input[name="password"]').fill('csrf-journey-password')
+      const tokenlessSubmission = browserPage.waitForResponse(response => response.request().method() === 'POST')
+      await browserPage.getByRole('button', { name: 'Sign in' }).click()
+      assert.equal((await tokenlessSubmission).status(), 419, 'Tokenless server actions must be rejected with a valid cookie and matching Origin')
+    } finally {
+      await browser.close()
+    }
+  }
+  const nativeFormLogin = await fetch(route('login'), {
+    method: 'POST', headers: { Cookie: cookie, Origin: origin },
+    body: new URLSearchParams({ ...credentials, _token: token }),
+  })
+  assert.equal(nativeFormLogin.status, 200, await nativeFormLogin.clone().text())
+  const invalidCredentials = await fetch(route('login'), {
+    method: 'POST', headers, body: JSON.stringify({ ...credentials, password: 'wrong-password' }),
+  })
+  assert.equal(invalidCredentials.status, 422, 'Invalid credentials must return a validation response')
+  assert.equal(invalidCredentials.headers.getSetCookie().some(value => value.startsWith('holo_session=')), false)
+  const finalAllowed = await fetch(route('login'), { method: 'POST', headers, body: JSON.stringify(credentials) })
+  assert.equal(finalAllowed.status, 200, 'Rejected CSRF requests must not consume the login limit')
+  if (journey.framework !== 'next') {
+    const fifthGuestAttempt = await fetch(route('login'), { method: 'POST', headers, body: JSON.stringify(credentials) })
+    assert.equal(fifthGuestAttempt.status, 200, 'Five guest login attempts must be allowed')
+  }
+  const limited = await fetch(route('login'), { method: 'POST', headers, body: JSON.stringify(credentials) })
+  assert.equal(limited.status, 429, 'The sixth login attempt must be throttled')
+  const failure = await limited.json()
+  assert.ok(failure.retryAfterSeconds > 0)
+  assert.equal(limited.headers.getSetCookie().some(value => value.startsWith('holo_session=')), false)
+  const routeAttempts = await Promise.all(Array.from({ length: 12 }, () => fetch(route('throttle'), {
+    method: 'POST', headers: { ...headers, Origin: allowedOrigin },
+  })))
+  assert.equal(routeAttempts.filter(response => response.status === 200).length, 10)
+  assert.equal(routeAttempts.filter(response => response.status === 429).length, 2, 'Plain-route throttling must return 429 under concurrent requests')
+  for (const response of routeAttempts.filter(response => response.status === 429)) {
+    assert.ok(Number(response.headers.get('Retry-After')) > 0, 'Throttled plain routes must expose Retry-After')
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), allowedOrigin)
+    assert.ok((await response.json()).retryAfterSeconds > 0)
+  }
   const managedMutation = await fetch(`${origin}/holo/realtime/mutation`, { method: 'POST' })
   assert.equal(managedMutation.status, 419, 'Managed mutation routes must also enforce CSRF')
-  log(journey.framework, 'CSRF cookie, rejected unsafe requests, and valid-token session login passed')
+  log(journey.framework, 'strict CSRF, native forms, CORS, login throttling, session rotation, and logout revocation passed')
 }
 
 async function stopServer(server) {
@@ -703,6 +902,7 @@ export default defineMigration({
       HOST: '127.0.0.1',
       HOSTNAME: '127.0.0.1',
       PORT: String(journey.port),
+      ORIGIN: `http://localhost:${journey.port}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -713,7 +913,7 @@ export default defineMigration({
 
   try {
     await waitForRenderedApp(journey, server)
-    await assertAuthCsrfProtection(journey)
+    await assertAuthSecurity(journey)
   } catch (error) {
     throw new Error([
       error instanceof Error ? error.message : String(error),

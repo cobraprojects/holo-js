@@ -17,6 +17,32 @@ function configureSecurity(enabled = true): void {
 afterEach(resetSecurityRuntime)
 
 describe('native csrf middleware', () => {
+  it('serves credentialed CORS preflight and preserves CORS headers on CSRF rejection', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true } }),
+      cors: { paths: ['/api/*'], origins: ['https://frontend.test'], credentials: true },
+      csrfSigningKey: 'native-middleware-test-key',
+    })
+    const middleware = nextCsrfProtection()
+    const preflight = await middleware(new NextRequest('https://api.test/api/login', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://frontend.test', 'Access-Control-Request-Method': 'POST' },
+    }))
+    expect(preflight?.status).toBe(204)
+    expect(preflight?.headers.get('Access-Control-Allow-Origin')).toBe('https://frontend.test')
+    expect(preflight?.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+    const denied = await middleware(new NextRequest('https://api.test/api/login', {
+      method: 'POST', headers: { Origin: 'https://frontend.test' },
+    }))
+    expect(denied?.status).toBe(419)
+    expect(denied?.headers.get('Access-Control-Allow-Origin')).toBe('https://frontend.test')
+    const untrusted = await middleware(new NextRequest('https://api.test/api/login', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://untrusted.test', 'Access-Control-Request-Method': 'POST' },
+    }))
+    expect(untrusted?.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
   it('uses Next native cookies and continuation responses', async () => {
     configureSecurity()
     const middleware = nextCsrfProtection()
@@ -92,6 +118,7 @@ describe('native csrf middleware', () => {
       expect(forged.headers.getSetCookie()[0]).toContain('XSRF-TOKEN=')
       const head = await fetch(url, { method: 'HEAD' })
       expect(head.headers.getSetCookie()).toHaveLength(2)
+      expect((await fetch(url, { method: 'OPTIONS' })).status).toBe(200)
       expect((await fetch(url, { method: 'POST' })).status).toBe(419)
       const tokenCookie = cookies.find(cookie => cookie.startsWith('XSRF-TOKEN='))
       const token = decodeURIComponent(tokenCookie?.split(';')[0]?.slice('XSRF-TOKEN='.length) ?? '')
