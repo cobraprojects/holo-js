@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "Holo-JS Framework - portable database, ORM, migrations, factories, and seeders",
   "type": "module",
   "license": "MIT",
@@ -28,20 +28,20 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:",
-    "@holo-js/kernel": "catalog:",
-    "inflection": "catalog:",
-    "ulid": "catalog:",
-    "uuid": "catalog:"
+    "@holo-js/config": "^0.3.18",
+    "@holo-js/kernel": "^0.3.18",
+    "inflection": "^3.0.2",
+    "ulid": "^3.0.1",
+    "uuid": "^12.0.0"
   },
   "devDependencies": {
-    "@holo-js/db-mysql": "catalog:",
-    "@holo-js/db-postgres": "catalog:",
-    "@holo-js/db-sqlite": "catalog:",
-    "@types/pg": "catalog:",
-    "pg": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:"
+    "@holo-js/db-mysql": "^0.3.18",
+    "@holo-js/db-postgres": "^0.3.18",
+    "@holo-js/db-sqlite": "^0.3.18",
+    "@types/pg": "^8.11.0",
+    "pg": "^8.13.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

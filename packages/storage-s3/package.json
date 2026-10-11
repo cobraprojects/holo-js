@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/storage-s3",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "Holo-JS Framework - S3 storage driver",
   "type": "module",
   "license": "MIT",
@@ -23,10 +23,10 @@
     "test": "vitest --run"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

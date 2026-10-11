@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-nuxt",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "Holo-JS Framework - Nuxt adapter",
   "type": "module",
   "license": "MIT",
@@ -38,21 +38,21 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/adapter-shared": "catalog:",
-    "@nuxt/kit": "catalog:",
-    "@holo-js/config": "catalog:",
-    "@holo-js/core": "catalog:",
-    "@holo-js/db": "catalog:",
-    "@holo-js/validation": "catalog:",
-    "h3": "catalog:",
-    "nitropack": "catalog:"
+    "@holo-js/adapter-shared": "^0.3.18",
+    "@nuxt/kit": "^4.4.4",
+    "@holo-js/config": "^0.3.18",
+    "@holo-js/core": "^0.3.18",
+    "@holo-js/db": "^0.3.18",
+    "@holo-js/validation": "^0.3.18",
+    "h3": "^1.15.11",
+    "nitropack": "^2.13.4"
   },
   "peerDependencies": {
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/forms": "catalog:",
-    "@holo-js/realtime": "catalog:",
-    "@holo-js/storage": "catalog:",
-    "@holo-js/storage-s3": "catalog:"
+    "@holo-js/broadcast": "^0.3.18",
+    "@holo-js/forms": "^0.3.18",
+    "@holo-js/realtime": "^0.3.18",
+    "@holo-js/storage": "^0.3.18",
+    "@holo-js/storage-s3": "^0.3.18"
   },
   "peerDependenciesMeta": {
     "@holo-js/broadcast": {
@@ -72,14 +72,14 @@
     }
   },
   "devDependencies": {
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/realtime": "catalog:",
-    "@holo-js/storage-s3": "catalog:",
-    "@nuxt/module-builder": "catalog:",
-    "@types/node": "catalog:",
-    "nuxt": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@holo-js/broadcast": "^0.3.18",
+    "@holo-js/realtime": "^0.3.18",
+    "@holo-js/storage-s3": "^0.3.18",
+    "@nuxt/module-builder": "^1.0.2",
+    "@types/node": "^22.10.2",
+    "nuxt": "^4.4.4",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

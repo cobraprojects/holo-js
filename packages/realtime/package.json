@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/realtime",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "Holo-JS Framework - realtime query and mutation runtime",
   "type": "module",
   "license": "MIT",
@@ -33,13 +33,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/broadcast": "workspace:*",
-    "@holo-js/db": "catalog:",
-    "@holo-js/validation": "catalog:",
-    "esbuild": "catalog:"
+    "@holo-js/broadcast": "^0.3.18",
+    "@holo-js/db": "^0.3.18",
+    "@holo-js/validation": "^0.3.18",
+    "esbuild": "^0.27.4"
   },
   "peerDependencies": {
-    "@holo-js/auth": "catalog:"
+    "@holo-js/auth": "^0.3.18"
   },
   "peerDependenciesMeta": {
     "@holo-js/auth": {
@@ -47,12 +47,12 @@
     }
   },
   "devDependencies": {
-    "@holo-js/auth": "catalog:",
-    "@holo-js/db-sqlite": "catalog:",
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@holo-js/auth": "^0.3.18",
+    "@holo-js/db-sqlite": "^0.3.18",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

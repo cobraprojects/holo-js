@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cache",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "Holo-JS Framework - cache contracts, config helpers, serialization, and runtime seams",
   "type": "module",
   "license": "MIT",
@@ -33,15 +33,15 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:",
-    "@holo-js/db": "catalog:",
-    "@holo-js/kernel": "catalog:"
+    "@holo-js/config": "^0.3.18",
+    "@holo-js/db": "^0.3.18",
+    "@holo-js/kernel": "^0.3.18"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
