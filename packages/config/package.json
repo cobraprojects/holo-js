@@ -26,7 +26,8 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/kernel": "catalog:"
+    "@holo-js/kernel": "catalog:",
+    "jiti": "catalog:"
   },
   "devDependencies": {
     "tsup": "catalog:",

@@ -74,6 +74,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "h3": "^1.15.11",
   "inflection": "^3.0.2",
   "ioredis": "^5.4.2",
+  "jiti": "^2.6.1",
   "minimatch": "^10.2.4",
   "mysql2": "^3.17.1",
   "next": "^16.3.5",

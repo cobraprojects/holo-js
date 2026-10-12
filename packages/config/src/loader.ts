@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createJiti } from 'jiti'
 import {
   normalizeRedisConfig,
   type HoloRedisConfig,
@@ -73,12 +74,13 @@ function getConfigName(fileName: string): ConfigFileName {
   return fileName.slice(0, fileName.length - extname(fileName).length)
 }
 
+const importConfig = createJiti(import.meta.url, { moduleCache: false, interopDefault: false })
 let configImportNonce = 0
 
 async function importConfigModule(filePath: string): Promise<unknown> {
   configImportNonce += 1
 
-  return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${configImportNonce}`)
+  return importConfig.import(`${pathToFileURL(filePath).href}?t=${configImportNonce}`)
 }
 
 async function writeFileIfChanged(filePath: string, contents: string): Promise<void> {
