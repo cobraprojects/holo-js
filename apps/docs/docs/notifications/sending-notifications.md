@@ -56,6 +56,20 @@ await notify(user, invoicePaid)
 
 Use `notifyUsing()` to send notifications without a notifiable model by providing routes directly:
 
+```ts
+import { defineNotification, notifyUsing } from '@holo-js/notifications'
+
+await notifyUsing()
+  .channel('email', { email: 'ava@example.com', name: 'Ava' })
+  .notify(defineNotification({
+    type: 'invoice-paid',
+    via: () => ['email'],
+    build: {
+      email: () => ({ subject: 'Your invoice has been paid' }),
+    },
+  }))
+```
+
 See [On-Demand Notifications](/notifications/on-demand-notifications) for a complete
 `defineNotification(...)` example. Anonymous notification builders must not depend on model attributes
 that are absent from the supplied routes.

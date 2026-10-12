@@ -1,3 +1,4 @@
+import { symlinkPackageDependency } from '../../../tests/support/published-package'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -213,6 +214,7 @@ async function writeRuntimePluginPackage(root: string, packageName: string, plug
 }
 
 async function writeNotificationsConfig(root: string, contents?: string): Promise<void> {
+  await symlinkPackageDependency(join(root, 'node_modules'), '@holo-js/notifications', resolve(import.meta.dirname, '../../notifications'))
   await writeFile(join(root, 'config/notifications.ts'), contents ?? `
 import { defineNotificationsConfig } from '@holo-js/notifications'
 
