@@ -1,6 +1,7 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Pool, types, type PoolConfig } from 'pg'
 import type {
+  CompiledStatement,
   DatabaseDriverFactory,
   DriverAdapter,
   DriverExecutionResult,
@@ -183,6 +184,14 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
 
   isConnected(): boolean {
     return this.connected
+  }
+
+  getMutationReturningPermissionQuery(tableName: string): CompiledStatement {
+    return {
+      sql: "SELECT has_table_privilege(current_user, $1, 'SELECT') AND NOT row_security_active($1) AS allowed",
+      bindings: [quoteDatabaseIdentifier(tableName)],
+      source: 'schema',
+    }
   }
 
   runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {

@@ -571,6 +571,7 @@ export class SQLQueryCompiler {
   }
 
   protected compileInsertSuffix(_plan: InsertQueryPlan): string {
+    if (_plan.returningColumn) return ` RETURNING ${this.quoteIdentifier(_plan.returningColumn)}`
     return _plan.returning === true ? ' RETURNING *' : ''
   }
 

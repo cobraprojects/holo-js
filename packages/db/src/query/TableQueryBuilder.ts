@@ -2131,22 +2131,21 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
-    const primaryKey = this.source.table?.columns[this.resolvePrimaryKeyColumn()]
-    const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
-      || (this.connection.getCapabilities().returning
-        && (returnGeneratedId || (primaryKey?.hasDefault === true && primaryKey.idStrategy !== 'autoIncrement')))
+    const primaryKeyColumn = this.resolvePrimaryKeyColumn()
+    const captureReturningRows = await this.shouldCaptureInsertReturningRows()
+    const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && returnGeneratedId)
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
-          createInsertQueryPlan(this.source, rows, { returning: true }),
+          createInsertQueryPlan(this.source, rows, {
+            returning: captureReturningRows,
+            returningColumn: captureReturningRows ? undefined : primaryKeyColumn,
+          }),
           true,
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
-          createInsertQueryPlan(this.source, rows, {
-            returningColumn: returnGeneratedId ? this.resolvePrimaryKeyColumn() : undefined,
-          }),
+          createInsertQueryPlan(this.source, rows),
         ))
-    await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId)
+    await this.invalidateInsertQueries('insert', captureReturningRows ? result.rows?.rows ?? rows : rows, result.lastInsertId)
     return {
       affectedRows: result.affectedRows,
       lastInsertId: result.lastInsertId,
@@ -2159,9 +2158,8 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
-    const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
-    const result: MutationExecutionResult = useReturningRows
+    const captureReturningRows = await this.shouldCaptureInsertReturningRows()
+    const result: MutationExecutionResult = captureReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true, returning: true }),
           true,
@@ -2173,7 +2171,7 @@ export class TableQueryBuilder<
       affectedRows: result.affectedRows,
       lastInsertId: result.lastInsertId,
     }
-    if (useReturningRows && result.affectedRows === 0) {
+    if (result.affectedRows === 0) {
       return insertResult
     }
 
@@ -2472,6 +2470,15 @@ export class TableQueryBuilder<
 
   private shouldUseReturningMutationRows(hasInvalidationListeners: boolean): boolean {
     return hasInvalidationListeners && this.connection.getCapabilities().returning
+  }
+
+  private async shouldCaptureInsertReturningRows(): Promise<boolean> {
+    if (!this.shouldUseReturningMutationRows(hasDatabaseDependencyInvalidationListeners())) return false
+    await this.connection.initialize()
+    const statement = this.connection.getAdapter().getMutationReturningPermissionQuery?.(this.source.tableName)
+    if (!statement) return true
+    const result = await this.connection.queryCompiled<{ allowed: boolean }>(statement)
+    return result.rows[0]?.allowed === true
   }
 
   private async queryReturningMutationRows(

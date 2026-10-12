@@ -1631,8 +1631,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       const entity = new Entity(this, payload, false)
       await this.dispatchCancelableEvent('saving', entity)
       await this.dispatchCancelableEvent('creating', entity)
-      const result = await this.query().getTableQueryBuilder().insert(payload)
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
+      const query = this.query().getTableQueryBuilder()
+      const result = hasPrimaryKeyValue
+        ? await query.insert(payload)
+        : { lastInsertId: await query.insertGetId(payload) }
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'

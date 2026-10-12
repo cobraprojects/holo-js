@@ -1,4 +1,4 @@
-import type { DatabaseOperationOptions, DatabaseTransactionOptions, DriverAdapter, DriverExecutionResult, DriverQueryResult } from '../core/types'
+import type { CompiledStatement, DatabaseOperationOptions, DatabaseTransactionOptions, DriverAdapter, DriverExecutionResult, DriverQueryResult } from '../core/types'
 
 export type DatabaseDriverConnection = {
   readonly url?: string
@@ -63,6 +63,7 @@ export class DeferredDatabaseDriverAdapter implements DriverAdapter {
   async initialize(): Promise<void> { await (await this.resolve()).initialize() }
   async disconnect(): Promise<void> { if (this.adapter || this.pending) await (await this.resolve()).disconnect() }
   isConnected(): boolean { return this.adapter?.isConnected() ?? false }
+  getMutationReturningPermissionQuery(tableName: string): CompiledStatement | undefined { return this.adapter?.getMutationReturningPermissionQuery?.(tableName) }
   async ensureDatabaseExists(): Promise<void> { await (await this.resolve()).ensureDatabaseExists?.() }
   isDatabaseMissingError(error: unknown): boolean { return this.adapter?.isDatabaseMissingError?.(error) ?? false }
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> { return (await this.resolve()).runWithTransactionScope?.(callback) ?? callback() }

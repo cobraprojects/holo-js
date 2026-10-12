@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { assertExampleAppAuthStorageBehavior } from './example-app-auth-storage.mjs'
 import { assertExampleAppQueryBehavior } from './example-app-query.mjs'
 import { assertExampleAppHostedAuthBehavior, startExampleAppHostedAuthService } from './example-app-hosted-auth.mjs'
+import { assertExampleAppInsertOnlyBehavior } from './example-app-insert-only.mjs'
 
 export async function openExampleAppDatabase(projectRoot) {
   const require = createRequire(join(projectRoot, 'package.json'))
@@ -33,6 +34,7 @@ export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, 
     await assert.rejects(connection.unsafeQuery(DB.raw('SELECT 1')), /unsafe/i)
     const schema = createSchemaService(connection)
     await assertExampleAppQueryBehavior(DB, schema, name, modelApi)
+    if (name === 'postgres') await assertExampleAppInsertOnlyBehavior(DB, schema, projectRoot, modelApi)
     await schema.createTable('named_connection_records', table => {
       table.id()
       table.string('value').unique()

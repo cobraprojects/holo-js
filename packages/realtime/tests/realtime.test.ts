@@ -4190,6 +4190,7 @@ describe('@holo-js/realtime', () => {
     expect(queryRuns).toBe(1)
     expect(queries).toEqual([
       `SELECT * FROM "${tableName}" ORDER BY "created_at" DESC LIMIT 100`,
+      "SELECT has_table_privilege(current_user, $1, 'SELECT') AND NOT row_security_active($1) AS allowed",
       `INSERT INTO "${tableName}" ("title") VALUES ($1) RETURNING *`,
     ])
     expect(snapshots).toEqual([

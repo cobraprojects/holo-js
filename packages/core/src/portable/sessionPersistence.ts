@@ -122,18 +122,13 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
       await inSessionWriteTransaction(connectionName, async (transaction) => {
         const publicData = Object.freeze({ ...record.data })
         const normalized = serializeSessionRecordForRow({ ...record, data: publicData }, transaction.getDialect().name)
+        await new TableQueryBuilder(tableName, transaction).upsert({
+          ...normalized,
+          data: serializeStoredSessionData({ publicData, flashEntries: new Map() }),
+        }, ['id'])
         const existing = await createSessionQuery(transaction, tableName, record.id, false)
           .first<Record<string, unknown>>()
-        if (!existing) {
-          await new TableQueryBuilder(tableName, transaction).insert({
-            ...normalized,
-            data: serializeStoredSessionData({
-              publicData,
-              flashEntries: new Map(),
-            }),
-          })
-          return
-        }
+        if (!existing) throw new Error(`[@holo-js/core] Database session "${record.id}" was not found.`)
 
         const stored = splitStoredSessionData(existing.data)
         await new TableQueryBuilder(tableName, transaction)

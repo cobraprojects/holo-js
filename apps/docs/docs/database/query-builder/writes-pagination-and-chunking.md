@@ -23,6 +23,12 @@ const id = await DB.table('users').insertGetId({
 
 Use direct inserts when the write is table-shaped and does not need model lifecycle behavior.
 
+On PostgreSQL, `insert()` and `insertOrIgnore()` support roles with INSERT permission but no SELECT
+permission. Installing realtime does not add a read requirement to these writes. Row-level security
+INSERT policies still apply. `insertGetId()` requests the primary key, so the role must also have
+SELECT permission on that column. When row-level security is active, its SELECT policy must permit
+returning the row.
+
 ## Updates
 
 ```ts

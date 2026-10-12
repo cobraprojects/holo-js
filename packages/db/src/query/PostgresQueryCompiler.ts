@@ -23,9 +23,7 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
       return `${plan.ignoreConflicts ? ' ON CONFLICT DO NOTHING' : ''} RETURNING *`
     }
 
-    const primaryKey = plan.returningColumn ?? Object.values(plan.source.table?.columns ?? {})
-      .find(column => column.primaryKey)?.name
-    const returning = primaryKey ? ` RETURNING ${this.quoteIdentifier(primaryKey)}` : ''
+    const returning = plan.returningColumn ? ` RETURNING ${this.quoteIdentifier(plan.returningColumn)}` : ''
     return `${plan.ignoreConflicts ? ' ON CONFLICT DO NOTHING' : ''}${returning}`
   }
 

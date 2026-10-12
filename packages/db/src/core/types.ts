@@ -91,6 +91,7 @@ export interface DriverExecutionResult {
 
 export interface DriverAdapter {
   readonly supportsConcurrentTransactionScopes?: boolean
+  getMutationReturningPermissionQuery?(tableName: string): CompiledStatement | undefined
   initialize(): Promise<void>
   disconnect(): Promise<void>
   isConnected(): boolean

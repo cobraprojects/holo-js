@@ -18,6 +18,7 @@ async function runApp(framework, driver) {
   assert.ok(['sqlite', 'postgres', 'mysql'].includes(driver))
   const projectRoot = join(root, `apps/blog-${framework}`)
   const name = `holo_app_${randomUUID().replaceAll('-', '')}`
+  const insertOnlyRole = `${name}_writer`
   const password = randomUUID()
   const filename = join(projectRoot, 'storage', `${name}.sqlite`)
   let postgresAdmin
@@ -34,8 +35,11 @@ async function runApp(framework, driver) {
       await client.connect()
       postgresAdmin = client
       await postgresAdmin.query(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`)
+      await postgresAdmin.query(`CREATE ROLE ${insertOnlyRole} NOLOGIN NOSUPERUSER NOBYPASSRLS`)
+      await postgresAdmin.query(`GRANT ${insertOnlyRole} TO ${name}`)
       await postgresAdmin.query(`CREATE DATABASE ${name} OWNER ${name}`)
       env.DB_POSTGRES_URL = `postgresql://${name}:${password}@${host}:${port}/${name}`
+      env.HOLO_POSTGRES_INSERT_ONLY_ROLE = insertOnlyRole
     }
     {
       const host = process.env.HOLO_MYSQL_HOST ?? '127.0.0.1'
@@ -66,6 +70,7 @@ async function runApp(framework, driver) {
       if (postgresAdmin) {
         await postgresAdmin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
         await postgresAdmin.query(`DROP ROLE IF EXISTS ${name}`)
+        await postgresAdmin.query(`DROP ROLE IF EXISTS ${insertOnlyRole}`)
         await postgresAdmin.end()
       }
     } finally {
