@@ -8,9 +8,10 @@ import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src
 import {
   DB, collectDatabaseQueryDependencies, column, configureDB, createConnectionManager,
   createDatabase, createDialect, createSchemaService, queryCacheInternals, resetDB,
-  type DatabaseContext, type DatabaseLogger,
+  type DatabaseContext, type DatabaseLogger, type DatabaseDependencyInvalidationEvent,
 } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
+import type { DatabaseMutationEvent } from '../src/cache'
 
 const users = defineTable('users', {
   id: column.id(), name: column.string(), status: column.string(), score: column.integer(),
@@ -128,6 +129,22 @@ describe('native database and cache integration', () => {
     expect(await score()).toBe(13)
     await DB.table(users).where('id', 1).updateJson('settings->region', 'mena')
     expect(await region()).toEqual([])
+  })
+
+  it('publishes concrete counter values for each changed row after commit', async () => {
+    const mutations: DatabaseMutationEvent[] = []
+    queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+      mutations.push(...event.mutations ?? [])
+    })
+    expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([10, 20])
+    await DB.transaction(async tx => {
+      await tx.table(users).increment('score', 5)
+      expect(mutations).toEqual([])
+    })
+
+    expect(mutations.map(mutation => mutation.values?.score)).toEqual([15, 25])
+    expect(mutations.flatMap(mutation => mutation.rows ?? []).map(row => row.score)).toEqual([15, 25])
+    expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([15, 25])
   })
 
   it('refreshes conjunctive, disjunctive, set, and projected caches when predicate values change', async () => {

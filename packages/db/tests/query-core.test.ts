@@ -734,6 +734,41 @@ describe('query core slice', () => {
       updateColumns: ['meta'] } as never)).toThrow('must be present in every row')
   })
 
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('preserves every concurrent increment and decrement across matching rows on %s', async (driver) => {
+    let writes = 0
+    const { db, table, schema } = await openDatabase(driver, {
+      logger: { onQuerySuccess: entry => { if (entry.kind === 'execute') writes += 1 } },
+    })
+    await schema.table(table.tableName, table => { table.integer('score').default(0) })
+    const counters = defineTable(table.tableName, { ...table.columns, score: column.integer() })
+    await db.table(counters).insert([
+      { id: 1, name: 'First', score: 100, active: true },
+      { id: 2, name: 'Second', score: 200, active: true },
+      { id: 3, name: 'Inactive', score: 300, active: false },
+    ])
+    writes = 0
+    const query = db.table(counters).where('active', true)
+    const results = await Promise.all(Array.from({ length: 20 }, () => [
+      query.increment('score', 3),
+      query.decrement('score', 2),
+    ]).flat())
+
+    expect(results.every(result => result.affectedRows === 2)).toBe(true)
+    expect(writes).toBe(40)
+    expect(await db.table(counters).orderBy('id').pluck('score')).toEqual([120, 220, 300])
+  })
+
+  it('preserves bounded row selection with disjunctive counter predicates', async () => {
+    const adapter = await createRealQueryDatabase()
+    await adapter.execute('CREATE TABLE counters (id INTEGER PRIMARY KEY, score INTEGER NOT NULL, active INTEGER NOT NULL)')
+    await adapter.execute('INSERT INTO counters VALUES (1, 10, 1), (2, 20, 1), (3, 30, 0)')
+    const counters = defineTable('counters', { id: column.id(), score: column.integer(), active: column.boolean() })
+    const query = DB.table(counters).where('active', true).orWhere('id', 3).orderBy('id', 'desc').limit(1).offset(1)
+
+    expect((await query.increment('score', 5)).affectedRows).toBe(1)
+    expect(await DB.table(counters).orderBy('id').pluck('score')).toEqual([10, 25, 30])
+  })
+
   it('updates only matching rows when incrementing and decrementing with extra values', async () => {
     const adapter = await createRealQueryDatabase()
     await adapter.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER NOT NULL, active INTEGER NOT NULL)')
@@ -750,7 +785,10 @@ describe('query core slice', () => {
     expect((await DB.table('users').where('id', 3).increment('score', 5)).affectedRows).toBe(1)
     expect(await DB.table(users).where('id', 3).value('score')).toBe(20)
     expect((await DB.table(users).where('id', 99).increment('score', 1)).affectedRows).toBe(0)
-    await expect(DB.table(users).increment('score', Number.NaN)).rejects.toThrow(SecurityError)
+    for (const amount of [Number.NaN, Infinity, -Infinity]) {
+      await expect(DB.table(users).increment('score', amount)).rejects.toThrow(SecurityError)
+      await expect(DB.table(users).decrement('score', amount)).rejects.toThrow(SecurityError)
+    }
     await adapter.execute("UPDATE users SET score = 'bad' WHERE id = 1")
     await expect(DB.table(users).where('id', 1).increment('score', 1)).rejects.toThrow(CompilerError)
   })

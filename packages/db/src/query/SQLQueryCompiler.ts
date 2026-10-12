@@ -1,4 +1,5 @@
 import { rawSqlPlaceholders } from './rawSql'
+import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError } from '../core/errors'
 import { validateQueryPlan } from './validator'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
@@ -649,6 +650,11 @@ export class SQLQueryCompiler {
     value: QueryUpdateValue,
     bindings: unknown[],
   ): string {
+    if (value instanceof NumericAdjustment) {
+      bindings.push(value.amount)
+      return `${this.quoteIdentifier(column)} + ${this.createPlaceholder(bindings.length)}`
+    }
+
     if (Array.isArray(value)) {
       return this.compileJsonUpdateOperations(column, value, bindings)
     }

@@ -1,4 +1,5 @@
 import { CompilerError, ConfigurationError, SecurityError } from '../core/errors'
+import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import {
   getDatabaseQueryCacheBridge,
@@ -2383,6 +2384,10 @@ export class TableQueryBuilder<
     currentValue: unknown,
     value: unknown,
   ): unknown {
+    if (value instanceof NumericAdjustment && typeof currentValue === 'number') {
+      return currentValue + value.amount
+    }
+
     if (!Array.isArray(value) || !value.every(item => this.isCapturedJsonUpdateOperation(item))) {
       return value
     }
@@ -2584,22 +2589,44 @@ export class TableQueryBuilder<
       values,
       hasInvalidationListeners,
     )
+    const numericColumns = hasInvalidationListeners
+      ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
+      : []
+    const primaryKey = this.resolvePrimaryKeyColumn()
+    const previousRows = new Map(numericColumns.length > 0
+      ? capturedRows?.previousRows?.map(row => [
+          typeof values[primaryKey] === 'undefined'
+            ? row[primaryKey]
+            : this.applyCapturedUpdateValue(row[primaryKey], values[primaryKey]),
+          row,
+        ])
+      : [])
+    const mutations = !hasInvalidationListeners ? [] : numericColumns.length > 0 && capturedRows?.rows
+      ? capturedRows.rows.map((row) => {
+          const previousRow = previousRows.get(row[primaryKey])
+          return createDatabaseMutationEvent(
+            'update',
+            this.connection.getConnectionName(),
+            this.source.tableName,
+            [{ kind: 'comparison', column: primaryKey, operator: '=', value: previousRow?.[primaryKey] ?? row[primaryKey] }],
+            Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
+            [row],
+            previousRow ? [previousRow] : undefined,
+          )
+        })
+      : [createDatabaseMutationEvent(
+          hasValues ? 'update' : 'delete',
+          this.connection.getConnectionName(),
+          this.source.tableName,
+          this.plan.predicates,
+          hasValues ? values : undefined,
+          capturedRows?.rows,
+          capturedRows?.previousRows,
+        )]
     await invalidateQueryCacheDependencies(
       this.connection,
       invalidation.dependencies,
-      hasInvalidationListeners
-        ? [
-            createDatabaseMutationEvent(
-              hasValues ? 'update' : 'delete',
-              this.connection.getConnectionName(),
-              this.source.tableName,
-              this.plan.predicates,
-              hasValues ? values : undefined,
-              capturedRows?.rows,
-              capturedRows?.previousRows,
-            ),
-          ]
-        : [],
+      mutations,
       invalidation,
     )
   }
@@ -2628,10 +2655,7 @@ export class TableQueryBuilder<
     amount: number,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
-    if (typeof amount !== 'number' || Number.isNaN(amount)) {
-      throw new SecurityError('Increment/decrement amount must be a valid number.')
-    }
-
+    const adjustment = new NumericAdjustment(amount)
     const primaryKey = this.resolvePrimaryKeyColumn()
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
@@ -2639,26 +2663,23 @@ export class TableQueryBuilder<
       withSelections(this.plan, [primaryKey as never, column as never]),
     )
     const rows = await uncachedSelection.get() as Record<string, unknown>[]
-    let affectedRows = 0
-    let lastInsertId: number | string | undefined
-
     for (const row of rows) {
       const currentValue = row[column]
       if (typeof currentValue !== 'number' || Number.isNaN(currentValue)) {
         throw new CompilerError(`Cannot increment/decrement non-numeric column "${column}".`)
       }
+    }
+    if (rows.length === 0) return { affectedRows: 0, lastInsertId: undefined }
 
-      const identifier = row[primaryKey]
-      const payload: Record<string, unknown> = {
-        ...extraValues,
-        [column]: currentValue + amount,
-      }
-      const result = await this.where(primaryKey as never, identifier).update(payload)
-      affectedRows += result.affectedRows ?? 0
-      lastInsertId = result.lastInsertId ?? lastInsertId
+    const values = { ...extraValues, [column]: adjustment }
+    if (typeof this.plan.limit === 'undefined' && typeof this.plan.offset === 'undefined') {
+      return this.update(values)
     }
 
-    return { affectedRows, lastInsertId }
+    const plan = this.plan.predicates.length === 0
+      ? this.plan
+      : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
+    return this.clone(plan).whereIn(primaryKey as never, rows.map(row => row[primaryKey])).update(values)
   }
 
   private whereMultiColumns(

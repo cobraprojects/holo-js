@@ -1,4 +1,5 @@
 import { SecurityError } from '../core/errors'
+import { NumericAdjustment } from './NumericAdjustment'
 import { normalizeDialectWriteValue } from '../schema/normalization'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -12,6 +13,7 @@ export function normalizeQueryWriteValue(
   columnName: string,
   value: unknown,
 ): unknown {
+  if (value instanceof NumericAdjustment) return value
   const column = table?.columns[columnName]
   if (!column) return value
   return normalizeDialectWriteValue(driver as SchemaDialectName, column as AnyColumnDefinition, value)
