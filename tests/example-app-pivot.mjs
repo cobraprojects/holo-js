@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict'
+
+export async function assertExampleAppPivotBehavior(Post, Tag, DB) {
+  const post = await Post.with('tags').where('status', 'published').orderBy('id').firstOrFail()
+  const primary = post.tags.find(tag => tag.pivot.is_primary)
+  const secondary = post.tags.find(tag => !tag.pivot.is_primary)
+  assert.ok(primary)
+  assert.ok(secondary)
+  assert.equal(primary.slug, 'framework')
+  assert.deepEqual(Object.keys(primary.pivot).sort(), ['created_at', 'is_primary', 'post_id', 'tag_id', 'updated_at'])
+  assert.equal(primary.pivot.post_id, post.id)
+  assert.equal(primary.pivot.tag_id, primary.id)
+  assert.equal(typeof secondary.pivot.is_primary, 'boolean')
+  assert.ok(primary.pivot.created_at instanceof Date)
+  assert.ok(primary.pivot.updated_at instanceof Date)
+  assert.equal(primary.pivot.created_at.getTime(), primary.pivot.updated_at.getTime())
+
+  const createdAt = secondary.pivot.created_at.getTime()
+  const staleTimestamp = new Date('2000-01-01T00:00:00.000Z')
+  await DB.table('post_tags').where('post_id', post.id).where('tag_id', secondary.id).update({ updated_at: '2000-01-01 00:00:00' })
+  await post.updateExistingPivot('tags', secondary.id, { is_primary: true })
+  const updated = await Post.with('tags').where('id', post.id).firstOrFail()
+  const changed = updated.tags.find(tag => tag.id === secondary.id)
+  assert.ok(changed)
+  assert.equal(changed.pivot.is_primary, true)
+  assert.equal(changed.pivot.created_at.getTime(), createdAt)
+  assert.ok(changed.pivot.updated_at.getTime() > staleTimestamp.getTime())
+  await post.updateExistingPivot('tags', secondary.id, { is_primary: false })
+
+  const tag = await Tag.with('posts').where('id', primary.id).firstOrFail()
+  const taggedPost = tag.posts.find(item => item.id === post.id)
+  assert.ok(taggedPost)
+  assert.equal(taggedPost.pivot.is_primary, true)
+  assert.equal(taggedPost.pivot.tag_id, primary.id)
+  assert.ok(taggedPost.pivot.created_at instanceof Date)
+}

@@ -1,3 +1,4 @@
+import { assertExampleAppPivotBehavior } from '../../../tests/example-app-pivot.mjs'
 import { broadcastRaw } from '@holo-js/broadcast'
 import { assertExampleAppQueueMaintenance } from '../../../tests/example-app-maintenance.mjs'
 import IndexBlogPost from '../server/jobs/blog/index-post.ts'
@@ -46,6 +47,7 @@ async function countQueuedBlogIndexJobs() {
 }
 
 try {
+  await assertExampleAppPivotBehavior(Post, Tag, DB)
   assert.deepEqual(parseTagIds('1, 2, 2, nope, 0, -1, 3'), [1, 2, 3])
 
   const home = await getHomePageData()

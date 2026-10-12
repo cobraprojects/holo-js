@@ -24,7 +24,13 @@ export default async function PostDetailPage({ params }: { params: Promise<{ slu
       <p style={{ margin: 0, color: '#cbd5e1' }}>{post.excerpt}</p>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         {post.category ? <Link href={`/categories/${post.category.slug}`} style={{ color: '#7dd3fc' }}>{post.category.name}</Link> : null}
-        {post.tags.map(tag => <Link key={tag.id} href={`/tags/${tag.slug}`} style={{ color: '#f9a8d4' }}>#{tag.name}</Link>)}
+        {post.tags.map(tag => (
+          <span key={tag.id} style={{ display: 'grid', gap: '0.25rem' }}>
+            <Link href={`/tags/${tag.slug}`} style={{ color: '#f9a8d4' }}>#{tag.name}</Link>
+            {tag.pivot.is_primary ? <small>Primary topic</small> : null}
+            <small>Tagged <time dateTime={tag.pivot.created_at.toISOString()}>{tag.pivot.created_at.toISOString().slice(0, 10)}</time></small>
+          </span>
+        ))}
       </div>
       <div style={{ padding: '1.5rem', borderRadius: '1rem', background: '#111827', lineHeight: 1.8 }}>{post.body}</div>
     </article>
