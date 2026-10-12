@@ -66,6 +66,9 @@ it('infers all pivot fields on eager-loaded relations', () => {
       const unloaded = await User.firstOrFail()
       const loaded = await unloaded.load('roles')
       expectTypeOf(loaded.roles[0]?.pivot.approved).toEqualTypeOf<boolean | undefined>()
+      expectTypeOf(loaded.toJSON().roles[0]?.pivot.approved).toEqualTypeOf<boolean | undefined>()
+      const json = await User.with('roles').firstJson()
+      expectTypeOf(json?.roles[0]?.pivot.approved).toEqualTypeOf<boolean | undefined>()
       const team = await Team.with('users.roles').firstOrFail()
       expectTypeOf(team.users[0]?.roles[0]?.pivot.approved).toEqualTypeOf<boolean | undefined>()
     }

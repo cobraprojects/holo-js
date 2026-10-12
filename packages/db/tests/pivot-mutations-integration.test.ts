@@ -1,6 +1,6 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { type Entity, belongsTo, belongsToMany, hasMany, morphToMany, column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { type Entity, belongsTo, belongsToMany, hasMany, morphToMany, column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
 import type { QuerySuccessLog } from '../src/core/types'
 
 const users = defineGeneratedTable('pivot_users', { id: column.id() })
@@ -57,6 +57,7 @@ describe('pivot mutation integration', () => {
           .withTimestamps().withPivot('approved').as('membership'),
       },
     })
+    registerGeneratedTables({ timedPivots })
     const user = await TimedUser.findOrFail(1)
     await user.attach('roles', [1, 2], { approved: true })
     const loaded = await TimedUser.with('roles').findOrFail(1)
@@ -65,6 +66,15 @@ describe('pivot mutation integration', () => {
     expect(membership?.created_at).toBeInstanceOf(Date)
     expect(membership?.updated_at).toEqual(membership?.created_at)
     expect(loaded.roles[1]?.membership.created_at).toEqual(membership?.created_at)
+    const NamedTimedUser = defineModel(users, {
+      timestamps: false,
+      relations: {
+        roles: belongsToMany(() => Role, 'pivot_timed_memberships', 'userId', 'roleId').withTimestamps().as('membership'),
+      },
+    })
+    const named = await NamedTimedUser.with('roles').findOrFail(1)
+    expect(named.roles[0]?.membership).toEqual(membership)
+
 
     await adapter.execute("UPDATE pivot_timed_memberships SET created_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE roleId = 1")
     await user.updateExistingPivot('roles', 1, { approved: false })

@@ -641,7 +641,7 @@ class EntityBase<
   async load<TPaths extends readonly ModelRelationPath<TRelations>[]>(
     ...relations: TPaths
   ): Promise<
-    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths>>
+    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths> | 'toJSON'>
     & ResolveEagerLoads<TRelations, TPaths>
     & (this extends { toJSON(): infer R }
       ? { toJSON(): R & SerializeLoaded<ResolveEagerLoads<TRelations, TPaths>> }
@@ -660,7 +660,7 @@ class EntityBase<
   async loadMissing<TPaths extends readonly ModelRelationPath<TRelations>[]>(
     ...relations: TPaths
   ): Promise<
-    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths>>
+    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths> | 'toJSON'>
     & ResolveEagerLoads<TRelations, TPaths>
     & (this extends { toJSON(): infer R }
       ? { toJSON(): R & SerializeLoaded<ResolveEagerLoads<TRelations, TPaths>> }
