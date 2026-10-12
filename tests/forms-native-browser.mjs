@@ -45,8 +45,8 @@ globalThis.submitNativeForm = async (method) => {
   return await form.submit()
 }
 globalThis.mountSurvey = () => {
-  const definition = schema({ pages: field.array({ key: field.string().required(), questions: field.array({ text: field.string().required(), required: field.boolean() }).default([]) }).required() })
-  const initialValues = { pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
+  const definition = schema({ tags: field.array(field.string()).required(), pages: field.array({ key: field.string().required(), questions: field.array({ text: field.string().required(), required: field.boolean() }).default([]) }).required() })
+  const initialValues = { tags: ['first', 'second'], pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
   function Survey() {
     const form = useForm(definition, {
       initialValues,
@@ -59,6 +59,7 @@ globalThis.mountSurvey = () => {
       event.preventDefault()
       void form.submit().then(result => { globalThis.surveyResult = result })
     } },
+    ...form.values.tags.map((tag, index) => createElement('input', { key: index, type: 'hidden', name: 'tags[' + index + ']', value: tag })),
     createElement('output', { id: 'survey-questions' }, form.values.pages.flatMap(page => page.questions.map(question => question.text)).join(', ')),
     createElement('button', { type: 'submit' }, 'Publish survey'))
   }
@@ -182,7 +183,7 @@ try {
         await page.evaluate(() => globalThis.mountSurvey())
         await page.getByRole('button', { name: 'Publish survey' }).click()
         await page.waitForFunction(() => globalThis.surveyResult !== undefined)
-        const expected = { pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
+        const expected = { tags: ['first', 'second'], pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
         assert.deepEqual(await page.evaluate(() => globalThis.surveyResult), { ok: true, status: 200, data: { values: expected, transported: expected } })
         assert.equal(await page.locator('#survey-questions').textContent(), 'First question, Second question, Third question')
       } finally {

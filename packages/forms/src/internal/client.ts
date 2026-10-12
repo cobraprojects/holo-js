@@ -771,7 +771,7 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
       const liveFormData = getActiveBrowserFormData(liveForm)
       const formData = liveFormData ?? buildFormData(state.values)
       if (liveFormData) {
-        const nativeFields = new Set(liveFormData.keys())
+        const nativeFields = new Set([...liveFormData.keys()].map(name => name.replace(/\[\d+\]$/, '[]')))
         for (const [name, value] of buildFormData(state.values)) {
           if (!nativeFields.has(name)) formData.append(name, value)
         }
