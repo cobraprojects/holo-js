@@ -1,4 +1,7 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { pathToFileURL } from 'node:url'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { loadConfigDirectory, writeConfigCache } from '@holo-js/config'
@@ -21,6 +24,7 @@ import {
   renderStorageConfig,
 } from '../src/project/scaffold'
 
+const execute = promisify(execFile)
 const tempDirs: string[] = []
 
 async function createProject(): Promise<string> {
@@ -215,10 +219,16 @@ connections: { ...config.connections, alternate: { host: '127.0.0.1', port: 6380
 
   it.each(['esm', 'cjs'] as const)('selects auth defaults in %s configs', async (format) => {
     const root = await createProject()
+    await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+    for (const name of ['config', 'auth']) {
+      await symlink(resolve(import.meta.dirname, `../../${name}`), join(root, 'node_modules/@holo-js', name))
+    }
     if (format === 'esm') {
-      await writeConfig(root, 'auth', renderAuthConfig(), `
-guards: { ...config.guards, api: { driver: 'token', provider: 'users' } },
-passwords: { ...config.passwords, alternate: { provider: 'users' } },
+      await writeFile(join(root, 'config/auth.ts'), `${renderAuthConfig().replace('export default ', 'const config = ')}
+export default { ...config,
+  guards: { ...config.guards, api: { driver: 'token', provider: 'users' } },
+  passwords: { ...config.passwords, alternate: { provider: 'users' } },
+}
 `)
     } else {
       await writeFile(join(root, 'config/auth.cjs'), `${renderAuthConfig({}, 'cjs')}
@@ -226,12 +236,21 @@ module.exports.guards.api = { driver: 'token', provider: 'users' }
 module.exports.passwords.alternate = { provider: 'users' }
 `)
     }
-    const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
-    expect(defaults.auth.defaults).toEqual({ guard: 'web', passwords: 'users' })
-    const overridden = await loadConfigDirectory(root, {
-      processEnv: { AUTH_GUARD: 'api', AUTH_PASSWORD_BROKER: 'alternate' }, preferCache: false,
-    })
-    expect(overridden.auth.defaults).toEqual({ guard: 'api', passwords: 'alternate' })
+    const configModule = pathToFileURL(resolve(import.meta.dirname, '../../config/dist/index.mjs')).href
+    const authModule = pathToFileURL(resolve(import.meta.dirname, '../../auth/dist/index.mjs')).href
+    const { stdout } = await execute(process.execPath, ['--input-type=module', '--eval', `
+import { loadConfigDirectory } from ${JSON.stringify(configModule)}
+import ${JSON.stringify(authModule)}
+const root = process.argv[1]
+const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+const overridden = await loadConfigDirectory(root, {
+  processEnv: { AUTH_GUARD: 'api', AUTH_PASSWORD_BROKER: 'alternate' }, preferCache: false,
+})
+console.log(JSON.stringify({ defaults: defaults.auth.defaults, overridden: overridden.auth.defaults }))
+`, root], { cwd: root })
+    const result: { defaults: { guard: string, passwords: string }, overridden: { guard: string, passwords: string } } = JSON.parse(stdout)
+    expect(result.defaults).toEqual({ guard: 'web', passwords: 'users' })
+    expect(result.overridden).toEqual({ guard: 'api', passwords: 'alternate' })
     expect(renderAuthEnvFiles().env).toContain('AUTH_GUARD=web')
     expect(renderAuthEnvFiles().example).toContain('AUTH_PASSWORD_BROKER=')
   })

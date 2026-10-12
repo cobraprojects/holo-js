@@ -120,4 +120,4 @@ const invoicePaid = defineNotification({
 2. Queued deliveries store JSON snapshots of the resolved payload and route. The worker does not rerun the notification definition or recipient routing methods.
 3. Start the normal Holo queue worker to deliver these jobs; application code does not need to register a notification delivery job.
 4. With `.afterCommit()`, Holo resolves and sends or queues delivery after the surrounding transaction commits. A rollback cancels it. Outside a transaction, delivery proceeds normally.
-5. Channel failures are isolated. Inspect the dispatch result for each channel's success or failure.
+5. Channel failures are isolated. For a queued channel, dispatch success means the job was enqueued, not that its message was delivered. Inspect worker failures through [Failed Jobs](/queue/failed-jobs).

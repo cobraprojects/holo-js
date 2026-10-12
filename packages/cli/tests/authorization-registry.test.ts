@@ -54,6 +54,7 @@ export default defineAuthConfig({
 `, 'utf8')
 
   await Promise.all([
+    symlink(join(workspaceRoot, 'packages/auth'), join(root, 'node_modules/@holo-js/auth')),
     symlink(join(workspaceRoot, 'packages/config'), join(root, 'node_modules/@holo-js/config')),
     symlink(join(workspaceRoot, 'packages/db'), join(root, 'node_modules/@holo-js/db')),
   ])
