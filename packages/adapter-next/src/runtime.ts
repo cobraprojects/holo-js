@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
 import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
 import { validationInternals } from '@holo-js/validation'
@@ -171,7 +173,8 @@ export function createNextRequestContext(request: Request): NextRequestLike {
   }
 }
 
-function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authRequest']> {
+function resolveNextAuthRequestAccessors(projectRoot = process.cwd()): NonNullable<CreateHoloOptions['authRequest']> {
+  const requireNext = createRequire(resolve(projectRoot, 'package.json'))
   return {
     async getCookie(name: string) {
       const request = getCurrentNextRequest()
@@ -180,7 +183,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
       }
 
       try {
-        const { cookies } = await import('next/headers.js') as NextHeadersModule
+        const { cookies } = requireNext('next/headers.js') as NextHeadersModule
         const store = await cookies()
         return store.get(name)?.value
       } catch (error) {
@@ -195,7 +198,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
       }
 
       try {
-        const { headers } = await import('next/headers.js') as NextHeadersModule
+        const { headers } = requireNext('next/headers.js') as NextHeadersModule
         const requestHeaders = await headers()
         return requestHeaders.get(name) ?? undefined
       } catch (error) {
@@ -210,7 +213,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
       }
 
       try {
-        const { cookies } = await import('next/headers.js') as NextHeadersModule
+        const { cookies } = requireNext('next/headers.js') as NextHeadersModule
         const store = await cookies() as MutableNextCookieStore
         store.set(parsed.name, parsed.value, parsed.options)
       } catch (error) {
@@ -218,7 +221,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
       }
     },
     async redirectResponse(url: string) {
-      const { redirect } = await import('next/navigation.js') as NextNavigationModule
+      const { redirect } = requireNext('next/navigation.js') as NextNavigationModule
       redirect(url)
     },
   }
@@ -227,7 +230,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
 export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfigMap>(
   options: NextHoloRuntimeOptions,
 ) {
-  const authRequest = options.authRequest ?? resolveNextAuthRequestAccessors()
+  const authRequest = options.authRequest ?? resolveNextAuthRequestAccessors(options.projectRoot)
   const resolveRuntime = async () => {
     const runtime = await initializeHolo<TCustom>(options.projectRoot, {
       ...options,
