@@ -44,6 +44,28 @@ globalThis.submitNativeForm = async (method) => {
   })
   return await form.submit()
 }
+globalThis.mountSurvey = () => {
+  const definition = schema({ pages: field.array({ key: field.string().required(), questions: field.array({ text: field.string().required(), required: field.boolean() }).default([]) }).required() })
+  const initialValues = { pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
+  function Survey() {
+    const form = useForm(definition, {
+      initialValues,
+      submitter: async ({ values, formData }) => {
+        const { validate } = await import(${JSON.stringify(join(root, 'packages/validation/src/index.ts'))})
+        return { ok: true, status: 200, data: { values, transported: await validate(formData, definition) } }
+      },
+    })
+    return createElement('form', { onSubmit: event => {
+      event.preventDefault()
+      void form.submit().then(result => { globalThis.surveyResult = result })
+    } },
+    createElement('output', { id: 'survey-questions' }, form.values.pages.flatMap(page => page.questions.map(question => question.text)).join(', ')),
+    createElement('button', { type: 'submit' }, 'Publish survey'))
+  }
+  const container = document.createElement('div')
+  document.body.append(container)
+  createRoot(container).render(createElement(Survey))
+}
 globalThis.submitNativeUpload = async () => {
   const form = createFormClient(schema({ title: field.string().required(), image: field.file().optional() }), {
     initialValues: { title: '' },
@@ -148,6 +170,21 @@ try {
           { ok: true, status: 200, data: { email: 'first@example.com', action: '/first' } },
           { ok: true, status: 200, data: { email: 'second@example.com', action: '/second' } },
         ])
+      } finally {
+        await context.close()
+      }
+    })
+    await suite.test('preserves nested array items in React state and server validation when submitting a native form', async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        await page.goto(url)
+        await page.evaluate(() => globalThis.mountSurvey())
+        await page.getByRole('button', { name: 'Publish survey' }).click()
+        await page.waitForFunction(() => globalThis.surveyResult !== undefined)
+        const expected = { pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
+        assert.deepEqual(await page.evaluate(() => globalThis.surveyResult), { ok: true, status: 200, data: { values: expected, transported: expected } })
+        assert.equal(await page.locator('#survey-questions').textContent(), 'First question, Second question, Third question')
       } finally {
         await context.close()
       }
