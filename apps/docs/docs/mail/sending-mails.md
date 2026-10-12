@@ -22,12 +22,17 @@ await sendMail(invoicePaidMail)
   .using('smtp')
 ```
 
-### Specifying a Connection
+### Choosing a Queue Connection
 
 ```ts
 await sendMail(invoicePaidMail)
-  .onConnection('smtp-production')
+  .using('smtp')
+  .onConnection('database')
+  .onQueue('mail')
 ```
+
+`.using(...)` selects a mailer in `config/mail.ts`. `.onConnection(...)` selects a queue connection in
+`config/queue.ts`, and `.onQueue(...)` selects its queue. Run the matching worker for asynchronous delivery.
 
 ### Queueing
 

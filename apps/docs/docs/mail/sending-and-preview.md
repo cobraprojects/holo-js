@@ -21,9 +21,9 @@ await sendMail(welcomeMail({
 
 The fluent send API supports:
 
-- `.using(name)`
-- `.onConnection(name)`
-- `.onQueue(name)`
+- `.using(name)` selects a mailer in `config/mail.ts`
+- `.onConnection(name)` selects a queue connection in `config/queue.ts`
+- `.onQueue(name)` selects a queue for delivery
 - `.delay(value)`
 - `.afterCommit()`
 

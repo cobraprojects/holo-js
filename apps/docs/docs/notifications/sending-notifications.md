@@ -42,7 +42,7 @@ await notify(user, invoicePaid)
 // Delay specific channels
 await notify(user, invoicePaid)
   .delayFor('email', 300)      // Email delayed 5 minutes
-  .delayFor('broadcast', 0)    // Broadcast immediately
+  .delayFor('broadcast', 0)    // No scheduling delay
 ```
 
 ### Transaction Awareness
@@ -56,11 +56,6 @@ await notify(user, invoicePaid)
 
 Use `notifyUsing()` to send notifications without a notifiable model by providing routes directly:
 
-```ts
-import { notifyUsing } from '@holo-js/notifications'
-
-await notifyUsing()
-  .channel('email', { email: 'ava@example.com', name: 'Ava' })
-  .channel('database', { id: 'user-1', type: 'users' })
-  .notify(invoicePaid)
-```
+See [On-Demand Notifications](/notifications/on-demand-notifications) for a complete
+`defineNotification(...)` example. Anonymous notification builders must not depend on model attributes
+that are absent from the supplied routes.

@@ -6,6 +6,7 @@ Notifications can be delayed and processed asynchronously using queues:
 
 ```ts
 await notify(user, invoicePaid)
+  .onConnection('database')
   .onQueue('notifications')
   .delay(300) // 5 minutes delay
   .afterCommit()
@@ -20,22 +21,26 @@ See [Deployment](/deployment) for host selection and [Queue Workers](/queue/work
 You can configure default queue settings in your notifications configuration:
 
 ```ts
-// config/notifications.ts
+import { defineNotificationsConfig } from '@holo-js/notifications'
+
 export default defineNotificationsConfig({
-  default: 'database',
+  table: 'notifications',
   queue: {
-    connection: 'default',
+    connection: 'database',
     queue: 'notifications',
-    // Whether to delay dispatch until after database commits
-    afterCommit: true
+    afterCommit: true,
   },
-  channels: {
-    database: {
-      driver: 'database',
-      table: 'notifications'
-    }
-  }
 })
+```
+
+`connection` names a connection in `config/queue.ts`. These settings supply defaults for queued
+deliveries; they do not make every notification asynchronous. Queue a notification with its definition's
+`queue` option, `.onConnection(...)`, `.onQueue(...)`, or a delay.
+
+Run a worker for the selected connection and queue:
+
+```bash
+holo queue:work --connection database --queue notifications
 ```
 
 ## Queue Options
@@ -50,12 +55,17 @@ await notify(user, invoicePaid)
 // Delay specific channels
 await notify(user, invoicePaid)
   .delayFor('email', 10 * 60) // Email delayed 10 minutes
-  .delayFor('broadcast', 0)   // Broadcast immediately
+  .delayFor('broadcast', 0)   // No scheduling delay
 
 // Delay using a Date object
 await notify(user, invoicePaid)
   .delay(new Date(Date.now() + 3600000))
 ```
+
+A zero delay adds no scheduling wait; the selected queue driver still controls execution. An asynchronous
+connection still needs its worker.
+Fluent delays override definition delays. If the definition has no separate delay, a delay returned by its
+queue resolver is used.
 
 ### Notification Queue Defaults
 
@@ -106,13 +116,8 @@ const invoicePaid = defineNotification({
 
 ## How Queueing Works
 
-1. When `.onQueue()` is called, one queue job is created per recipient and per channel
-2. Each queue job contains:
-   - The notification definition
-   - The recipient information
-   - Channel-specific payload data
-3. Queue workers process jobs by:
-   - Reconstructing the notification
-   - Sending it through the appropriate channel
-4. If `.afterCommit()` is used, notifications are only queued after database transactions commit
-5. Channel failures are isolated - if one channel fails, others continue to process
+1. Holo resolves a delivery for each recipient and channel, including the payload, route, queue, and delay.
+2. Queued deliveries store JSON snapshots of the resolved payload and route. The worker does not rerun the notification definition or recipient routing methods.
+3. Start the normal Holo queue worker to deliver these jobs; application code does not need to register a notification delivery job.
+4. With `.afterCommit()`, Holo resolves and sends or queues delivery after the surrounding transaction commits. A rollback cancels it. Outside a transaction, delivery proceeds normally.
+5. Channel failures are isolated. Inspect the dispatch result for each channel's success or failure.

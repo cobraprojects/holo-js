@@ -6,6 +6,7 @@ When using the queue feature, mails can be delayed and processed asynchronously:
 
 ```ts
 await sendMail(invoicePaidMail)
+  .onConnection('database')
   .onQueue('mail')
   .delay(300) // 5 minutes delay
   .afterCommit()
@@ -20,11 +21,12 @@ See [Deployment](/deployment) for host selection and [Queue Workers](/queue/work
 You can configure default queue settings in your mail configuration:
 
 ```ts
-// config/mail.ts
+import { defineMailConfig } from '@holo-js/mail'
+
 export default defineMailConfig({
   default: 'smtp',
   queue: {
-    connection: 'default',
+    connection: 'database',
     queue: 'mail',
     // Whether to delay dispatch until after database commits
     afterCommit: true
@@ -37,6 +39,15 @@ export default defineMailConfig({
   }
 })
 ```
+
+Queue connections are declared in `config/queue.ts`, independently of the selected mailer. Start a
+worker for the selected connection and queue:
+
+```bash
+holo queue:work --connection database --queue mail
+```
+
+Holo registers mail delivery jobs when the worker boots; application code does not register them manually.
 
 ## Queue Options
 
@@ -54,16 +65,19 @@ await sendMail(invoicePaidMail)
 
 ### Per-Mailer Queue Settings
 
-You can set queue defaults per mailer:
+Set `queued: true` on a mailer to queue its deliveries by default. The connection and queue identify
+where its worker receives those jobs:
 
 ```ts
-// config/mail.ts
+import { defineMailConfig } from '@holo-js/mail'
+
 export default defineMailConfig({
   mailers: {
     smtp: {
       driver: 'smtp',
       queue: {
-        connection: 'smtp-queue',
+        queued: true,
+        connection: 'database',
         queue: 'mail-high-priority'
       }
     }

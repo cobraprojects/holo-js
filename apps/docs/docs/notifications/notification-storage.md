@@ -17,8 +17,10 @@ Holo-JS provides helper functions for working with stored notifications:
 
 ```ts
 import {
+  clearNotifications,
   deleteNotifications,
   listNotifications,
+  markAllNotificationsAsRead,
   markNotificationsAsRead,
   markNotificationsAsUnread,
   unreadNotifications,
@@ -39,10 +41,20 @@ const unread = await unreadNotifications(
 await markNotificationsAsRead({ recipient }, ['notif_1', 'notif_2', 'notif_3'])
 await markNotificationsAsUnread({ recipient }, ['notif_4', 'notif_5'])
 await deleteNotifications({ recipient }, ['notif_6', 'notif_7'])
+
+const marked = await markAllNotificationsAsRead({ recipient, type: 'invoice-paid' })
+const deleted = await clearNotifications({ recipient, type: 'invoice-paid' })
 ```
 
 The first argument selects the recipient's notifications. The second argument controls pagination. Both list helpers
-return `records`, `total`, and `unread`.
+return `records`, `total`, and `unread`. Record timestamps are `Date` values; `readAt` is `null` until a notification is read.
+
+Resolve the recipient from the authenticated session on the server. All read, unread, delete, and bulk operations
+remain scoped to the supplied recipient and filters. The mutation helpers return the number of affected records;
+marking an already-read notification as read does not count as a change.
+
+ID-based mutations accept at most 100 IDs per call. Use `markAllNotificationsAsRead(query)` or
+`clearNotifications(query)` for all records matching a trusted query instead of fetching every ID.
 
 Add `type` or `dataMatches` only when the page needs narrower results:
 
