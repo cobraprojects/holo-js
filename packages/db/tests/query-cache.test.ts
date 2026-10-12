@@ -59,6 +59,20 @@ describe('native database and cache integration', () => {
 
   const names = () => DB.table(users).orderBy('id').cache(60).pluck('name')
 
+  it('isolates cached rows, counts and existence with an explicit key and invalidates them after writes', async () => {
+    const query = DB.table(users).cache({ key: 'users.shared', ttl: 60 })
+    expect(await query.count()).toBe(2)
+    expect(await query.exists()).toBe(true)
+    expect(await query.get()).toHaveLength(2)
+    expect(await query.count()).toBe(2)
+    expect(await query.exists()).toBe(true)
+    expect(queries.filter(entry => entry.sql.startsWith('SELECT')).map(entry => entry.rowCount)).toEqual([1, 1, 2])
+    await DB.table(users).delete()
+    expect(await query.count()).toBe(0)
+    expect(await query.exists()).toBe(false)
+    expect(await query.get()).toEqual([])
+  })
+
   it('caches real query results with distinct bound-value keys and explicit file keys', async () => {
     const first = await DB.table(users).where('id', 1).cache(60).first()
     await adapter.execute("UPDATE users SET name = 'Outside' WHERE id = 1")

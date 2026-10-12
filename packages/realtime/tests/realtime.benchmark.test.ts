@@ -13223,11 +13223,12 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       score: 12_000,
     }
 
+    const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
     rows[999] = upsertedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpsertInvalidation(upsertedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
-    const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
+    const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
@@ -13297,11 +13298,12 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       title: 'Renamed post 500',
     }
 
+    const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
     rows[499] = updatedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchTitleOnlyReturningUpdateInvalidation(updatedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
-    const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
+    const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
@@ -13361,11 +13363,12 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       score: 12_000,
     }
 
+    const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
     rows[499] = updatedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(updatedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
-    const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
+    const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
@@ -13532,10 +13535,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       throw new Error('Expected benchmark aggregate backfill row to exist.')
     }
 
+    const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
-    const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
+    const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)

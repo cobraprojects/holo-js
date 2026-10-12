@@ -1182,32 +1182,15 @@ export class ModelQueryBuilder<
   }
 
   async count(): Promise<number> {
-    const collection = await this.get()
-    const result = collection.length
-    rebindDatabaseQueryObservationAggregate(collection, result, Object.freeze({ kind: 'count' }))
-    return result
+    return this.tableQuery.count()
   }
 
   async exists(): Promise<boolean> {
-    const count = await this.count()
-    const result = count > 0
-    rebindDatabaseQueryObservationAggregate(count, result, Object.freeze({
-      count,
-      kind: 'count',
-      output: 'boolean',
-    }))
-    return result
+    return this.tableQuery.exists()
   }
 
   async doesntExist(): Promise<boolean> {
-    const count = await this.count()
-    const result = count === 0
-    rebindDatabaseQueryObservationAggregate(count, result, Object.freeze({
-      count,
-      kind: 'count',
-      output: 'inverseBoolean',
-    }))
-    return result
+    return this.tableQuery.doesntExist()
   }
 
   async pluck<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<Array<ModelRecord<TTable>[TColumn]>> {

@@ -76,23 +76,59 @@ export class SQLQueryCompiler {
   }
 
   compilePaginationCount(plan: SelectQueryPlan): CompiledStatement {
-    const statement = this.compile({ ...plan, orderBy: [], limit: undefined, offset: undefined, lockMode: undefined })
+    return this.compileCount({ ...plan, orderBy: [], limit: undefined, offset: undefined, lockMode: undefined })
+  }
+
+  compileCount(plan: SelectQueryPlan): CompiledStatement {
+    const countsRows = !plan.distinct
+      && plan.groupBy.length === 0
+      && plan.having.length === 0
+      && plan.unions.length === 0
+      && plan.selections.every(selection => selection.kind === 'column')
+    if (
+      countsRows
+      && typeof plan.limit === 'undefined'
+      && typeof plan.offset === 'undefined'
+      && !plan.lockMode
+    ) {
+      return this.compile({
+        ...plan,
+        orderBy: [],
+        selections: [{ kind: 'aggregate', aggregate: 'count', column: '*', alias: '__holo_count' }],
+      })
+    }
+    const statement = this.compile(plan)
+    const bindings: unknown[] = []
+    const sql = countsRows ? this.compileSelectSql({ ...plan, orderBy: [] }, bindings, '1') : statement.sql
     const metadata = this.createSelectMetadata(plan)
     return this.withMetadata({
       ...statement,
-      sql: `SELECT COUNT(*) AS ${this.quoteIdentifier('__holo_count')} FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_pagination')}`,
+      bindings: countsRows ? bindings : statement.bindings,
+      sql: `SELECT COUNT(*) AS ${this.quoteIdentifier('__holo_count')} FROM (${sql}) AS ${this.quoteIdentifier('__holo_counted')}`,
     }, {
       ...metadata,
       selectedShape: { mode: 'projection', columns: [], aggregates: ['__holo_count'], hasRawSelections: false, hasSubqueries: true },
     })
   }
 
+  compileExists(plan: SelectQueryPlan): CompiledStatement {
+    const statement = this.compile(plan)
+    return this.withMetadata({
+      ...statement,
+      sql: `SELECT EXISTS (${statement.sql}) AS ${this.quoteIdentifier('__holo_exists')}`,
+    }, {
+      ...this.createSelectMetadata(plan),
+      selectedShape: { mode: 'projection', columns: [], aggregates: [], hasRawSelections: false, hasSubqueries: true },
+    })
+  }
+
   protected compileSelectSql(
     plan: SelectQueryPlan,
     bindings: unknown[],
+    projection?: string,
   ): string {
     const selectKeyword = plan.distinct ? 'SELECT DISTINCT' : 'SELECT'
-    const selectList = plan.selections.length === 0
+    const selectList = projection ?? (plan.selections.length === 0
       ? '*'
       : plan.selections.map((selection) => {
           if (selection.kind === 'subquery') {
@@ -114,7 +150,7 @@ export class SQLQueryCompiler {
           return selection.alias
             ? `${column} AS ${this.quoteIdentifier(selection.alias)}`
             : column
-        }).join(', ')
+        }).join(', '))
     const joinClause = this.compileJoins(plan.joins, bindings)
     const whereClause = this.compilePredicates(plan.predicates, bindings)
     const unionClause = this.compileUnions(plan.unions, bindings)

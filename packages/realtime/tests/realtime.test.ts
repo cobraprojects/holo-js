@@ -10817,6 +10817,7 @@ describe('@holo-js/realtime', () => {
         throw error
       },
     })
+    const queriesBeforeWrites = adapter.queries.length
     await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Second', 2])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
@@ -10871,7 +10872,7 @@ describe('@holo-js/realtime', () => {
         },
       },
     ])
-    expect(adapter.queries.filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(1)
+    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(1)
   })
 
   it('backfills filtered simple-paginated metadata for unknown updates without rerunning the handler', async () => {
@@ -11031,6 +11032,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(publishedQuery, {}, publishedPatchOptions)
     await subscribeRealtimeQuery(draftQuery, {}, draftPatchOptions)
 
+    const queriesBeforeWrites = adapter.queries.length
     await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Third', 3])
     await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['draft', 'Fourth', 4])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
@@ -11087,8 +11089,8 @@ describe('@holo-js/realtime', () => {
       op: 'merge',
       path: ['meta'],
     })
-    expect(adapter.queries.filter(query => query.sql === 'SELECT "status", COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" IN (?, ?) GROUP BY "status"')).toHaveLength(1)
-    expect(adapter.queries.filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(0)
+    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT "status", COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" IN (?, ?) GROUP BY "status"')).toHaveLength(1)
+    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(0)
   })
 
   it('patches returning paginated query data after stable row updates without refreshing unchanged metadata', async () => {
@@ -11187,7 +11189,7 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT COUNT(*) AS "__holo_count" FROM (SELECT * FROM "posts") AS "__holo_pagination"',
+      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
       'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
       'UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING *',
     ])

@@ -1956,8 +1956,9 @@ export class TableQueryBuilder<
   }
 
   async count(): Promise<number> {
-    const rows = await this.get()
-    const result = rows.length
+    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compileCount(this.plan), true, true)
+    const result = Number(rows[0]?.__holo_count)
+    if (!Number.isSafeInteger(result) || result < 0) throw new CompilerError('Query count must be a non-negative safe integer.')
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({ kind: 'count' }))
     }
@@ -1965,6 +1966,10 @@ export class TableQueryBuilder<
   }
 
   async exists(): Promise<boolean> {
+    if (!hasActiveDatabaseDependencyCollector()) {
+      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(this.getCompiler().compileExists(this.plan), false, true)
+      return rows[0]?.__holo_exists === true || rows[0]?.__holo_exists === 1
+    }
     const count = await this.count()
     const result = count > 0
     if (hasActiveDatabaseDependencyCollector()) {
@@ -1978,6 +1983,7 @@ export class TableQueryBuilder<
   }
 
   async doesntExist(): Promise<boolean> {
+    if (!hasActiveDatabaseDependencyCollector()) return !await this.exists()
     const count = await this.count()
     const result = count === 0
     if (hasActiveDatabaseDependencyCollector()) {
