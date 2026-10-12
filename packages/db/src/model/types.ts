@@ -82,7 +82,7 @@ export type ModelDefinitionTable<TReference extends ModelDefinitionLike>
       : TableDefinition
 
 export type PivotTableColumnName<TPivotTable extends string | TableDefinition>
-  = TPivotTable extends TableDefinition ? Extract<keyof InferSelect<TPivotTable>, string> : string
+  = Extract<keyof InferSelect<TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable>, string>
 
 export interface BelongsToRelationDefinition<TRelated extends ModelDefinitionLike = ModelDefinitionLike> extends ScopedRelationDefinition {
   readonly kind: 'belongsTo'
@@ -165,6 +165,7 @@ export interface BelongsToManyRelationDefinition<
   readonly pivotWheres: readonly PivotWhereDefinition[]
   readonly pivotOrderBy: readonly PivotOrderDefinition[]
   readonly pivotAccessor: string
+  readonly pivotTimestamps?: boolean
   readonly pivotModel?: () => ModelDefinitionLike
 }
 
@@ -185,6 +186,7 @@ export interface MorphToManyRelationDefinition<
   readonly pivotWheres: readonly PivotWhereDefinition[]
   readonly pivotOrderBy: readonly PivotOrderDefinition[]
   readonly pivotAccessor: string
+  readonly pivotTimestamps?: boolean
   readonly pivotModel?: () => ModelDefinitionLike
 }
 
@@ -205,6 +207,7 @@ export interface MorphedByManyRelationDefinition<
   readonly pivotWheres: readonly PivotWhereDefinition[]
   readonly pivotOrderBy: readonly PivotOrderDefinition[]
   readonly pivotAccessor: string
+  readonly pivotTimestamps?: boolean
   readonly pivotModel?: () => ModelDefinitionLike
 }
 
@@ -219,15 +222,30 @@ export interface PivotOrderDefinition {
   readonly direction: 'asc' | 'desc'
 }
 
+export type ConfiguredPivotRelation<
+  TRelation,
+  TPivotTable extends string | TableDefinition,
+  TOverrides,
+> = Omit<TRelation, keyof PivotRelationMethods<unknown> | keyof TOverrides>
+  & TOverrides
+  & PivotRelationMethods<Omit<TRelation, keyof PivotRelationMethods<unknown> | keyof TOverrides> & TOverrides, TPivotTable>
+
+export type InitialPivotRelation<TRelation, TPivotTable extends string | TableDefinition>
+  = ConfiguredPivotRelation<TRelation, TPivotTable, {
+    readonly pivotAccessor: 'pivot'
+    readonly pivotModel: undefined
+  }>
+
 export interface PivotRelationMethods<
   TRelation,
   TPivotTable extends string | TableDefinition = string | TableDefinition,
 > {
-  withPivot(...columns: readonly PivotTableColumnName<TPivotTable>[]): TRelation
-  wherePivot(column: PivotTableColumnName<TPivotTable>, operator: unknown, value?: unknown): TRelation
-  orderByPivot(column: PivotTableColumnName<TPivotTable>, direction?: 'asc' | 'desc'): TRelation
-  as(accessor: string): TRelation
-  using(model: () => ModelDefinitionLike): TRelation
+  withPivot(...columns: readonly PivotTableColumnName<TPivotTable>[]): TRelation & PivotRelationMethods<TRelation, TPivotTable>
+  withTimestamps(): ConfiguredPivotRelation<TRelation, TPivotTable, { readonly pivotTimestamps: true }>
+  wherePivot(column: PivotTableColumnName<TPivotTable>, operator: unknown, value?: unknown): TRelation & PivotRelationMethods<TRelation, TPivotTable>
+  orderByPivot(column: PivotTableColumnName<TPivotTable>, direction?: 'asc' | 'desc'): TRelation & PivotRelationMethods<TRelation, TPivotTable>
+  as<const TAccessor extends string>(accessor: TAccessor): ConfiguredPivotRelation<TRelation, TPivotTable, { readonly pivotAccessor: TAccessor }>
+  using<TModel extends ModelDefinitionLike>(model: () => TModel): ConfiguredPivotRelation<TRelation, TPivotTable, { readonly pivotModel: () => TModel }>
 }
 
 export interface HasOneThroughRelationDefinition<
@@ -418,14 +436,28 @@ type IsToManyRelation<TRelation extends RelationDefinition>
     : false
 
 /** Resolves a single (non-nested) relation to its typed entity shape. */
+type PivotRecordOfRelation<TRelation>
+  = TRelation extends { readonly pivotModel: () => infer TModel extends ModelDefinitionLike }
+    ? Entity<ModelDefinitionTable<TModel>, RelatedRelationsOfDefinition<TModel>>
+    : TRelation extends { readonly pivotTable: infer TPivotTable extends string | TableDefinition }
+      ? InferSelect<TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable>
+      : Record<never, never>
+
+type LoadedPivotOfRelation<TRelation>
+  = TRelation extends { readonly pivotAccessor: infer TAccessor extends string }
+    ? string extends TAccessor ? Record<never, never> : { readonly [K in TAccessor]: PivotRecordOfRelation<TRelation> }
+    : Record<never, never>
+
 type ResolveRelationEntity<TRelation extends RelationDefinition>
-  = Entity<RelatedTableOfRelation<TRelation>, RelatedRelationsOfRelation<TRelation>>
+  = TRelation extends { readonly pivotAccessor: string }
+    ? Entity<RelatedTableOfRelation<TRelation>, RelatedRelationsOfRelation<TRelation>> & LoadedPivotOfRelation<TRelation>
+    : Entity<RelatedTableOfRelation<TRelation>, RelatedRelationsOfRelation<TRelation>>
 
 type ResolveNestedRelationEntity<TRelation extends RelationDefinition, TLoaded>
   = EntityWithLoaded<
     RelatedTableOfRelation<TRelation>,
     RelatedRelationsOfRelation<TRelation>,
-    TLoaded
+    TLoaded & LoadedPivotOfRelation<TRelation>
   >
 
 /**

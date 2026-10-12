@@ -249,6 +249,13 @@ class EntityBase<
   }
 
   setRelation(name: string, value: unknown): this {
+    if (!(name in this)) {
+      Object.defineProperty(this, name, {
+        configurable: true,
+        enumerable: false,
+        get: () => this.getRelation(name),
+      })
+    }
     this.relations[name] = value
     return this
   }

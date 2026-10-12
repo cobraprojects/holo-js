@@ -3504,35 +3504,17 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return pivotRepository.hydrate(row)
     }
 
-    const selectedColumns = new Set<string>([
-      ...this.getDefaultPivotColumns(relation),
-      ...relation.pivotColumns,
-    ])
-
     const connection = this.getConnection()
     const table = typeof relation.pivotTable === 'string'
       ? connection.getSchemaRegistry().get(relation.pivotTable)
       : relation.pivotTable
     const dialect = connection.getDriver() as SchemaDialectName
     return Object.fromEntries(
-      [...selectedColumns]
-        .filter(column => Object.prototype.hasOwnProperty.call(row, column))
-        .map(column => {
-          const definition = table?.columns[column]
-          return [column, definition ? normalizeDialectReadValue(dialect, definition, row[column]) : row[column]]
-        }),
+      Object.entries(row).map(([column, value]) => {
+        const definition = table?.columns[column]
+        return [column, definition ? normalizeDialectReadValue(dialect, definition, value) : value]
+      }),
     )
-  }
-
-  private getDefaultPivotColumns(relation: PivotRelationDefinition): readonly string[] {
-    switch (relation.kind) {
-      case 'belongsToMany':
-        return [relation.foreignPivotKey, relation.relatedPivotKey]
-      case 'morphToMany':
-        return [relation.morphTypeColumn, relation.morphIdColumn, relation.foreignPivotKey]
-      case 'morphedByMany':
-        return [relation.foreignPivotKey, relation.morphTypeColumn, relation.morphIdColumn]
-    }
   }
 
   private getPivotMutationContext(
@@ -3720,7 +3702,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         relatedColumn = relation.morphIdColumn
         break
     }
-    return new PivotMutation({ table: relation.pivotTable, scope, relatedColumn, allowedColumns: relation.pivotColumns, relationName }, this.getConnection())
+    return new PivotMutation({ table: relation.pivotTable, scope, relatedColumn, allowedColumns: relation.pivotColumns, timestamps: relation.pivotTimestamps === true, relationName }, this.getConnection())
   }
 
   private async dispatchCancelableEvent(

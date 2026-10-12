@@ -963,11 +963,13 @@ describe('model relation slice', () => {
     expect(firstUserRoles.map(role => role.get('name'))).toEqual(['Editor', 'Admin'])
     expect(secondUserRoles.map(role => role.get('name'))).toEqual([])
     expect((firstUserRoles[0]?.getRelation('membership') as JsonRecord | undefined)).toEqual({
+      id: 1001,
       userId: 1,
       roleId: 101,
       grantedAt: '2026-02-01',
       approved: true })
     expect((firstUserRoles[1]?.getRelation('membership') as JsonRecord | undefined)).toEqual({
+      id: 1000,
       userId: 1,
       roleId: 100,
       grantedAt: '2026-01-01',
