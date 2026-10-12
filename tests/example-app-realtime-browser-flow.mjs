@@ -97,8 +97,80 @@ async function openRealtimePage(page, failures) {
     () => sockets.sentFrames.some(frame => frame.includes('holo:realtime') && frame.includes('"action":"subscribe"')),
     formatRealtimeFailure('Expected the realtime page to subscribe through the websocket runtime.', sockets, failures),
   )
+  await waitFor(
+    () => sockets.receivedFrames.some(frame => JSON.parse(frame).event === 'holo:realtime:snapshot'),
+    formatRealtimeFailure('Expected the worker to deliver the initial authenticated subscription snapshot.', sockets, failures),
+  )
 
   return sockets
+}
+
+async function assertNextRealtimeQueryAfterLogout(baseUrl) {
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext({ baseURL: baseUrl })
+  try {
+    assert.equal((await context.request.get('/login')).status(), 200)
+    const token = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')?.value
+    assert.ok(token, 'The native app must issue a CSRF token before login.')
+    const headers = { 'X-CSRF-TOKEN': decodeURIComponent(token) }
+    const login = await context.request.post('/api/login', { headers, data: { email: 'editor@example.com', password: 'secret-secret' } })
+    assert.equal(login.status(), 200, await login.text())
+    assert.equal((await login.json()).data.user.email, 'editor@example.com')
+    const page = await context.newPage()
+    await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('link', { name: /realtime demo/i }).waitFor()
+    await page.waitForLoadState('networkidle')
+    await page.route('**/holo/realtime/query', async route => {
+      const logout = await context.request.post('/api/logout', { headers })
+      assert.equal(logout.status(), 200, await logout.text())
+      assert.equal((await logout.json()).authenticated, false)
+      await route.continue()
+    })
+    const queryResponse = page.waitForResponse(response => response.url().includes('/holo/realtime/query') && response.request().method() === 'POST')
+    await page.getByRole('link', { name: /realtime demo/i }).click()
+    assert.equal((await queryResponse).status(), 401, 'A query in flight after real logout must fail authentication.')
+    await page.locator('#__holo_next_client_http_error__').getByRole('heading', { name: '401', exact: true }).waitFor()
+  } finally {
+    await context.close()
+  }
+}
+
+async function assertRealtimeMutationAfterLogout(baseUrl, appName, postId) {
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext({ baseURL: baseUrl })
+  try {
+    assert.equal((await context.request.get('/login')).status(), 200)
+    const token = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')?.value
+    assert.ok(token)
+    const headers = { 'X-CSRF-TOKEN': decodeURIComponent(token) }
+    if (appName === 'blog-sveltekit') {
+      const login = await context.request.post('/login', { headers: { ...headers, Accept: 'text/html' }, form: { email: 'editor@example.com', password: 'secret-secret', _token: decodeURIComponent(token) }, maxRedirects: 0 })
+      assert.equal(login.status(), 303, await login.text())
+      assert.equal(login.headers().location, '/admin')
+    } else {
+      const login = await context.request.post('/api/login', { headers, data: { email: 'editor@example.com', password: 'secret-secret' } })
+      assert.equal(login.status(), 200, await login.text())
+      assert.equal((await login.json()).data.user.email, 'editor@example.com')
+    }
+    const page = await context.newPage()
+    const sockets = await openRealtimePage(page, [])
+    const post = page.locator(`[data-post-id="${postId}"]`)
+    await post.getByRole('button', { name: /edit title/i }).click()
+    await page.getByLabel('Realtime post title').fill('Unauthorized realtime update')
+    const logout = await context.request.post('/api/logout', { headers })
+    assert.equal(logout.status(), 200, await logout.text())
+    assert.equal((await logout.json()).authenticated, false)
+    await page.getByRole('button', { name: /save realtime title/i }).click()
+    await waitFor(() => sockets.receivedFrames.some(frame => {
+      const packet = JSON.parse(frame)
+      const data = typeof packet.data === 'string' ? JSON.parse(packet.data) : packet.data
+      return packet.event === 'holo:realtime:error' && data.status === 401
+    }), formatRealtimeFailure('A real logout must revoke mutation access on the existing WebSocket.', sockets, []))
+    await page.getByRole('heading', { name: '401', exact: true }).waitFor()
+
+  } finally {
+    await context.close()
+  }
 }
 
 export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, cookieHeader, postId }) {
@@ -116,9 +188,11 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
     const firstPost = editorPage.locator(`[data-post-id="${postId}"]`)
     assert.ok(postId, 'Expected the realtime page to render post ids.')
 
+    const subscriptionFrames = editorSockets.sentFrames.filter(frame => frame.includes('"action":"subscribe"')).length
     const title = `Realtime ${appName} ${Date.now()}`
     await firstPost.getByRole('button', { name: /edit title/i }).click()
     await editorPage.getByLabel('Realtime post title').fill(title)
+    assert.equal(editorSockets.sentFrames.filter(frame => frame.includes('"action":"subscribe"')).length, subscriptionFrames, 'Editing local form state must preserve the existing realtime subscription.')
     await editorPage.getByRole('button', { name: /save realtime title/i }).click()
     try {
       await waitFor(
@@ -133,12 +207,31 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
     }
 
     assert.deepEqual([...observerResult.failures, ...editorResult.failures], [])
+    const unsubscribed = observerSockets.sentFrames.filter(frame => frame.includes('"action":"unsubscribe"')).length
+    await observerPage.locator('a[href="/admin/posts"]').first().click()
+    await observerPage.waitForURL('**/admin/posts')
+    await waitFor(
+      () => observerSockets.sentFrames.filter(frame => frame.includes('"action":"unsubscribe"')).length > unsubscribed,
+      formatRealtimeFailure('Leaving the page must release its live subscription.', observerSockets, observerResult.failures),
+    )
+    await observerPage.getByRole('link', { name: /realtime demo/i }).click()
+    await observerPage.locator(`[data-post-id="${postId}"] h2`).waitFor()
+    await waitFor(
+      async () => (await observerPage.locator(`[data-post-id="${postId}"] h2`).textContent()) === title,
+      'Returning to the page must restore its live data.',
+    )
+    assert.equal(await observerPage.locator(`[data-post-id="${postId}"] h2`).textContent(), title)
+    await assertRealtimeMutationAfterLogout(baseUrl, appName, postId)
+    await observerPage.reload({ waitUntil: 'domcontentloaded' })
+    await observerPage.locator(`[data-post-id="${postId}"] h2`).waitFor()
+    assert.equal(await observerPage.locator(`[data-post-id="${postId}"] h2`).textContent(), title, 'Rejected mutations must preserve the persisted title.')
+
   } finally {
     await context.close()
   }
 }
 
-export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, cookieHeader }) {
+export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, cookieHeader, appName }) {
   const browser = await getExampleAppBrowser()
   const context = await browser.newContext({ baseURL: baseUrl })
 
@@ -171,6 +264,7 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     await page.locator(postSelector).first().waitFor({ timeout: 20000 })
 
     assert.deepEqual(result.failures, [])
+    if (appName === 'blog-next') await assertNextRealtimeQueryAfterLogout(baseUrl)
   } finally {
     await context.close()
   }

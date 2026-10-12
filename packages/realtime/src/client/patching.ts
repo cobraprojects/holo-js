@@ -16,7 +16,7 @@ import type {
 } from './types'
 import { stableStringify } from './utils'
 
-const patchedSnapshots = new WeakSet<object>()
+const patchedSnapshots = new WeakMap<object, RealtimeWireSnapshotPatch>()
 const unsafeWirePatchKeys = new Set(['__proto__', 'constructor', 'prototype'])
 
 export function parseWireSnapshotPatch(value: unknown): RealtimeWireSnapshotPatch | undefined {
@@ -250,7 +250,7 @@ export function applyWireSnapshotPatch<TResult>(
     version: patch.version,
     data: data as TResult,
   }
-  patchedSnapshots.add(nextSnapshot)
+  patchedSnapshots.set(nextSnapshot, patch)
   return nextSnapshot
 }
 
@@ -556,6 +556,6 @@ function shareEquivalentWireValue(currentValue: unknown, replacementValue: unkno
     : replacementValue
 }
 
-export function isPatchedRealtimeSnapshot(snapshot: RealtimeSubscriptionSnapshot<unknown>): boolean {
-  return patchedSnapshots.has(snapshot)
+export function readRealtimeSnapshotPatch(snapshot: RealtimeSubscriptionSnapshot<unknown>): RealtimeWireSnapshotPatch | undefined {
+  return patchedSnapshots.get(snapshot)
 }

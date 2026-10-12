@@ -1,5 +1,6 @@
 import type { LoadedHoloConfig } from '@holo-js/config'
 import { DB, type TableQueryBuilder } from '@holo-js/db'
+import { serializeAuthTimestamp } from './authPersistence'
 import {
   type CoreNotificationJsonPrimitive,
   type CoreNotificationRecord,
@@ -38,10 +39,13 @@ export interface CoreNotificationPage {
 }
 
 export interface CoreNotificationStore {
+  clear(query: CoreNotificationQuery): Promise<number>
   create(record: CoreNotificationRecord): Promise<void>
+  find(query: CoreNotificationQuery, ids: readonly string[]): Promise<readonly CoreNotificationRecord[]>
   list(query: CoreNotificationQuery, pagination: CoreNotificationPagination): Promise<CoreNotificationPage>
   unread(query: CoreNotificationQuery, pagination: CoreNotificationPagination): Promise<CoreNotificationPage>
   markAsRead(query: CoreNotificationQuery, ids: readonly string[]): Promise<number>
+  markAllAsRead(query: CoreNotificationQuery): Promise<number>
   markAsUnread(query: CoreNotificationQuery, ids: readonly string[]): Promise<number>
   delete(query: CoreNotificationQuery, ids: readonly string[]): Promise<number>
 }
@@ -77,6 +81,7 @@ export function createCoreNotificationStore(
     DB.table(tableName, connectionName),
     query,
   )
+  const currentTimestamp = (): string => serializeAuthTimestamp(new Date(), DB.connection(connectionName).getDriver())
   const unreadQuery = (query: CoreNotificationQuery): TableQueryBuilder<string> => scopedQuery(query).whereNull('read_at')
 
   const createPage = async (
@@ -114,8 +119,12 @@ export function createCoreNotificationStore(
   }
 
   return Object.freeze({
+    async clear(query: CoreNotificationQuery): Promise<number> {
+      const result = await scopedQuery(query).delete()
+      return result.affectedRows ?? 0
+    },
     async create(record: CoreNotificationRecord): Promise<void> {
-      await DB.table(tableName, connectionName).insertOrIgnore(serializeNotificationRecordForRow(record))
+      await DB.table(tableName, connectionName).insertOrIgnore(serializeNotificationRecordForRow(record, DB.connection(connectionName).getDriver()))
       const persisted = await DB.table(tableName, connectionName).where('id', record.id).first<Record<string, unknown>>()
       if (!persisted) {
         throw new Error('[@holo-js/core] Notification persistence failed closed.')
@@ -133,17 +142,27 @@ export function createCoreNotificationStore(
     async list(query: CoreNotificationQuery, pagination: CoreNotificationPagination): Promise<CoreNotificationPage> {
       return await createPage(query, pagination, false)
     },
+    async find(query: CoreNotificationQuery, ids: readonly string[]): Promise<readonly CoreNotificationRecord[]> {
+      if (ids.length === 0) return Object.freeze([])
+      const rows = await scopedQuery(query).whereIn('id', ids).get<Record<string, unknown>>()
+      return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
+    },
     async unread(query: CoreNotificationQuery, pagination: CoreNotificationPagination): Promise<CoreNotificationPage> {
       return await createPage(query, pagination, true)
     },
     async markAsRead(query: CoreNotificationQuery, ids: readonly string[]): Promise<number> {
       if (ids.length === 0) return 0
 
-      const now = new Date().toISOString()
+      const now = currentTimestamp()
       const result = await scopedQuery(query)
         .whereIn('id', ids)
         .update({ read_at: now, updated_at: now })
 
+      return result.affectedRows ?? 0
+    },
+    async markAllAsRead(query: CoreNotificationQuery): Promise<number> {
+      const now = currentTimestamp()
+      const result = await unreadQuery(query).update({ read_at: now, updated_at: now })
       return result.affectedRows ?? 0
     },
     async markAsUnread(query: CoreNotificationQuery, ids: readonly string[]): Promise<number> {
@@ -151,7 +170,7 @@ export function createCoreNotificationStore(
 
       const result = await scopedQuery(query)
         .whereIn('id', ids)
-        .update({ read_at: null, updated_at: new Date().toISOString() })
+        .update({ read_at: null, updated_at: currentTimestamp() })
 
       return result.affectedRows ?? 0
     },

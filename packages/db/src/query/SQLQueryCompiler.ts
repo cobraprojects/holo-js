@@ -1,3 +1,4 @@
+import { rawSqlPlaceholders } from './rawSql'
 import { CompilerError } from '../core/errors'
 import { validateQueryPlan } from './validator'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
@@ -14,6 +15,7 @@ import type {
   UpsertQueryPlan,
   QueryPlan,
   QueryPredicateNode,
+  QueryPredicate,
   QueryUpdateValue,
   QueryVectorPredicate,
   SelectQueryPlan,
@@ -46,6 +48,19 @@ export class SQLQueryCompiler {
       default:
         throw new CompilerError(`Unsupported query plan kind "${(plan as { kind: string }).kind}".`)
     }
+  }
+
+  private compileRawSql(sql: string, values: readonly unknown[], bindings: unknown[]): string {
+    let result = ''
+    let offset = 0
+    let anonymousIndex = 0
+    for (const placeholder of rawSqlPlaceholders(sql)) {
+      result += sql.slice(offset, placeholder.start)
+      bindings.push(values[typeof placeholder.index === 'undefined' ? anonymousIndex++ : placeholder.index - 1])
+      result += this.createPlaceholder(bindings.length)
+      offset = placeholder.end
+    }
+    return result + sql.slice(offset)
   }
 
   protected compileSelect(plan: SelectQueryPlan): CompiledStatement {
@@ -91,8 +106,7 @@ export class SQLQueryCompiler {
           }
 
           if (selection.kind === 'raw') {
-            bindings.push(...selection.bindings)
-            return selection.sql
+            return this.compileRawSql(selection.sql, selection.bindings, bindings)
           }
 
           const column = this.compileColumnReference(selection.column)
@@ -422,8 +436,7 @@ export class SQLQueryCompiler {
     }
 
     if (predicate.kind === 'raw') {
-      bindings.push(...predicate.bindings)
-      return predicate.sql
+      return this.compileRawSql(predicate.sql, predicate.bindings, bindings)
     }
 
     if (predicate.kind === 'exists') {
@@ -470,7 +483,7 @@ export class SQLQueryCompiler {
       const values = predicate.value as readonly unknown[]
       const placeholders = values.map((value) => {
         bindings.push(value)
-        return this.createPlaceholder(bindings.length)
+        return this.compileComparisonPlaceholder(predicate, bindings.length)
       }).join(', ')
       return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} (${placeholders})`
     }
@@ -478,11 +491,15 @@ export class SQLQueryCompiler {
     if (predicate.operator === 'between' || predicate.operator === 'not between') {
       const values = predicate.value as readonly [unknown, unknown]
       bindings.push(values[0], values[1])
-      return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.createPlaceholder(bindings.length - 1)} AND ${this.createPlaceholder(bindings.length)}`
+      return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length - 1)} AND ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
     }
 
     bindings.push(predicate.value)
-    return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
+    return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
+  }
+
+  protected compileComparisonPlaceholder(_predicate: QueryPredicate, index: number): string {
+    return this.createPlaceholder(index)
   }
 
   protected compileDatePredicate(
@@ -535,8 +552,7 @@ export class SQLQueryCompiler {
     }
 
     if (orderBy.kind === 'raw') {
-      bindings.push(...orderBy.bindings)
-      return orderBy.sql
+      return this.compileRawSql(orderBy.sql, orderBy.bindings, bindings)
     }
 
     if (orderBy.kind === 'vector') {

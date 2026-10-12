@@ -20,12 +20,12 @@ function log(message) {
   process.stdout.write(`[published-package-smoke] ${message}\n`)
 }
 
-function run(cwd, command, args) {
+function run(cwd, command, args, env = {}) {
   log(`${command} ${args.join(' ')}`)
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
-    env: process.env,
+    env: { ...process.env, ...env },
     maxBuffer: 20 * 1024 * 1024,
   })
   if (result.status !== 0) {
@@ -75,7 +75,7 @@ async function stopServer(server) {
   }
 }
 
-async function assertProductionApp(appRoot, app) {
+async function assertProductionApp(appRoot, app, env) {
   const port = await getAvailablePort()
   const output = []
   const cliPath = join(appRoot, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
@@ -83,6 +83,7 @@ async function assertProductionApp(appRoot, app) {
     cwd: appRoot,
     env: {
       ...process.env,
+      ...env,
       APP_URL: `http://127.0.0.1:${port}`,
       HOST: '127.0.0.1',
       HOSTNAME: '127.0.0.1',
@@ -228,9 +229,10 @@ async function copyFrameworkApp(source, target) {
     filter(path) {
       const relative = path.slice(source.length).replace(/^\//, '')
       const rootSegment = relative.split('/')[0]
-      return !['node_modules', '.next', '.nuxt', '.output', 'build'].includes(rootSegment)
+      return !['node_modules', '.holo-js', '.next', '.nuxt', '.output', 'build', 'storage'].includes(rootSegment)
     },
   })
+  await mkdir(join(target, 'storage'), { recursive: true })
 }
 
 function listManifestDependencyNames(manifest, includeDevDependencies = false) {
@@ -389,21 +391,23 @@ async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework) {
   for (const app of selectedApps) {
     const sourceAppRoot = join(rootDir, app.source)
     const appRoot = join(tempRoot, `framework-${app.name}`)
+    const env = { DB_DRIVER: 'sqlite', DB_URL: join(appRoot, 'storage/database.sqlite'), DB_SQLITE_URL: join(appRoot, 'storage/database.sqlite') }
     await copyFrameworkApp(sourceAppRoot, appRoot)
     if (app.name === 'next') {
       await createFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     } else {
       await createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     }
-    run(appRoot, 'bun', ['run', 'prepare'])
-    const build = run(appRoot, 'bun', ['run', 'build'])
+    run(appRoot, 'bun', ['run', 'prepare'], env)
+    run(appRoot, 'bun', ['x', 'holo', 'migrate:fresh', '--seed'], env)
+    const build = run(appRoot, 'bun', ['run', 'build'], env)
     if (app.name === 'next') {
       assert.doesNotMatch(
         `${build.stdout}\n${build.stderr}`,
         /Dynamic filesystem access causes tracing of the whole project/,
       )
     }
-    await assertProductionApp(appRoot, app)
+    await assertProductionApp(appRoot, app, env)
     await rm(appRoot, { recursive: true, force: true })
   }
 }

@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { useFlux } from '@holo-js/flux-svelte'
+  import { useFlux, useFluxPresence } from '@holo-js/flux-svelte'
   import { type PageData } from './$types'
 
   export let data: PageData
   let latestPostChange = 'Waiting for post activity'
+  const { members } = useFluxPresence('blog.admin.presence')
 
   useFlux('blog.admin', 'blog.post.changed', (payload) => {
     latestPostChange = `${payload.action}: ${payload.title}`
@@ -22,6 +23,7 @@
     <article class="panel live-panel">
       <strong>Live post activity</strong>
       <div data-testid="broadcast-post-activity">{latestPostChange}</div>
+      <div data-testid="broadcast-presence">{JSON.stringify($members)}</div>
     </article>
     <div class="links">
       <a href="/admin/posts">Manage posts</a>

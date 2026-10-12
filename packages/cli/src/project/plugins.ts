@@ -775,16 +775,11 @@ function insertPluginsProperty(contents: string, packageNames: readonly string[]
   const nextProperty = renderPluginConfigProperty(packageNames)
   const pathsMatch = contents.match(/^\s*(?:"paths"|paths):\s*\{/m)
   if (pathsMatch?.index === undefined) {
-    const openConfigMatch = contents.match(/defineAppConfig\(\{\s*\n/)
-    if (openConfigMatch?.index !== undefined) {
-      const insertIndex = openConfigMatch.index + openConfigMatch[0].length
-      return `${contents.slice(0, insertIndex)}${nextProperty}${contents.slice(insertIndex)}`
-    }
+    const openConfigMatch = contents.match(/defineAppConfig\(\{\s*/)
+    if (openConfigMatch?.index === undefined) return undefined
 
-    const emptyConfigMatch = contents.match(/defineAppConfig\(\{\s*\}\)/)
-    return emptyConfigMatch
-      ? contents.replace(emptyConfigMatch[0], `defineAppConfig({\n${nextProperty}})`)
-      : undefined
+    const insertIndex = openConfigMatch.index + openConfigMatch[0].length
+    return `${contents.slice(0, insertIndex)}\n${nextProperty}${contents.slice(insertIndex)}`
   }
 
   return `${contents.slice(0, pathsMatch.index)}${nextProperty}${contents.slice(pathsMatch.index)}`

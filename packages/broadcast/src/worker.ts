@@ -1902,6 +1902,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       })
     },
     async close(): Promise<void> {
+      await Promise.all([...connectedSockets.values()].map(async socket => {
+        socket.close(1001, 'Worker shutdown')
+        this.disconnectWebSocket(socket.socketId)
+        await socket.pendingMessage
+      }))
       const unsubscribe = await scalingUnsubscribe
       await unsubscribe()
       if (scaling) {
@@ -2193,6 +2198,7 @@ export async function startBroadcastWorker(
     host: config.worker.host,
     port,
     async stop() {
+      await runtime.close()
       await new Promise<void>((resolvePromise) => {
         wsServer.close(() => {
           resolvePromise()
@@ -2209,7 +2215,6 @@ export async function startBroadcastWorker(
           resolvePromise()
         })
       })
-      await runtime.close()
     },
   })
 }

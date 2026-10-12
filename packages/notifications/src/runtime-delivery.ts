@@ -114,6 +114,7 @@ function resolveChannelDispatchPlan(
   const resolvedDelay = options.delayByChannel?.[channel]
     ?? options.delay
     ?? resolveNotificationDelay(notification, target, channel)
+    ?? notificationQueueOptions?.delay
 
   const queued = notificationQueue === true
     || Boolean(notificationQueueOptions)

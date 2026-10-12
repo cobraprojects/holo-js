@@ -55,14 +55,19 @@
     "ws": "catalog:"
   },
   "peerDependencies": {
+    "@holo-js/db": "catalog:",
     "ioredis": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@holo-js/db": {
+      "optional": true
+    },
     "ioredis": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@holo-js/db": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "ioredis": "catalog:",

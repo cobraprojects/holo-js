@@ -1,1023 +1,128 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
+import { setTimeout } from 'node:timers/promises'
+import { describe, expect, it } from 'vitest'
+import { startRedisService } from '../../session/tests/support/redis'
+import { createSecurityRedisAdapter } from '../src/drivers/redis-adapter'
 
-const redisMock = vi.hoisted(() => {
-  const calls = {
-    connect: 0,
-    constructorArgs: [] as unknown[][],
-    del: [] as string[][],
-    clusterDel: [] as Array<[number, string[]]>,
-    clusterNodes: [] as string[],
-    clusterScan: [] as Array<[number, string, string, string, string, number]>,
-    disconnect: 0,
-    multi: [] as Array<{
-      zadd: Array<[string, number, string]>
-      zremrangebyscore: Array<[string, string | number, string | number]>
-      zcard: string[]
-      zrange: Array<[string, number, number, string]>
-    }>,
-    pexpireat: [] as Array<[string, number]>,
-    quit: 0,
-    quitFailures: 0,
-    scan: [] as Array<[string, string, string, string, number]>,
-  }
+async function createAdapter(options: { cluster?: boolean; socket?: boolean; url?: boolean; db?: number; prefix?: string; tls?: boolean } = {}) {
+  const service = await startRedisService(options)
+  const port = service.ports[0]
+  if (!port) throw new Error('Expected Redis port')
+  const prefix = options.prefix ?? `holo:rate-limit:${randomUUID()}:`
+  const adapter = createSecurityRedisAdapter({
+    host: '127.0.0.1', port, db: options.db ?? 0, prefix,
+    connection: options.socket ? `unix://${service.socket}` : options.url || options.tls ? `${options.tls ? 'rediss' : 'redis'}://127.0.0.1:${port}` : 'default',
+    clusters: options.cluster ? service.ports.map(port => ({ host: '127.0.0.1', port, url: options.tls ? `rediss://127.0.0.1:${port}` : undefined })) : undefined,
+  })
+  return { adapter, service, prefix }
+}
 
-  const execResponses: Array<Array<[null, number]> | null> = []
-  const clusterScanResponses: Array<Array<[string, string[]]>> = []
-  const scanResponses: Array<[string, string[]]> = []
-  let clusterNodeCount = 2
-
-  class FakeRedisClusterNode {
-    constructor(private readonly index: number) {}
-
-    async scan(
-      cursor: string,
-      matchLabel: string,
-      pattern: string,
-      countLabel: string,
-      count: number,
-    ): Promise<[string, string[]]> {
-      calls.clusterScan.push([this.index, cursor, matchLabel, pattern, countLabel, count])
-      return clusterScanResponses[this.index]?.shift() ?? ['0', []]
+describe('Redis rate-limit behavior', () => {
+  it.each([{}, { url: true, db: 2 }, { socket: true, db: 3 }])('counts hits and clears buckets through %j', async options => {
+    const { adapter } = await createAdapter(options)
+    try {
+      await adapter.connect()
+      expect(await adapter.increment('login:127.0.0.1', { decaySeconds: 60 })).toEqual({ attempts: 1, ttlSeconds: 60 })
+      expect(await adapter.increment('login:127.0.0.1', { decaySeconds: 60 })).toEqual({ attempts: 2, ttlSeconds: 60 })
+      expect(await adapter.del('login:127.0.0.1')).toBe(1)
+      expect(await adapter.del('login:127.0.0.1')).toBe(0)
+      expect(await adapter.increment('login:127.0.0.1', { decaySeconds: 60 })).toEqual({ attempts: 1, ttlSeconds: 60 })
+    } finally {
+      await adapter.close()
     }
+  })
 
-    async del(...keys: string[]): Promise<number> {
-      calls.clusterDel.push([this.index, keys])
-      if (keys.length > 1) {
-        throw new Error('CROSSSLOT Keys in request do not hash to the same slot')
-      }
-
-      return keys.length
+  it('counts every simultaneous attempt without overwriting hits', async () => {
+    const { adapter } = await createAdapter()
+    try {
+      await adapter.connect()
+      const hits = await Promise.all(Array.from({ length: 32 }, () => adapter.increment('login', { decaySeconds: 60 })))
+      expect(hits.map(hit => hit.attempts).sort((left, right) => left - right)).toEqual(Array.from({ length: 32 }, (_, index) => index + 1))
+      expect(hits.every(hit => hit.ttlSeconds === 60)).toBe(true)
+    } finally {
+      await adapter.close()
     }
-  }
+  })
 
-  class FakeRedis {
-    static Cluster = class FakeRedisCluster {
-      constructor(...args: unknown[]) {
-        calls.constructorArgs.push(args)
-      }
-
-      async connect(): Promise<void> {
-        calls.connect += 1
-      }
-
-      multi() {
-        return new FakeRedis().multi()
-      }
-
-      async del(...keys: string[]): Promise<number> {
-        return new FakeRedis().del(...keys)
-      }
-
-      async scan(
-        cursor: string,
-        matchLabel: string,
-        pattern: string,
-        countLabel: string,
-        count: number,
-      ): Promise<[string, string[]]> {
-        return new FakeRedis().scan(cursor, matchLabel, pattern, countLabel, count)
-      }
-
-      nodes(role: 'master') {
-        calls.clusterNodes.push(role)
-        return Array.from({ length: clusterNodeCount }, (_, index) => new FakeRedisClusterNode(index))
-      }
-
-      async pexpireat(key: string, timestampMs: number): Promise<number> {
-        return new FakeRedis().pexpireat(key, timestampMs)
-      }
-
-      async quit(): Promise<void> {
-        calls.quit += 1
-        if (calls.quitFailures > 0) {
-          calls.quitFailures -= 1
-          throw new Error('quit failed')
-        }
-      }
-
-      disconnect(): void {
-        calls.disconnect += 1
-      }
+  it('expires old hits while retaining later hits in the sliding window', async () => {
+    const { adapter } = await createAdapter()
+    try {
+      await adapter.connect()
+      expect((await adapter.increment('login', { decaySeconds: 2 })).attempts).toBe(1)
+      await setTimeout(1200)
+      expect(await adapter.increment('login', { decaySeconds: 2 })).toEqual({ attempts: 2, ttlSeconds: 1 })
+      await setTimeout(1000)
+      expect((await adapter.increment('login', { decaySeconds: 2 })).attempts).toBe(2)
+      await setTimeout(2100)
+      expect(await adapter.increment('login', { decaySeconds: 2 })).toEqual({ attempts: 1, ttlSeconds: 2 })
+    } finally {
+      await adapter.close()
     }
+  }, 10_000)
 
-    constructor(...args: unknown[]) {
-      calls.constructorArgs.push(args)
-    }
-
-    async connect(): Promise<void> {
-      calls.connect += 1
-    }
-
-    multi() {
-      const chain = {
-        zadd: [] as Array<[string, number, string]>,
-        zremrangebyscore: [] as Array<[string, string | number, string | number]>,
-        zcard: [] as string[],
-        zrange: [] as Array<[string, number, number, string]>,
+  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }])('clears every matching bucket and preserves unrelated keys through %j', async options => {
+    const { adapter, service } = await createAdapter(options)
+    const { cluster } = options
+    try {
+      await adapter.connect()
+      for (let index = 0; index < 30; index += 1) {
+        await adapter.increment(`login:${index}`, { decaySeconds: 60 })
       }
-      calls.multi.push(chain)
-
-      return {
-        zadd(key: string, score: number, member: string) {
-          chain.zadd.push([key, score, member])
-          return this
-        },
-        zremrangebyscore(key: string, min: string | number, max: string | number) {
-          chain.zremrangebyscore.push([key, min, max])
-          return this
-        },
-        zcard(key: string) {
-          chain.zcard.push(key)
-          return this
-        },
-        zrange(key: string, start: number, stop: number, withScores: string) {
-          chain.zrange.push([key, start, stop, withScores])
-          return this
-        },
-        async exec() {
-          if (execResponses.length > 0) {
-            return execResponses.shift() ?? null
-          }
-
-          return [
-            [null, 1],
-            [null, 0],
-            [null, 2],
-            [null, ['17665', '1776517199500']],
-            [null, 1],
-          ]
-        },
+      await adapter.increment('other:bucket', { decaySeconds: 60 })
+      if (cluster) {
+        expect((await Promise.all(service.clients.map(client => client.dbsize()))).every(size => size > 0)).toBe(true)
       }
+      expect(await adapter.clearByPrefix('login:*')).toBe(30)
+      expect(await adapter.clearByPrefix('login:')).toBe(0)
+      expect((await adapter.increment('other:bucket', { decaySeconds: 60 })).attempts).toBe(2)
+      expect(await adapter.clearAll()).toBe(1)
+      expect(await adapter.clearAll()).toBe(0)
+    } finally {
+      await adapter.close()
     }
+  }, 30_000)
 
-    async del(...keys: string[]): Promise<number> {
-      calls.del.push(keys)
-      return keys.length
+  it('escapes glob metacharacters in configured and requested prefixes', async () => {
+    const { adapter, service, prefix } = await createAdapter({ prefix: `holo:[tenant]*?:${randomUUID()}:` })
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected Redis client')
+    try {
+      await adapter.connect()
+      await adapter.increment('login:[user]*?', { decaySeconds: 60 })
+      await adapter.increment('login:other', { decaySeconds: 60 })
+      await client.set('unrelated:sentinel', 'preserved')
+      await client.set(`${prefix.replace('[tenant]*?', 't')}login:[user]*?`, 'preserved')
+      expect(await adapter.clearByPrefix('login:[user]*?')).toBe(1)
+      expect(await adapter.clearAll()).toBe(1)
+      expect(await client.get('unrelated:sentinel')).toBe('preserved')
+      expect(await client.get(`${prefix.replace('[tenant]*?', 't')}login:[user]*?`)).toBe('preserved')
+    } finally {
+      await adapter.close()
     }
+  })
 
-    async scan(
-      cursor: string,
-      matchLabel: string,
-      pattern: string,
-      countLabel: string,
-      count: number,
-    ): Promise<[string, string[]]> {
-      calls.scan.push([cursor, matchLabel, pattern, countLabel, count])
-      if (scanResponses.length > 0) {
-        return scanResponses.shift() as [string, string[]]
-      }
-
-      return ['0', []]
+  it('rejects real Redis command errors instead of reporting a successful limit check', async () => {
+    const { adapter, service, prefix } = await createAdapter()
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected Redis client')
+    try {
+      await adapter.connect()
+      await client.set(`${prefix}login`, 'corrupted')
+      await expect(adapter.increment('login', { decaySeconds: 60 })).rejects.toThrow(/WRONGTYPE/)
+      expect(await client.get(`${prefix}login`)).toBe('corrupted')
+      expect(await adapter.del('login')).toBe(1)
+      expect((await adapter.increment('login', { decaySeconds: 60 })).attempts).toBe(1)
+    } finally {
+      await adapter.close()
     }
-
-    async pexpireat(key: string, timestampMs: number): Promise<number> {
-      calls.pexpireat.push([key, timestampMs])
-      return 1
-    }
-
-    async quit(): Promise<void> {
-      calls.quit += 1
-      if (calls.quitFailures > 0) {
-        calls.quitFailures -= 1
-        throw new Error('quit failed')
-      }
-    }
-
-    disconnect(): void {
-      calls.disconnect += 1
-    }
-  }
-
-  return {
-    calls,
-    clusterScanResponses,
-    execResponses,
-    FakeRedis,
-    get clusterNodeCount() {
-      return clusterNodeCount
-    },
-    scanResponses,
-    set clusterNodeCount(value: number) {
-      clusterNodeCount = value
-    },
-  }
-})
-
-vi.mock('ioredis', () => ({
-  default: redisMock.FakeRedis,
-}))
-
-import { createSecurityRedisAdapter, securityRedisAdapterInternals } from '../src/drivers/redis-adapter'
-
-describe('security redis adapter', () => {
-  beforeEach(() => {
-    redisMock.calls.connect = 0
-    redisMock.calls.constructorArgs.length = 0
-    redisMock.calls.del.length = 0
-    redisMock.calls.clusterDel.length = 0
-    redisMock.calls.clusterNodes.length = 0
-    redisMock.calls.clusterScan.length = 0
-    redisMock.calls.disconnect = 0
-    redisMock.calls.multi.length = 0
-    redisMock.calls.pexpireat.length = 0
-    redisMock.calls.quit = 0
-    redisMock.calls.quitFailures = 0
-    redisMock.calls.scan.length = 0
-    redisMock.clusterNodeCount = 2
-    redisMock.clusterScanResponses.length = 0
-    redisMock.execResponses.length = 0
-    redisMock.scanResponses.length = 0
   })
 
-  it('applies the configured prefix to redis keys and limiter clear scans', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    await adapter.connect()
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).resolves.toEqual({
-      attempts: 2,
-      ttlSeconds: expect.any(Number),
-    })
-    await expect(adapter.del('limiter:login|user%3A1')).resolves.toBe(1)
-
-    redisMock.scanResponses.push(['0', ['holo:rate-limit:limiter:login|foo']])
-    await expect(adapter.clearByPrefix('limiter:login|')).resolves.toBe(1)
-    await adapter.close()
-
-    expect(redisMock.calls.connect).toBe(1)
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      {
-        host: '127.0.0.1',
-        port: 6379,
-        password: undefined,
-        username: undefined,
-        db: 0,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    ]])
-    expect(redisMock.calls.multi).toEqual([{
-      zadd: [expect.arrayContaining(['holo:rate-limit:limiter:login|user%3A1', expect.any(Number), expect.any(String)])],
-      zremrangebyscore: [expect.arrayContaining(['holo:rate-limit:limiter:login|user%3A1', '-inf', expect.any(Number)])],
-      zcard: ['holo:rate-limit:limiter:login|user%3A1'],
-      zrange: [['holo:rate-limit:limiter:login|user%3A1', 0, 0, 'WITHSCORES']],
-    }])
-    expect(redisMock.calls.pexpireat).toEqual([
-      ['holo:rate-limit:limiter:login|user%3A1', expect.any(Number)],
-    ])
-    expect(redisMock.calls.del).toEqual([
-      ['holo:rate-limit:limiter:login|user%3A1'],
-      ['holo:rate-limit:limiter:login|foo'],
-    ])
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:rate-limit:limiter:login|*', 'COUNT', 100],
-    ])
-    expect(redisMock.calls.quit).toBe(1)
-  })
-
-  it('uses a configured redis connection URL instead of the default host tuple', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'redis://cache.internal:6380/4',
-      prefix: 'holo:rate-limit:',
-    })
-
-    await adapter.connect()
-
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      'redis://cache.internal:6380/4',
-      {
-        password: undefined,
-        username: undefined,
-        db: 0,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    ]])
-  })
-
-  it('preserves the configured redis db when the connection is a URL', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 4,
-      connection: 'redis://cache.internal:6380',
-      prefix: 'holo:rate-limit:',
-    })
-
-    await adapter.connect()
-
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      'redis://cache.internal:6380',
-      {
-        password: undefined,
-        username: undefined,
-        db: 4,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    ]])
-  })
-
-  it('propagates TLS options for rediss cluster nodes', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [{
-        url: 'rediss://cache.internal:6380',
-        host: 'cache.internal',
-        port: 6380,
-      }],
-    })
-
-    await adapter.connect()
-
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      [{
-        host: 'cache.internal',
-        port: 6380,
-        tls: {},
-      }],
-      {
-        redisOptions: {
-          password: undefined,
-          username: undefined,
-          lazyConnect: true,
-          maxRetriesPerRequest: 3,
-          tls: {},
-        },
-      },
-    ]])
-  })
-
-  it('clears redis cluster keys from every primary node without cross-slot del', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [
-        {
-          host: 'cache-a.internal',
-          port: 6379,
-        },
-        {
-          host: 'cache-b.internal',
-          port: 6379,
-        },
-      ],
-    })
-
-    redisMock.clusterScanResponses.push([
-      ['13', [
-        'holo:rate-limit:bucket:{slot-a}',
-        'holo:rate-limit:bucket:{slot-b}',
-      ]],
-      ['0', [
-        'holo:rate-limit:bucket:{slot-c}',
-      ]],
-    ])
-    redisMock.clusterScanResponses.push([
-      ['0', [
-        'holo:rate-limit:bucket:{slot-d}',
-      ]],
-    ])
-
-    await expect(adapter.clearAll()).resolves.toBe(4)
-
-    expect(redisMock.calls.clusterNodes).toEqual(['master'])
-    expect(redisMock.calls.clusterScan).toEqual([
-      [0, '0', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
-      [0, '13', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
-      [1, '0', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
-    ])
-    expect(redisMock.calls.clusterDel).toEqual([
-      [0, ['holo:rate-limit:bucket:{slot-a}']],
-      [0, ['holo:rate-limit:bucket:{slot-b}']],
-      [0, ['holo:rate-limit:bucket:{slot-c}']],
-      [1, ['holo:rate-limit:bucket:{slot-d}']],
-    ])
-  })
-
-  it('preserves the configured redis db for socket-style connections', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 4,
-      connection: 'unix:///tmp/redis.sock',
-      prefix: 'holo:rate-limit:',
-    })
-
-    await adapter.connect()
-
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      'unix:///tmp/redis.sock',
-      {
-        password: undefined,
-        username: undefined,
-        db: 4,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    ]])
-  })
-
-  it('forwards non-default connection names to ioredis for observability', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'cache',
-      prefix: 'holo:rate-limit:',
-    })
-
-    await adapter.connect()
-
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      {
-        host: '127.0.0.1',
-        port: 6379,
-        password: undefined,
-        username: undefined,
-        db: 0,
-        connectionName: 'cache',
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    ]])
-  })
-
-  it('detects redis connection targets and only adds connection names for named profiles', () => {
-    expect(securityRedisAdapterInternals.isRedisConnectionTarget('redis://cache.internal:6380/4')).toBe(true)
-    expect(securityRedisAdapterInternals.isRedisConnectionTarget('rediss://cache.internal:6380/4')).toBe(true)
-    expect(securityRedisAdapterInternals.isRedisConnectionTarget('unix:///tmp/redis.sock')).toBe(true)
-    expect(securityRedisAdapterInternals.isRedisConnectionTarget('/tmp/redis.sock')).toBe(true)
-    expect(securityRedisAdapterInternals.isRedisConnectionTarget('cache')).toBe(false)
-    expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('redis://cache.internal:6380/4')).toBe(false)
-    expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('rediss://cache.internal:6380/4')).toBe(false)
-    expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('unix:///tmp/redis.sock')).toBe(true)
-    expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('/tmp/redis.sock')).toBe(true)
-    expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('cache')).toBe(false)
-    expect(securityRedisAdapterInternals.toRedisSocketPath('unix:///tmp/redis.sock')).toBe('/tmp/redis.sock')
-    expect(securityRedisAdapterInternals.toRedisSocketPath('/tmp/redis.sock')).toBe('/tmp/redis.sock')
-
-    expect(securityRedisAdapterInternals.createRedisClientOptions({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })).toEqual({
-      host: '127.0.0.1',
-      port: 6379,
-      password: undefined,
-      username: undefined,
-      db: 0,
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    })
-
-    expect(securityRedisAdapterInternals.createRedisClientOptions({
-      host: '/tmp/redis.sock',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })).toEqual({
-      path: '/tmp/redis.sock',
-      password: undefined,
-      username: undefined,
-      db: 0,
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    })
-
-    expect(securityRedisAdapterInternals.createRedisClientOptions({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'cache',
-      prefix: 'holo:rate-limit:',
-    })).toEqual({
-      host: '127.0.0.1',
-      port: 6379,
-      password: undefined,
-      username: undefined,
-      db: 0,
-      connectionName: 'cache',
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    })
-
-    expect(securityRedisAdapterInternals.createRedisClientOptions({
-      url: 'redis://cache.internal:6380/4',
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'cache',
-      prefix: 'holo:rate-limit:',
-    })).toEqual({
-      password: undefined,
-      username: undefined,
-      db: 0,
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    })
-
-    expect(securityRedisAdapterInternals.createRedisClientOptions({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 4,
-      connection: 'unix:///tmp/redis.sock',
-      prefix: 'holo:rate-limit:',
-    })).toEqual({
-      password: undefined,
-      username: undefined,
-      db: 4,
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    })
-
-    expect(securityRedisAdapterInternals.createRedisClusterOptions({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [{
-        url: 'rediss://cache.internal:6380',
-        host: 'cache.internal',
-        port: 6380,
-      }],
-    })).toEqual({
-      redisOptions: {
-        password: undefined,
-        username: undefined,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-        tls: {},
-      },
-    })
-
-    expect(securityRedisAdapterInternals.createRedisClusterOptions({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [{
-        url: 'redis://cache.internal',
-        host: 'cache.internal',
-        port: 6379,
-      }],
-    })).toEqual({
-      redisOptions: {
-        password: undefined,
-        username: undefined,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    })
-
-    expect(() => securityRedisAdapterInternals.createRedisClusterOptions({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 4,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [{
-        url: 'redis://cache.internal:6380',
-        host: 'cache.internal',
-        port: 6380,
-      }],
-    })).toThrow('Redis Cluster does not support selecting a non-zero database')
-  })
-
-  it('validates malformed cluster node urls and socket cluster nodes', () => {
-    expect(() => securityRedisAdapterInternals.parseClusterNodeUrl('http://cache.internal:6380', 'node url'))
-      .toThrow('unsupported protocol "http:"')
-    expect(() => securityRedisAdapterInternals.parseClusterNodeUrl('redis://', 'node url'))
-      .toThrow('node url is invalid')
-    expect(() => securityRedisAdapterInternals.resolveClusterStartupNodes({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [{
-        host: '/tmp/redis.sock',
-        port: 6379,
-      }],
-    })).toThrow('cannot use a Unix socket path')
-    expect(securityRedisAdapterInternals.resolveClusterStartupNodes({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-      clusters: [{
-        host: 'cache.internal',
-        port: 6380,
-      }],
-    })).toEqual([{
-      host: 'cache.internal',
-      port: 6380,
-    }])
-    expect(securityRedisAdapterInternals.resolveClusterStartupNodes({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })).toEqual([])
-    expect(securityRedisAdapterInternals.parseClusterNodeUrl('redis://cache.internal', 'node url')).toEqual({
-      host: 'cache.internal',
-      port: 6379,
-    })
-  })
-
-  it('constructs redis clients from explicit normalized urls', () => {
-    createSecurityRedisAdapter({
-      url: 'redis://cache.internal:6380/4',
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    expect(redisMock.calls.constructorArgs).toEqual([[
-      'redis://cache.internal:6380/4',
-      {
-        password: undefined,
-        username: undefined,
-        db: 0,
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-      },
-    ]])
-  })
-
-  it('falls back to disconnect when redis quit fails', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.calls.quitFailures = 1
-
-    await adapter.close()
-
-    expect(redisMock.calls.quit).toBe(1)
-    expect(redisMock.calls.disconnect).toBe(1)
-  })
-
-  it('counts repeated hits within the same window instead of overwriting a single sorted-set member', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    await adapter.connect()
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).resolves.toEqual({
-      attempts: 2,
-      ttlSeconds: expect.any(Number),
-    })
-
-    const zaddCalls = redisMock.calls.multi[0]?.zadd ?? []
-    expect(zaddCalls).toHaveLength(1)
-    expect(zaddCalls[0]?.[0]).toBe('holo:rate-limit:limiter:login|user%3A1')
-    expect(zaddCalls[0]?.[2]).not.toMatch(/^\d+$/)
-    expect(redisMock.calls.multi[0]?.zcard).toEqual(['holo:rate-limit:limiter:login|user%3A1'])
-    expect(redisMock.calls.multi[0]?.zrange).toEqual([
-      ['holo:rate-limit:limiter:login|user%3A1', 0, 0, 'WITHSCORES'],
-    ])
-  })
-
-  it('keeps ttlSeconds anchored to the oldest hit while expiring the bucket from the latest hit', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    }, {
-      now: () => new Date('2026-04-18T12:59:59.500Z'),
-    })
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, 2],
-      [null, ['17665', '1776517198500']],
-      [null, 1],
-    ] as never)
-
-    await adapter.connect()
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 3600,
-    })).resolves.toEqual({
-      attempts: 2,
-      ttlSeconds: 3599,
-    })
-
-    expect(redisMock.calls.pexpireat).toEqual([
-      ['holo:rate-limit:limiter:login|user%3A1', 1776520799500],
-    ])
-    expect(redisMock.calls.multi[0]?.zrange).toEqual([
-      ['holo:rate-limit:limiter:login|user%3A1', 0, 0, 'WITHSCORES'],
-    ])
-  })
-
-  it('extends redis bucket expiry when a later hit lands in the same window', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    }, {
-      now: () => new Date('2026-04-18T12:59:59.500Z'),
-    })
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, 2],
-      [null, ['17665', '1776516899500']],
-    ] as never)
-
-    await adapter.connect()
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 3600,
-    })).resolves.toEqual({
-      attempts: 2,
-      ttlSeconds: 3300,
-    })
-
-    expect(redisMock.calls.pexpireat).toEqual([
-      ['holo:rate-limit:limiter:login|user%3A1', 1776520799500],
-    ])
-  })
-
-  it('clears all prefixed rate-limit buckets and returns zero when no matching keys exist', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.scanResponses.push([
-      '13',
-      [
-        'holo:rate-limit:bucket:1',
-      ],
-    ])
-    redisMock.scanResponses.push([
-      '0',
-      [
-        'holo:rate-limit:bucket:2',
-      ],
-    ])
-    redisMock.scanResponses.push([
-      '0',
-      [],
-    ])
-
-    await expect(adapter.clearAll()).resolves.toBe(2)
-    await expect(adapter.clearAll()).resolves.toBe(0)
-
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
-      ['13', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
-      ['0', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
-    ])
-    expect(redisMock.calls.del).toEqual([
-      ['holo:rate-limit:bucket:1'],
-      ['holo:rate-limit:bucket:2'],
-    ])
-  })
-
-  it('fails closed when redis transactions fail and returns zero for empty prefix clears', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.execResponses.push(null)
-    redisMock.scanResponses.push(['0', []])
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('Redis transaction failed for increment')
-    await expect(adapter.clearByPrefix('limiter:login|')).resolves.toBe(0)
-    redisMock.scanResponses.push(['0', []])
-    await expect(adapter.clearByPrefix('limiter:login|*')).resolves.toBe(0)
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:rate-limit:limiter:login|*', 'COUNT', 100],
-      ['0', 'MATCH', 'holo:rate-limit:limiter:login|*', 'COUNT', 100],
-    ])
-  })
-
-  it('escapes redis glob metacharacters before clearing by prefix', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.scanResponses.push(['0', []])
-
-    await expect(adapter.clearByPrefix('limiter:logi?n[1]*')).resolves.toBe(0)
-
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:rate-limit:limiter:logi\\?n\\[1\\]*', 'COUNT', 100],
-    ])
-  })
-
-  it('escapes redis glob metacharacters in configured prefixes before clearing', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:*:rate-limit[prod]?:',
-    })
-
-    redisMock.scanResponses.push(['0', []])
-
-    await expect(adapter.clearAll()).resolves.toBe(0)
-
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:\\*:rate-limit\\[prod\\]\\?:*', 'COUNT', 100],
-    ])
-  })
-
-  it('rejects malformed scan replies from redis while clearing buckets', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.scanResponses.push(['0', []] as never)
-    redisMock.scanResponses.push(null as never)
-    redisMock.scanResponses.push(['0', 'invalid'] as never)
-
-    await expect(adapter.clearByPrefix('limiter:login|')).resolves.toBe(0)
-    await expect(adapter.clearAll()).rejects.toThrow('invalid scan response')
-    await expect(adapter.clearAll()).rejects.toThrow('invalid scan response')
-  })
-
-  it('rejects malformed oldest-hit replies from redis transactions', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, 2],
-      [null, []],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('oldest rate-limit hit')
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, 2],
-      [null, ['17665', 'not-a-number']],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('invalid oldest-hit score')
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, 2],
-      [null, ['17665', { invalid: true }]],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('invalid oldest-hit score')
-  })
-
-  it('rejects redis transaction tuples that contain command errors', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    })
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [new Error('zcard failed'), null],
-      [null, ['member', '1713240000000']],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('zcard failed')
-    expect(redisMock.calls.pexpireat).toEqual([])
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, '2'],
-      [null, ['member', '1713240000000']],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('invalid attempt count')
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      ['WRONGTYPE', null],
-      [null, ['member', '1713240000000']],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('Redis transaction failed for attempt count: WRONGTYPE')
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 60,
-    })).rejects.toThrow('failed to return the attempt count')
-  })
-
-  it('accepts numeric oldest-hit scores returned by redis transactions', async () => {
-    const adapter = createSecurityRedisAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    }, {
-      now: () => new Date('2026-04-18T12:59:59.500Z'),
-    })
-
-    redisMock.execResponses.push([
-      [null, 1],
-      [null, 0],
-      [null, 2],
-      [null, ['17665', 1776517199500]],
-    ] as never)
-
-    await expect(adapter.increment('limiter:login|user%3A1', {
-      decaySeconds: 3600,
-    })).resolves.toEqual({
-      attempts: 2,
-      ttlSeconds: 3600,
-    })
+  it.each([
+    { db: 4, clusters: [{ host: '127.0.0.1', port: 6379 }], message: 'non-zero database' },
+    { clusters: [{ host: '/tmp/redis.sock', port: 6379 }], message: 'cannot use a Unix socket path' },
+    { clusters: [{ url: 'http://127.0.0.1:6379', host: '127.0.0.1', port: 6379 }], message: 'unsupported protocol' },
+    { clusters: [{ url: 'redis:///', host: '127.0.0.1', port: 6379 }], message: 'missing hostname' },
+  ])('rejects unsupported cluster configuration: $message', options => {
+    expect(() => createSecurityRedisAdapter({ host: '127.0.0.1', port: 6379, connection: 'default', db: 0, prefix: '', ...options })).toThrow(options.message)
   })
 })

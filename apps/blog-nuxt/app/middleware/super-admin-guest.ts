@@ -1,15 +1,6 @@
-import { useAuth } from '@holo-js/auth/nuxt'
+import { guestOnly } from '@holo-js/auth/nuxt/server'
 
-export default defineNuxtRouteMiddleware(async () => {
-  const currentAuth = await useAuth({
-    guard: 'admin',
-  })
-
-  if (!currentAuth.authenticated.value) {
-    return undefined
-  }
-
-  return navigateTo('/super-admin', {
-    redirectCode: 303,
-  })
+export default guestOnly({
+  guard: 'admin',
+  redirectTo: '/super-admin',
 })

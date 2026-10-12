@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { writeConfigCache } from '@holo-js/config'
 import { linkInstalledDependenciesForPackage } from '../../../tests/support/published-package'
 import type * as AdapterModule from '../src'
@@ -13,7 +13,7 @@ const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/
 const repoRoot = resolve(import.meta.dirname, '../../..')
 const tempDirs: string[] = []
 const tempBuildRoots: string[] = []
-let coreBuildPromise: Promise<{ coreEntryUrl: string }> | null = null
+let adapterBuildPromise: Promise<{ adapterEntryUrl: string }> | null = null
 let adapterModulePromise: Promise<typeof AdapterModule> | null = null
 
 async function writePackageWrapper(sourcePackageDir: string, targetPackageDir: string): Promise<void> {
@@ -51,9 +51,9 @@ function buildWorkspacePackage(filter: string, outDir: string): void {
   })
 }
 
-async function ensureIsolatedCoreBuild(): Promise<{ coreEntryUrl: string }> {
-  if (!coreBuildPromise) {
-    coreBuildPromise = (async () => {
+async function ensureIsolatedAdapterBuild(): Promise<{ adapterEntryUrl: string }> {
+  if (!adapterBuildPromise) {
+    adapterBuildPromise = (async () => {
       const root = await mkdtemp(join(tmpdir(), 'holo-sveltekit-build-'))
       tempBuildRoots.push(root)
       const dbPackageRoot = join(root, 'packages/db')
@@ -120,20 +120,29 @@ async function ensureIsolatedCoreBuild(): Promise<{ coreEntryUrl: string }> {
       await linkPackageDependency(corePackageRoot, 'esbuild', resolve(repoRoot, 'packages/core/node_modules/esbuild'))
       buildWorkspacePackage('@holo-js/core', join(corePackageRoot, 'dist'))
 
+      const adapterPackageRoot = join(root, 'packages/adapter-sveltekit')
+      await writePackageWrapper(resolve(repoRoot, 'packages/adapter-sveltekit'), adapterPackageRoot)
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: join(adapterPackageRoot, 'node_modules'),
+        packageJsonPath: resolve(repoRoot, 'packages/adapter-sveltekit/package.json'),
+      })
+      await linkPackageDependency(adapterPackageRoot, '@holo-js/core', corePackageRoot)
+      buildWorkspacePackage('@holo-js/adapter-sveltekit', join(adapterPackageRoot, 'dist'))
+
       return {
-        coreEntryUrl: pathToFileURL(join(corePackageRoot, 'dist/index.mjs')).href,
+        adapterEntryUrl: pathToFileURL(join(adapterPackageRoot, 'dist/index.mjs')).href,
       }
     })()
   }
 
-  return coreBuildPromise
+  return adapterBuildPromise
 }
 
 async function loadAdapterModule() {
   if (!adapterModulePromise) {
-    const { coreEntryUrl } = await ensureIsolatedCoreBuild()
-    vi.doMock('@holo-js/core', () => import(coreEntryUrl))
-    adapterModulePromise = import('../src')
+    const { adapterEntryUrl } = await ensureIsolatedAdapterBuild()
+    adapterModulePromise = import(adapterEntryUrl)
   }
 
   return adapterModulePromise
@@ -184,8 +193,6 @@ afterEach(async () => {
   const { resetSvelteKitHoloProject } = await loadAdapterModule()
   await resetSvelteKitHoloProject()
   adapterModulePromise = null
-  vi.doUnmock('@holo-js/core')
-  vi.resetModules()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 }, 45000)
 

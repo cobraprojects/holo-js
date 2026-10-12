@@ -1,83 +1,33 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createServer, type IncomingMessage, type IncomingHttpHeaders } from 'node:http'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission } from '../src'
 import { field, schema, ValidationException, type WebFileLike } from '@holo-js/validation'
-import { createFormClient as useForm, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
+import { createFormClient as useForm, markClientSubmitControlFlowError } from '../src/internal/client'
 import { validationExceptionToFailure } from '../src/internal/validation-exception'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
-const browserGlobal = globalThis as typeof globalThis & { document?: Document }
-const originalFetch = globalThis.fetch
-const originalFormData = globalThis.FormData
-const originalDocument = browserGlobal.document
-
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
-type TestFormDataEntryValue = NonNullable<ReturnType<FormData['get']>>
-type TestBrowserFormControl = {
-  readonly name: string
-  readonly value: string
+async function createFormHttpEndpoint(response: Response | ((request: IncomingMessage) => Response | Promise<Response>)) {
+  const headers: IncomingHttpHeaders[] = []
+  const requests: Array<{ method: string | undefined, url: string | undefined, body: string }> = []
+  const server = createServer(async (request, outgoing) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    requests.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString() })
+    headers.push(request.headers)
+    const result = typeof response === 'function' ? await response(request) : response.clone()
+    outgoing.writeHead(result.status, Object.fromEntries(result.headers))
+    outgoing.end(Buffer.from(await result.arrayBuffer()))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  onTestFinished(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('The native form HTTP server did not bind')
+  return { url: `http://127.0.0.1:${address.port}`, requests, headers }
 }
-type TestBrowserFormElement = {
-  readonly action: string
-  readonly method: string
-  readonly controls: readonly TestBrowserFormControl[]
-}
-
-class TestBrowserFormData {
-  readonly #entries: Array<[string, string]> = []
-
-  constructor(form?: TestBrowserFormElement) {
-    for (const control of form?.controls ?? []) {
-      this.append(control.name, control.value)
-    }
-  }
-
-  append(name: string, value: string): void {
-    this.#entries.push([name, value])
-  }
-
-  set(name: string, value: string): void {
-    const index = this.#entries.findIndex(entry => entry[0] === name)
-    if (index === -1) {
-      this.append(name, value)
-      return
-    }
-
-    this.#entries.splice(index, 1, [name, value])
-  }
-
-  get(name: string): string | null {
-    return this.#entries.find(entry => entry[0] === name)?.[1] ?? null
-  }
-
-  * entries(): IterableIterator<[string, string]> {
-    yield * this.#entries
-  }
-}
-
-function createSecurityClientModule(config: { readonly field: string, readonly cookie: string } = {
-  field: '_token',
-  cookie: 'XSRF-TOKEN',
-}) {
-  return {
-    getSecurityClientConfig() {
-      return {
-        csrf: config,
-      }
-    },
-  }
-}
-
-afterEach(() => {
-  globalThis.fetch = originalFetch
-  globalThis.FormData = originalFormData
-  if (typeof originalDocument === 'undefined') {
-    delete (browserGlobal as { document?: Document }).document
-  } else {
-    browserGlobal.document = originalDocument
-  }
-  delete (globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__
-  delete (globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__
-})
 
 function createDeferred<TValue>() {
   let resolvePromise: (value: TValue) => void = () => {}
@@ -114,197 +64,38 @@ function createSensitiveSchemaFixture(fields: Record<string, unknown>): Sensitiv
 }
 
 describe('@holo-js/forms client', () => {
-  it('bootstraps csrf before cross-origin unsafe submissions', async () => {
-    const contactForm = schema({
-      email: field.string().required().email(),
-    })
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(createJsonResponse({ token: 'cross-origin-token' }))
-      .mockResolvedValueOnce(createJsonResponse({
-        ok: true,
-        status: 201,
-        data: {
-          submitted: true,
-        },
-      }, {
-        status: 201,
-      }))
-    globalThis.fetch = fetchMock
-
-    const client = useForm(contactForm, {
-      action: 'https://api.example.com/enquiries',
+  it('bootstraps a native CSRF token before an unsafe HTTP submission', async () => {
+    const { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } = await import('../../security/src')
+    configureSecurityRuntime({ config: defineSecurityConfig({ csrf: { enabled: true } }), csrfSigningKey: 'native-form-bootstrap-key' })
+    onTestFinished(resetSecurityRuntime)
+    const token = await csrf.token(new Request('http://localhost/enquiries'))
+    const endpoint = await createFormHttpEndpoint(request => request.url === '/csrf'
+      ? Response.json({ token })
+      : Response.json({ ok: true, status: 201, data: { submitted: true } }, { status: 201 }))
+    const client = useForm(schema({ email: field.string().required().email() }), {
+      action: `${endpoint.url}/enquiries`,
       credentials: 'include',
-      csrf: {
-        endpoint: 'https://api.example.com/csrf',
-      },
-      initialValues: {
-        email: 'ava@example.com',
-      },
+      csrf: { endpoint: `${endpoint.url}/csrf` },
+      initialValues: { email: 'ava@example.com' },
     })
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 201 })
+    expect(endpoint.requests.map(request => [request.method, request.url])).toEqual([['GET', '/csrf'], ['POST', '/enquiries']])
+    expect(endpoint.headers[1]?.['x-csrf-token']).toBe(token)
+    expect(endpoint.requests[1]?.body).toContain('ava@example.com')
+  })
 
+  it('preserves a failed HTTP CSRF bootstrap and does not submit the form', async () => {
+    const endpoint = await createFormHttpEndpoint(new Response('Unavailable', { status: 503 }))
+    const client = useForm(schema({ email: field.string().required().email() }), {
+      action: `${endpoint.url}/enquiries`,
+      credentials: 'include',
+      csrf: { endpoint: `${endpoint.url}/csrf` },
+      initialValues: { email: 'ava@example.com' },
+    })
     await expect(client.submit()).resolves.toMatchObject({
-      ok: true,
-      status: 201,
+      ok: false, status: 503, errors: { _root: ['Unable to submit the form right now. Please try again.'] },
     })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://api.example.com/csrf', {
-      credentials: 'include',
-    })
-
-    const submitRequest = fetchMock.mock.calls[1]
-    expect(submitRequest?.[0]).toBe('https://api.example.com/enquiries')
-    expect(submitRequest?.[1]).toMatchObject({
-      method: 'POST',
-      credentials: 'include',
-    })
-    expect(submitRequest?.[1]?.headers).toBeInstanceOf(Headers)
-    expect((submitRequest?.[1]?.headers as Headers).get('X-CSRF-TOKEN')).toBe('cross-origin-token')
-  })
-
-  it('returns a form failure when csrf bootstrap fails', async () => {
-    const contactForm = schema({
-      email: field.string().required().email(),
-    })
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(createTextResponse('Unavailable', { status: 503 }))
-    globalThis.fetch = fetchMock
-
-    const client = useForm(contactForm, {
-      action: 'https://api.example.com/enquiries',
-      credentials: 'include',
-      csrf: {
-        endpoint: 'https://api.example.com/csrf',
-      },
-      initialValues: {
-        email: 'ava@example.com',
-      },
-    })
-
-    await expect(client.submit()).resolves.toMatchObject({
-      ok: false,
-      status: 503,
-      errors: {
-        _root: ['Unable to submit the form right now. Please try again.'],
-      },
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('attaches the configured csrf token to unsafe outgoing form data when the cookie exists', async () => {
-    const registerUser = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = createSecurityClientModule()
-
-    browserGlobal.document = {
-      cookie: 'XSRF-TOKEN=client-token',
-    } as Document
-
-    const client = useForm(registerUser, {
-      initialValues: {
-        email: 'ava@example.com',
-      },
-      async submitter({ formData }) {
-        expect(formData.get('_token')).toBe('client-token')
-        return {
-          ok: true,
-          status: 200,
-          data: undefined,
-        }
-      },
-    })
-
-    await expect(client.submit()).resolves.toEqual({
-      ok: true,
-      status: 200,
-      data: undefined,
-    })
-  })
-
-  it('uses csrf names exposed by the security client module without requiring the server runtime in the browser', async () => {
-    const registerUser = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = createSecurityClientModule({
-      field: '_csrf',
-      cookie: 'csrf-token',
-    })
-
-    browserGlobal.document = {
-      cookie: 'csrf-token=client-token',
-    } as Document
-
-    const client = useForm(registerUser, {
-      initialValues: {
-        email: 'ava@example.com',
-      },
-      async submitter({ formData }) {
-        expect(formData.get('_csrf')).toBe('client-token')
-        expect(formData.has('_token')).toBe(false)
-        return {
-          ok: true,
-          status: 200,
-          data: undefined,
-        }
-      },
-    })
-
-    await expect(client.submit()).resolves.toEqual({
-      ok: true,
-      status: 200,
-      data: undefined,
-    })
-  })
-
-  it('does not attach csrf tokens for safe methods or when the csrf cookie is missing', async () => {
-    const registerUser = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = createSecurityClientModule()
-
-    browserGlobal.document = {
-      cookie: 'XSRF-TOKEN=safe-token',
-    } as Document
-
-    const safeClient = useForm(registerUser, {
-      method: 'GET',
-      initialValues: {
-        email: 'ava@example.com',
-      },
-      async submitter({ formData }) {
-        expect(formData.has('_token')).toBe(false)
-        return {
-          ok: true,
-          status: 200,
-          data: undefined,
-        }
-      },
-    })
-
-    await safeClient.submit()
-
-    browserGlobal.document = {
-      cookie: '',
-    } as Document
-
-    const clientWithoutCookie = useForm(registerUser, {
-      initialValues: {
-        email: 'ava@example.com',
-      },
-      async submitter({ formData }) {
-        expect(formData.has('_token')).toBe(false)
-        return {
-          ok: true,
-          status: 200,
-          data: undefined,
-        }
-      },
-    })
-
-    await clientWithoutCookie.submit()
+    expect(endpoint.requests).toEqual([{ method: 'GET', url: '/csrf', body: '' }])
   })
 
   it('creates a typed field tree with initial values and no initial errors', () => {
@@ -1175,28 +966,10 @@ describe('@holo-js/forms client', () => {
     const localResult = await localClient.submit()
     expect('ok' in localResult && localResult.ok === true).toBe(true)
 
-    globalThis.fetch = vi.fn(async () => ({
-      headers: new Headers({
-        'content-type': 'application/json',
-      }),
-      async json() {
-        return {
-          ok: false,
-          status: 422,
-          valid: false,
-          values: {
-            email: 'server-bad',
-            publishedAt: '2026-04-04T10:00:00.000Z',
-          },
-          errors: {
-            email: ['Server says no.'],
-          },
-        }
-      },
-    } as Response))
+    const endpoint1 = await createFormHttpEndpoint(Response.json({ ok: false, status: 422, valid: false, values: { email: 'server-bad', publishedAt: '2026-04-04T10:00:00.000Z' }, errors: { email: ['Server says no.'] } }))
 
     const fetchClient = useForm(registerUser, {
-      action: '/register',
+      action: `${endpoint1.url}/register`,
       initialValues: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -1210,7 +983,7 @@ describe('@holo-js/forms client', () => {
     expect('valid' in fetchResult && fetchResult.valid === false).toBe(true)
     expect(fetchClient.errors.first('email')).toBe('Server says no.')
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+    const endpoint2 = await createFormHttpEndpoint(createJsonResponse({
       type: 'failure',
       status: 422,
       data: JSON.stringify({
@@ -1228,7 +1001,7 @@ describe('@holo-js/forms client', () => {
     }))
 
     const svelteKitActionClient = useForm(registerUser, {
-      action: '/register?/default',
+      action: `${endpoint2.url}/register?/default`,
       initialValues: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -1242,12 +1015,12 @@ describe('@holo-js/forms client', () => {
     expect(svelteKitActionClient.values.email).toBe('sveltekit-bad')
     expect(svelteKitActionClient.errors.first('email')).toBe('SvelteKit action says no.')
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => new Response(null, {
+    const endpoint3 = await createFormHttpEndpoint(new Response(null, {
       status: 204,
     }))
 
     const noContentClient = useForm(registerUser, {
-      action: '/register',
+      action: `${endpoint3.url}/register`,
       initialValues: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -1263,7 +1036,7 @@ describe('@holo-js/forms client', () => {
       expect(noContentResult.data).toBeUndefined()
     }
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+    const endpoint4 = await createFormHttpEndpoint(createJsonResponse({
       ok: false,
       status: 422,
       valid: false,
@@ -1279,7 +1052,7 @@ describe('@holo-js/forms client', () => {
     }))
 
     const headerlessFailureClient = useForm(registerUser, {
-      action: '/register',
+      action: `${endpoint4.url}/register`,
       initialValues: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -1292,7 +1065,7 @@ describe('@holo-js/forms client', () => {
     expect('valid' in headerlessFailure && headerlessFailure.valid === false).toBe(true)
     expect(headerlessFailureClient.errors.first('email')).toBe('Missing header failure.')
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => createTextResponse('<html></html>', {
+    const endpoint5 = await createFormHttpEndpoint(createTextResponse('<html></html>', {
       status: 500,
       headers: {
         'content-type': 'text/html; charset=utf-8',
@@ -1300,7 +1073,7 @@ describe('@holo-js/forms client', () => {
     }))
 
     const nonJsonFailureClient = useForm(registerUser, {
-      action: '/register',
+      action: `${endpoint5.url}/register`,
       initialValues: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -1346,7 +1119,7 @@ describe('@holo-js/forms client', () => {
       _root: ['Unable to submit the form right now. Please try again.'],
     })
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => createTextResponse('<html></html>', {
+    const endpoint6 = await createFormHttpEndpoint(createTextResponse('<html></html>', {
       status: 200,
       headers: {
         'content-type': 'text/html; charset=utf-8',
@@ -1354,7 +1127,7 @@ describe('@holo-js/forms client', () => {
     }))
 
     const redirectedClient = useForm(registerUser, {
-      action: '/register',
+      action: `${endpoint6.url}/register`,
       initialValues: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -1374,19 +1147,19 @@ describe('@holo-js/forms client', () => {
   it('handles malformed and error-shaped SvelteKit action responses', async () => {
     const login = schema({ email: field.string().required().email() })
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+    const endpoint7 = await createFormHttpEndpoint(createJsonResponse({
       type: 'failure',
       status: 422,
       data: '{malformed',
     }))
     const malformedClient = useForm(login, {
-      action: '/login?/default',
+      action: `${endpoint7.url}/login?/default`,
       initialValues: { email: 'ava@example.com' },
     })
     const malformedResult = await malformedClient.submit()
     expect(malformedResult).toBeDefined()
 
-    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+    const endpoint8 = await createFormHttpEndpoint(createJsonResponse({
       type: 'error',
       error: {
         ok: false,
@@ -1397,161 +1170,12 @@ describe('@holo-js/forms client', () => {
       },
     }))
     const errorClient = useForm(login, {
-      action: '/login?/default',
+      action: `${endpoint8.url}/login?/default`,
       initialValues: { email: 'ava@example.com' },
     })
     const errorResult = await errorClient.submit()
     expect('ok' in errorResult && !errorResult.ok).toBe(true)
     expect(errorClient.errors.first('email')).toBe('Action failed.')
-  })
-
-  it('preserves files from the active browser form during submit', async () => {
-    const uploadSchema = schema({
-      title: field.string().required(),
-      image: field.file().optional(),
-    })
-    const image = new File(['avatar'], 'avatar.png', { type: 'image/png' })
-    const liveForm = {
-      __entries: [
-        ['title', 'Uploaded from browser form'],
-        ['image', image],
-      ],
-    }
-
-    class BrowserFormData {
-      readonly #entries: [string, TestFormDataEntryValue][] = []
-
-      constructor(source?: { readonly __entries?: readonly (readonly [string, TestFormDataEntryValue])[] }) {
-        for (const [key, value] of source?.__entries ?? []) {
-          this.append(key, value)
-        }
-      }
-
-      append(key: string, value: TestFormDataEntryValue): void {
-        this.#entries.push([key, value])
-      }
-
-      set(key: string, value: TestFormDataEntryValue): void {
-        const filtered = this.#entries.filter(([entryKey]) => entryKey !== key)
-        filtered.push([key, value])
-        this.#entries.length = 0
-        this.#entries.push(...filtered)
-      }
-
-      get(key: string): TestFormDataEntryValue | null {
-        return this.#entries.find(([entryKey]) => entryKey === key)?.[1] ?? null
-      }
-
-      getAll(key: string): TestFormDataEntryValue[] {
-        return this.#entries
-          .filter(([entryKey]) => entryKey === key)
-          .map(([, value]) => value)
-      }
-
-      has(key: string): boolean {
-        return this.#entries.some(([entryKey]) => entryKey === key)
-      }
-
-      entries(): IterableIterator<[string, TestFormDataEntryValue]> {
-        return this.#entries[Symbol.iterator]()
-      }
-
-      [Symbol.iterator](): IterableIterator<[string, TestFormDataEntryValue]> {
-        return this.entries()
-      }
-    }
-
-    vi.stubGlobal('FormData', BrowserFormData)
-    vi.stubGlobal('document', {
-      activeElement: {
-        form: liveForm,
-      },
-    })
-
-    const submitter = vi.fn(async ({ values, formData }: { values: { title: string, image?: WebFileLike }, formData: FormData }) => {
-      expect(values.image).toBe(image)
-      expect(formData.get('image')).toBe(image)
-      return {
-        ok: true as const,
-        status: 200,
-        data: undefined,
-      }
-    })
-
-    const client = useForm(uploadSchema, {
-      initialValues: {
-        title: '',
-      },
-      submitter,
-    })
-
-    await client.submit()
-
-    expect(submitter).toHaveBeenCalledTimes(1)
-  })
-
-  it('falls back to tracked values when the active browser form cannot be serialized', async () => {
-    const uploadSchema = schema({
-      title: field.string().required(),
-    })
-
-    class ThrowingBrowserFormData {
-      readonly #entries: [string, TestFormDataEntryValue][] = []
-
-      constructor(source?: object) {
-        if (source) {
-          throw new Error('Cannot serialize this form.')
-        }
-      }
-
-      append(key: string, value: TestFormDataEntryValue): void {
-        this.#entries.push([key, value])
-      }
-
-      set(key: string, value: TestFormDataEntryValue): void {
-        this.#entries.splice(0, this.#entries.length, [key, value])
-      }
-
-      get(key: string): TestFormDataEntryValue | null {
-        return this.#entries.find(([entryKey]) => entryKey === key)?.[1] ?? null
-      }
-
-      entries(): IterableIterator<[string, TestFormDataEntryValue]> {
-        return this.#entries[Symbol.iterator]()
-      }
-
-      [Symbol.iterator](): IterableIterator<[string, TestFormDataEntryValue]> {
-        return this.entries()
-      }
-    }
-
-    vi.stubGlobal('FormData', ThrowingBrowserFormData)
-    vi.stubGlobal('document', {
-      activeElement: {
-        form: {},
-      },
-    })
-
-    const submitter = vi.fn(async ({ values, formData }: { values: { title: string }, formData: FormData }) => {
-      expect(values.title).toBe('Tracked title')
-      expect(formData.get('title')).toBe('Tracked title')
-      return {
-        ok: true as const,
-        status: 200,
-        data: undefined,
-      }
-    })
-
-    const client = useForm(uploadSchema, {
-      initialValues: {
-        title: 'Tracked title',
-      },
-      submitter,
-    })
-
-    await client.submit()
-
-    expect(submitter).toHaveBeenCalledTimes(1)
   })
 
   it('preserves failure payload status codes returned by submitters', async () => {
@@ -1618,6 +1242,16 @@ describe('@holo-js/forms client', () => {
     expect('ok' in result && result.ok === false).toBe(true)
     expect(client.values.email).toBe('taken@example.com')
     expect(client.errors.first('email')).toBe('Email is already taken.')
+  })
+
+  it('preserves HTTP status codes from app submitter errors', async () => {
+    const form = useForm(schema({ title: field.string().required() }), {
+      initialValues: { title: 'Denied post' },
+      submitter() {
+        throw Object.assign(new Error('Only the author can update posts.'), { status: 403 })
+      },
+    })
+    await expect(form.submit()).resolves.toMatchObject({ ok: false, status: 403, valid: false })
   })
 
   it('normalizes submitter transport errors into form failures', async () => {
@@ -2231,104 +1865,6 @@ describe('@holo-js/forms client', () => {
     expect(client.submitting).toBe(false)
   })
 
-  it('submits concurrent browser forms with isolated explicit form context', async () => {
-    const registerUser = schema({
-      email: field.string().required().email(),
-    })
-    const submissions: Array<{
-      readonly action?: string
-      readonly email: string | undefined
-    }> = []
-    const firstForm: TestBrowserFormElement = {
-      action: 'https://example.com/first',
-      method: 'post',
-      controls: [
-        {
-          name: 'email',
-          value: 'first@example.com',
-        },
-      ],
-    }
-    const secondForm: TestBrowserFormElement = {
-      action: 'https://example.com/second',
-      method: 'post',
-      controls: [
-        {
-          name: 'email',
-          value: 'second@example.com',
-        },
-      ],
-    }
-
-    globalThis.FormData = TestBrowserFormData as unknown as typeof FormData
-
-    const firstClient = useForm(registerUser, {
-      submitter(context) {
-        submissions.push({
-          action: context.action,
-          email: context.formData.get('email')?.toString(),
-        })
-        return {
-          ok: true,
-          status: 200,
-          data: {
-            saved: 'first',
-          },
-        }
-      },
-    })
-    const secondClient = useForm(registerUser, {
-      submitter(context) {
-        submissions.push({
-          action: context.action,
-          email: context.formData.get('email')?.toString(),
-        })
-        return {
-          ok: true,
-          status: 200,
-          data: {
-            saved: 'second',
-          },
-        }
-      },
-    })
-
-    await Promise.all([
-      runWithBrowserFormElement(firstClient, firstForm),
-      runWithBrowserFormElement(secondClient, secondForm),
-    ])
-
-    expect(submissions).toEqual([
-      {
-        action: 'https://example.com/first',
-        email: 'first@example.com',
-      },
-      {
-        action: 'https://example.com/second',
-        email: 'second@example.com',
-      },
-    ])
-  })
-
-  it('falls back to submit when a form client has no explicit browser form context hook', async () => {
-    const result = await runWithBrowserFormElement({
-      submit: async () => ({
-        ok: true,
-        status: 200,
-        data: 'fallback',
-      }),
-    }, {
-      action: 'https://example.com/fallback',
-      method: 'post',
-    })
-
-    expect(result).toEqual({
-      ok: true,
-      status: 200,
-      data: 'fallback',
-    })
-  })
-
   it('ignores empty paths when setting values', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
@@ -2344,100 +1880,36 @@ describe('@holo-js/forms client', () => {
     expect(client.values.email).toBe('ava@example.com')
   })
 
-  it('serializes GET submissions into the query string without sending a request body', async () => {
-    const searchSchema = schema({
-      q: field.string().required(),
-      filters: {
-        city: field.string().required(),
-      },
-    })
-
-    const fetchMock = vi.fn(async (): Promise<Response> => createJsonResponse({
-      ok: true as const,
-      status: 200,
-      data: {
-        results: [],
-      },
-    }, {
-      status: 200,
-    }))
-
-    globalThis.fetch = fetchMock
-
+  it('serializes nested GET fields over real HTTP without a request body', async () => {
+    const endpoint = await createFormHttpEndpoint(Response.json({ ok: true, status: 200, data: { results: [] } }))
+    const searchSchema = schema({ q: field.string().required(), filters: { city: field.string().required() } })
     const client = useForm(searchSchema, {
-      action: 'https://example.com/search',
+      action: `${endpoint.url}/search`,
       method: 'GET',
-      initialValues: {
-        q: 'ava',
-        filters: {
-          city: 'Cairo',
-        },
-      },
+      initialValues: { q: 'ava', filters: { city: 'Cairo' } },
     })
-
-    const result = await client.submit()
-
-    expect('ok' in result && result.ok).toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith('https://example.com/search?q=ava&filters.city=Cairo', {
-      method: 'GET',
-    })
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 200 })
+    expect(endpoint.requests).toEqual([{ method: 'GET', url: '/search?q=ava&filters.city=Cairo', body: '' }])
   })
 
-  it('preserves hashes and file names when serializing HEAD submissions without requiring a JSON body', async () => {
-    const uploadSchema = schema({
-      avatar: field.file().optional(),
-    })
-
-    const fetchMock = vi.fn(async (): Promise<Response> => new Response(null, {
-      status: 204,
-    }))
-
-    globalThis.fetch = fetchMock
-
-    const client = useForm(uploadSchema, {
-      action: 'https://example.com/upload#done',
+  it('submits file names through native HEAD requests and accepts an empty successful response', async () => {
+    const endpoint = await createFormHttpEndpoint(new Response(null, { status: 204 }))
+    const client = useForm(schema({ avatar: field.file().optional() }), {
+      action: `${endpoint.url}/upload#done`,
       method: 'HEAD',
-      initialValues: {
-        avatar: new File(['avatar'], 'avatar.png', { type: 'image/png' }),
-      },
+      initialValues: { avatar: new File(['avatar'], 'avatar.png', { type: 'image/png' }) },
     })
-
-    const result = await client.submit()
-
-    expect('ok' in result && result.ok).toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith('https://example.com/upload?avatar=avatar.png#done', {
-      method: 'HEAD',
-    })
-    await expect(fetchMock.mock.results[0]?.value).resolves.toMatchObject({ status: 204 })
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 204, data: undefined })
+    expect(endpoint.requests).toEqual([{ method: 'HEAD', url: '/upload?avatar=avatar.png', body: '' }])
   })
 
-  it('keeps hash-only GET actions intact when there are no query parameters', async () => {
-    const searchSchema = schema({
-      q: field.string().optional(),
-    })
-
-    const fetchMock = vi.fn(async (): Promise<Response> => createJsonResponse({
-      ok: true as const,
-      status: 200,
-      data: {
-        results: [],
-      },
-    }, {
-      status: 200,
-    }))
-
-    globalThis.fetch = fetchMock
-
-    const client = useForm(searchSchema, {
-      action: 'https://example.com/search#results',
+  it('submits GET actions with a hash and no query fields through native HTTP', async () => {
+    const endpoint = await createFormHttpEndpoint(Response.json({ ok: true, status: 200, data: { results: [] } }))
+    const client = useForm(schema({ q: field.string().optional() }), {
+      action: `${endpoint.url}/search#results`,
       method: 'GET',
     })
-
-    const result = await client.submit()
-
-    expect('ok' in result && result.ok).toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith('https://example.com/search#results', {
-      method: 'GET',
-    })
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 200 })
+    expect(endpoint.requests).toEqual([{ method: 'GET', url: '/search', body: '' }])
   })
 })

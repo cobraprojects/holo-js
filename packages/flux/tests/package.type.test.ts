@@ -63,12 +63,12 @@ describe('@holo-js/flux typing', () => {
 
     const client = createFluxClient({
       manifest,
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     })
     const subscription = client.private('orders.{orderId}')
     const presenceSubscription = createFluxClient({
       manifest: presenceManifest,
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     }).presence('chat.{roomId}')
 
     subscription.listen('orders.updated', (payload) => {
@@ -147,7 +147,7 @@ describe('@holo-js/flux typing', () => {
           },
         }],
       },
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     })
 
     client.private('orders.{orderId}').listen('orders.updated', (payload) => {
@@ -193,7 +193,7 @@ describe('@holo-js/flux typing', () => {
           },
         }],
       },
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     })
 
     client.private('orders.{orderId}').listen('orders.updated', (payload) => {
@@ -213,7 +213,7 @@ describe('@holo-js/flux typing', () => {
     dynamicSubscription.listen('orders.deleted', () => {})
     // @ts-expect-error dynamic channels do not invent manifest whisper names
     dynamicSubscription.listenForWhisper('typing.start', () => {})
-    const defaultClient = createFluxClient({ connector: fluxInternals.createPusherConnector({ transport: 'mock' }) })
+    const defaultClient = createFluxClient({ connector: fluxInternals.createHoloWebSocketConnector() })
     defaultClient.private('manual.1').listen('manual.event', (payload) => {
       expectTypeOf(payload).toEqualTypeOf<BroadcastJsonObject>()
     })

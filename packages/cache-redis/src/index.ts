@@ -92,16 +92,8 @@ type RedisClusterOptions = {
   readonly redisOptions: RedisClientOptions
 }
 
-type RedisClientLike = {
+type RedisClientLike = Pick<Redis, 'get' | 'set' | 'del' | 'scan' | 'incrby' | 'decrby' | 'eval' | 'disconnect'> & {
   readonly isCluster?: boolean
-  disconnect?(): void
-  get(key: string): Promise<string | null>
-  set(key: string, value: string, ...arguments_: readonly (string | number)[]): Promise<'OK' | null>
-  del(...keys: string[]): Promise<number>
-  scan(cursor: string, matchLabel: string, pattern: string, countLabel: string, count: number): Promise<[string, string[]]>
-  incrby(key: string, amount: number): Promise<number>
-  decrby(key: string, amount: number): Promise<number>
-  eval(script: string, numberOfKeys: number, ...arguments_: readonly string[]): Promise<number>
   nodes?(role: 'master'): readonly RedisClientLike[]
 }
 
@@ -121,13 +113,11 @@ const RELEASE_LOCK_SCRIPT = [
   'return 0',
 ].join('\n')
 
-/* v8 ignore start -- lock timeout tests cover the behavior, but fake-timer attribution does not reliably mark this helper as covered. */
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => {
     setTimeout(resolveDelay, milliseconds)
   })
 }
-/* v8 ignore stop */
 
 function isRedisSocketConnectionTarget(value: string): boolean {
   return value.startsWith('unix://') || value.startsWith('/')
@@ -204,8 +194,7 @@ function parseClusterNodeUrl(url: string, label: string): RedisClusterStartupNod
       `[@holo-js/cache-redis] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-  /* v8 ignore stop */
-}
+  }
 
 function resolveClusterStartupNodes(
   options: RedisCacheDriverOptions,

@@ -1,3 +1,4 @@
+import { loadEnvironment } from '@holo-js/config'
 import { type spawn, spawnSync } from 'node:child_process'
 import type { IoStreams, PackageManagerCommand, SpawnProcessLike } from './cli-types'
 
@@ -29,10 +30,11 @@ function launchFrameworkRun(
   invocation: PackageManagerCommand,
   serverArgs: readonly string[],
   spawnProcess: typeof spawn,
+  environment: NodeJS.ProcessEnv,
 ): { readonly completion: Promise<FrameworkRunResult>, restart(): void, shutdown(signal: NodeJS.Signals): void } {
   const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
     cwd: projectRoot,
-    env: process.env,
+    env: environment,
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as SpawnProcessLike
   let restartRequested = false
@@ -102,7 +104,7 @@ export function createFrameworkSession(
   onShutdown?: () => void,
 ): {
   readonly signal: AbortSignal
-  launch(invocation: PackageManagerCommand, serverArgs: readonly string[]): ReturnType<typeof launchFrameworkRun>
+  launch(invocation: PackageManagerCommand, serverArgs: readonly string[]): Promise<ReturnType<typeof launchFrameworkRun>>
   dispose(): void
 } {
   const controller = new AbortController()
@@ -126,9 +128,10 @@ export function createFrameworkSession(
 
   return {
     signal: controller.signal,
-    launch(invocation: PackageManagerCommand, serverArgs: readonly string[]) {
+    async launch(invocation: PackageManagerCommand, serverArgs: readonly string[]) {
+      const environment = await loadEnvironment({ cwd: projectRoot, processEnv: process.env })
       controller.signal.throwIfAborted()
-      activeRun = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess)
+      activeRun = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess, environment.values)
       if (shutdownSignal) activeRun.shutdown(shutdownSignal)
       return activeRun
     },

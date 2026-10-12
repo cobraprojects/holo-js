@@ -138,8 +138,5 @@ async function synchronize(input: HostedIdentitySyncInput): Promise<HostedIdenti
 }
 
 export async function syncHostedIdentity(input: HostedIdentitySyncInput): Promise<HostedIdentitySyncResult> {
-  if (input.ownership === 'save') {
-    return await synchronize(input)
-  }
   return await withIdentitySyncLock(JSON.stringify([input.provider, input.providerUserId]), () => synchronize(input))
 }

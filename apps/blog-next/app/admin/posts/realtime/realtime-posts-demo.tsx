@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import Link from 'next/link'
 import { adminPosts, renameAdminPost } from '@/server/realtime/posts'
 
 export default function RealtimePostsDemo() {
@@ -29,7 +30,7 @@ export default function RealtimePostsDemo() {
     <section style={{ display: 'grid', gap: '1.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
         <h1 style={{ margin: 0 }}>Realtime posts</h1>
-        <a href="/admin/posts" style={{ color: '#7dd3fc' }}>Posts</a>
+        <Link href="/admin/posts" style={{ color: '#7dd3fc' }}>Posts</Link>
       </div>
       <form
         onSubmit={(event) => {

@@ -1,18 +1,8 @@
 import { PassThrough } from 'node:stream'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { stripVTControlCharacters } from 'node:util'
+import { describe, expect, it } from 'vitest'
 import { runWithSpinner, supportsSpinner } from '../src/io'
 import type { IoStreams } from '../src/cli-types'
-
-const spinnerMock = vi.hoisted(() => ({
-  error: vi.fn(),
-  spinner: vi.fn(),
-  start: vi.fn(),
-  stop: vi.fn(),
-}))
-
-vi.mock('@clack/prompts', () => ({
-  spinner: spinnerMock.spinner,
-}))
 
 type TestReadStream = PassThrough & NodeJS.ReadStream & {
   isTTY?: boolean
@@ -44,65 +34,28 @@ function createIo(options: { readonly tty?: boolean, readonly rawMode?: boolean 
 }
 
 describe('CLI IO', () => {
-  beforeEach(() => {
-    spinnerMock.error.mockReset()
-    spinnerMock.spinner.mockReset()
-    spinnerMock.start.mockReset()
-    spinnerMock.stop.mockReset()
-  })
-
-  it('runs tasks without a spinner outside a real terminal', async () => {
+  it('writes task progress and results without a terminal spinner', async () => {
     const io = createIo({ tty: true })
-
     await expect(runWithSpinner(io, 'Loading...', async () => 'done', 'Loaded.')).resolves.toBe('done')
-
     expect(supportsSpinner(io)).toBe(false)
-    expect(spinnerMock.spinner).not.toHaveBeenCalled()
     expect(io.stdout.read(io.stdout.readableLength)?.toString()).toBe('Loading...\nLoaded.\n')
   })
 
-  it('starts and stops the spinner for real terminal streams', async () => {
+  it('renders task completion through the real spinner', async () => {
     const io = createIo({ tty: true, rawMode: true })
-
-    spinnerMock.spinner.mockReturnValueOnce({
-      error: spinnerMock.error,
-      isCancelled: false,
-      start: spinnerMock.start,
-      stop: spinnerMock.stop,
-      cancel: vi.fn(),
-      clear: vi.fn(),
-      message: vi.fn(),
-    })
-
     await expect(runWithSpinner(io, 'Installing...', async () => 1, 'Installed.')).resolves.toBe(1)
-
     expect(supportsSpinner(io)).toBe(true)
-    expect(spinnerMock.spinner).toHaveBeenCalledWith({
-      input: io.stdin,
-      output: io.stdout,
-    })
-    expect(spinnerMock.start).toHaveBeenCalledWith('Installing...')
-    expect(spinnerMock.stop).toHaveBeenCalledWith('Installed.')
+    const output = io.stdout.read(io.stdout.readableLength)?.toString() ?? ''
+    expect(stripVTControlCharacters(output)).toContain('Installed.')
   })
 
-  it('marks the spinner as failed before rethrowing task errors', async () => {
+  it('renders failure through the real spinner and preserves the task error', async () => {
     const io = createIo({ tty: true, rawMode: true })
     const error = new Error('install failed')
-
-    spinnerMock.spinner.mockReturnValueOnce({
-      error: spinnerMock.error,
-      isCancelled: false,
-      start: spinnerMock.start,
-      stop: spinnerMock.stop,
-      cancel: vi.fn(),
-      clear: vi.fn(),
-      message: vi.fn(),
-    })
-
     await expect(runWithSpinner(io, 'Installing...', async () => {
       throw error
     })).rejects.toThrow(error)
-
-    expect(spinnerMock.error).toHaveBeenCalledWith('Command failed.')
+    const output = io.stdout.read(io.stdout.readableLength)?.toString() ?? ''
+    expect(stripVTControlCharacters(output)).toContain('Command failed.')
   })
 })

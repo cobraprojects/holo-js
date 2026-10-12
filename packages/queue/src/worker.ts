@@ -378,6 +378,8 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
 
       if (sleepSeconds > 0) {
         await sleepFn(sleepSeconds * 1000)
+      } else {
+        await new Promise<void>(resolve => setImmediate(resolve))
       }
 
       continue

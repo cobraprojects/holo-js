@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir as defaultMkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir as defaultMkdir, open, readFile, readdir, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import type { SessionRecord, SessionStore } from '../contracts'
@@ -21,6 +21,7 @@ type RecordLockIdentity = {
   readonly inode: number
   readonly modifiedAt: number
   readonly owner?: RecordLockOwner
+  readonly fileName?: string
 }
 
 function serializeRecord(record: SessionRecord): string {
@@ -86,13 +87,8 @@ function parseRecordLockOwner(value: unknown): RecordLockOwner | undefined {
   })
 }
 
-async function readRecordLockOwner(lockPath: string): Promise<RecordLockOwner | undefined> {
-  try {
-    return parseRecordLockOwner(JSON.parse(await readFile(join(lockPath, 'owner.json'), 'utf8')) as unknown)
-  } catch (error) {
-    if (error instanceof SyntaxError || isMissingFileError(error)) return undefined
-    throw error
-  }
+function recordLockOwnerFileName(owner: RecordLockOwner): string {
+  return `owner.${encodeURIComponent(owner.token)}.json`
 }
 
 function processIsRunning(pid: number): boolean {
@@ -109,49 +105,54 @@ async function sleep(delayMs: number): Promise<void> {
 }
 
 async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdentity | undefined> {
-  const owner = await readRecordLockOwner(lockPath)
-  const identityPath = owner ? join(lockPath, 'owner.json') : lockPath
+  let fileName: string | undefined
+  try {
+    fileName = (await readdir(lockPath)).find(name => name.startsWith('owner.') && name.endsWith('.json'))
+  } catch (error) {
+    if (isMissingFileError(error)) return undefined
+    throw error
+  }
+  const identityPath = fileName ? join(lockPath, fileName) : lockPath
+  let owner: RecordLockOwner | undefined
+  if (fileName) {
+    try {
+      owner = parseRecordLockOwner(JSON.parse(await readFile(identityPath, 'utf8')) as unknown)
+      if (owner && recordLockOwnerFileName(owner) !== fileName) owner = undefined
+    } catch (error) {
+      if (!(error instanceof SyntaxError) && !isMissingFileError(error)) throw error
+    }
+  }
   const identity = await stat(identityPath).catch(() => undefined)
   if (!identity) return undefined
-  return Object.freeze({
-    device: identity.dev,
-    inode: identity.ino,
-    modifiedAt: identity.mtimeMs,
-    ...(owner ? { owner } : {}),
-  })
+  return Object.freeze({ device: identity.dev, inode: identity.ino, modifiedAt: identity.mtimeMs, ...(owner ? { owner } : {}), ...(fileName ? { fileName } : {}) })
 }
 
 function recordLockIdentityMatches(left: RecordLockIdentity, right: RecordLockIdentity | undefined): boolean {
   return right !== undefined
     && left.device === right.device
     && left.inode === right.inode
+    && left.fileName === right.fileName
     && left.modifiedAt === right.modifiedAt
     && left.owner?.token === right.owner?.token
 }
 
-async function restoreReplacedLock(lockPath: string, stalePath: string): Promise<void> {
-  const existing = await stat(lockPath).catch(() => undefined)
-  if (existing) {
-    throw new Error(`[@holo-js/session] File session lock changed during stale recovery for "${lockPath}".`)
+async function removeRecordLock(lockPath: string, fileName?: string): Promise<boolean> {
+  if (fileName) {
+    try { await unlink(join(lockPath, fileName)) } catch (error) { if (!isMissingFileError(error)) throw error }
   }
-  await rename(stalePath, lockPath)
+  try {
+    await rmdir(lockPath)
+    return true
+  } catch (error) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+    if (code === 'ENOENT' || code === 'ENOTEMPTY' || code === 'EEXIST') return false
+    throw error
+  }
 }
 
 async function reclaimStaleLock(lockPath: string, expected: RecordLockIdentity): Promise<boolean> {
-  const stalePath = `${lockPath}.${process.pid}.${randomUUID()}.stale`
-  try {
-    await rename(lockPath, stalePath)
-  } catch (error) {
-    if (isMissingFileError(error)) return false
-    throw error
-  }
-  const moved = await readRecordLockIdentity(stalePath)
-  if (!recordLockIdentityMatches(expected, moved)) {
-    await restoreReplacedLock(lockPath, stalePath)
-    return false
-  }
-  await rm(stalePath, { recursive: true, force: true })
-  return true
+  if (!recordLockIdentityMatches(expected, await readRecordLockIdentity(lockPath))) return false
+  return removeRecordLock(lockPath, expected.fileName)
 }
 
 async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdentity | undefined> {
@@ -165,7 +166,7 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
       return processIsRunning(owner.pid) ? undefined : identity
     }
   }
-  const leasePath = owner ? join(lockPath, 'owner.json') : lockPath
+  const leasePath = identity.fileName ? join(lockPath, identity.fileName) : lockPath
   const stale = await stat(leasePath).then(value => value.mtimeMs <= Date.now() - RECORD_LOCK_STALE_MS).catch(() => false)
   return stale ? identity : undefined
 }
@@ -173,50 +174,44 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
   const lockPath = `${recordPath}.lock`
   const deadline = Date.now() + 5_000
-  const owner = Object.freeze({
-    host: hostname(),
-    pid: process.pid,
-    processToken: PROCESS_INSTANCE_TOKEN,
-    token: randomUUID(),
-  })
-  while (true) {
-    try {
-      await makeDirectory(lockPath)
-      let ownerHandle
+  const owner = Object.freeze({ host: hostname(), pid: process.pid, processToken: PROCESS_INSTANCE_TOKEN, token: randomUUID() })
+  const pendingPath = `${lockPath}.${owner.token}.pending`
+  await makeDirectory(pendingPath)
+  let ownerHandle
+  let acquired = false
+  try {
+    ownerHandle = await open(join(pendingPath, recordLockOwnerFileName(owner)), 'wx', 0o600)
+    await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
+    await ownerHandle.sync()
+    while (!acquired) {
       try {
-        ownerHandle = await open(join(lockPath, 'owner.json'), 'wx', 0o600)
-        await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
-        await ownerHandle.sync()
+        await rename(pendingPath, lockPath)
+        acquired = true
       } catch (error) {
-        await ownerHandle?.close()
-        await rm(lockPath, { recursive: true, force: true })
-        throw error
+        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+        if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error
+        const reclaimable = await reclaimableRecordLock(lockPath)
+        if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
+        if (Date.now() >= deadline) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+        await sleep(5)
       }
-      const heartbeat = setInterval(() => {
-        const now = new Date()
-        void ownerHandle.utimes(now, now).catch(() => undefined)
-      }, RECORD_LOCK_HEARTBEAT_MS)
-      heartbeat.unref()
-      return async () => {
-        clearInterval(heartbeat)
-        await ownerHandle.close()
-        const currentOwner = await readRecordLockOwner(lockPath)
-        if (currentOwner?.token === owner.token) await rm(lockPath, { recursive: true, force: true })
-      }
-    } catch (error) {
-      const candidate = error as NodeJS.ErrnoException
-      if (candidate.code !== 'EEXIST') {
-        throw error
-      }
-      const reclaimable = await reclaimableRecordLock(lockPath)
-      if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) {
-        continue
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
-      }
-      await sleep(5)
     }
+    const handle = ownerHandle
+    const heartbeat = setInterval(() => {
+      const now = new Date()
+      void handle.utimes(now, now).catch(() => undefined)
+    }, RECORD_LOCK_HEARTBEAT_MS)
+    heartbeat.unref()
+    return async () => {
+      clearInterval(heartbeat)
+      await handle.close()
+      await removeRecordLock(lockPath, recordLockOwnerFileName(owner))
+    }
+  } catch (error) {
+    await ownerHandle?.close()
+    if (acquired) await removeRecordLock(lockPath, recordLockOwnerFileName(owner))
+    else await rm(pendingPath, { recursive: true, force: true })
+    throw error
   }
 }
 
@@ -400,6 +395,7 @@ export function createFileSessionStore(root: string): SessionStore {
 }
 
 export const fileSessionDriverInternals = {
+  acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,
   getFlashPath,

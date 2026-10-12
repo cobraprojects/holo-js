@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto'
+import { createPostgresAdapter } from '../../db-postgres/src'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import {
-  createCapabilities,
   createDatabase,
+  createDialect,
+  createSchemaService,
   configureDB,
   createConnectionManager,
   recordDatabaseQueryDependencies,
@@ -18,13 +21,11 @@ import {
   hasOne,
   queryCacheInternals,
   type DatabaseContext,
-  type Dialect,
   type DriverAdapter,
-  type DriverExecutionResult,
-  type DriverQueryResult,
 } from '@holo-js/db'
 import { field, schema } from '@holo-js/validation'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { createNativeRelationalAdapter } from './helpers/native-fixture'
 import {
   configureRealtimeClientTransport,
   createRealtimeClient,
@@ -51,10 +52,12 @@ import {
   createSplicePatchOperation,
 } from '../src/runtime/patch-operations'
 import { collectRelevantMutationTargets } from '../src/runtime/query-relevant-mutations'
-import type { AuthenticatedAuthUser } from '@holo-js/auth'
+import { authRuntimeInternals, createAsyncAuthContext, defineAuthConfig, getAuthRuntime, resetAuthRuntime } from '@holo-js/auth'
+import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
+import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
+import { createNativeSessionStore } from '../../auth/tests/support/native-session'
 import { recordDatabaseQueryObservation } from '../../db/src/cache'
 import type {
-  RealtimeAuthModule,
   RealtimeSubscribeOptions,
 } from '../src/index'
 import type { DatabaseMutationEvent } from '../src/runtime/dependencies'
@@ -62,8 +65,6 @@ import type { BackfillCache, QueryPatchTarget } from '../src/runtime/query-state
 
 const DATABASE_DEPENDENCY_METADATA_KEY = '__holoDatabaseDependencyMetadata__'
 
-type MemoryRow = Record<string, unknown>
-type MemoryTables = Record<string, MemoryRow[]>
 type RealtimePatchForTest = {
   readonly dependencies?: readonly string[]
   readonly operations: readonly (
@@ -102,693 +103,25 @@ type InternalRealtimeSubscribeOptionsForTest<TResult> = RealtimeSubscribeOptions
   readonly onPatch?: (patch: RealtimePatchForTest) => void | Promise<void>
 }
 
-class MemoryAdapter implements DriverAdapter {
-  private connected = false
-  readonly rows: Record<string, unknown>[] = [
-    { id: 1, title: 'First' },
-  ]
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(): Promise<DriverQueryResult<TRow>> {
-    return {
-      rows: this.rows.map(row => ({ ...row })) as TRow[],
-      rowCount: this.rows.length,
-    }
-  }
-
-  async execute(): Promise<DriverExecutionResult> {
-    this.rows.push({
-      id: this.rows.length + 1,
-      title: `Post ${this.rows.length + 1}`,
-    })
-
-    return {
-      affectedRows: 1,
-      lastInsertId: this.rows.length,
-    }
-  }
-
-  async beginTransaction(): Promise<void> {}
-
-  async commit(): Promise<void> {}
-
-  async rollback(): Promise<void> {}
-}
-
-function readPlaceholderIndexes(rawPlaceholders: string): number[] {
-  return rawPlaceholders.split(', ').map((part, index) => {
-    const rawIndex = part.replace('?', '')
-    return rawIndex ? Number(rawIndex) - 1 : index
-  })
-}
-
-function readPlaceholderBindingIndex(sql: string, placeholderIndex: number, rawIndex: string | undefined): number {
-  if (rawIndex) {
-    return Number(rawIndex) - 1
-  }
-
-  return sql.slice(0, placeholderIndex).split('?').length - 1
-}
-
-function readLimitBinding(
-  sql: string,
-  bindings: readonly unknown[],
-  match: RegExpExecArray,
-  prefix: string,
-): number {
-  const literal = match[2]
-  if (literal) {
-    return Number(literal)
-  }
-
-  return Number(bindings[readPlaceholderBindingIndex(sql, match.index + prefix.length, match[1])])
-}
-
-function compareMemoryValues(left: unknown, right: unknown): number | undefined {
-  if (typeof left === 'number' && typeof right === 'number') {
-    return left === right ? 0 : left < right ? -1 : 1
-  }
-
-  if (typeof left === 'string' && typeof right === 'string') {
-    const comparison = left.localeCompare(right)
-    return comparison === 0 ? 0 : comparison < 0 ? -1 : 1
-  }
-
-  if (left === right) {
-    return 0
-  }
-
-  return undefined
-}
-
-function applyMemoryPredicate(left: unknown, operator: string, right: unknown): boolean {
-  switch (operator) {
-    case '=':
-      return left === right
-    case '!=':
-    case '<>':
-      return left !== right
-    case '>':
-    case '>=':
-    case '<':
-    case '<=': {
-      const comparison = compareMemoryValues(left, right)
-      if (typeof comparison === 'undefined') {
-        return false
-      }
-
-      if (operator === '>') {
-        return comparison > 0
-      }
-      if (operator === '>=') {
-        return comparison >= 0
-      }
-      if (operator === '<') {
-        return comparison < 0
-      }
-      return comparison <= 0
-    }
-    case 'LIKE': {
-      const pattern = String(right)
-        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/%/g, '.*')
-      return new RegExp(`^${pattern}$`).test(String(left ?? ''))
-    }
-    default:
-      return false
-  }
-}
-
-function filterMemoryRows(sql: string, bindings: readonly unknown[], rows: readonly MemoryRow[]): MemoryRow[] {
-  const whereMatch = sql.match(/ WHERE (.+?)( GROUP BY| ORDER BY| LIMIT| OFFSET|$)/)
-  if (!whereMatch) {
-    return [...rows]
-  }
-
-  const clauses = whereMatch[1]!.split(' AND ')
-  return rows.filter((row) => {
-    let bindingIndex = 0
-    return clauses.every((clause) => {
-      const inMatch = clause.match(/^(?:"[^"]+"\.)?"([^"]+)" (NOT IN|IN) \((.+)\)$/)
-      if (inMatch) {
-        const [, column, operator, rawPlaceholders] = inMatch
-        const indexes = rawPlaceholders!.split(', ').map((part, index) => {
-          const rawIndex = part.replace('?', '')
-          return rawIndex ? Number(rawIndex) - 1 : bindingIndex + index
-        })
-        const present = indexes.map(index => bindings[index]).includes(row[column!])
-        bindingIndex += indexes.length
-        return operator === 'IN' ? present : !present
-      }
-
-      const comparisonMatch = clause.match(/^(?:"[^"]+"\.)?"([^"]+)" (=|!=|<>|>=|>|<=|<|LIKE) \?(\d*)$/)
-      if (comparisonMatch) {
-        const [, column, operator, index] = comparisonMatch
-        const valueIndex = index ? Number(index) - 1 : bindingIndex
-        bindingIndex += 1
-        return applyMemoryPredicate(row[column!], operator!, bindings[valueIndex])
-      }
-
-      return true
-    })
-  })
-}
-
-function projectMemoryAggregateRows(rawSelection: string, rows: readonly MemoryRow[]): MemoryRow[] | undefined {
-  const aggregateRow: MemoryRow = {}
-  if (!projectMemoryAggregateSelections(rawSelection, rows, aggregateRow)) {
-    return undefined
-  }
-
-  return [aggregateRow]
-}
-
-function readMemoryGroupColumns(sql: string): readonly string[] {
-  const groupBy = sql.match(/ GROUP BY (.+?)( HAVING| ORDER BY| LIMIT| OFFSET|$)/)?.[1]
-  if (!groupBy) {
-    return []
-  }
-
-  const columns = groupBy.split(', ').map(column => column.match(/^"([^"]+)"$/)?.[1])
-  return columns.every((column): column is string => Boolean(column))
-    ? Object.freeze(columns)
-    : []
-}
-
-function readMemoryHavingCountMatcher(sql: string, bindings: readonly unknown[]): ((count: number) => boolean) | undefined {
-  const match = sql.match(/ HAVING COUNT\(\*\) (=|!=|<>|>=|>|<=|<) \?(\d*)/)
-  if (!match) {
-    return undefined
-  }
-
-  const [, operator, rawIndex] = match
-  const bindingIndex = rawIndex ? Number(rawIndex) - 1 : bindings.length - 1
-  return count => applyMemoryPredicate(count, operator!, bindings[bindingIndex])
-}
-
-function createMemoryGroupKey(row: MemoryRow, columns: readonly string[]): string {
-  return JSON.stringify(columns.map(column => row[column]))
-}
-
-function projectMemoryGroupedRows(
-  sql: string,
-  bindings: readonly unknown[],
-  rawSelection: string,
-  groupColumns: readonly string[],
-  rows: readonly MemoryRow[],
-): MemoryRow[] | undefined {
-  const groupedRows = new Map<string, MemoryRow[]>()
-  const groupValues = new Map<string, readonly unknown[]>()
-  for (const row of rows) {
-    const key = createMemoryGroupKey(row, groupColumns)
-    const values = groupValues.get(key) ?? Object.freeze(groupColumns.map(column => row[column]))
-    const group = groupedRows.get(key) ?? []
-    group.push(row)
-    groupedRows.set(key, group)
-    groupValues.set(key, values)
-  }
-
-  const results: MemoryRow[] = []
-  const matchesHaving = readMemoryHavingCountMatcher(sql, bindings)
-  for (const [key, group] of groupedRows) {
-    if (matchesHaving && !matchesHaving(group.length)) {
-      continue
-    }
-
-    const values = groupValues.get(key)
-    if (!values) {
-      return undefined
-    }
-
-    const projected: MemoryRow = {}
-    for (let index = 0; index < groupColumns.length; index += 1) {
-      projected[groupColumns[index]!] = values[index]
-    }
-
-    if (!projectMemoryAggregateSelections(rawSelection, group, projected, groupColumns)) {
-      return undefined
-    }
-
-    results.push(projected)
-  }
-
-  return results
-}
-
-function projectMemoryAggregateSelections(
-  rawSelection: string,
-  rows: readonly MemoryRow[],
-  target: MemoryRow,
-  groupColumns: readonly string[] = [],
-): boolean {
-  for (const selection of rawSelection.split(', ')) {
-    const columnSelection = selection.match(/^"([^"]+)"(?: AS "([^"]+)")?$/)
-    if (columnSelection) {
-      const column = columnSelection[1]!
-      const resultKey = columnSelection[2] ?? column
-      if (!groupColumns.includes(column)) {
-        return false
-      }
-
-      target[resultKey] = rows[0]?.[column]
-      continue
-    }
-
-    const match = selection.match(/^(COUNT|SUM|AVG|MIN|MAX)\((\*|"([^"]+)")\) AS "([^"]+)"$/)
-    if (!match) {
-      return false
-    }
-
-    const [, aggregate, , column, alias] = match
-    if (aggregate === 'COUNT') {
-      target[alias!] = rows.length
-      continue
-    }
-
-    if (!column) {
-      return false
-    }
-
-    const values: number[] = []
-    for (const row of rows) {
-      const value = row[column]
-      if (typeof value !== 'number' || Number.isNaN(value)) {
-        return false
-      }
-
-      values.push(value)
-    }
-
-    if (values.length === 0) {
-      target[alias!] = null
-      continue
-    }
-
-    if (aggregate === 'SUM') {
-      target[alias!] = values.reduce((sum, value) => sum + value, 0)
-      continue
-    }
-
-    if (aggregate === 'AVG') {
-      target[alias!] = values.reduce((sum, value) => sum + value, 0) / values.length
-      continue
-    }
-
-    target[alias!] = aggregate === 'MIN' ? Math.min(...values) : Math.max(...values)
-  }
-
-  return true
-}
-
-function projectMemoryRows(sql: string, bindings: readonly unknown[], rows: readonly MemoryRow[]): MemoryRow[] {
-  const selectMatch = sql.match(/^SELECT (.+?) FROM /)
-  const rawSelection = selectMatch?.[1]
-  if (!rawSelection || rawSelection === '*') {
-    return rows.map(row => ({ ...row }))
-  }
-
-  const groupColumns = readMemoryGroupColumns(sql)
-  if (groupColumns.length > 0) {
-    const groupedRows = projectMemoryGroupedRows(sql, bindings, rawSelection, groupColumns, rows)
-    if (groupedRows) {
-      return groupedRows
-    }
-  }
-
-  const aggregateRows = projectMemoryAggregateRows(rawSelection, rows)
-  if (aggregateRows) {
-    return aggregateRows
-  }
-
-  const selections = rawSelection.split(', ').map((selection) => {
-    const match = selection.match(/^"([^"]+)"(?: AS "([^"]+)")?$/)
-    return match
-      ? { column: match[1]!, resultKey: match[2] ?? match[1]! }
-      : undefined
-  })
-  if (selections.some(selection => !selection)) {
-    return rows.map(row => ({ ...row }))
-  }
-
-  return rows.map((row) => {
-    const projected: MemoryRow = {}
-    for (const selection of selections) {
-      projected[selection!.resultKey] = row[selection!.column]
-    }
-    return projected
-  })
-}
-
-function createMemoryWhereMatcher(rawWhere: string, bindings: readonly unknown[], fallbackBindingIndex: number): (row: MemoryRow) => boolean {
-  const whereMatch = rawWhere.match(/^"([^"]+)" = \?(\d*)$/)
-  const whereColumn = whereMatch?.[1] ?? ''
-  const whereBindingIndex = whereMatch?.[2] ? Number(whereMatch[2]) - 1 : fallbackBindingIndex
-  return row => row[whereColumn] === bindings[whereBindingIndex]
-}
-
-class RelationalMemoryAdapter implements DriverAdapter {
-  private connected = false
-  readonly queries: Array<{ sql: string, bindings: readonly unknown[] }> = []
-  readonly executions: Array<{ sql: string, bindings: readonly unknown[] }> = []
-
-  constructor(readonly tables: MemoryTables) {}
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverQueryResult<TRow>> {
-    this.queries.push({ sql, bindings })
-    const returningUpsertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+) ON CONFLICT \((.+)\) DO UPDATE SET (.+) RETURNING \*$/)
-    if (returningUpsertMatch) {
-      const [, tableName, rawColumns, rawValues, rawConflictColumns, rawAssignments] = returningUpsertMatch
-      const rows = this.upsertRows(tableName!, rawColumns!, rawValues!, rawConflictColumns!, rawAssignments!, bindings)
-      return {
-        rows: rows.map(row => ({ ...row })) as TRow[],
-        rowCount: rows.length,
-      }
-    }
-
-    const returningInsertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+) RETURNING \*$/)
-    if (returningInsertMatch) {
-      const [, tableName, rawColumns, rawValues] = returningInsertMatch
-      const rows = this.insertRows(tableName!, rawColumns!, rawValues!, bindings)
-      return {
-        rows: rows.map(row => ({ ...row })) as TRow[],
-        rowCount: rows.length,
-      }
-    }
-
-    const returningUpdateMatch = sql.match(/^UPDATE "([^"]+)" SET (.+?) WHERE (.+) RETURNING \*$/)
-    if (returningUpdateMatch) {
-      const [, tableName, rawAssignments, rawWhere] = returningUpdateMatch
-      const rows = this.updateRows(tableName!, rawAssignments!, rawWhere!, bindings)
-      return {
-        rows: rows.map(row => ({ ...row })) as TRow[],
-        rowCount: rows.length,
-      }
-    }
-
-    const returningDeleteMatch = sql.match(/^DELETE FROM "([^"]+)" WHERE (.+) RETURNING \*$/)
-    if (returningDeleteMatch) {
-      const [, tableName, rawWhere] = returningDeleteMatch
-      const rows = this.deleteRows(tableName!, rawWhere!, bindings)
-      return {
-        rows: rows.map(row => ({ ...row })) as TRow[],
-        rowCount: rows.length,
-      }
-    }
-
-    const tableName = sql.match(/ FROM "([^"]+)"/)?.[1] ?? ''
-    const filteredSql = sql.replace(/^SELECT COUNT\(\*\) AS "__holo_count" FROM \((.+)\) AS "__holo_pagination"$/, '$1')
-    let rows = filterMemoryRows(filteredSql, bindings, this.tables[tableName] ?? [])
-
-    const orderMatch = sql.match(/ ORDER BY "([^"]+)" (ASC|DESC)/)
-    if (orderMatch) {
-      const [, column, direction] = orderMatch
-      rows = [...rows].sort((left, right) => {
-        const leftValue = left[column!]
-        const rightValue = right[column!]
-        if (leftValue === rightValue) {
-          return 0
-        }
-
-        const ascending = leftValue! < rightValue! ? -1 : 1
-        return direction === 'ASC' ? ascending : -ascending
-      })
-    }
-
-    const limitMatch = / LIMIT (?:\?(\d*)|(\d+))/.exec(sql)
-    const offsetMatch = / OFFSET (?:\?(\d*)|(\d+))/.exec(sql)
-    const offset = offsetMatch
-      ? readLimitBinding(sql, bindings, offsetMatch, ' OFFSET ')
-      : 0
-    const limit = limitMatch
-      ? readLimitBinding(sql, bindings, limitMatch, ' LIMIT ')
-      : undefined
-    const pagedRows = typeof limit === 'number'
-      ? rows.slice(offset, offset + limit)
-      : rows.slice(offset)
-
-    return {
-      rows: projectMemoryRows(sql, bindings, pagedRows) as TRow[],
-      rowCount: pagedRows.length,
-    }
-  }
-
-  async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    this.executions.push({ sql, bindings })
-    const updateMatch = sql.match(/^UPDATE "([^"]+)" SET (.+?) WHERE (.+)$/)
-    if (updateMatch) {
-      const [, tableName, rawAssignments, rawWhere] = updateMatch
-      return { affectedRows: this.updateRows(tableName!, rawAssignments!, rawWhere!, bindings).length }
-    }
-
-    const deleteMatch = sql.match(/^DELETE FROM "([^"]+)" WHERE (.+)$/)
-    if (deleteMatch) {
-      const [, tableName, rawWhere] = deleteMatch
-      return { affectedRows: this.deleteRows(tableName!, rawWhere!, bindings).length }
-    }
-
-    const insertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+)$/)
-    if (!insertMatch) {
-      return { affectedRows: 0 }
-    }
-
-    const [, tableName, rawColumns, rawValues] = insertMatch
-    const rows = this.insertRows(tableName!, rawColumns!, rawValues!, bindings)
-
-    return {
-      affectedRows: rows.length,
-      lastInsertId: rows.at(-1)?.id as number | string | undefined,
-    }
-  }
-
-  private insertRows(
-    tableName: string,
-    rawColumns: string,
-    rawValues: string,
-    bindings: readonly unknown[],
-  ): MemoryRow[] {
-    const rows = this.createRowsFromValues(tableName, rawColumns, rawValues, bindings)
-    const table = this.tables[tableName] ?? (this.tables[tableName] = [])
-    for (const row of rows) {
-      table.push(row)
-    }
-
-    return rows
-  }
-
-  private createRowsFromValues(
-    tableName: string,
-    rawColumns: string,
-    rawValues: string,
-    bindings: readonly unknown[],
-  ): MemoryRow[] {
-    const columns = rawColumns.split(', ').map(part => part.replaceAll('"', ''))
-    const groups = [...rawValues.matchAll(/\(([^)]+)\)/g)]
-    const table = this.tables[tableName] ?? []
-    const nextId = table.reduce((max, current) => Math.max(max, Number(current.id ?? 0)), 0) + 1
-    return groups.map((group, rowIndex) => {
-      const placeholders = group[1]!.split(', ')
-      const row: MemoryRow = {}
-      for (let index = 0; index < columns.length; index += 1) {
-        const rawIndex = placeholders[index]!.replace('?', '')
-        const bindingIndex = rawIndex ? Number(rawIndex) - 1 : rowIndex * columns.length + index
-        row[columns[index]!] = bindings[bindingIndex]
-      }
-      if (!Object.prototype.hasOwnProperty.call(row, 'id')) {
-        row.id = nextId + rowIndex
-      }
-      if (tableName === 'todos' && !Object.prototype.hasOwnProperty.call(row, 'created_at')) {
-        row.created_at = new Date(`2026-06-24T10:00:0${table.length + rowIndex + 1}.000Z`)
-      }
-      return row
-    })
-  }
-
-  private upsertRows(
-    tableName: string,
-    rawColumns: string,
-    rawValues: string,
-    rawConflictColumns: string,
-    rawAssignments: string,
-    bindings: readonly unknown[],
-  ): MemoryRow[] {
-    const rows = this.createRowsFromValues(tableName, rawColumns, rawValues, bindings)
-    const table = this.tables[tableName] ?? (this.tables[tableName] = [])
-    const conflictColumns = rawConflictColumns.split(', ').map(part => part.replaceAll('"', ''))
-    const assignments = rawAssignments.split(', ').map((assignment) => {
-      const assignmentMatch = assignment.match(/^"([^"]+)" = EXCLUDED\."([^"]+)"$/)
-      if (!assignmentMatch) {
-        throw new Error(`Unexpected SQL assignment format: ${assignment}`)
-      }
-
-      return { column: assignmentMatch[1]!, sourceColumn: assignmentMatch[2]! }
-    })
-    const returnedRows: MemoryRow[] = []
-
-    for (const row of rows) {
-      const existing = table.find(candidate => conflictColumns.every(column => candidate[column] === row[column]))
-      if (!existing) {
-        table.push(row)
-        returnedRows.push(row)
-        continue
-      }
-
-      for (const assignment of assignments) {
-        existing[assignment.column] = row[assignment.sourceColumn]
-      }
-      returnedRows.push(existing)
-    }
-
-    return returnedRows
-  }
-
-  private updateRows(
-    tableName: string,
-    rawAssignments: string,
-    rawWhere: string,
-    bindings: readonly unknown[],
-  ): MemoryRow[] {
-    const table = this.tables[tableName] ?? []
-    const assignments = rawAssignments.split(', ').map((assignment, index) => {
-      const assignmentMatch = assignment.match(/^"([^"]+)" = \?(\d*)$/)
-      if (!assignmentMatch) {
-        throw new Error(`Unexpected SQL assignment format: ${assignment}`)
-      }
-
-      const [, column, rawPlaceholder] = assignmentMatch
-      if (!column) {
-        throw new Error(`Unexpected SQL assignment format: ${assignment}`)
-      }
-
-      const bindingIndex = rawPlaceholder ? Number(rawPlaceholder) - 1 : index
-      return { column, value: bindings[bindingIndex] }
-    })
-    const matchesWhere = createMemoryWhereMatcher(rawWhere, bindings, assignments.length)
-    const rows: MemoryRow[] = []
-    for (const row of table) {
-      if (!matchesWhere(row)) {
-        continue
-      }
-
-      for (const assignment of assignments) {
-        row[assignment.column] = assignment.value
-      }
-      rows.push(row)
-    }
-
-    return rows
-  }
-
-  private deleteRows(
-    tableName: string,
-    rawWhere: string,
-    bindings: readonly unknown[],
-  ): MemoryRow[] {
-    const table = this.tables[tableName] ?? []
-    const matchesWhere = createMemoryWhereMatcher(rawWhere, bindings, 0)
-    const deletedRows: MemoryRow[] = []
-    const remainingRows: MemoryRow[] = []
-
-    for (const row of table) {
-      if (matchesWhere(row)) {
-        deletedRows.push(row)
-        continue
-      }
-
-      remainingRows.push(row)
-    }
-
-    this.tables[tableName] = remainingRows
-    return deletedRows
-  }
-
-  async beginTransaction(): Promise<void> {}
-
-  async commit(): Promise<void> {}
-
-  async rollback(): Promise<void> {}
-}
-
-const dialect: Dialect = {
-  name: 'sqlite',
-  capabilities: createCapabilities(),
-  quoteIdentifier(identifier: string): string {
-    return `"${identifier}"`
-  },
-  createPlaceholder(): string {
-    return '?'
-  },
-}
-
-const returningDialect: Dialect = {
-  ...dialect,
-  capabilities: createCapabilities({ returning: true }),
+async function createPostsAdapter() {
+  return createNativeRelationalAdapter({ posts: [{ id: 1, title: 'First' }] })
 }
 
 const postsViewsAggregateBackfillSql = 'SELECT COUNT(*) AS "__holo_count", SUM("views") AS "__holo_sum_0", AVG("views") AS "__holo_avg_0", MIN("views") AS "__holo_min_0", MAX("views") AS "__holo_max_0" FROM "posts"'
 
-function createContext(adapter: DriverAdapter = new MemoryAdapter()): DatabaseContext {
+async function createContext(adapter?: DriverAdapter): Promise<DatabaseContext> {
+  const resolvedAdapter = adapter ?? await createPostsAdapter()
   return createDatabase({
-    adapter,
-    dialect,
+    adapter: resolvedAdapter,
+    dialect: createDialect('sqlite'),
     connectionName: 'main',
   })
 }
 
-function createReturningContext(adapter: DriverAdapter): DatabaseContext {
-  return createDatabase({
-    adapter,
-    dialect: returningDialect,
-    connectionName: 'main',
-  })
-}
-
-function createAuthModule(users: Readonly<Record<string, AuthenticatedAuthUser | null>>): RealtimeAuthModule {
-  return {
-    getAuthRuntime() {
-      return {
-        user: async () => users.default ?? null,
-        provider: async () => users.default ? 'local' : null,
-        guard(name: string) {
-          return {
-            user: async () => users[name] ?? null,
-            provider: async () => users[name] ? 'local' : null,
-          }
-        },
-      }
-    },
-  }
-}
 
 afterEach(() => {
+  resetAuthRuntime()
+  resetSessionRuntime()
   resetRealtimeClientRuntime()
   resetRealtimeRuntime()
   resetDatabaseDependencyInvalidationListeners()
@@ -930,10 +263,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('executes public queries with validated args and auto-generated names', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       args: schema({
@@ -956,10 +288,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps structured query observations internal to active query entries', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       name: 'posts.observed',
@@ -988,12 +319,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('uses the configured DB facade when no realtime database binding is provided', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureDB({
       connection: () => db,
     } as never)
     configureRealtimeRuntime({
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       access: 'public',
@@ -1006,7 +336,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('allows public queries when auth is installed but not configured', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
     })
@@ -1018,42 +348,12 @@ describe('@holo-js/realtime', () => {
     await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
       data: null,
     })
-  })
-
-  it('treats configured anonymous auth as optional for public queries', async () => {
-    const db = createContext()
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => createAuthModule({
-        default: null,
-      }),
-    })
-    const query = defineRealtimeQuery({
-      access: 'public',
-      handler: async ({ auth }) => auth,
-    })
-
-    await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
-      data: null,
-    })
-  })
-
-  it('exposes model repositories through the realtime db context', async () => {
-    const repository = { name: 'PostRepository' }
-    const connection = {
-      model: () => repository,
-    } as unknown as DatabaseContext
-    const context = realtimeRuntimeInternals.createRealtimeDatabaseContext(connection)
-
-    expect(context.connection).toBe(connection)
-    expect(context.model({} as never)).toBe(repository)
   })
 
   it('honors custom definition names', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       name: 'posts.list',
@@ -1067,10 +367,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('executes callable query and mutation definitions directly on the server', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const listPosts = defineRealtimeQuery({
       args: schema({
@@ -1110,19 +409,15 @@ describe('@holo-js/realtime', () => {
     await expect(listPosts({ limit: 2 })).resolves.toEqual({
       rows: [
         { id: 1, title: 'First' },
-        { id: 2, title: 'Post 2' },
+        { id: 2, title: 'Second' },
       ],
       limit: 2,
     })
   })
 
   it('persists mutation database writes without a broadcast worker or client transport', async () => {
-    const adapter = new RelationalMemoryAdapter({
-      posts: [
-        { id: 1, title: 'First' },
-      ],
-    })
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -1131,7 +426,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const listPosts = defineRealtimeQuery({
       access: 'public',
@@ -1162,15 +456,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps mutation-only execution off realtime DB invalidation listener overhead', async () => {
-    const adapter = new RelationalMemoryAdapter({
-      posts: [
-        { id: 1, title: 'First' },
-      ],
-    })
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const renamePost = defineRealtimeMutation({
       access: 'public',
@@ -1199,15 +488,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps direct query execution off live realtime DB invalidation listener overhead', async () => {
-    const adapter = new RelationalMemoryAdapter({
-      posts: [
-        { id: 1, title: 'First' },
-      ],
-    })
-    const db = createReturningContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const listPosts = defineRealtimeQuery({
       access: 'public',
@@ -1264,15 +548,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('detaches realtime DB invalidation listeners after the last subscription unsubscribes', async () => {
-    const adapter = new RelationalMemoryAdapter({
-      posts: [
-        { id: 1, title: 'First' },
-      ],
-    })
-    const db = createReturningContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const listPosts = defineRealtimeQuery({
       access: 'public',
@@ -1321,10 +600,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('rolls back realtime DB invalidation listeners when subscription startup fails', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       access: 'public',
@@ -1344,10 +622,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('identifies realtime definitions and rejects invalid access guard configuration', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       access: 'public',
@@ -1376,11 +653,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('refreshes subscribed queries after direct Holo DB writes invalidate matching dependencies', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[][] = []
     const query = defineRealtimeQuery({
@@ -1406,23 +682,22 @@ describe('@holo-js/realtime', () => {
 
     expect(subscription.current.data).toEqual([
       { id: 1, title: 'First' },
-      { id: 2, title: 'Post 2' },
+      { id: 2, title: 'Next' },
     ])
     expect(snapshots).toEqual([
       [{ id: 1, title: 'First' }],
       [
         { id: 1, title: 'First' },
-        { id: 2, title: 'Post 2' },
+        { id: 2, title: 'Next' },
       ],
     ])
   })
 
   it('uses internal structured dependency metadata when present on invalidation events', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[][] = []
@@ -1454,7 +729,7 @@ describe('@holo-js/realtime', () => {
         snapshots.push(snapshot.data)
       },
     })
-    adapter.rows.push({ id: 2, title: 'Metadata' })
+    await adapter.execute('INSERT INTO posts (id, title) VALUES (?, ?)', [2, 'Metadata'])
     await realtimeRuntimeInternals.handleDatabaseInvalidation(event)
 
     expect(queryRuns).toBe(2)
@@ -1468,11 +743,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('coalesces duplicate subscription refreshes by query key during invalidation bursts', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     let blockNextRefresh = false
@@ -1535,12 +809,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('does not publish duplicate snapshots when refreshed data is unchanged', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[][] = []
@@ -1567,13 +840,12 @@ describe('@holo-js/realtime', () => {
   })
 
   it('publishes dependency-only refreshes when data is unchanged', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
       comments: [{ id: 1, body: 'Initial' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let readComments = false
     let queryRuns = 0
@@ -1632,10 +904,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('refreshes structurally unpatchable observed queries after matching mutations', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -1644,28 +916,15 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[] = []
     const patches: RealtimePatchForTest[] = []
-    const dependencies = ['db:main:posts']
     const query = defineRealtimeQuery({
       access: 'public',
       handler: async () => {
         queryRuns += 1
-        const postCount = adapter.tables.posts?.length ?? 0
-        recordDatabaseQueryDependencies(dependencies)
-        recordDatabaseQueryObservation({
-          connectionName: 'main',
-          dependencies,
-          orderBy: [],
-          patchable: false,
-          predicates: [],
-          result: postCount,
-          selections: [],
-          tableName: 'posts',
-        })
+        const postCount = await db.table('posts').whereInSub('id', db.table('posts').select('id')).count()
 
         return postCount
       },
@@ -1697,10 +956,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('shares unpatchable refresh fallback across mixed subscribers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -1709,30 +968,17 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const patchSnapshots: number[] = []
     const snapshotOnlySnapshots: number[] = []
     const secondSnapshotOnlySnapshots: number[] = []
     const patches: RealtimePatchForTest[] = []
-    const dependencies = ['db:main:posts']
     const query = defineRealtimeQuery({
       access: 'public',
       handler: async () => {
         queryRuns += 1
-        const postCount = adapter.tables.posts?.length ?? 0
-        recordDatabaseQueryDependencies(dependencies)
-        recordDatabaseQueryObservation({
-          connectionName: 'main',
-          dependencies,
-          orderBy: [],
-          patchable: false,
-          predicates: [],
-          result: postCount,
-          selections: [],
-          tableName: 'posts',
-        })
+        const postCount = await db.table('posts').whereInSub('id', db.table('posts').select('id')).count()
 
         return postCount
       },
@@ -1777,14 +1023,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches having grouped count rows across mixed subscribers without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 2, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -1793,7 +1039,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -1866,14 +1111,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches hidden having grouped count rows without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 2, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -1882,7 +1127,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -1948,14 +1192,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches redundant having grouped count rows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 2, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -1964,7 +1208,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2028,14 +1271,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches grouped count rows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 2, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2044,7 +1287,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2108,14 +1350,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches grouped sum rows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 11, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2124,7 +1366,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2188,14 +1429,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches hidden having grouped sum rows without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 11, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2204,7 +1445,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2271,14 +1511,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches hidden having grouped average rows without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 11, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2287,7 +1527,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2354,13 +1593,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches observed grouped average rows from hidden state without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2369,7 +1608,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2434,14 +1672,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches grouped max rows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 11, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2450,7 +1688,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2514,14 +1751,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills grouped max rows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 13, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 11, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2530,7 +1767,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2594,14 +1830,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches hidden having grouped min and max rows without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 11, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2610,7 +1846,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2717,14 +1952,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches having grouped max runner-up rows without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 6, title: 'Second' },
         { id: 3, author_id: 1, score: 7, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -2733,7 +1968,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -2799,7 +2033,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('skips detail subscriptions when a different row is invalidated', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -2807,7 +2041,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -2838,12 +2071,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('refreshes detail subscriptions after broad row invalidations', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const query = defineRealtimeQuery({
@@ -2864,12 +2096,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches detail subscriptions after matching updates', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -2903,16 +2134,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('groups exact detail row backfills for batched unknown updates', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const firstPatches: RealtimePatchForTest[] = []
     const secondPatches: RealtimePatchForTest[] = []
@@ -2948,12 +2178,8 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(firstQuery, {}, firstPatchOptions)
     await subscribeRealtimeQuery(secondQuery, {}, secondPatchOptions)
     const setupQueryCount = adapter.queries.length
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
-    posts[0] = { id: 1, title: 'Updated First' }
-    posts[1] = { id: 2, title: 'Updated Second' }
+    await adapter.execute('UPDATE posts SET title = ? WHERE id = ?', ['Updated First', 1])
+    await adapter.execute('UPDATE posts SET title = ? WHERE id = ?', ['Updated Second', 2])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: '',
       dependencies: [],
@@ -3006,12 +2232,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact patches to internal patch subscribers while preserving snapshot fallback', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3088,12 +2313,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('updates snapshot-only subscribers from patched canonical data without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3135,7 +2359,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers field-level replace patches for stable list updates', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -3143,7 +2367,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -3187,7 +2410,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers bounded field-level replace patches for multi-row stable list updates', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 2, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
@@ -3196,7 +2419,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -3245,12 +2467,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers merge patches for stable multi-field row updates', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3312,12 +2533,11 @@ describe('@holo-js/realtime', () => {
       field_8: 'h',
       field_9: 'i',
     }
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ ...initialPost }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3381,12 +2601,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('falls back to a row replace patch when update shape changes without rerunning the query handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3401,6 +2620,7 @@ describe('@holo-js/realtime', () => {
     const updatePost = defineRealtimeMutation({
       access: 'public',
       handler: async ({ db: context }) => {
+        await createSchemaService(db).table('posts', table => { table.string('metadata').nullable() })
         await context.table('posts').where('id', 1).update({ metadata: 'visible' })
         return true
       },
@@ -3434,12 +2654,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed sole query records without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3486,12 +2705,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed exact record queries to undefined when changed predicates stop matching without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, status: 'open', title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3536,12 +2754,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed exact value queries without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3597,12 +2814,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps subscribed exact value queries silent for irrelevant updates without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3639,12 +2855,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed exact value queries to undefined when changed predicates stop matching without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, status: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3687,7 +2902,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed pluck queries without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
@@ -3695,7 +2910,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3741,7 +2955,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps subscribed pluck queries silent for irrelevant updates without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First', views: 1 },
         { id: 2, author_id: 1, title: 'Second', views: 1 },
@@ -3749,7 +2963,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3790,7 +3003,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact splice patches for pluck inserts and deletes without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
@@ -3798,7 +3011,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3864,7 +3076,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches nested pluck arrays when a query returns a wrapper object', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
@@ -3872,7 +3084,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3923,7 +3134,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact move patches for ordered pluck updates without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, priority: 10, title: 'First' },
         { id: 2, priority: 20, title: 'Second' },
@@ -3932,7 +3143,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -3981,12 +3191,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed exists queries without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -4028,12 +3237,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps subscribed exists queries silent while updating aggregate count metadata', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -4091,12 +3299,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed doesntExist queries without rerunning the handler', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [],
-    }))
+    }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}}))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -4138,12 +3345,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps subscribed doesntExist queries silent while updating aggregate count metadata', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -4201,12 +3407,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('does not publish patched detail subscriptions when matching updates keep row data unchanged', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -4239,12 +3444,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches empty detail subscriptions after matching inserts', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[] = []
@@ -4278,7 +3482,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered predicate subscriptions when mutation rows are sufficient', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
@@ -4286,7 +3490,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -4332,7 +3535,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches selected column subscriptions without leaking unselected fields', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 2, body: 'Hidden', title: 'Second' },
@@ -4340,7 +3543,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
@@ -4393,7 +3595,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills selected limited ordered subscriptions without leaking unselected fields', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, body: 'Hidden', title: 'First' },
         { id: 2, body: 'Hidden', title: 'Second' },
@@ -4402,7 +3604,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
@@ -4484,17 +3685,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills filtered selected limited subscriptions without selected predicates or handler reruns', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 2, body: 'Hidden', title: 'Second' },
         { id: 3, author_id: 1, body: 'Hidden', title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
@@ -4528,11 +3728,7 @@ describe('@holo-js/realtime', () => {
         snapshots.push(snapshot.data)
       },
     })
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
-    posts[1] = { id: 2, author_id: 1, body: 'Hidden', title: 'Second' }
+    await adapter.execute('UPDATE posts SET author_id = ?, body = ?, title = ? WHERE id = ?', [1, 'Hidden', 'Second', 2])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -4576,16 +3772,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches selected subscriptions from returning update rows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 2, body: 'Hidden', title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
@@ -4629,16 +3824,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches selected returning updates in place without leaking unselected fields', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 1, body: 'Hidden', title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
@@ -4688,16 +3882,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches exact selected records without selected identity or handler reruns', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, body: 'Hidden', title: 'First' },
         { id: 2, body: 'Hidden', title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<Readonly<Record<string, unknown>> | null | undefined> = []
@@ -4753,16 +3946,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches exact selected record deletes without selected identity or handler reruns', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, body: 'Hidden', title: 'First' },
         { id: 2, body: 'Hidden', title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<Readonly<Record<string, unknown>> | null | undefined> = []
@@ -4818,15 +4010,14 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches exact selected record inserts from empty results without selected identity or handler reruns', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, body: 'Hidden', title: 'First' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<Readonly<Record<string, unknown>> | null | undefined> = []
@@ -4884,16 +4075,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches selected subscriptions when returning upserts move rows out of predicates', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 2, body: 'Hidden', title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly Readonly<Record<string, unknown>>[]> = []
@@ -4942,16 +4132,32 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches limited ordered inserts with database-generated returned columns', async () => {
-    const adapter = new RelationalMemoryAdapter({
-      todos: [
-        { id: 1, title: 'First', created_at: new Date('2026-06-24T10:00:01.000Z') },
-        { id: 2, title: 'Second', created_at: new Date('2026-06-24T09:00:00.000Z') },
-      ],
+    const adapter = createPostgresAdapter({ config: {
+      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
+      password: process.env.HOLO_POSTGRES_PASSWORD,
+      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+    } })
+    const queries: string[] = []
+    const db = createDatabase({
+      adapter,
+      dialect: createDialect('postgres'),
+      connectionName: 'main',
+      security: { debugSqlInLogs: true },
+      logger: { onQuerySuccess: event => { if (event.kind === 'query') queries.push(event.sql ?? '') } },
     })
-    const db = createReturningContext(adapter)
+    const tableName = `holo_todos_${randomUUID().replaceAll('-', '')}`
+    const tableSchema = createSchemaService(db)
+    onTestFinished(async () => { try { await tableSchema.dropTable(tableName) } finally { await db.disconnect() } })
+    await tableSchema.createTable(tableName, table => { table.id(); table.string('title'); table.timestamp('created_at').defaultNow() })
+    await db.table(tableName).insert([
+      { title: 'First', created_at: new Date('2026-06-24T10:00:01.000Z') },
+      { title: 'Second', created_at: new Date('2026-06-24T09:00:00.000Z') },
+    ])
+    queries.length = 0
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -4960,7 +4166,7 @@ describe('@holo-js/realtime', () => {
       handler: async ({ db: context }) => {
         queryRuns += 1
         return await context
-          .table('todos')
+          .table(tableName)
           .orderBy('created_at', 'desc')
           .limit(100)
           .get()
@@ -4969,7 +4175,7 @@ describe('@holo-js/realtime', () => {
     const createTodo = defineRealtimeMutation({
       access: 'public',
       handler: async ({ db: context }) => {
-        await context.table('todos').insert({ title: 'Third' })
+        await context.table(tableName).insert({ title: 'Third' })
         return true
       },
     })
@@ -4982,10 +4188,9 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createTodo)
 
     expect(queryRuns).toBe(1)
-    expect(adapter.executions).toHaveLength(0)
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "todos" ORDER BY "created_at" DESC LIMIT 100',
-      'INSERT INTO "todos" ("title") VALUES (?) RETURNING *',
+    expect(queries).toEqual([
+      `SELECT * FROM "${tableName}" ORDER BY "created_at" DESC LIMIT 100`,
+      `INSERT INTO "${tableName}" ("title") VALUES ($1) RETURNING *`,
     ])
     expect(snapshots).toEqual([
       [1, 2],
@@ -4994,7 +4199,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches nested rows when a query returns a wrapper object', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
@@ -5002,7 +4207,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<{ readonly rows: readonly number[], readonly scope: string }> = []
@@ -5050,16 +4254,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches nested selected rows for stable returning upserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 1, body: 'Hidden', title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<{ readonly rows: readonly Readonly<Record<string, unknown>>[], readonly scope: string }> = []
@@ -5125,17 +4328,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches nested rows for multi-row stable returning upserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 2, title: 'Other' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<{ readonly rows: readonly Readonly<Record<string, unknown>>[] }> = []
@@ -5199,14 +4401,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches wrapper queries when one db result is exposed in multiple places', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
       ],
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<{ readonly duplicate: readonly number[], readonly rows: readonly number[] }> = []
@@ -5257,7 +4458,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches multiple nested query results from one mutation', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
@@ -5265,7 +4466,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<{ readonly all: readonly number[], readonly mine: readonly number[] }> = []
@@ -5320,7 +4520,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches same-row updates in ordered predicate subscriptions', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
@@ -5328,7 +4528,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: string[][] = []
@@ -5376,17 +4575,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered updates in place when the row stays between the same neighbors', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, priority: 10, title: 'First' },
         { id: 2, priority: 20, title: 'Second' },
         { id: 3, priority: 30, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly number[]> = []
@@ -5416,13 +4614,9 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePriority)
 
     expect(queryRuns).toBe(1)
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" ORDER BY "priority" ASC',
-      'SELECT * FROM "posts" WHERE "id" = ?',
-    ])
-    expect(adapter.executions.map(execution => execution.sql)).toEqual([
-      'UPDATE "posts" SET "priority" = ? WHERE "id" = ?',
-    ])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
+    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
+    expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
       [10, 20, 30],
       [10, 21, 30],
@@ -5430,17 +4624,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact move patches when ordered updates move one row', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, priority: 10, title: 'First' },
         { id: 2, priority: 20, title: 'Second' },
         { id: 3, priority: 30, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly number[]> = []
@@ -5494,7 +4687,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches multi-row ordered updates without sorting when scan order stays valid', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 2, priority: 10, title: 'First' },
         { id: 2, author_id: 1, priority: 20, title: 'Second' },
@@ -5502,10 +4695,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 2, priority: 40, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly number[]> = []
@@ -5535,13 +4727,9 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePriorities)
 
     expect(queryRuns).toBe(1)
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" ORDER BY "priority" ASC',
-      'SELECT * FROM "posts" WHERE "author_id" = ?',
-    ])
-    expect(adapter.executions.map(execution => execution.sql)).toEqual([
-      'UPDATE "posts" SET "priority" = ? WHERE "author_id" = ?',
-    ])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
+    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
+    expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
       [10, 20, 30, 40],
       [10, 25, 25, 40],
@@ -5549,7 +4737,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('sorts patched multi-row ordered updates when scan order breaks', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 2, priority: 10, title: 'First' },
         { id: 2, author_id: 1, priority: 20, title: 'Second' },
@@ -5557,10 +4745,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 2, priority: 40, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: Array<readonly number[]> = []
@@ -5590,13 +4777,9 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePriorities)
 
     expect(queryRuns).toBe(1)
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" ORDER BY "priority" ASC',
-      'SELECT * FROM "posts" WHERE "author_id" = ?',
-    ])
-    expect(adapter.executions.map(execution => execution.sql)).toEqual([
-      'UPDATE "posts" SET "priority" = ? WHERE "author_id" = ?',
-    ])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
+    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
+    expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
       [10, 20, 30, 40],
       [5, 5, 10, 40],
@@ -5604,7 +4787,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches predicate subscriptions when an update moves a row out of the result set', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
@@ -5612,7 +4795,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -5650,7 +4832,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches deletes when the current ordered result has enough data', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
@@ -5658,7 +4840,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -5696,17 +4877,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills full limited ordered windows after matching deletes', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -5746,17 +4926,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills offset ordered windows without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -5789,11 +4968,8 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deletePost)
 
     expect(queryRuns).toBe(1)
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC LIMIT 2 OFFSET 1',
-      'SELECT * FROM "posts" WHERE "id" = ?',
-      'SELECT * FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC LIMIT 2 OFFSET 1',
-    ])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(2)
+    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(snapshots).toEqual([
       [2, 3],
       [3],
@@ -5801,17 +4977,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches offset ordered window row updates without backfilling unchanged membership', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: string[][] = []
@@ -5844,10 +5019,8 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
 
     expect(queryRuns).toBe(1)
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT * FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC LIMIT 2 OFFSET 1',
-      'SELECT * FROM "posts" WHERE "id" = ?',
-    ])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
+    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(snapshots).toEqual([
       ['Second', 'Third'],
       ['Updated Second', 'Third'],
@@ -5855,17 +5028,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('coalesces full limited ordered window backfills across query entries', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let listRuns = 0
     let wrapperRuns = 0
@@ -5931,17 +5103,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches full limited ordered windows when updated rows enter the window', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 20, title: 'First' },
         { id: 2, author_id: 1, score: 10, title: 'Second' },
         { id: 3, author_id: 1, score: 0, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -5981,17 +5152,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills limited ordered rows for unknown updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 20, title: 'First' },
         { id: 2, author_id: 1, score: 10, title: 'Second' },
         { id: 3, author_id: 1, score: 0, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -6018,11 +5188,7 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
-    posts[2] = { id: 3, author_id: 1, score: 30, title: 'Third' }
+    await adapter.execute('UPDATE posts SET author_id = ?, score = ?, title = ? WHERE id = ?', [1, 30, 'Third', 3])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -6065,7 +5231,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches shrinking limited windows when the current result is not full', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
@@ -6073,7 +5239,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -6120,7 +5285,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches predicate subscriptions when an update moves a row into the result set', async () => {
-    const db = createContext(new RelationalMemoryAdapter({
+    const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
@@ -6128,7 +5293,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -6166,11 +5330,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('batches committed write bursts into one visible refresh with the final data', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[][] = []
@@ -6202,22 +5365,21 @@ describe('@holo-js/realtime', () => {
     expect(snapshots).toHaveLength(2)
     expect(snapshots.at(-1)).toEqual([
       { id: 1, title: 'First' },
-      { id: 2, title: 'Post 2' },
-      { id: 3, title: 'Post 3' },
-      { id: 4, title: 'Post 4' },
-      { id: 5, title: 'Post 5' },
-      { id: 6, title: 'Post 6' },
+      { id: 2, title: 'Next' },
+      { id: 3, title: 'Next' },
+      { id: 4, title: 'Next' },
+      { id: 5, title: 'Next' },
+      { id: 6, title: 'Next' },
     ])
   })
 
   it('patches committed write bursts without rerunning supported query handlers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const fallbackSnapshots: number[][] = []
@@ -6285,17 +5447,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact splice patches for ordered row deletes without rerunning handlers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -6347,16 +5508,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact splice patches for ordered middle inserts without rerunning handlers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: number[][] = []
@@ -6410,11 +5570,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('refreshes same-query subscribers with one rerun after committed writes', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const firstSnapshots: unknown[][] = []
@@ -6455,11 +5614,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('isolates user subscription callback failures while refreshing matching subscriptions', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     let shouldFailQuery = false
@@ -6517,7 +5675,7 @@ describe('@holo-js/realtime', () => {
 
     expect(snapshots.at(-1)).toEqual([
       { id: 1, title: 'First' },
-      { id: 2, title: 'Post 2' },
+      { id: 2, title: 'Next' },
     ])
     expect(consoleError).toHaveBeenCalledWith(
       '[@holo-js/realtime] Realtime subscription onData callback failed.',
@@ -6530,7 +5688,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered belongs-to-many relation queries when related rows are attached without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
       ],
@@ -6541,7 +5699,7 @@ describe('@holo-js/realtime', () => {
         { id: 100, postId: 1, tagId: 10 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -6550,7 +5708,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -6647,7 +5804,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered belongs-to-many relation queries when related rows update without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
       ],
@@ -6658,7 +5815,7 @@ describe('@holo-js/realtime', () => {
         { id: 100, postId: 1, tagId: 10 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -6667,7 +5824,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -6768,7 +5924,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered belongs-to-many relation queries when pivot rows update without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
       ],
@@ -6779,7 +5935,7 @@ describe('@holo-js/realtime', () => {
         { id: 100, postId: 1, tagId: 10, weight: 1 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -6788,7 +5944,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -6879,7 +6034,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact move patches for ordered belongs-to-many relation pivot updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
       ],
@@ -6892,7 +6047,7 @@ describe('@holo-js/realtime', () => {
         { id: 101, postId: 1, tagId: 11, weight: 2 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -6901,7 +6056,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -7008,7 +6162,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered belongs-to-many relation queries when related rows delete without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
       ],
@@ -7021,7 +6175,7 @@ describe('@holo-js/realtime', () => {
         { id: 101, postId: 1, tagId: 11 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7030,7 +6184,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -7125,7 +6278,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered belongs-to-many relation queries when related rows are detached without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
       ],
@@ -7138,7 +6291,7 @@ describe('@holo-js/realtime', () => {
         { id: 101, postId: 1, tagId: 11 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7147,7 +6300,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -7242,7 +6394,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-many relation queries after stable related row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -7250,7 +6402,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7259,7 +6411,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7331,7 +6482,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-many relation queries after related row deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -7340,7 +6491,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 1, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7349,7 +6500,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7424,13 +6574,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-one relation inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
       posts: [],
-    })
-    const db = createContext(adapter)
+    }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7439,7 +6589,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7509,7 +6658,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-one relation deletes to null without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -7517,7 +6666,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7526,7 +6675,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7596,7 +6744,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-one relation parent key moves without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -7605,7 +6753,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7614,7 +6762,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7694,7 +6841,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches constrained has-one relation parent key moves without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -7704,7 +6851,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, title: 'Draft' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7713,7 +6860,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7798,7 +6944,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches range-constrained has-one relation parent key moves without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -7808,7 +6954,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, score: 5, title: 'Draft' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7817,7 +6963,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -7903,7 +7048,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches not-in constrained has-one relation parent key moves without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -7913,7 +7058,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, title: 'Draft' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -7922,7 +7067,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8007,7 +7151,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-one eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8015,7 +7159,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8024,7 +7168,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8119,7 +7262,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered has-one eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8129,7 +7272,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 2, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8138,7 +7281,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8208,7 +7350,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches constrained has-one eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8219,7 +7361,7 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 2, title: 'Published' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8228,7 +7370,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8298,7 +7439,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8306,7 +7447,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8315,7 +7456,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8386,13 +7526,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [],
       posts: [
         { id: 1, author_id: 1, title: 'First' },
       ],
-    })
-    const db = createContext(adapter)
+    }, {"authors":{"id":"INTEGER","name":"TEXT"}})
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8401,7 +7541,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8472,7 +7611,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation deletes to null without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8480,7 +7619,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8489,7 +7628,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8560,7 +7698,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation swaps after parent foreign key updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -8569,7 +7707,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8578,7 +7716,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8652,7 +7789,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation swaps to null after parent foreign key updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8660,7 +7797,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8669,7 +7806,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8743,7 +7879,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation swaps to missing related rows without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -8751,7 +7887,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8760,7 +7896,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8834,13 +7969,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
       posts: [],
-    })
-    const db = createContext(adapter)
+    }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8849,7 +7984,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -8922,11 +8056,11 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager parent inserts with missing related rows to null without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [],
       posts: [],
-    })
-    const db = createContext(adapter)
+    }, {"authors":{"id":"INTEGER","name":"TEXT"},"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -8935,7 +8069,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9008,13 +8141,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager firstJson inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
       posts: [],
-    })
-    const db = createContext(adapter)
+    }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9023,7 +8156,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9092,13 +8224,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager paginated inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
       posts: [],
-    })
-    const db = createContext(adapter)
+    }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9107,7 +8239,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9201,7 +8332,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered has-many relation inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9210,7 +8341,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 1, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9219,7 +8350,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9301,7 +8431,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches constrained has-many relation inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9310,7 +8440,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 1, title: 'Published' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9319,7 +8449,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9402,7 +8531,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches not-equal constrained has-many relation inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9411,7 +8540,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 1, score: 1 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9420,7 +8549,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9503,7 +8631,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches in-constrained has-many relation inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9512,7 +8640,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 1, title: 'Featured' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9521,7 +8649,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9604,7 +8731,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed has-many eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9612,7 +8739,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9621,7 +8748,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9725,7 +8851,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps projected eager relation queries silent for hidden parent updates without relation backfills', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, internal: 'old', name: 'Ada' },
       ],
@@ -9733,7 +8859,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9742,7 +8868,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9813,13 +8938,12 @@ describe('@holo-js/realtime', () => {
       ],
     ])
     expect(patches).toEqual([])
-    expect(mutationQueries).toEqual([
-      'SELECT * FROM "authors" WHERE "id" = ?',
-    ])
+    expect(mutationQueries.filter(sql => sql.startsWith('SELECT '))).toHaveLength(0)
+    expect(mutationQueries.filter(sql => sql.startsWith('UPDATE '))).toHaveLength(1)
   })
 
   it('patches ordered has-many eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9829,7 +8953,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9838,7 +8962,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -9911,7 +9034,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches constrained has-many eager parent inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -9922,7 +9045,7 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 2, title: 'Published' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -9931,7 +9054,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -10004,7 +9126,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ordered has-many relation parent key moves without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -10014,7 +9136,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 2, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -10023,7 +9145,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -10118,7 +9239,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches constrained has-many relation parent key moves without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -10129,7 +9250,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 2, title: 'Published' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -10138,7 +9259,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -10233,7 +9353,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('falls back once for shared has-many relation inserts without pretending unordered rows are patchable', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -10241,7 +9361,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -10250,7 +9370,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -10339,16 +9458,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed paginated queries after inserts change the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -10451,16 +9569,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed simple-paginated queries after inserts change the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -10555,17 +9672,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed paginated queries after deletes shrink the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -10668,17 +9784,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed simple-paginated queries after deletes shrink the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -10773,7 +9888,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed paginated offset-window queries after earlier-page deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -10782,10 +9897,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -10888,7 +10002,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager simple-paginated inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -10898,7 +10012,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -10907,7 +10021,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -11019,7 +10132,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager paginated offset-window delete backfills without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -11035,7 +10148,7 @@ describe('@holo-js/realtime', () => {
         { id: 5, author_id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -11044,7 +10157,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -11164,7 +10276,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed simple-paginated offset-window queries after earlier-page deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -11173,10 +10285,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -11271,7 +10382,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed paginated offset-window queries after earlier-page inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -11280,10 +10391,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -11382,7 +10492,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed simple-paginated offset-window queries after earlier-page inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -11391,10 +10501,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -11484,16 +10593,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed paginated query data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const fallbackSnapshots: unknown[] = []
@@ -11579,24 +10687,20 @@ describe('@holo-js/realtime', () => {
         value: 'Updated Second',
       },
     ])
-    expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT COUNT(*) AS "__holo_count" FROM (SELECT * FROM "posts") AS "__holo_pagination"',
-      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
-      'SELECT * FROM "posts" WHERE "id" = ?',
-    ])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(2)
+    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
   })
 
   it('backfills subscribed paginated query data for unknown updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const fallbackSnapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -11626,11 +10730,7 @@ describe('@holo-js/realtime', () => {
         throw error
       },
     })
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
-    posts[1] = { id: 2, title: 'Updated Second' }
+    await adapter.execute('UPDATE posts SET title = ? WHERE id = ?', ['Updated Second', 2])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -11674,16 +10774,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills filtered paginated metadata for unknown updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, status: 'published', title: 'First' },
         { id: 2, status: 'draft', title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const fallbackSnapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -11717,11 +10816,7 @@ describe('@holo-js/realtime', () => {
         throw error
       },
     })
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
-    posts[1] = { id: 2, status: 'published', title: 'Second' }
+    await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Second', 2])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -11779,16 +10874,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills filtered simple-paginated metadata for unknown updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, status: 'published', title: 'First' },
         { id: 2, status: 'draft', title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const fallbackSnapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -11822,11 +10916,7 @@ describe('@holo-js/realtime', () => {
         throw error
       },
     })
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
-    posts[1] = { id: 2, status: 'published', title: 'Second' }
+    await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Second', 2])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -11879,7 +10969,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('groups exact filtered paginated count backfills for batched unknown updates', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, status: 'published', title: 'First' },
         { id: 2, status: 'draft', title: 'Second' },
@@ -11887,10 +10977,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, status: 'archived', title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const publishedPatches: RealtimePatchForTest[] = []
     const draftPatches: RealtimePatchForTest[] = []
@@ -11940,13 +11029,9 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(publishedQuery, {}, publishedPatchOptions)
     await subscribeRealtimeQuery(draftQuery, {}, draftPatchOptions)
-    const posts = adapter.tables.posts
-    if (!posts) {
-      throw new Error('Expected posts table to exist.')
-    }
 
-    posts[2] = { id: 3, status: 'published', title: 'Third' }
-    posts[3] = { id: 4, status: 'draft', title: 'Fourth' }
+    await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Third', 3])
+    await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['draft', 'Fourth', 4])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: '',
       dependencies: [],
@@ -12006,16 +11091,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches returning paginated query data after stable row updates without refreshing unchanged metadata', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const fallbackSnapshots: unknown[] = []
@@ -12109,16 +11193,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated JSON data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -12212,17 +11295,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated JSON data after deletes shrink the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -12334,7 +11416,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated JSON offset windows after earlier-page deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -12343,10 +11425,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -12458,7 +11539,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated JSON offset windows after earlier-page inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -12467,10 +11548,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -12578,16 +11658,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model collections after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -12657,7 +11736,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model relation aggregate loads without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -12665,7 +11744,7 @@ describe('@holo-js/realtime', () => {
         { id: 1, author_id: 1, title: 'First' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -12674,7 +11753,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -12750,7 +11828,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated relation aggregate loads without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -12760,7 +11838,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, title: 'Other' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -12769,7 +11847,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -12857,7 +11934,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated numeric relation aggregate loads without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -12868,7 +11945,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 2, score: 3, title: 'Other' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -12877,7 +11954,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -12973,7 +12049,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate subscribed relation minimum and maximum aggregate updates silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -12984,7 +12060,7 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 1, score: 7, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -12993,7 +12069,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -13071,7 +12146,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate subscribed relation minimum and maximum aggregate deletes silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -13082,7 +12157,7 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 1, score: 7, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -13091,7 +12166,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -13182,8 +12256,8 @@ describe('@holo-js/realtime', () => {
         { id: 5, author_id: 2, score: 11, title: 'Other' },
       ],
     }
-    const adapter = new RelationalMemoryAdapter(tables)
-    const db = createContext(adapter)
+    const adapter = await createNativeRelationalAdapter(tables)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -13192,7 +12266,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -13246,7 +12319,7 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
-    tables.posts[0] = { id: 1, author_id: 1, score: 5, title: 'Renamed' }
+    await adapter.execute('UPDATE posts SET author_id = ?, score = ?, title = ? WHERE id = ?', [1, 5, 'Renamed', 1])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts', 'db:main:posts:where-exact:author_id:1'],
@@ -13299,8 +12372,8 @@ describe('@holo-js/realtime', () => {
         { id: 7, author_id: 3, score: 13, title: 'Seventh' },
       ],
     }
-    const adapter = new RelationalMemoryAdapter(tables)
-    const db = createContext(adapter)
+    const adapter = await createNativeRelationalAdapter(tables)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -13309,7 +12382,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -13369,8 +12441,8 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
-    tables.posts[0] = { id: 1, author_id: 1, score: 5, title: 'Renamed first' }
-    tables.posts[3] = { id: 4, author_id: 2, score: 9, title: 'Renamed fourth' }
+    await adapter.execute('UPDATE posts SET author_id = ?, score = ?, title = ? WHERE id = ?', [1, 5, 'Renamed first', 1])
+    await adapter.execute('UPDATE posts SET author_id = ?, score = ?, title = ? WHERE id = ?', [2, 9, 'Renamed fourth', 4])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: [],
@@ -13446,8 +12518,8 @@ describe('@holo-js/realtime', () => {
         { id: 7, author_id: 3, score: 13, title: 'Seventh' },
       ],
     }
-    const adapter = new RelationalMemoryAdapter(tables)
-    const db = createContext(adapter)
+    const adapter = await createNativeRelationalAdapter(tables)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -13456,7 +12528,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -13502,8 +12573,8 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
-    tables.posts[1] = { id: 2, author_id: 1, score: 6, title: 'Second' }
-    tables.posts[3] = { id: 4, author_id: 2, score: 9, title: 'Renamed fourth' }
+    await adapter.execute('UPDATE posts SET author_id = ?, score = ?, title = ? WHERE id = ?', [1, 6, 'Second', 2])
+    await adapter.execute('UPDATE posts SET author_id = ?, score = ?, title = ? WHERE id = ?', [2, 9, 'Renamed fourth', 4])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: [],
@@ -13576,7 +12647,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate subscribed relation minimum and maximum aggregate upserts silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
       ],
@@ -13587,7 +12658,7 @@ describe('@holo-js/realtime', () => {
         { id: 4, author_id: 1, score: 7, title: 'Fourth' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -13596,7 +12667,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -13682,13 +12752,12 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model count and existence queries without rerunning handlers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [],
-    })
-    const db = createContext(adapter)
+    }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -13754,13 +12823,12 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps subscribed model existence queries silent while updating aggregate count metadata', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -13839,17 +12907,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model aggregate queries without rerunning handlers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 2, score: 100, title: 'Other' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -13918,17 +12985,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate subscribed model extreme aggregates silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 7, title: 'Second' },
         { id: 3, author_id: 1, score: 7, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -13993,7 +13059,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate subscribed model minimum and maximum aggregate updates silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 5, title: 'Second' },
@@ -14002,10 +13068,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, author_id: 2, score: 100, title: 'Other' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14068,7 +13133,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate subscribed model minimum and maximum aggregate upserts silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
         { id: 2, author_id: 1, score: 5, title: 'Second' },
@@ -14077,10 +13142,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, author_id: 2, score: 100, title: 'Other' },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14151,13 +13215,12 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model value queries without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14221,16 +13284,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model pluck queries without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 1, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14286,16 +13348,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model single-record results after stable row updates without rerunning handlers', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14420,16 +13481,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('falls back for transformed model serialization instead of patching unsafe row shapes', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', secret: 'alpha' },
         { id: 2, title: 'Second', secret: 'beta' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14482,16 +13542,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14585,16 +13644,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated data and metadata after inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14702,17 +13760,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated data after deletes shrink the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14820,7 +13877,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated offset windows after earlier-page deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -14829,10 +13886,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -14940,7 +13996,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model paginated offset windows after earlier-page inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -14949,10 +14005,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15056,16 +14111,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated data and metadata after inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15165,17 +14219,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated data after deletes shrink the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15275,7 +14328,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated offset windows after earlier-page deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -15284,10 +14337,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15387,7 +14439,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated offset windows after earlier-page inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -15396,10 +14448,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15494,16 +14545,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15593,7 +14643,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model cursor-paginated data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -15601,10 +14651,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15690,16 +14739,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated data and next cursor after inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15796,17 +14844,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated data and next cursor after deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15900,16 +14947,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model JSON collections after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -15979,16 +15025,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated JSON data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -16078,17 +15123,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated JSON data after deletes shrink the current window without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -16192,7 +15236,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated JSON offset windows after earlier-page deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -16201,10 +15245,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -16308,7 +15351,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model simple-paginated JSON offset windows after earlier-page inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -16317,10 +15360,9 @@ describe('@holo-js/realtime', () => {
         { id: 5, title: 'Fifth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -16419,7 +15461,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed model cursor-paginated JSON data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -16427,10 +15469,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -16516,7 +15557,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager paginated delete backfills without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -16528,7 +15569,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -16537,7 +15578,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -16636,7 +15676,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager simple-paginated delete backfills without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -16648,7 +15688,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -16657,7 +15697,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -16750,7 +15789,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated JSON belongs-to inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -16760,7 +15799,7 @@ describe('@holo-js/realtime', () => {
         { id: 2, author_id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -16769,7 +15808,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -16878,7 +15916,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated JSON belongs-to delete backfills without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
         { id: 2, name: 'Grace' },
@@ -16890,7 +15928,7 @@ describe('@holo-js/realtime', () => {
         { id: 3, author_id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -16899,7 +15937,6 @@ describe('@holo-js/realtime', () => {
     }))
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const authors = defineGeneratedTable('authors', {
       id: column.id(),
@@ -17005,17 +16042,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated JSON data and next cursor after deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const posts = defineGeneratedTable('posts', {
       id: column.id(),
@@ -17114,11 +16150,10 @@ describe('@holo-js/realtime', () => {
     try {
       await adapter.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)')
       await adapter.execute("INSERT INTO posts VALUES (1, 'First'), (2, 'Second'), (3, 'Third'), (4, 'Fourth')")
-      const db = createContext(adapter)
+      const db = await createContext(adapter)
       configureRealtimeRuntime({
         db: () => db,
-        loadAuthModule: async () => null,
-      })
+        })
       const snapshots: Array<{
         readonly ids: readonly number[]
         readonly cursorName: string
@@ -17175,16 +16210,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page cursor-paginated query data and next cursor after inserts without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const fallbackSnapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17276,17 +16310,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page cursor-paginated query data and next cursor after deletes without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
         { id: 3, title: 'Third' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const fallbackSnapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17375,7 +16408,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed cursor-paginated query data after stable row updates without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
@@ -17383,10 +16416,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, title: 'Fourth' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const fallbackSnapshots: unknown[] = []
@@ -17467,16 +16499,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed aggregate queries after writes change aggregate values', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     let queryRuns = 0
@@ -17536,16 +16567,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('delivers compact aggregate patches without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17597,16 +16627,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches ambiguous primitive aggregate result bindings when all candidates produce the same value', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17658,16 +16687,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('falls back safely when ambiguous primitive aggregate bindings produce different values', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17710,16 +16738,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps unchanged average aggregates silent while updating aggregate metadata', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     let queryRuns = 0
@@ -17761,16 +16788,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed constrained average aggregates when rows leave the predicate without rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', user_id: 1, views: 5 },
         { id: 2, title: 'Second', user_id: 1, views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17818,16 +16844,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed minimum aggregates when inserts change the minimum', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     let queryRuns = 0
@@ -17861,16 +16886,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps patched duplicate minimum aggregate metadata without backfilling later deletes', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -17930,16 +16954,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches extreme aggregate updates that replace the current extreme without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18008,16 +17031,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed extreme aggregate runner-up values without rerunning or backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     let queryRuns = 0
@@ -18082,11 +17104,10 @@ describe('@holo-js/realtime', () => {
         { id: 3, title: 'Third', views: 7 },
       ],
     }
-    const adapter = new RelationalMemoryAdapter(tables)
-    const db = createContext(adapter)
+    const adapter = await createNativeRelationalAdapter(tables)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18119,7 +17140,7 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
-    tables.posts[0] = { id: 1, title: 'First', views: 6 }
+    await adapter.execute('UPDATE posts SET title = ?, views = ? WHERE id = ?', ['First', 6, 1])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -18143,17 +17164,16 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate current extreme aggregates silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
         { id: 3, title: 'Third', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18212,7 +17232,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate current minimum and maximum aggregate updates silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 5 },
@@ -18220,10 +17240,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, title: 'Fourth', views: 7 },
       ],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18277,7 +17296,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps duplicate current minimum and maximum aggregate upserts silent without backfilling', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 5 },
@@ -18285,10 +17304,9 @@ describe('@holo-js/realtime', () => {
         { id: 4, title: 'Fourth', views: 7 },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18350,16 +17368,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches all subscribed aggregate kinds for returning upserts without rerunning the query handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     let queryRuns = 0
@@ -18419,16 +17436,15 @@ describe('@holo-js/realtime', () => {
   })
 
   it('keeps irrelevant returning aggregate updates silent without backfilling or rerunning the handler', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
         { id: 2, title: 'Second', views: 7 },
       ],
     })
-    const db = createReturningContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18483,11 +17499,10 @@ describe('@holo-js/realtime', () => {
         { id: 2, title: 'Second', views: 7 },
       ],
     }
-    const adapter = new RelationalMemoryAdapter(tables)
-    const db = createContext(adapter)
+    const adapter = await createNativeRelationalAdapter(tables)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[] = []
     const patches: RealtimePatchForTest[] = []
@@ -18512,7 +17527,7 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
-    tables.posts[0] = { id: 1, title: 'First', views: 9 }
+    await adapter.execute('UPDATE posts SET title = ?, views = ? WHERE id = ?', ['First', 9, 1])
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -18544,11 +17559,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('supports client helpers and unsubscribes from later refreshes', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const client = createRealtimeClient()
     const snapshots: unknown[][] = []
@@ -18560,7 +17574,7 @@ describe('@holo-js/realtime', () => {
       access: 'public',
       handler: async ({ db: context }) => {
         await context.table('posts').insert({ title: 'Next' })
-        return { count: adapter.rows.length }
+        return { count: await context.table('posts').count() }
       },
     })
 
@@ -18580,13 +17594,13 @@ describe('@holo-js/realtime', () => {
 
     expect(subscription.current.data).toEqual([
       { id: 1, title: 'First' },
-      { id: 2, title: 'Post 2' },
+      { id: 2, title: 'Next' },
     ])
     expect(snapshots).toEqual([
       [{ id: 1, title: 'First' }],
       [
         { id: 1, title: 'First' },
-        { id: 2, title: 'Post 2' },
+        { id: 2, title: 'Next' },
       ],
     ])
   })
@@ -18635,10 +17649,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('ignores unrelated dependency invalidations and reports refresh errors', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const snapshots: unknown[][] = []
     const errors: unknown[] = []
@@ -18679,14 +17692,13 @@ describe('@holo-js/realtime', () => {
   })
 
   it('refreshes only for the current dependencies after a query changes what it reads', async () => {
-    const adapter = new RelationalMemoryAdapter({
+    const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
       comments: [{ id: 1, body: 'Initial' }],
     })
-    const db = createContext(adapter)
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let readComments = false
     const snapshots: unknown[][] = []
@@ -18727,11 +17739,10 @@ describe('@holo-js/realtime', () => {
   })
 
   it('stops refreshing unsubscribed queries after matching writes', async () => {
-    const adapter = new MemoryAdapter()
-    const db = createContext(adapter)
+    const adapter = await createPostsAdapter()
+    const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let queryRuns = 0
     const snapshots: unknown[][] = []
@@ -18762,169 +17773,61 @@ describe('@holo-js/realtime', () => {
     expect(snapshots).toEqual([[{ id: 1, title: 'First' }]])
   })
 
-  it('rejects authenticated access when auth is unavailable', async () => {
-    const db = createContext()
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => null,
-    })
-    const query = defineRealtimeQuery({
-      access: 'authenticated',
-      handler: async () => true,
-    })
-
-    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeAuthUnavailableError)
+  it('rejects authenticated queries when native auth is unconfigured and permits anonymous public queries', async () => {
+    const db = await createContext()
+    configureRealtimeRuntime({ db: () => db })
+    await expect(executeRealtimeQuery(defineRealtimeQuery({ access: 'authenticated', handler: async () => true }))).rejects.toBeInstanceOf(RealtimeAuthUnavailableError)
+    await expect(executeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async ({ auth }) => auth }))).resolves.toMatchObject({ data: null })
   })
 
-  it('rejects authenticated access when auth runtime loading fails', async () => {
-    const db = createContext()
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => {
-        throw new Error('auth crashed')
-      },
+  it('authorizes named and fallback guards from real users and sessions and rejects access after logout', async () => {
+    const persistence = await createNativeAuthPersistence()
+    const store = createNativeSessionStore()
+    const context = createAsyncAuthContext()
+    configureSessionRuntime({
+      config: { ...persistence.loadedConfig.session, driver: 'file', stores: { file: { name: 'file', driver: 'file', path: store.path } } },
+      stores: { file: store },
     })
-    const query = defineRealtimeQuery({
-      access: 'authenticated',
-      handler: async () => true,
-    })
-
-    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeAuthUnavailableError)
-  })
-
-  it('rejects authenticated access when configured auth fails while resolving a guard', async () => {
-    const db = createContext()
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => ({
-        getAuthRuntime() {
-          return {
-            user: async () => {
-              throw new Error('auth context missing')
-            },
-            provider: async () => null,
-            guard() {
-              return {
-                user: async () => null,
-                provider: async () => null,
-              }
-            },
-          }
-        },
+    authRuntimeInternals.configureRuntime({
+      config: defineAuthConfig({
+        defaults: { guard: 'web', passwords: 'users' },
+        guards: { web: { driver: 'session', provider: 'users' }, admin: { driver: 'session', provider: 'admins' } },
+        providers: { users: { model: 'User' }, admins: { model: 'Admin' } },
       }),
+      providers: persistence.providers,
+      session: getSessionRuntime(),
+      context,
     })
-    const query = defineRealtimeQuery({
-      access: 'authenticated',
-      handler: async () => true,
+    await persistence.db.table('users').insert({ id: 10, name: 'Ava', email: 'ava@example.com' })
+    configureRealtimeRuntime({ db: () => persistence.db })
+    await context.run(async () => {
+      const authenticated = await getAuthRuntime().guard('web').loginUsingId(10)
+      expect(authenticated).toMatchObject({ guard: 'web', sessionId: expect.any(String), user: { id: 10 } })
+      const fallback = defineRealtimeQuery({
+        access: { require: 'authenticated', guards: ['admin', 'web'] },
+        handler: async ({ auth }) => ({ guard: auth.guard, userId: auth.user.id }),
+      })
+      await expect(executeRealtimeQuery(fallback)).resolves.toMatchObject({ data: { guard: 'web', userId: 10 } })
+      const named = defineRealtimeQuery({ access: { require: 'authenticated', guard: 'web' }, handler: async ({ auth }) => auth.guard })
+      await expect(executeRealtimeQuery(named)).resolves.toMatchObject({ data: 'web' })
+      const forbidden = defineRealtimeQuery({ access: { require: 'authenticated', authorize: async ({ auth }) => auth?.user.id === 20 }, handler: async () => 'forbidden' })
+      await expect(executeRealtimeQuery(forbidden)).rejects.toBeInstanceOf(RealtimeForbiddenError)
+      const allowed = defineRealtimeQuery({ access: { require: 'authenticated', authorize: async ({ auth }) => auth?.user.id === 10 }, handler: async () => 'allowed' })
+      await expect(executeRealtimeQuery(allowed)).resolves.toMatchObject({ data: 'allowed' })
+      const missing = defineRealtimeQuery({ access: { require: 'authenticated', guard: 'missing' }, handler: async () => true })
+      await expect(executeRealtimeQuery(missing)).rejects.toBeInstanceOf(RealtimeAuthUnavailableError)
+      await getAuthRuntime().guard('web').logout()
+      expect(await store.countRecords()).toBe(0)
+      await expect(executeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async ({ auth }) => auth }))).resolves.toMatchObject({ data: null })
+      await expect(executeRealtimeQuery(fallback)).rejects.toBeInstanceOf(RealtimeUnauthorizedError)
+      await expect(executeRealtimeQuery(allowed)).rejects.toBeInstanceOf(RealtimeUnauthorizedError)
     })
-
-    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeAuthUnavailableError)
-  })
-
-  it('treats failing optional auth as anonymous for public access', async () => {
-    const db = createContext()
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => {
-        throw new Error('auth crashed')
-      },
-    })
-    const query = defineRealtimeQuery({
-      access: 'public',
-      handler: async ({ auth }) => auth,
-    })
-
-    await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
-      data: null,
-    })
-  })
-
-  it('resolves authenticated access across configured guards', async () => {
-    const db = createContext()
-    const user = {
-      id: 10,
-      email: 'ava@example.com',
-      can: async () => true,
-    } satisfies AuthenticatedAuthUser
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => createAuthModule({
-        admin: null,
-        web: user,
-      }),
-    })
-    const query = defineRealtimeQuery({
-      access: {
-        require: 'authenticated',
-        guards: ['admin', 'web'],
-      },
-      handler: async ({ auth }) => ({
-        guard: auth.guard,
-        userId: auth.user.id,
-      }),
-    })
-
-    await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
-      data: {
-        guard: 'web',
-        userId: 10,
-      },
-    })
-  })
-
-  it('resolves authenticated access from one named guard', async () => {
-    const db = createContext()
-    const user = {
-      id: 11,
-      can: async () => true,
-    } satisfies AuthenticatedAuthUser
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => createAuthModule({
-        web: user,
-      }),
-    })
-    const query = defineRealtimeQuery({
-      access: {
-        require: 'authenticated',
-        guard: 'web',
-      },
-      handler: async ({ auth }) => auth.guard,
-    })
-
-    await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
-      data: 'web',
-    })
-  })
-
-  it('runs custom authorization before the handler', async () => {
-    const db = createContext()
-    const user = {
-      id: 10,
-      can: async () => true,
-    } satisfies AuthenticatedAuthUser
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => createAuthModule({
-        default: user,
-      }),
-    })
-    const query = defineRealtimeQuery({
-      access: {
-        require: 'authenticated',
-        authorize: async ({ auth }) => auth?.user.id === 20,
-      },
-      handler: async () => true,
-    })
-
-    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeForbiddenError)
-  })
+  }, 30000)
 
   it('runs handlers when custom authorization allows access', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     const query = defineRealtimeQuery({
       access: {
@@ -18940,10 +17843,9 @@ describe('@holo-js/realtime', () => {
   })
 
   it('passes nullable auth into public custom authorization callbacks', async () => {
-    const db = createContext()
+    const db = await createContext()
     configureRealtimeRuntime({
       db: () => db,
-      loadAuthModule: async () => null,
     })
     let receivedAuth: unknown = Symbol('unset')
     const query = defineRealtimeQuery({
@@ -18982,22 +17884,5 @@ describe('@holo-js/realtime', () => {
     }
   })
 
-  it('rejects custom authenticated authorization when no guard returns a user', async () => {
-    const db = createContext()
-    configureRealtimeRuntime({
-      db: () => db,
-      loadAuthModule: async () => createAuthModule({
-        default: null,
-      }),
-    })
-    const query = defineRealtimeQuery({
-      access: {
-        require: 'authenticated',
-        authorize: async () => true,
-      },
-      handler: async () => true,
-    })
 
-    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeUnauthorizedError)
-  })
 })

@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createSQLiteAdapter } from '../../db-sqlite/src'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   DB,
   configureDB,
   createConnectionManager,
   resetDB,
-  type Dialect,
-  type DriverAdapter,
+  createDatabase,
+  createDialect,
+  createSchemaService,
 } from '@holo-js/db'
 import {
   configureEventsRuntime,
@@ -18,101 +20,16 @@ import {
   resetEventsRuntime,
 } from '../src'
 
-class FakeAdapter implements DriverAdapter {
-  connected = false
-  readonly calls: string[] = []
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query() {
-    return {
-      rows: [],
-      rowCount: 0,
-    }
-  }
-
-  async execute() {
-    return {
-      affectedRows: 0,
-      lastInsertId: undefined,
-    }
-  }
-
-  async beginTransaction(): Promise<void> {
-    this.calls.push('begin')
-  }
-
-  async commit(): Promise<void> {
-    this.calls.push('commit')
-  }
-
-  async rollback(): Promise<void> {
-    this.calls.push('rollback')
-  }
-
-  async createSavepoint(name: string): Promise<void> {
-    this.calls.push(`savepoint:${name}`)
-  }
-
-  async rollbackToSavepoint(name: string): Promise<void> {
-    this.calls.push(`rollback-to:${name}`)
-  }
-
-  async releaseSavepoint(name: string): Promise<void> {
-    this.calls.push(`release:${name}`)
-  }
-}
-
-function createTestDialect(savepoints = false): Dialect {
-  return {
-    name: 'sqlite',
-    capabilities: {
-      returning: false,
-      savepoints,
-      concurrentQueries: false,
-      workerThreadExecution: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      jsonValueQuery: true,
-      jsonContains: false,
-      jsonLength: true,
-      schemaQualifiedIdentifiers: false,
-      nativeUpsert: true,
-      ddlAlterSupport: false,
-      introspection: true,
-    },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return `?${index}`
-    },
-  }
-}
-
-function configureTestDB(savepoints = true): FakeAdapter {
-  const adapter = new FakeAdapter()
-  configureDB(createConnectionManager({
-    defaultConnection: 'default',
-    connections: {
-      default: {
-        adapter,
-        dialect: createTestDialect(savepoints),
-        security: { allowUnsafeRawSql: true },
-      },
-    },
-  }))
-  return adapter
+async function configureTestDB() {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  onTestFinished(() => adapter.disconnect())
+  const db = createDatabase({ adapter, dialect: createDialect('sqlite') })
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+  await createSchemaService(db).createTable('event_records', table => {
+    table.id()
+    table.string('user_id')
+  })
+  return db
 }
 
 afterEach(() => {
@@ -123,7 +40,7 @@ afterEach(() => {
 
 describe('@holo-js/events afterCommit integration', () => {
   it('keeps immediate dispatch behavior inside transactions when no afterCommit is requested', async () => {
-    configureTestDB()
+    await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))
@@ -152,7 +69,7 @@ describe('@holo-js/events afterCommit integration', () => {
   })
 
   it('defers the full dispatch when dispatch-level afterCommit is requested in an active transaction', async () => {
-    configureTestDB()
+    await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))
@@ -183,7 +100,7 @@ describe('@holo-js/events afterCommit integration', () => {
   })
 
   it('defers only listeners marked afterCommit and runs them immediately outside transactions', async () => {
-    configureTestDB()
+    await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))
@@ -235,7 +152,7 @@ describe('@holo-js/events afterCommit integration', () => {
   })
 
   it('supports mixed immediate and deferred sync and queued listeners in the same transaction', async () => {
-    configureTestDB()
+    await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))
@@ -302,7 +219,7 @@ describe('@holo-js/events afterCommit integration', () => {
   })
 
   it('keeps deferred work isolated across nested savepoints and rollbacks', async () => {
-    const adapter = configureTestDB(true)
+    const db = await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))
@@ -319,6 +236,7 @@ describe('@holo-js/events afterCommit integration', () => {
 
     await DB.transaction(async () => {
       await DB.transaction(async () => {
+        await db.table('event_records').insert({ user_id: 'usr-nested' })
         const nested = await dispatchEvent('user.registered', {
           userId: 'usr-nested',
         }).afterCommit()
@@ -332,6 +250,7 @@ describe('@holo-js/events afterCommit integration', () => {
 
     await expect(DB.transaction(async () => {
       await expect(DB.transaction(async () => {
+        await db.table('event_records').insert({ user_id: 'usr-rolled-back' })
         await dispatchEvent('user.registered', {
           userId: 'usr-rolled-back',
         }).afterCommit()
@@ -340,11 +259,11 @@ describe('@holo-js/events afterCommit integration', () => {
     })).resolves.toBeUndefined()
 
     expect(handled).toHaveBeenCalledTimes(1)
-    expect(adapter.calls.some(call => call.startsWith('savepoint:'))).toBe(true)
+    expect(await db.table('event_records').pluck('user_id')).toEqual(['usr-nested'])
   })
 
   it('does not leak deferred work after rollback and handles repeated dispatches in one transaction', async () => {
-    configureTestDB()
+    await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))

@@ -94,10 +94,6 @@ type NextHeadersModule = {
   readonly headers: () => Headers | Promise<Headers>
 }
 
-type FormsRuntimeGlobal = typeof globalThis & {
-  readonly __holoFormsNextHeadersImport__?: () => Promise<unknown>
-}
-
 const nextHeadersModuleSpecifier = 'next/headers.js'
 
 const h3RawBodySymbol = Symbol.for('h3RawBody')
@@ -434,10 +430,7 @@ function isNextHeadersModule(value: unknown): value is NextHeadersModule {
 
 async function importNextHeadersModule(): Promise<NextHeadersModule | undefined> {
   try {
-    const runtime = globalThis as FormsRuntimeGlobal
-    const module = runtime.__holoFormsNextHeadersImport__
-      ? await runtime.__holoFormsNextHeadersImport__()
-      : await import(/* @vite-ignore */ /* webpackIgnore: true */ nextHeadersModuleSpecifier)
+    const module = await import(/* @vite-ignore */ /* webpackIgnore: true */ nextHeadersModuleSpecifier)
 
     /* v8 ignore next -- V8 marks this guard uncovered even though both branches are exercised. */
     if (isNextHeadersModule(module)) {

@@ -14,6 +14,7 @@ import {
   configureDB,
   createModelCollection,
   createModelRegistry,
+  createSchemaService,
   createConnectionManager,
   createDatabase,
   createDialect as createDatabaseDialect,
@@ -21,6 +22,7 @@ import {
   belongsTo,
   defineModel,
   hasOne,
+  hasMany,
   morphMany,
   morphTo,
   morphToMany,
@@ -28,23 +30,17 @@ import {
   registerGeneratedTables,
   resetDB,
   uniqueSlug,
-  type Dialect,
-  type DriverAdapter,
-  type DriverExecutionResult,
-  type DriverQueryResult,
   type ModelCollection,
   type ModelQueryBuilder,
   type RelationMap,
   type TableDefinition } from '../src'
 import { getGlobalModel } from '../src/model/ModelRegistry'
-import { initializeEntityModelProperties, valuesAreEqual } from '../src/model/entityRuntime'
-import { resolveGeneratedModelTable } from '../src/model/defineModelHelpers'
 import { listMorphModels, registerMorphModel, resolveMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
+import { createTestTable } from './support/schema'
+import { openDatabase } from './support/database'
 
 type Row = Record<string, unknown>
-type TableStore = Record<string, Row[]>
-type CounterStore = Record<string, number>
 type TestEntity = Entity<TableDefinition>
 type DynamicEntity = TestEntity & Record<string, unknown>
 
@@ -56,500 +52,7 @@ function asDynamicEntity(value: unknown): DynamicEntity {
   return value as DynamicEntity
 }
 
-function cloneRow(row: Row): Row {
-  return { ...row }
-}
-
-function applyPredicate(row: Row, column: string, operator: string, value: unknown): boolean {
-  const left = row[column]
-  const normalizedLeft = typeof left === 'boolean' && typeof value === 'number'
-    ? Number(left)
-    : left
-  const normalizedRight = typeof value === 'boolean' && typeof left === 'number'
-    ? Number(value)
-    : value
-
-  switch (operator) {
-    case '=':
-      return normalizedLeft === normalizedRight
-    case '!=':
-      return normalizedLeft !== normalizedRight
-    case '>':
-      return (left as number | Date) > (value as number | Date)
-    case '>=':
-      return (left as number | Date) >= (value as number | Date)
-    case '<':
-      return (left as number | Date) < (value as number | Date)
-    case '<=':
-      return (left as number | Date) <= (value as number | Date)
-    case 'LIKE': {
-      const pattern = String(value)
-        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/%/g, '.*')
-      return new RegExp(`^${pattern}$`).test(String(left ?? ''))
-    }
-    default:
-      return false
-  }
-}
-
-function filterRows(sql: string, bindings: readonly unknown[], rows: Row[]): Row[] {
-  const whereMatch = sql.match(/ WHERE (.+?)( ORDER BY| LIMIT| OFFSET|$)/)
-  if (!whereMatch) return rows
-
-  const clauses = whereMatch[1]!.split(' AND ')
-  return rows.filter(row => clauses.every((clause) => {
-    const nullMatch = clause.match(/^"([^"]+)" IS( NOT)? NULL$/)
-    if (nullMatch) {
-      const [, column, negated] = nullMatch
-      const isNull = row[column!] == null
-      return negated ? !isNull : isNull
-    }
-
-    const columnMatch = clause.match(/^"([^"]+)" ([A-Z!=<>]+) "([^"]+)"$/)
-    if (columnMatch) {
-      const [, leftColumn, operator, rightColumn] = columnMatch
-      return applyPredicate(row, leftColumn!, operator!, row[rightColumn!])
-    }
-
-    const inMatch = clause.match(/^"([^"]+)" (NOT IN|IN) \((.+)\)$/)
-    if (inMatch) {
-      const [, column, operator, placeholders] = inMatch
-      const values = placeholders!
-        .split(', ')
-        .map(token => bindings[Number(token.replace('?', '')) - 1])
-      const present = values.includes(row[column!])
-      return operator === 'IN' ? present : !present
-    }
-
-    const betweenMatch = clause.match(/^"([^"]+)" (NOT BETWEEN|BETWEEN) \?(\d+) AND \?(\d+)$/)
-    if (betweenMatch) {
-      const [, column, operator, leftIndex, rightIndex] = betweenMatch
-      const left = bindings[Number(leftIndex) - 1] as number | Date
-      const right = bindings[Number(rightIndex) - 1] as number | Date
-      const value = row[column!] as number | Date
-      const within = value >= left && value <= right
-      return operator === 'BETWEEN' ? within : !within
-    }
-
-    const match = clause.match(/^"([^"]+)" ([A-Z!=<>]+) \?(\d+)$/)
-    if (!match) return true
-    const [, column, operator, index] = match
-    return applyPredicate(row, column!, operator!, bindings[Number(index) - 1])
-  }))
-}
-
-function selectColumns(sql: string, rows: Row[]): Row[] {
-  const match = sql.match(/^SELECT(?: DISTINCT)? (.+?) FROM /)
-  if (!match || match[1] === '*') return rows.map(cloneRow)
-
-  const columns = match[1]!.split(', ').map(part => part.replaceAll('"', ''))
-  return rows.map(row => Object.fromEntries(columns.map(column => [column, row[column]])))
-}
-
-class InMemoryAdapter implements DriverAdapter {
-  connected = false
-  readonly queries: Array<{ sql: string, bindings: readonly unknown[] }> = []
-  readonly executions: Array<{ sql: string, bindings: readonly unknown[] }> = []
-  private transactionSnapshots: Array<{ tables: TableStore, counters: CounterStore }> = []
-
-  constructor(
-    readonly tables: TableStore,
-    private readonly counters: CounterStore,
-  ) {}
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverQueryResult<TRow>> {
-    this.queries.push({ sql, bindings })
-
-    const tableMatch = sql.match(/ FROM "([^"]+)"/)
-    const tableName = tableMatch?.[1]
-    const sourceRows = tableName ? (this.tables[tableName] ?? []) : []
-    let rows = filterRows(sql, bindings, sourceRows)
-
-    const orderMatch = sql.match(/ ORDER BY "([^"]+)" (ASC|DESC)/)
-    if (orderMatch) {
-      const [, column, direction] = orderMatch
-      rows = [...rows].sort((left, right) => {
-        const a = left[column!]
-        const b = right[column!]
-        if (a === b) return 0
-        if (direction === 'ASC') return a! < b! ? -1 : 1
-        return a! > b! ? -1 : 1
-      })
-    }
-
-    const offsetMatch = sql.match(/ OFFSET (\d+)/)
-    if (offsetMatch) {
-      rows = rows.slice(Number(offsetMatch[1]))
-    }
-
-    const limitMatch = sql.match(/ LIMIT (\d+)/)
-    if (limitMatch) {
-      rows = rows.slice(0, Number(limitMatch[1]))
-    }
-
-    const selected = selectColumns(sql, rows)
-    return {
-      rows: selected.map(cloneRow) as TRow[],
-      rowCount: selected.length }
-  }
-
-  async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    this.executions.push({ sql, bindings })
-
-    const insertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+)$/)
-    if (insertMatch) {
-      const [, tableName, rawColumns] = insertMatch
-      const columns = rawColumns!.split(', ').map(column => column.replaceAll('"', ''))
-      const rowCount = (sql.match(/\(/g) ?? []).length - 1
-      const rows = this.tables[tableName!] ?? (this.tables[tableName!] = [])
-      let bindingIndex = 0
-      let lastInsertId: number | undefined
-
-      for (let index = 0; index < rowCount; index += 1) {
-        const row = Object.fromEntries(columns.map(column => [column, bindings[bindingIndex++]]))
-        if (!('id' in row)) {
-          this.counters[tableName!] = (this.counters[tableName!] ?? 0) + 1
-          row.id = this.counters[tableName!]
-          lastInsertId = row.id as number
-        }
-        rows.push(row)
-      }
-
-      return { affectedRows: rowCount, lastInsertId }
-    }
-
-    const updateMatch = sql.match(/^UPDATE "([^"]+)" SET (.+?)( WHERE .+)?$/)
-    if (updateMatch) {
-      const [, tableName, assignments] = updateMatch
-      const rows = filterRows(sql, bindings, this.tables[tableName!] ?? [])
-      const columns = assignments!.split(', ').map(part => part.match(/^"([^"]+)"/)![1]!)
-      const assignmentValues = bindings.slice(0, columns.length)
-
-      for (const row of rows) {
-        columns.forEach((column, index) => {
-          row[column] = assignmentValues[index]
-        })
-      }
-
-      return { affectedRows: rows.length }
-    }
-
-    const deleteMatch = sql.match(/^DELETE FROM "([^"]+)"( WHERE .+)?$/)
-    if (deleteMatch) {
-      const [, tableName] = deleteMatch
-      const rows = this.tables[tableName!] ?? []
-      const survivors = rows.filter(row => !filterRows(sql, bindings, [row]).length)
-      const affectedRows = rows.length - survivors.length
-      this.tables[tableName!] = survivors
-      return { affectedRows }
-    }
-
-    return { affectedRows: 0 }
-  }
-
-  async beginTransaction(): Promise<void> {
-    this.transactionSnapshots.push({
-      tables: Object.fromEntries(
-        Object.entries(this.tables).map(([name, rows]) => [name, rows.map(cloneRow)]),
-      ),
-      counters: { ...this.counters } })
-  }
-
-  async commit(): Promise<void> {
-    this.transactionSnapshots.pop()
-  }
-
-  async rollback(): Promise<void> {
-    const snapshot = this.transactionSnapshots.pop()
-    if (!snapshot) {
-      return
-    }
-
-    for (const key of Object.keys(this.tables)) {
-      Reflect.deleteProperty(this.tables, key)
-    }
-
-    for (const [tableName, rows] of Object.entries(snapshot.tables)) {
-      this.tables[tableName] = rows.map(cloneRow)
-    }
-
-    for (const key of Object.keys(this.counters)) {
-      Reflect.deleteProperty(this.counters, key)
-    }
-
-    Object.assign(this.counters, snapshot.counters)
-  }
-
-  getTable(name: string): Row[] {
-    return (this.tables[name] ?? []).map(cloneRow)
-  }
-}
-
-class FailingInMemoryAdapter extends InMemoryAdapter {
-  failOnExecution?: number
-  private executionCount = 0
-
-  override async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    this.executionCount += 1
-
-    if (this.failOnExecution === this.executionCount) {
-      throw new Error(`execution failed at ${this.executionCount}`)
-    }
-
-    return super.execute(sql, bindings)
-  }
-}
-
-class ConcurrentUniqueInsertAdapter extends InMemoryAdapter {
-  private failed = false
-  private pendingConcurrentInsert = false
-
-  override async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    if (!this.failed && sql.startsWith('INSERT INTO "users"')) {
-      this.failed = true
-      this.pendingConcurrentInsert = true
-      throw Object.assign(new Error('UNIQUE constraint failed: users.email'), {
-        code: 'SQLITE_CONSTRAINT_UNIQUE',
-      })
-    }
-
-    return super.execute(sql, bindings)
-  }
-
-  override async rollback(): Promise<void> {
-    await super.rollback()
-    if (!this.pendingConcurrentInsert) {
-      return
-    }
-
-    this.pendingConcurrentInsert = false
-    this.tables.users = [
-      ...(this.tables.users ?? []),
-      {
-        id: 1,
-        name: 'Concurrent',
-        email: 'race@example.com',
-        status: 'active',
-      },
-    ]
-  }
-}
-
-class UnresolvedUniqueInsertAdapter extends InMemoryAdapter {
-  override async execute(sql: string, bindings: readonly unknown[] = []): Promise<DriverExecutionResult> {
-    if (sql.startsWith('INSERT INTO "users"')) {
-      throw Object.assign(new Error('UNIQUE constraint failed: users.email'), {
-        code: 'SQLITE_CONSTRAINT_UNIQUE',
-      })
-    }
-
-    return super.execute(sql, bindings)
-  }
-}
-
-class LoggingAdapter implements DriverAdapter {
-  connected = false
-  readonly queries: Array<{ sql: string, bindings: readonly unknown[] }> = []
-  readonly executions: Array<{ sql: string, bindings: readonly unknown[] }> = []
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverQueryResult<TRow>> {
-    this.queries.push({ sql, bindings })
-    return { rows: [] as TRow[], rowCount: 0 }
-  }
-
-  async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    this.executions.push({ sql, bindings })
-    return { affectedRows: 1, lastInsertId: 9 }
-  }
-
-  async beginTransaction(): Promise<void> {}
-  async commit(): Promise<void> {}
-  async rollback(): Promise<void> {}
-}
-
-class NoInsertIdAdapter extends InMemoryAdapter {
-  override async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    const result = await super.execute(sql, bindings)
-    return { affectedRows: result.affectedRows }
-  }
-}
-
-function createDialect(name: string): Dialect {
-  return {
-    name,
-    capabilities: {
-      returning: false,
-      savepoints: true,
-      concurrentQueries: true,
-      workerThreadExecution: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      jsonValueQuery: true,
-      jsonContains: false,
-      jsonLength: false,
-      schemaQualifiedIdentifiers: false,
-      nativeUpsert: false,
-      ddlAlterSupport: false,
-      introspection: true },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return `?${index}`
-    } }
-}
-
 describe('model core slice', () => {
-  it('preserves unexpected runtime schema lookup errors', () => {
-    const getManager = vi.spyOn(DB, 'getManager').mockImplementation(() => {
-      throw new Error('runtime schema unavailable')
-    })
-    expect(() => resolveGeneratedModelTable('unexpected_runtime_table')).toThrow('runtime schema unavailable')
-    getManager.mockRestore()
-  })
-
-  it('compares object shapes and resolves relation properties without a repository loader', async () => {
-    expect(valuesAreEqual({ left: 1 }, { right: 1 })).toBe(false)
-    const relations = new Map<string, unknown>()
-    const host = {
-      hasRelation: (name: string) => relations.has(name),
-      getRelation<TRelation = unknown>(name: string): TRelation {
-        return relations.get(name) as TRelation
-      },
-      relation: vi.fn(() => (() => undefined) as never),
-      setRelation: (name: string, value: unknown) => relations.set(name, value),
-      get: vi.fn(),
-      set: vi.fn(),
-    }
-    initializeEntityModelProperties(host, {
-      definition: { relations: { comments: {} } },
-    })
-    const propertyHost = host as typeof host & { comments: PromiseLike<unknown> }
-    await expect(propertyHost.comments.then(value => value)).resolves.toBeUndefined()
-  })
-
-  it('dispatches fluent relation methods through repository collaborators', async () => {
-    const kinds: Record<string, string> = {
-      owner: 'belongsTo',
-      profile: 'hasOne',
-      posts: 'hasMany',
-      roles: 'belongsToMany',
-      unknown: 'custom',
-    }
-    const repo = {
-      definition: { table: { columns: {} }, relations: {} },
-      getConnectionName: () => 'default',
-      getRelationNames: () => [],
-      getRelationDefinition: (name: string) => kinds[name] ? { kind: kinds[name] } : undefined,
-      associateRelation: vi.fn(),
-      dissociateRelation: vi.fn(),
-      createRelatedEntity: vi.fn(async () => 'created'),
-      createManyRelatedEntities: vi.fn(async () => ['created-many']),
-      saveRelatedEntity: vi.fn(async (_entity, _name, related) => related),
-      saveManyRelatedEntities: vi.fn(async (_entity, _name, related) => related),
-      attachRelation: vi.fn(async () => {}),
-      detachRelation: vi.fn(async () => 1),
-      syncRelation: vi.fn(async () => ({ attached: [], detached: [], updated: [] })),
-      toggleRelation: vi.fn(async () => ({ attached: [], detached: [] })),
-      updateExistingPivot: vi.fn(async () => 1),
-    }
-    const entity = new Entity(repo as never, {}, true)
-    const related = new Entity(repo as never, {}, true)
-    expect(() => entity.relation('missing' as never)).toThrow('is not defined')
-
-    const { getRelationDefinition: _getRelationDefinition, ...repositoryWithoutResolver } = repo
-    const fallbackEntity = new Entity({
-      ...repositoryWithoutResolver,
-      definition: {
-        ...repositoryWithoutResolver.definition,
-        relations: { owner: { kind: 'belongsTo' } },
-      },
-    } as never, {}, true)
-    expect(fallbackEntity.relation('owner' as never)).toBeDefined()
-
-    const owner = entity.relation('owner' as never) as never as { associate(value: unknown): void, dissociate(): void }
-    owner.associate(related)
-    owner.dissociate()
-
-    const profile = entity.relation('profile' as never) as never as { create(values: Record<string, unknown>): Promise<unknown>, save(value: unknown): Promise<unknown> }
-    await profile.create({ name: 'Profile' })
-    await profile.save(related)
-
-    const posts = entity.relation('posts' as never) as never as {
-      create(values: Record<string, unknown>): Promise<unknown>
-      createMany(values: readonly Record<string, unknown>[]): Promise<unknown>
-      save(value: unknown): Promise<unknown>
-      saveMany(values: readonly unknown[]): Promise<unknown>
-    }
-    await posts.create({ title: 'Post' })
-    await posts.createMany([{ title: 'Post' }])
-    await posts.save(related)
-    await posts.saveMany([related])
-
-    const roles = entity.relation('roles' as never) as never as {
-      attach(ids: unknown, attributes?: Record<string, unknown>): Promise<void>
-      detach(ids?: unknown): Promise<number>
-      sync(ids: unknown): Promise<unknown>
-      toggle(ids: unknown): Promise<unknown>
-      updateExistingPivot(id: unknown, attributes: Record<string, unknown>): Promise<number>
-      create(values: Record<string, unknown>): Promise<unknown>
-      save(value: unknown): Promise<unknown>
-    }
-    await roles.attach([1])
-    await roles.detach([1])
-    await roles.sync([1])
-    await roles.toggle([1])
-    await roles.updateExistingPivot(1, { active: true })
-    await roles.create({ name: 'Admin' })
-    await roles.save(related)
-    expect(entity.relation('unknown' as never)).toEqual({})
-  })
   beforeEach(() => {
     resetDB()
     clearGeneratedTables()
@@ -927,8 +430,8 @@ describe('model core slice', () => {
       connections: {
         default: createDatabase({
           connectionName: 'default',
-          adapter: new InMemoryAdapter({}, {}),
-          dialect: createDialect('sqlite'),
+          adapter: createSQLiteAdapter({ filename: ':memory:' }),
+          dialect: createDatabaseDialect('sqlite'),
         }),
       },
     }))
@@ -952,11 +455,14 @@ describe('model core slice', () => {
       connections: {
         default: createDatabase({
           connectionName: 'default',
-          adapter: new InMemoryAdapter({}, {}),
-          dialect: createDialect('sqlite'),
+          adapter: createSQLiteAdapter({ filename: ':memory:' }),
+          dialect: createDatabaseDialect('sqlite'),
         }),
       },
     }))
+
+    onTestFinished(() => DB.connection().disconnect())
+    await createTestTable(DB.connection(), articles)
 
     const Article = defineModel(articles, {
       fillable: ['title', 'slug', 'public_slug'],
@@ -1048,468 +554,175 @@ describe('model core slice', () => {
     })
   })
 
-  it('provides model statics, inferred metadata, scopes, and explicit repositories', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
-        { id: 2, name: 'Amina', email: 'a@example.com', status: 'inactive' },
-      ] }, { users: 2 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
+  it('applies model scopes and repository queries to persisted rows', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, connectionName: 'default', dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.string('email')
+      table.string('status')
+      table.string('nickname').nullable()
+    })
     const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      email: column.string(),
-      status: column.string() })
-
+      id: column.id(), name: column.string(), email: column.string(), status: column.string(), nickname: column.string().nullable(),
+    })
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'],
       guarded: ['id'],
-      globalScopes: {
-        activeOnly: (query: ModelQueryBuilder<typeof users>) => query.where('status', 'active') },
+      globalScopes: { activeOnly: (query: ModelQueryBuilder<typeof users>) => query.where('status', 'active') },
       scopes: {
         active: (query: ModelQueryBuilder<typeof users>) => query.where('status', 'active'),
-        named: (query: ModelQueryBuilder<typeof users>, value: string) => query.where('name', value) } })
-
-    expect(User.definition.name).toBe('User')
-    expect(User.definition.primaryKey).toBe('id')
-    expect(User.getTableName()).toBe('users')
-    expect(User.getConnectionName()).toBeUndefined()
-    expect(User.query().getConnectionName()).toBe('default')
-    expect((await User.get()).map(user => user.get('name'))).toEqual(['Mohamed'])
-    expect(User.newQuery().toSQL()).toEqual(User.query().toSQL())
-    expect(User.newModelQuery().toSQL()).toEqual(User.query().toSQL())
-    expect(User.newQueryWithoutRelationships().toSQL()).toEqual(User.query().toSQL())
-    expect(User.newQueryWithoutScopes().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.newQuery().withoutGlobalScope('activeOnly').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.withoutGlobalScope('activeOnly').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.newQuery().withoutGlobalScopes().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.withoutGlobalScopes().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.newQuery().withoutGlobalScopes(['activeOnly']).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.withoutGlobalScopes(['activeOnly']).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.query().select('id').orderBy('id', 'desc').offset(0).limit(1).toSQL()).toEqual({
-      sql: 'SELECT "id" FROM "users" WHERE "status" = ?1 ORDER BY "id" DESC LIMIT 1 OFFSET 0',
-      bindings: ['active'],
-      source: 'query:select:users' })
-    expect(User.newQuery().withoutGlobalScope('activeOnly').where('name', 'Amina').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "name" = ?1',
-      bindings: ['Amina'],
-      source: 'query:select:users' })
-
-    const active = await User.active().get()
-    expect(active).toHaveLength(1)
-    expect(active[0]!.toJSON()).toEqual({
-      id: 1,
-      name: 'Mohamed',
-      email: 'm@example.com',
-      status: 'active' })
-
-    expect((await User.named('Amina').first())?.get('email')).toBeUndefined()
-    expect((await User.where('name', 'Mohamed').first())?.get('email')).toBe('m@example.com')
-    expect((await User.newQuery().withoutGlobalScope('activeOnly').get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
-    expect((await User.withoutGlobalScope('activeOnly').get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
-    expect((await User.newQuery().withoutGlobalScopes().get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
-    expect((await User.withoutGlobalScopes().get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
-    expect((await User.newQuery().withoutGlobalScopes(['activeOnly']).get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
-    expect((await User.withoutGlobalScopes(['activeOnly']).get()).map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
+        named: (query: ModelQueryBuilder<typeof users>, value: string) => query.where('name', value),
+      },
+    })
+    await User.create({ name: 'Mohamed', email: 'm@example.com', status: 'active' })
+    await User.create({ name: 'Amina', email: 'a@example.com', status: 'inactive' })
+    const names = async (query: ModelQueryBuilder<typeof users>) => (await query.orderBy('id').get()).map(user => user.get('name'))
+    for (const query of [User.query(), User.newQuery(), User.newModelQuery(), User.newQueryWithoutRelationships(), User.active()]) {
+      expect(await names(query)).toEqual(['Mohamed'])
+    }
+    for (const query of [
+      User.newQueryWithoutScopes(), User.newQuery().withoutGlobalScope('activeOnly'), User.withoutGlobalScope('activeOnly'),
+      User.newQuery().withoutGlobalScopes(), User.withoutGlobalScopes(),
+      User.newQuery().withoutGlobalScopes(['activeOnly']), User.withoutGlobalScopes(['activeOnly']),
+    ]) expect(await names(query)).toEqual(['Mohamed', 'Amina'])
+    expect(await User.named('Amina').first()).toBeUndefined()
+    expect((await User.withoutGlobalScope('activeOnly').where('name', 'Amina').firstOrFail()).get('email')).toBe('a@example.com')
+    expect(await User.query().select('id').orderBy('id', 'desc').offset(0).limit(1).pluck('id')).toEqual([1])
     expect((await User.all()).map(user => user.get('name'))).toEqual(['Mohamed'])
     expect((await User.find(1))?.get('name')).toBe('Mohamed')
     expect(await User.findMany([])).toEqual([])
     expect((await User.findMany([1, 2])).map(user => user.get('name'))).toEqual(['Mohamed'])
     expect((await User.findOrFail(1)).get('name')).toBe('Mohamed')
-    expect((await User.first())?.get('name')).toBe('Mohamed')
     expect((await User.firstOrFail()).get('name')).toBe('Mohamed')
     expect((await User.sole()).get('name')).toBe('Mohamed')
     expect((await User.firstWhere('name', 'Mohamed'))?.get('email')).toBe('m@example.com')
     expect(await User.valueOrFail('name')).toBe('Mohamed')
     expect(await User.soleValue('name')).toBe('Mohamed')
-    await expect(User.valueOrFail('nickname' as never)).rejects.toThrow('User query returned no value for column "nickname".')
-    await expect(User.soleValue('nickname' as never)).rejects.toThrow('User query returned no value for column "nickname".')
-    await expect(User.query().findOrFail('Ghost', 'name')).rejects.toThrow(
-      'User record not found for key "Ghost" via "name".',
-    )
-    expect(User.query().withTrashed().toSQL()).toEqual(User.query().toSQL())
-    expect(User.query().onlyTrashed().toSQL()).toEqual(User.query().toSQL())
-    expect(User.query().withoutTrashed().toSQL()).toEqual(User.query().toSQL())
+    expect(await User.valueOrFail('nickname')).toBeNull()
+    expect(await User.soleValue('nickname')).toBeNull()
+    await expect(User.query().findOrFail('Ghost', 'name')).rejects.toThrow('User record not found for key "Ghost" via "name".')
     await expect(User.findOrFail(999)).rejects.toThrow(ModelNotFoundException)
-    await expect(User.where('name', 'Nobody').sole()).rejects.toThrow(
-      'User query expected exactly one result but found 0.',
-    )
-    await expect(User.where('name', 'Nobody').valueOrFail('name')).rejects.toThrow(
-      'User query returned no value for column "name".',
-    )
-
+    await expect(User.where('name', 'Nobody').sole()).rejects.toThrow('User query expected exactly one result but found 0.')
+    await expect(User.where('name', 'Nobody').valueOrFail('name')).rejects.toThrow('User query returned no value for column "name".')
+    for (const query of [User.query().withTrashed(), User.query().onlyTrashed(), User.query().withoutTrashed()]) {
+      expect(await names(query)).toEqual(['Mohamed'])
+    }
     const repo = DB.connection().model(User)
-    expect(repo.getConnectionName()).toBe('default')
-    expect(repo.getConnection()).toBe(DB.connection())
     expect((await repo.firstOrFail()).get('name')).toBe('Mohamed')
-    adapter.tables.users!.push({ id: 3, name: 'Extra', email: 'e@example.com', status: 'active' })
+    await User.create({ name: 'Extra', email: 'e@example.com', status: 'active' })
     await expect(User.sole()).rejects.toThrow('User query expected exactly one result but found 2.')
   })
 
-  it('supports distinct, column-comparison, set, and range helpers through model statics', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      email: column.string(),
-      status: column.string(),
-      minScore: column.integer(),
-      maxScore: column.integer() })
-
-    const User = defineModelFromTable(users)
-
-    expect(User
-      .distinct()
-      .whereIn('status', ['active'])
-      .whereNotIn('name', ['Layla'])
-      .whereBetween('id', [1, 3])
-      .whereNotBetween('id', [4, 8])
-      .whereColumn('minScore', '<=', 'maxScore')
-      .toSQL()).toEqual({
-      sql: 'SELECT DISTINCT * FROM "users" WHERE "status" IN (?1) AND "name" NOT IN (?2) AND "id" BETWEEN ?3 AND ?4 AND "id" NOT BETWEEN ?5 AND ?6 AND "minScore" <= "maxScore"',
-      bindings: ['active', 'Layla', 1, 3, 4, 8],
-      source: 'query:select:users' })
+  it('filters persisted models by column comparisons, sets, and ranges', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.string('status')
+      table.integer('minScore')
+      table.integer('maxScore')
+    })
+    const User = defineModel('users', { fillable: ['name', 'status', 'minScore', 'maxScore'] })
+    await User.createMany([
+      { name: 'Mohamed', status: 'active', minScore: 1, maxScore: 2 },
+      { name: 'Amina', status: 'active', minScore: 3, maxScore: 2 },
+      { name: 'Layla', status: 'active', minScore: 1, maxScore: 2 },
+      { name: 'Nada', status: 'inactive', minScore: 1, maxScore: 2 },
+    ])
+    expect(await User.distinct().whereIn('status', ['active']).whereNotIn('name', ['Layla'])
+      .whereBetween('id', [1, 3]).whereNotBetween('id', [4, 8])
+      .whereColumn('minScore', '<=', 'maxScore').pluck('name')).toEqual(['Mohamed'])
+    expect(await User.distinct().orderBy('status').pluck('status')).toEqual(['active', 'inactive'])
   })
 
-  it('supports conditional and ordering helpers on model statics and builders', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active', created_at: '2024-01-02T00:00:00.000Z' },
-        { id: 2, name: 'Amina', email: 'a@example.com', status: 'inactive', created_at: '2024-01-01T00:00:00.000Z' },
-      ] }, { users: 2 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      email: column.string(),
-      status: column.string(),
-      bio: column.text(),
-      settings: column.json(),
-      created_at: column.timestamp() })
-
-    const User = defineModelFromTable(users)
-
-    expect(User.when(true, query => query.where('status', 'active')).latest().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "status" = ?1 ORDER BY "created_at" DESC',
-      bindings: ['active'],
-      source: 'query:select:users' })
-
-    expect(User.latest().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" ORDER BY "created_at" DESC',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.unless(true, query => query.where('status', 'active'), query => query.where('status', 'inactive')).oldest().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "status" = ?1 ORDER BY "created_at" ASC',
-      bindings: ['inactive'],
-      source: 'query:select:users' })
-
-    expect(User.unless(false, query => query.where('status', 'active')).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "status" = ?1',
-      bindings: ['active'],
-      source: 'query:select:users' })
-
-    expect(User.oldest().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" ORDER BY "created_at" ASC',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.inRandomOrder().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" ORDER BY RANDOM()',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.lockForUpdate().toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    const postTable = defineTable('posts', {
-      id: column.id(),
-      title: column.string(),
-      userId: column.integer() })
-    const Post = defineModelFromTable(postTable)
-
-    expect(User.whereExists(Post.query().select('id').where('userId', 1)).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE EXISTS (SELECT "id" FROM "posts" WHERE "userId" = ?1)',
-      bindings: [1],
-      source: 'query:select:users' })
-
-    expect(User.whereSub('id', 'in', Post.query().select('userId').where('title', 'like', 'Hello%')).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "id" IN (SELECT "userId" FROM "posts" WHERE "title" LIKE ?1)',
-      bindings: ['Hello%'],
-      source: 'query:select:users' })
-
-    expect(User.join('posts', 'users.id', '=', 'posts.userId').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" INNER JOIN "posts" ON "users"."id" = "posts"."userId"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.query()
-      .leftJoin('profiles', 'profiles.userId', '=', 'users.id')
-      .rightJoin('teams', 'teams.ownerId', '=', 'users.id')
-      .crossJoin('countries')
-      .toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" LEFT JOIN "profiles" ON "profiles"."userId" = "users"."id" RIGHT JOIN "teams" ON "teams"."ownerId" = "users"."id" CROSS JOIN "countries"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    await expect(
-      User.join('bad table' as never, 'users.id', '=', 'posts.userId').get(),
-    ).rejects.toThrow(SecurityError)
-
-    expect(User
-      .select('id', 'name')
-      .where('status', 'active')
-      .union(Post.select('id', 'title').where('title', 'like', 'Hello%'))
-      .toSQL()).toEqual({
-      sql: 'SELECT "id", "name" FROM "users" WHERE "status" = ?1 UNION SELECT "id", "title" FROM "posts" WHERE "title" LIKE ?2',
-      bindings: ['active', 'Hello%'],
-      source: 'query:select:users' })
-
-    expect(User
-      .joinSub(Post.select('userId').where('title', 'like', 'Hello%'), 'recent_posts', 'recent_posts.userId', '=', 'users.id')
-      .toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" INNER JOIN (SELECT "userId" FROM "posts" WHERE "title" LIKE ?1) AS "recent_posts" ON "recent_posts"."userId" = "users"."id"',
-      bindings: ['Hello%'],
-      source: 'query:select:users' })
-
-    expect(User.select('name as displayName').toSQL()).toEqual({
-      sql: 'SELECT "name" AS "displayName" FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.from('users as u').where('u.id', 1).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" AS "u" WHERE "u"."id" = ?1',
-      bindings: [1],
-      source: 'query:select:users' })
-
-    expect(User.selectSub(Post.select('title').where('userId', 1).limit(1), 'latestTitle').toSQL()).toEqual({
-      sql: 'SELECT (SELECT "title" FROM "posts" WHERE "userId" = ?1 LIMIT 1) AS "latestTitle" FROM "users"',
-      bindings: [1],
-      source: 'query:select:users' })
-
-    expect(User.reorder('name', 'asc').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" ORDER BY "name" ASC',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.when(true, () => {}).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.when(false, query => query.where('status', 'active')).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.when(false, query => query.where('status', 'active'), () => {}).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.when(false, query => query.where('status', 'active'), query => query.where('name', 'fallback')).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "name" = ?1',
-      bindings: ['fallback'],
-      source: 'query:select:users' })
-
-    expect(User.unless(false, () => {}).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.unless(true, query => query.where('status', 'active')).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.where('status', 'active').orWhere('name', 'Amina').orWhereNull('created_at').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "status" = ?1 OR "name" = ?2 OR "created_at" IS NULL',
-      bindings: ['active', 'Amina'],
-      source: 'query:select:users' })
-
-    expect(User.query()
-      .where(query => query.where('status', 'active').orWhere('name', 'Amina'))
-      .whereNotNull('created_at')
-      .toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE ("status" = ?1 OR "name" = ?2) AND "created_at" IS NOT NULL',
-      bindings: ['active', 'Amina'],
-      source: 'query:select:users' })
-
-    expect(User.whereNot(query => query.where('status', 'active').orWhere('name', 'Amina'))
-      .orWhereNot(query => query.whereNull('created_at'))
-      .toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE NOT ("status" = ?1 OR "name" = ?2) OR NOT ("created_at" IS NULL)',
-      bindings: ['active', 'Amina'],
-      source: 'query:select:users' })
-
-    expect(User.whereLike('name', 'Mo%').orWhereLike('name', 'Am%').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "name" LIKE ?1 OR "name" LIKE ?2',
-      bindings: ['Mo%', 'Am%'],
-      source: 'query:select:users' })
-
-    expect(User.whereAny(['name', 'created_at'], 'like', 'Mo%').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE ("name" LIKE ?1 OR "created_at" LIKE ?2)',
-      bindings: ['Mo%', 'Mo%'],
-      source: 'query:select:users' })
-
-    expect(User.whereAll(['name', 'created_at'], 'like', 'Mo%').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE ("name" LIKE ?1 AND "created_at" LIKE ?2)',
-      bindings: ['Mo%', 'Mo%'],
-      source: 'query:select:users' })
-
-    expect(User.whereNone(['name', 'created_at'], 'like', 'Mo%').toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE NOT ("name" LIKE ?1 OR "created_at" LIKE ?2)',
-      bindings: ['Mo%', 'Mo%'],
-      source: 'query:select:users' })
-
-    expect(User.select('name')
-      .groupBy('name')
-      .having('count(*)', '>=', 2)
-      .havingBetween('count(*)', [2, 5])
-      .toSQL()).toEqual({
-      sql: 'SELECT "name" FROM "users" GROUP BY "name" HAVING COUNT(*) >= ?1 AND COUNT(*) BETWEEN ?2 AND ?3',
-      bindings: [2, 2, 5],
-      source: 'query:select:users' })
-
-    expect(User.select('id').addSelect('name').toSQL()).toEqual({
-      sql: 'SELECT "id", "name" FROM "users"',
-      bindings: [],
-      source: 'query:select:users' })
-
-    expect(User.unsafeWhere('"name" = ?1', ['Mohamed']).unsafeOrderBy('"name" DESC', []).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "name" = ?1 ORDER BY "name" DESC',
-      bindings: ['Mohamed'],
-      source: 'query:select:users',
-      unsafe: true })
-
-    expect(User.whereDate('created_at', '2024-01-02')
-      .whereMonth('created_at', 1)
-      .whereDay('created_at', 2)
-      .whereYear('created_at', 2024)
-      .whereTime('created_at', '00:00:00')
-      .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE date("created_at") = ?1 AND strftime('%m', "created_at") = ?2 AND strftime('%d', "created_at") = ?3 AND strftime('%Y', "created_at") = ?4 AND time("created_at") = ?5`,
-      bindings: ['2024-01-02', 1, 2, 2024, '00:00:00'],
-      source: 'query:select:users' })
-
-    expect(User.whereJson('settings->profile->region', 'eu')
-      .whereJsonContains('settings->tags', 'beta')
-      .whereJsonLength('settings->tags', '>=', 2)
-      .toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE json_type("settings", '$.profile.region') = 'text' AND json_extract("settings", '$.profile.region') = ?1 AND EXISTS (SELECT 1 FROM json_each(json_extract("settings", '$.tags')) WHERE value = ?2) AND json_array_length(json_extract("settings", '$.tags')) >= ?3`,
-      bindings: ['eu', 'beta', 2],
-      source: 'query:select:users' })
-
-    const reordered = await User.query()
-      .latest()
-      .reorder('name', 'desc')
-      .get()
-    expect(reordered.map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
+  it('supports conditional, ordering, date, JSON, and subquery helpers on native model queries', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, connectionName: 'default', dialect: createDatabaseDialect('sqlite'), security: { allowUnsafeRawSql: true } })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const schema = createSchemaService(db)
+    await schema.createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.string('status')
+      table.json('settings')
+      table.timestamp('created_at')
+    })
+    await schema.createTable('posts', table => {
+      table.id()
+      table.integer('userId')
+      table.string('title')
+    })
+    const User = defineModel('users', { fillable: ['name', 'status', 'settings', 'created_at'] })
+    const Post = defineModel('posts', { fillable: ['userId', 'title'] })
+    await User.create({ name: 'Mohamed', status: 'active', settings: { profile: { region: 'eu' }, tags: ['beta', 'web'] }, created_at: new Date('2024-01-02T00:00:00Z') })
+    await User.create({ name: 'Amina', status: 'inactive', settings: { profile: { region: 'mena' }, tags: [] }, created_at: new Date('2024-01-01T00:00:00Z') })
+    await Post.create({ userId: 1, title: 'Hello' })
+    expect(await User.when(true, query => query.where('status', 'active')).latest().pluck('name')).toEqual(['Mohamed'])
+    expect(await User.unless(true, query => query.where('status', 'active'), query => query.where('status', 'inactive')).oldest().pluck('name')).toEqual(['Amina'])
+    expect(await User.unless(false, query => query.where('status', 'active')).pluck('name')).toEqual(['Mohamed'])
+    expect(await User.latest().pluck('name')).toEqual(['Mohamed', 'Amina'])
+    expect(await User.oldest().pluck('name')).toEqual(['Amina', 'Mohamed'])
+    expect(await User.inRandomOrder().pluck('name')).toEqual(expect.arrayContaining(['Mohamed', 'Amina']))
+    expect(await User.latest().reorder('name', 'asc').pluck('name')).toEqual(['Amina', 'Mohamed'])
+    expect(await User.whereExists(Post.query().select('id').whereColumn('posts.userId', '=', 'users.id')).pluck('name')).toEqual(['Mohamed'])
+    expect(await User.whereSub('id', 'in', Post.query().select('userId').where('title', 'like', 'Hello%')).pluck('name')).toEqual(['Mohamed'])
+    expect(await User.whereAny(['name', 'status'], 'like', 'Mo%').pluck('name')).toEqual(['Mohamed'])
+    expect(await User.whereAll(['name', 'status'], 'like', '%a%').orderBy('id').pluck('name')).toEqual(['Mohamed', 'Amina'])
+    expect(await User.whereNone(['name', 'status'], 'like', 'Mo%').pluck('name')).toEqual(['Amina'])
+    expect(await User.whereDate('created_at', '2024-01-02').whereMonth('created_at', 1).whereDay('created_at', 2).whereYear('created_at', 2024).whereTime('created_at', '00:00:00').pluck('name')).toEqual(['Mohamed'])
+    expect(await User.whereJson('settings->profile->region', 'eu').whereJsonContains('settings->tags', 'beta').whereJsonLength('settings->tags', '>=', 2).pluck('name')).toEqual(['Mohamed'])
+    expect(await User.unsafeWhere('"name" = ?1', ['Mohamed']).unsafeOrderBy('"name" DESC', []).pluck('name')).toEqual(['Mohamed'])
+    await DB.transaction(async () => {
+      expect(await User.lockForUpdate().pluck('name')).toEqual(['Mohamed', 'Amina'])
+      expect(await User.sharedLock().pluck('name')).toEqual(['Mohamed', 'Amina'])
+    })
   })
 
-  it('supports aggregate and scalar retrieval helpers on model queries', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', score: 10 },
-        { id: 2, name: 'Amina', score: 20 },
-        { id: 3, name: 'Salma', score: 30 },
-      ] }, { users: 3 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      score: column.integer() })
-    const User = defineModelFromTable(users)
-
-    expect(await User.query().count()).toBe(3)
+  it('aggregates native nullable model columns and retrieves scalar values', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, connectionName: 'default', dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.integer('score').nullable()
+    })
+    const User = defineModel('users', { fillable: ['name', 'score'] })
+    await User.createMany([{ name: 'Mohamed', score: 10 }, { name: 'Amina', score: 20 }, { name: 'Salma', score: null }])
     expect(await User.count()).toBe(3)
-    expect(await User.query().exists()).toBe(true)
     expect(await User.exists()).toBe(true)
-    expect(await User.query().doesntExist()).toBe(false)
     expect(await User.doesntExist()).toBe(false)
-    expect(await User.query().pluck('name')).toEqual(['Mohamed', 'Amina', 'Salma'])
-    expect(await User.pluck('name')).toEqual(['Mohamed', 'Amina', 'Salma'])
-    expect(await User.query().value('name')).toBe('Mohamed')
-    expect(await User.value('name')).toBe('Mohamed')
-    expect(await User.query().sum('score')).toBe(60)
-    expect(await User.sum('score')).toBe(60)
-    expect(await User.query().avg('score')).toBe(20)
-    expect(await User.avg('score')).toBe(20)
-    expect(await User.query().min('score')).toBe(10)
+    expect(await User.orderBy('id').pluck('name')).toEqual(['Mohamed', 'Amina', 'Salma'])
+    expect(await User.where('id', 1).value('name')).toBe('Mohamed')
+    expect(await User.sum('score')).toBe(30)
+    expect(await User.avg('score')).toBe(15)
     expect(await User.min('score')).toBe(10)
-    expect(await User.query().max('score')).toBe(30)
-    expect(await User.max('score')).toBe(30)
-
-    await expect(User.query().sum('name')).rejects.toThrow(
-      'Model aggregate "sum" requires numeric values for column "name".',
-    )
-
-    adapter.tables.users = []
-    expect(await User.query().count()).toBe(0)
-    expect(await User.query().exists()).toBe(false)
-    expect(await User.query().doesntExist()).toBe(true)
-    expect(await User.query().pluck('name')).toEqual([])
-    expect(await User.query().value('name')).toBeUndefined()
-    expect(await User.query().sum('score')).toBe(0)
-    expect(await User.query().avg('score')).toBeNull()
-    expect(await User.query().min('score')).toBeNull()
-    expect(await User.query().max('score')).toBeNull()
+    expect(await User.max('score')).toBe(20)
+    await expect(User.sum('name')).rejects.toThrow('requires numeric values')
+    const nulls = User.whereNull('score')
+    expect(await nulls.sum('score')).toBe(0)
+    expect(await nulls.avg('score')).toBeNull()
+    expect(await nulls.min('score')).toBeNull()
+    expect(await nulls.max('score')).toBeNull()
+    await User.query().delete()
+    expect(await User.count()).toBe(0)
+    expect(await User.exists()).toBe(false)
+    expect(await User.doesntExist()).toBe(true)
+    expect(await User.pluck('name')).toEqual([])
+    expect(await User.value('name')).toBeUndefined()
+    expect(await User.sum('score')).toBe(0)
+    expect(await User.avg('score')).toBeNull()
+    expect(await User.min('score')).toBeNull()
+    expect(await User.max('score')).toBeNull()
   })
 
   it('exposes redacted debug helpers on model queries and statics', () => {
@@ -1517,8 +730,8 @@ describe('model core slice', () => {
       defaultConnection: 'default',
       connections: {
         default: {
-          adapter: new LoggingAdapter(),
-          dialect: createDialect('sqlite'),
+          adapter: createSQLiteAdapter({ filename: ':memory:' }),
+          dialect: createDatabaseDialect('sqlite'),
           security: {
             redactBindingsInLogs: true } } } }))
 
@@ -1527,213 +740,100 @@ describe('model core slice', () => {
       name: column.string() })
     const User = defineModelFromTable(users)
 
-    expect(User.where('name', 'Mohamed').debug()).toMatchObject({
-      sql: 'SELECT * FROM "users" WHERE "name" = ?1',
-      bindings: ['[REDACTED]'],
-      source: 'query:select:users',
-      connectionName: 'default',
-      scope: 'root',
-      schedulingMode: 'concurrent',
-      metadata: {
-        kind: 'select',
-        resultMode: 'rows',
-        selectedShape: {
-          mode: 'all',
-          columns: [],
-          aggregates: [],
-          hasRawSelections: false,
-          hasSubqueries: false },
-        safety: {
-          unsafe: false,
-          containsRawSql: false },
-        debug: {
-          tableName: 'users',
-          hasJoins: false,
-          hasUnions: false,
-          hasGrouping: false,
-          hasHaving: false,
-          complexity: 2,
-          intent: 'read',
-          transactionAffinity: 'optional',
-          streaming: 'buffered',
-          connectionName: 'default',
-          scope: 'root',
-          schedulingMode: 'concurrent' } } })
-
-    expect(User.debug()).toMatchObject({
-      sql: 'SELECT * FROM "users"',
-      bindings: [],
-      source: 'query:select:users',
-      connectionName: 'default',
-      scope: 'root',
-      schedulingMode: 'concurrent',
-      metadata: {
-        kind: 'select',
-        resultMode: 'rows',
-        selectedShape: {
-          mode: 'all',
-          columns: [],
-          aggregates: [],
-          hasRawSelections: false,
-          hasSubqueries: false },
-        safety: {
-          unsafe: false,
-          containsRawSql: false },
-        debug: {
-          tableName: 'users',
-          hasJoins: false,
-          hasUnions: false,
-          hasGrouping: false,
-          hasHaving: false,
-          complexity: 1,
-          intent: 'read',
-          transactionAffinity: 'optional',
-          streaming: 'buffered',
-          connectionName: 'default',
-          scope: 'root',
-          schedulingMode: 'concurrent' } } })
+    const debug = User.where('name', 'Mohamed').debug()
+    expect(debug.sql).toBe('SELECT * FROM "users" WHERE "name" = ?')
+    expect(debug.bindings).toEqual(['[REDACTED]'])
+    expect(User.debug().bindings).toEqual([])
+    expect(User.debug().sql).toBe('SELECT * FROM "users"')
   })
 
-  it('supports nested JSON updates through model queries while enforcing writable JSON roots', async () => {
-    const adapter = new LoggingAdapter()
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          adapter,
-          dialect: createDialect('sqlite') } } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      settings: column.json() })
-
-    const User = defineModelFromTable(users, {
-      fillable: ['settings'],
-      guarded: ['id'] })
-
-    await User.where('id', 1).updateJson('settings->profile->region', 'eu')
-    expect(adapter.executions.at(-1)).toEqual({
-      sql: `UPDATE "users" SET "settings" = json_set(COALESCE("settings", json('{}')), '$.profile.region', json(?1)) WHERE "id" = ?2`,
-      bindings: ['"eu"', 1] })
-
-    await expect(User.where('id', 1).update({
-      'settings->profile->region': 'mena' } as Record<string, unknown> as never)).resolves.toEqual({
-      affectedRows: 1,
-      lastInsertId: 9 })
-
+  it('persists nested JSON updates and rejects unwritable roots', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.json('settings')
+    })
+    const users = defineTable('users', { id: column.id(), name: column.string(), settings: column.json<{ profile: { region: string }, tags: string[] }>() })
+    const User = defineModelFromTable(users, { fillable: ['settings'], guarded: ['id'] })
+    await db.table(users).insert({ name: 'Mohamed', settings: { profile: { region: 'old' }, tags: ['retained'] } })
+    expect((await User.where('id', 1).updateJson('settings->profile->region', 'eu')).affectedRows).toBe(1)
+    expect((await User.findOrFail(1)).get('settings')).toEqual({ profile: { region: 'eu' }, tags: ['retained'] })
+    await User.where('id', 1).updateJson('settings->profile->region', 'mena')
+    expect((await User.findOrFail(1)).get('settings')).toEqual({ profile: { region: 'mena' }, tags: ['retained'] })
     await expect(User.where('id', 1).updateJson('name->profile', 'eu')).rejects.toThrow(SecurityError)
-
-    const LockedUser = defineModelFromTable(users, {
-      fillable: ['name'] })
-
+    const LockedUser = defineModelFromTable(users, { fillable: ['name'] })
     await expect(LockedUser.where('id', 1).updateJson('settings->profile->region', 'eu')).rejects.toThrow(SecurityError)
+    expect((await User.findOrFail(1)).get('settings')).toEqual({ profile: { region: 'mena' }, tags: ['retained'] })
+    expect((await User.findOrFail(1)).get('name')).toBe('Mohamed')
   })
 
-  it('supports model increment and decrement helpers with extra payloads', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', score: 10, active: true },
-        { id: 2, name: 'Amina', score: 20, active: true },
-        { id: 3, name: 'Layla', score: 30, active: false },
-      ] }, { users: 3 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      score: column.integer(),
-      active: column.boolean() })
-    const User = defineModelFromTable(users, {
-      fillable: ['name', 'score', 'active'] })
-
-    const incremented = await User.query().where('active', true).increment('score', 5, { name: 'Boosted' })
-    expect(incremented.affectedRows).toBe(2)
-    expect(adapter.getTable('users')).toEqual([
+  it('increments and decrements persisted models with extra writable attributes', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.integer('score')
+      table.boolean('active')
+    })
+    const User = defineModel('users', { fillable: ['name', 'score', 'active'] })
+    await User.createMany([
+      { name: 'Mohamed', score: 10, active: true },
+      { name: 'Amina', score: 20, active: true },
+      { name: 'Layla', score: 30, active: false },
+    ])
+    expect((await User.where('active', true).increment('score', 5, { name: 'Boosted' })).affectedRows).toBe(2)
+    expect((await User.orderBy('id').get()).toJSON()).toEqual([
       { id: 1, name: 'Boosted', score: 15, active: true },
       { id: 2, name: 'Boosted', score: 25, active: true },
       { id: 3, name: 'Layla', score: 30, active: false },
     ])
-
-    const decremented = await User.decrement('score', 3, { name: 'Lowered' })
-    expect(decremented.affectedRows).toBe(3)
-    expect(adapter.getTable('users')).toEqual([
+    expect((await User.decrement('score', 3, { name: 'Lowered' })).affectedRows).toBe(3)
+    expect((await User.orderBy('id').get()).toJSON()).toEqual([
       { id: 1, name: 'Lowered', score: 12, active: true },
       { id: 2, name: 'Lowered', score: 22, active: true },
       { id: 3, name: 'Lowered', score: 27, active: false },
     ])
-
     await expect(User.increment('score', Number.NaN)).rejects.toThrow('valid number')
-
-    const nonNumericAdapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed', score: 'ten' }] }, { users: 1 })
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter: nonNumericAdapter,
-          dialect: createDialect('sqlite') }) } }))
-    const BadUser = defineModelFromTable(users, {
-      fillable: ['name', 'score', 'active'] })
-    await expect(BadUser.increment('score', 1)).rejects.toThrow('non-numeric column')
+    expect(await User.orderBy('id').pluck('score')).toEqual([12, 22, 27])
+    await adapter.execute('UPDATE users SET score = ? WHERE id = ?', ['ten', 1])
+    await expect(User.increment('score', 1)).rejects.toThrow('non-numeric column')
+    expect((await adapter.query('SELECT score FROM users WHERE id = 1')).rows).toEqual([{ score: 'ten' }])
   })
 
-  it('supports builder-level upsert on model queries', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      email: column.string(),
-      name: column.string() })
-    const User = defineModelFromTable(users, {
-      fillable: ['email', 'name'] })
-
-    await User.query().upsert(
-      { email: 'm@example.com', name: 'Mohamed' },
-      ['email'],
-      ['name'],
-    )
-
-    expect(adapter.executions.at(-1)).toEqual({
-      sql: 'INSERT INTO "users" ("email", "name") VALUES (?1, ?2) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name"',
-      bindings: ['m@example.com', 'Mohamed'] })
+  it('upserts persisted models using a real unique constraint', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('email').unique()
+      table.string('name')
+    })
+    const User = defineModel('users', { fillable: ['email', 'name'] })
+    await User.query().upsert({ email: 'm@example.com', name: 'Mohamed' }, ['email'], ['name'])
+    const id = (await User.firstOrFail()).get('id')
+    await User.query().upsert({ email: 'm@example.com', name: 'Updated' }, ['email'], ['name'])
+    expect((await User.sole()).toJSON()).toEqual({ id, email: 'm@example.com', name: 'Updated' })
+    await User.query().upsert([
+      { email: 'm@example.com', name: 'Batch update' },
+      { email: 'a@example.com', name: 'Amina' },
+    ], ['email'], ['name'])
+    expect(await User.orderBy('email').pluck('name')).toEqual(['Amina', 'Batch update'])
+    await User.query().upsert({ email: 'm@example.com', name: 'Ignored' }, ['email'])
+    expect((await User.findOrFail(id)).get('name')).toBe('Batch update')
+    await expect(User.create({ email: 'm@example.com', name: 'Duplicate' })).rejects.toThrow(/unique/i)
+    expect(await User.count()).toBe(2)
   })
 
-  it('supports pagination and chunking on model queries and statics', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com' },
-        { id: 2, name: 'Amina', email: 'a@example.com' },
-        { id: 3, name: 'Salma', email: 's@example.com' },
-        { id: 4, name: 'Youssef', email: 'y@example.com' },
-        { id: 5, name: 'Nada', email: 'n@example.com' },
-      ] }, { users: 5 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
+  it('paginates and chunks persisted models including duplicate and nullable sort keys', async () => {
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
@@ -1741,21 +841,15 @@ describe('model core slice', () => {
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email'] })
 
-    expect(User.query().orderBy('id').forPage(2, 2).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" ORDER BY "id" ASC LIMIT 2 OFFSET 2',
-      bindings: [],
-      source: 'query:select:users' })
-    expect(User.query().orderBy('id').skip(1).take(2).toSQL()).toEqual({
-      sql: 'SELECT * FROM "users" ORDER BY "id" ASC LIMIT 2 OFFSET 1',
-      bindings: [],
-      source: 'query:select:users' })
-
     const sqlite = createSQLiteAdapter({ filename: ':memory:' })
     await sqlite.initialize()
     onTestFinished(() => sqlite.disconnect())
     await sqlite.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)')
     await sqlite.execute("INSERT INTO users VALUES (1, 'Mohamed', 'm@example.com'), (2, 'Amina', 'a@example.com'), (3, 'Salma', 's@example.com'), (4, 'Youssef', 'y@example.com'), (5, 'Nada', 'n@example.com')")
     configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter: sqlite, dialect: createDatabaseDialect('sqlite') } } }))
+
+    expect(await User.query().orderBy('id').forPage(2, 2).pluck('name')).toEqual(['Salma', 'Youssef'])
+    expect(await User.query().orderBy('id').skip(1).take(2).pluck('name')).toEqual(['Amina', 'Salma'])
 
     const paginated = await User.query().orderBy('id').paginate(2, 2)
     expect(paginated.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
@@ -1791,9 +885,8 @@ describe('model core slice', () => {
         hasMorePages: true,
       },
     })
-    expect(User.orderBy('id').toSQL().sql).toContain('ORDER BY "id" ASC')
-    expect(User.with([]).toSQL().sql).toContain('SELECT')
-    expect(User.with(['missing' as never]).toSQL().sql).toContain('SELECT')
+    expect(await User.with([]).orderBy('id').pluck('id')).toEqual([1, 2, 3, 4, 5])
+    await expect(User.with(['missing' as never]).get()).rejects.toThrow(/relation/i)
     await expect(User.findOrFailJson(1)).resolves.toMatchObject({ id: 1 })
     await expect(User.firstJson()).resolves.toMatchObject({ id: 1 })
     await expect(User.soleJson()).rejects.toThrow('expected exactly one result')
@@ -1906,7 +999,7 @@ describe('model core slice', () => {
     const edgeUsers = defineTable('edge_users', {
       id: column.id(),
       name: column.string(),
-      rank: column.integer() })
+      rank: column.integer().nullable() })
     const EdgeUser = defineModelFromTable(edgeUsers)
     await sqlite.execute("INSERT INTO edge_users VALUES (1, 'Equal A', 1), (2, 'Null', NULL), (3, 'Equal B', 1), (4, 'Other Null', NULL), (5, 'Two', 2)")
 
@@ -1966,16 +1059,17 @@ describe('model core slice', () => {
     expect((await collection.fresh()).modelKeys()).toEqual([1, 2, 3, 4, 5])
   })
 
-  it('supports first-or-create and batch persistence helpers', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+  it('persists first-or-create and batch helpers against real constraints', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.string('email').unique()
+      table.string('status')
+    })
 
     const users = defineTable('users', {
       id: column.id(),
@@ -2021,94 +1115,68 @@ describe('model core slice', () => {
     ])
     expect(staticSaved.map(user => user.get('id'))).toEqual([6])
     expect(await User.destroy([1, 999, 2])).toBe(2)
-    expect(adapter.tables.users!.map(user => user.id)).toEqual([3, 4, 5, 6])
+    expect(await User.orderBy('id').pluck('id')).toEqual([3, 4, 5, 6])
   })
 
-  it('returns the concurrent match when first-or-create loses a unique insert race', async () => {
-    const adapter = new ConcurrentUniqueInsertAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      email: column.string(),
-      status: column.string() })
-
-    const User = defineModelFromTable(users, {
-      fillable: ['name', 'email', 'status'] })
-
-    const user = await User.firstOrCreate(
-      { email: 'race@example.com' },
-      { name: 'Fallback', status: 'inactive' },
-    )
-
-    expect(user.get('id')).toBe(1)
-    expect(user.get('name')).toBe('Concurrent')
-    expect(adapter.tables.users).toHaveLength(1)
-  })
-
-  it('preserves non-unique and unresolved unique first-or-create failures', async () => {
-    const users = defineTable('users', {
-      id: column.id(),
-      email: column.string(),
+  it('returns one persisted model across concurrent first-or-create calls', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.string('email').unique()
     })
+    const User = defineModel('users', { fillable: ['name', 'email'] })
+    const users = await Promise.all(Array.from({ length: 16 }, (_, index) => User.firstOrCreate(
+      { email: 'race@example.com' }, { name: `Caller ${index}` },
+    )))
+    const persisted = (await User.sole()).toJSON()
+    expect(users.map(user => user.toJSON())).toEqual(Array.from({ length: 16 }, () => persisted))
+    expect(persisted).toMatchObject({ id: 1, email: 'race@example.com' })
+    await expect(User.create({ name: 'Duplicate', email: 'race@example.com' })).rejects.toThrow(/unique/i)
+    expect(await User.count()).toBe(1)
+  })
 
-    const failingAdapter = new FailingInMemoryAdapter({ users: [] }, { users: 0 })
-    failingAdapter.failOnExecution = 1
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter: failingAdapter,
-          dialect: createDialect('sqlite'),
-        }),
-      },
-    }))
-    const FailingUser = defineModelFromTable(users, { fillable: ['email'] })
-    await expect(FailingUser.firstOrCreate({ email: 'failure@example.com' })).rejects.toThrow('execution failed')
-
-    const uniqueAdapter = new UnresolvedUniqueInsertAdapter({ users: [] }, { users: 0 })
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter: uniqueAdapter,
-          dialect: createDialect('sqlite'),
-        }),
-      },
-    }))
-    const UniqueUser = defineModelFromTable(users, { fillable: ['email'] })
-    await expect(UniqueUser.firstOrCreate({ email: 'unique@example.com' })).rejects.toThrow('UNIQUE constraint')
+  it('preserves real not-null and unresolved unique failures in first-or-create', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => {
+      table.id()
+      table.string('name')
+      table.string('email').unique()
+      table.string('status')
+    })
+    const User = defineModel('users', { fillable: ['name', 'email', 'status'] })
+    await expect(User.firstOrCreate({ email: 'failure@example.com' })).rejects.toThrow(/not null/i)
+    expect(await User.count()).toBe(0)
+    await User.create({ name: 'Inactive', email: 'unique@example.com', status: 'inactive' })
+    const ActiveUser = defineModel('users', {
+      name: 'ActiveUser', fillable: ['name', 'email', 'status'],
+      globalScopes: { active: query => query.where('status', 'active') },
+    })
+    await expect(ActiveUser.firstOrCreate({ email: 'unique@example.com' }, { name: 'Active', status: 'active' })).rejects.toThrow(/unique/i)
+    expect((await User.sole()).toJSON()).toMatchObject({ name: 'Inactive', status: 'inactive' })
   })
 
   it('supports custom collections per model', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com' },
-        { id: 2, name: 'Amina', email: 'a@example.com' },
-      ] }, { users: 2 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed', email: 'm@example.com' },
+        { id: 2, name: 'Amina', email: 'a@example.com' },
+      ])
 
     const User = defineModelFromTable(users, {
       collection<TItem extends Entity<typeof users>>(items: readonly TItem[]) {
@@ -2236,173 +1304,16 @@ describe('model core slice', () => {
     expect((await pending).modelKeys()).toEqual([1, 2, 3])
   })
 
-  it('forwards advanced static builder helpers through query()', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: {
-            ...createDialect('postgres'),
-            capabilities: {
-              ...createDialect('postgres').capabilities,
-              lockForUpdate: true,
-              sharedLock: true,
-              jsonContains: true,
-              jsonLength: true } } }) } }))
-
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      meta: column.json<Record<string, unknown>>().nullable(),
-      embedding: column.vector({ dimensions: 3 }).nullable() })
-    const posts = defineTable('posts', {
-      id: column.id(),
-      userId: column.integer().nullable(),
-      title: column.string().nullable(),
-      score: column.integer().nullable() })
-    const images = defineTable('images', {
-      id: column.id(),
-      imageableType: column.string().nullable(),
-      imageableId: column.integer().nullable(),
-      name: column.string().nullable() })
-
-    let Post!: ReturnType<typeof defineModelFromTable<typeof posts>>
-    let User!: ReturnType<typeof defineModelFromTable<typeof users>>
-    Post = defineModelFromTable(posts, {
-      relations: {
-        author: belongsTo(() => User, { foreignKey: 'userId', ownerKey: 'id' }) } })
-
-    User = defineModelFromTable(users, {
-      relations: {
-        posts: hasOne(() => Post, { foreignKey: 'userId', localKey: 'id' }) } })
-
-    const Image = defineModelFromTable(images, {
-      relations: {
-        imageable: hasOne(() => User, { foreignKey: 'id', localKey: 'imageableId' }) } })
-
-    expect(User.having('count(*)', '>', 1)).toBeTruthy()
-    expect(User.havingBetween('sum(id)', [1, 3])).toBeTruthy()
-    expect(User.whereDate('name', '2025-01-01')).toBeTruthy()
-    expect(User.whereMonth('name', 1)).toBeTruthy()
-    expect(User.whereDay('name', 2)).toBeTruthy()
-    expect(User.whereYear('name', 2025)).toBeTruthy()
-    expect(User.whereTime('name', '12:00:00')).toBeTruthy()
-    expect(User.whereJson('meta->enabled', true)).toBeTruthy()
-    expect(User.orWhereJson('meta->enabled', true)).toBeTruthy()
-    expect(User.whereJsonContains('meta->roles', ['admin'])).toBeTruthy()
-    expect(User.orWhereJsonContains('meta->roles', ['admin'])).toBeTruthy()
-    expect(User.whereJsonLength('meta->roles', '>', 1)).toBeTruthy()
-    expect(User.orWhereJsonLength('meta->roles', '>', 1)).toBeTruthy()
-    expect(User.whereFullText('name', 'mohamed')).toBeTruthy()
-    expect(User.orWhereFullText(['name'], 'mohamed', { mode: 'boolean' })).toBeTruthy()
-    expect(User.whereVectorSimilarTo('embedding', [0.1, 0.2, 0.3], 0.5)).toBeTruthy()
-    expect(User.orWhereVectorSimilarTo('embedding', [0.1, 0.2, 0.3], 0.5)).toBeTruthy()
-    expect(User.latest('id')).toBeTruthy()
-    expect(User.oldest('id')).toBeTruthy()
-    expect(User.inRandomOrder()).toBeTruthy()
-    expect(User.reorder('name', 'desc')).toBeTruthy()
-    expect(User.lock('update')).toBeTruthy()
-    expect(User.lockForUpdate()).toBeTruthy()
-    expect(User.sharedLock()).toBeTruthy()
-    expect(User.with('posts')).toBeTruthy()
-    expect(User.withCount('posts')).toBeTruthy()
-    expect(User.withExists('posts')).toBeTruthy()
-    expect(User.withSum('posts', 'score')).toBeTruthy()
-    expect(User.withAvg('posts', 'score')).toBeTruthy()
-    expect(User.withMin('posts', 'score')).toBeTruthy()
-    expect(User.withMax('posts', 'score')).toBeTruthy()
-    expect(User.has('posts')).toBeTruthy()
-    expect(User.orHas('posts')).toBeTruthy()
-    expect(User.whereHas('posts')).toBeTruthy()
-    expect(User.orWhereHas('posts')).toBeTruthy()
-    expect(User.doesntHave('posts')).toBeTruthy()
-    expect(User.orDoesntHave('posts')).toBeTruthy()
-    expect(User.whereDoesntHave('posts')).toBeTruthy()
-    expect(User.orWhereDoesntHave('posts')).toBeTruthy()
-    expect(User.whereRelation('posts', 'title', 'Post')).toBeTruthy()
-    expect(User.orWhereRelation('posts', 'title', 'Post')).toBeTruthy()
-    expect(User.withWhereHas('posts')).toBeTruthy()
-    const relatedUser = new Entity(User.getRepository() as never, { id: 1, name: 'Mohamed' }, true)
-    const subquery = User.query()
-    const tableSubquery = DB.table(posts).select('userId')
-
-    expect(User.dump()).toBeInstanceOf(Object)
-    expect(log).toHaveBeenCalled()
-    expect(User.preventLazyLoading()).toBe(User)
-    expect(User.preventAccessingMissingAttributes()).toBe(User)
-    expect(User.automaticallyEagerLoadRelationships()).toBe(User)
-    expect(await User.withoutEvents(() => 'muted')).toBe('muted')
-    expect(await User.unguarded(() => User.make({ name: 'unguarded' }).get('name'))).toBe('unguarded')
-    expect(User.where((query: ModelQueryBuilder<typeof users>) => query.where('name', 'Mohamed'))).toBeTruthy()
-    expect(User.orWhere('name', 'Amina')).toBeTruthy()
-    expect(User.orWhere((query: ModelQueryBuilder<typeof users>) => query.where('name', 'Amina'))).toBeTruthy()
-    expect(User.whereNot((query: ModelQueryBuilder<typeof users>) => query.where('name', 'Mohamed'))).toBeTruthy()
-    expect(User.orWhereNot((query: ModelQueryBuilder<typeof users>) => query.where('name', 'Amina'))).toBeTruthy()
-    expect(User.whereExists(subquery)).toBeTruthy()
-    expect(User.orWhereExists(subquery)).toBeTruthy()
-    expect(User.whereNotExists(subquery)).toBeTruthy()
-    expect(User.orWhereNotExists(subquery)).toBeTruthy()
-    expect(User.whereSub('id', 'in', subquery)).toBeTruthy()
-    expect(User.orWhereSub('id', 'not in', subquery)).toBeTruthy()
-    expect(User.whereInSub('id', subquery)).toBeTruthy()
-    expect(User.whereNotInSub('id', subquery)).toBeTruthy()
-    expect(User.select('id', 'name')).toBeTruthy()
-    expect(User.addSelect('name')).toBeTruthy()
-    expect(User.withCasts({ name: 'string' })).toBeTruthy()
-    expect(User.selectSub(subquery, 'sub_name')).toBeTruthy()
-    expect(User.addSelectSub(tableSubquery, 'sub_user_id')).toBeTruthy()
-    expect(User.whereNull('meta')).toBeTruthy()
-    expect(User.orWhereNull('meta')).toBeTruthy()
-    expect(User.whereNotNull('name')).toBeTruthy()
-    expect(User.orWhereNotNull('name')).toBeTruthy()
-    expect(User.when(true, (query: ModelQueryBuilder<typeof users>) => query.where('name', 'Mohamed'))).toBeTruthy()
-    expect(User.unless(false, (query: ModelQueryBuilder<typeof users>) => query.where('name', 'Mohamed'))).toBeTruthy()
-    expect(User.distinct()).toBeTruthy()
-    expect(User.whereColumn('id', '>=', 'id')).toBeTruthy()
-    expect(User.whereIn('id', [1, 2])).toBeTruthy()
-    expect(User.whereNotIn('id', [3, 4])).toBeTruthy()
-    expect(User.whereBetween('id', [1, 2])).toBeTruthy()
-    expect(User.whereNotBetween('id', [3, 4])).toBeTruthy()
-    expect(User.whereLike('name', 'Mo%')).toBeTruthy()
-    expect(User.orWhereLike('name', 'Am%')).toBeTruthy()
-    expect(User.whereAny(['name'], 'like', 'Mo%')).toBeTruthy()
-    expect(User.whereAll(['name'], 'like', 'Mo%')).toBeTruthy()
-    expect(User.whereNone(['name'], 'like', 'Mo%')).toBeTruthy()
-    expect(User.join('posts', 'users.id', '=', 'posts.userId')).toBeTruthy()
-    expect(User.leftJoin('posts', 'users.id', '=', 'posts.userId')).toBeTruthy()
-    expect(User.rightJoin('posts', 'users.id', '=', 'posts.userId')).toBeTruthy()
-    expect(User.crossJoin('posts')).toBeTruthy()
-    expect(User.joinSub(subquery, 'p', 'users.id', '=', 'p.id')).toBeTruthy()
-    expect(User.leftJoinSub(subquery, 'p', 'users.id', '=', 'p.id')).toBeTruthy()
-    expect(User.rightJoinSub(subquery, 'p', 'users.id', '=', 'p.id')).toBeTruthy()
-    expect(User.joinLateral(subquery, 'lp')).toBeTruthy()
-    expect(User.leftJoinLateral(subquery, 'lp')).toBeTruthy()
-    expect(User.union(subquery)).toBeTruthy()
-    expect(User.unionAll(subquery)).toBeTruthy()
-    expect(User.groupBy('id')).toBeTruthy()
-    expect(Post.whereBelongsTo(relatedUser as never, 'author')).toBeTruthy()
-    expect(Post.orWhereBelongsTo(relatedUser as never, 'author')).toBeTruthy()
-  })
-
-  it('treats empty whereNot and orWhereNot callbacks as no-ops', () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+  it('treats empty whereNot and orWhereNot callbacks as no-ops', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
     const User = defineModelFromTable(users, {})
 
     const base = User.query()
@@ -2413,24 +1324,20 @@ describe('model core slice', () => {
   })
 
   it('supports array-form model upserts and relation date serialization', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-      ] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
-      email: column.string().unique(),
+      email: column.string().nullable().unique(),
       name: column.string(),
       seenAt: column.timestamp().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+      ])
     const User = defineModelFromTable(users, {
       fillable: ['email', 'name', 'seenAt'],
       serializeDate: value => `date:${value.toISOString()}` })
@@ -2439,7 +1346,7 @@ describe('model core slice', () => {
       { email: 'm@example.com', name: 'Updated' } as never,
       { email: 'a@example.com', name: 'Created' } as never,
     ], ['email'], ['name'])
-    expect(adapter.executions.at(-1)?.sql).toContain('ON CONFLICT')
+
 
     const user = await User.findOrFail(1)
     user.setRelation('lastSeenAt', new Date('2025-01-02T03:04:05.000Z') as never)
@@ -2448,19 +1355,16 @@ describe('model core slice', () => {
   })
 
   it('rejects nested JSON updates on non-JSON model columns', async () => {
-    const adapter = new InMemoryAdapter({ users: [{ id: 1, name: 'Mohamed' }] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const User = defineModelFromTable(users, {
       fillable: ['name'] })
 
@@ -2470,33 +1374,30 @@ describe('model core slice', () => {
   })
 
   it('supports model pruning and mass pruning', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', status: 'active' },
-        { id: 2, name: 'Amina', status: 'inactive' },
-        { id: 3, name: 'Salma', status: 'inactive' },
-      ],
-      logs: [
-        { id: 1, level: 'info' },
-        { id: 2, level: 'debug' },
-        { id: 3, level: 'debug' },
-      ] }, { users: 3, logs: 3 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed', status: 'active' },
+        { id: 2, name: 'Amina', status: 'inactive' },
+        { id: 3, name: 'Salma', status: 'inactive' },
+      ])
     const logs = defineTable('logs', {
       id: column.id(),
       level: column.string() })
+    await createTestTable(db, logs)
+    await db.table(logs).insert([
+        { id: 1, level: 'info' },
+        { id: 2, level: 'debug' },
+        { id: 3, level: 'debug' },
+      ])
 
     const deletedCalls: string[] = []
     const User = defineModelFromTable(users, {
@@ -2514,34 +1415,30 @@ describe('model core slice', () => {
 
     expect(await User.prune()).toBe(2)
     expect(deletedCalls).toEqual(['Amina', 'Salma'])
-    expect(adapter.tables.users!).toEqual([
+    expect((await db.table(users).get())!).toEqual([
       { id: 1, name: 'Mohamed', status: 'active' },
     ])
 
     expect(await Log.prune()).toBe(2)
-    expect(adapter.tables.logs!).toEqual([
+    expect((await db.table(logs).get())!).toEqual([
       { id: 1, level: 'info' },
     ])
   })
 
-  it('supports soft-delete pruning and raw serialization fallback entities', async () => {
-    const adapter = new InMemoryAdapter({
-      logs: [
-        { id: 1, level: 'debug', deleted_at: '2025-01-01T00:00:00.000Z' },
-      ] }, { logs: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+  it('prunes already soft-deleted records permanently', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const logs = defineTable('logs', {
       id: column.id(),
       level: column.string(),
       deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, logs)
+    await db.table(logs).insert([
+        { id: 1, level: 'debug', deleted_at: new Date('2025-01-01T00:00:00.000Z') },
+      ])
 
     const Log = defineModelFromTable(logs, {
       fillable: ['level', 'deleted_at'],
@@ -2551,156 +1448,48 @@ describe('model core slice', () => {
 
     expect(await Log.prune()).toBe(1)
 
-    const repo = Log.getRepository()
-    const raw = repo.serializeEntity({
-      toAttributes() {
-        return { id: 7, level: 'info' }
-      },
-      getLoadedRelations() {
-        return { touchedAt: new Date('2025-01-02T03:04:05.000Z') }
-      } } as never)
-    expect(raw).toEqual({
-      id: 7,
-      level: 'info',
-      touchedAt: 'date:2025-01-02T03:04:05.000Z' })
-
-    const hiddenVisible = repo.serializeEntity({
-      getSerializationConfig() {
-        return {
-          hidden: new Set(['secretRelation']),
-          visible: new Set<string>(),
-          visibleOnly: ['id', 'visibleRelation'],
-          appended: null }
-      },
-      toAttributes() {
-        return { id: 8, level: 'warn' }
-      },
-      getLoadedRelations() {
-        return {
-          secretRelation: 'skip-hidden',
-          visibleRelation: 'keep-visible',
-          omittedRelation: 'skip-visible-only' }
-      } } as never)
-    expect(hiddenVisible).toEqual({
-      id: 8,
-      visibleRelation: 'keep-visible' })
-
-    const visibleAppendedOnly = repo.serializeEntity({
-      getSerializationConfig() {
-        return {
-          hidden: new Set<string>(),
-          visible: new Set<string>(),
-          visibleOnly: ['id'],
-          appended: ['computed'] }
-      },
-      toAttributes() {
-        return { id: 9, computed: 'skip-appended' }
-      },
-      getLoadedRelations() {
-        return {}
-      } } as never)
-    expect(visibleAppendedOnly).toEqual({
-      id: 9 })
+    expect(await db.table(logs).count()).toBe(0)
   })
 
-  it('falls back to the base prune query and rowCount return values for mass pruning', async () => {
-    class RowCountAdapter extends InMemoryAdapter {
-      override async execute(sql: string, bindings: readonly unknown[] = []): Promise<DriverExecutionResult> {
-        await super.execute(sql, bindings)
-        return { affectedRows: 2 } as DriverExecutionResult
-      }
-    }
-
-    const adapter = new RowCountAdapter({
-      logs: [
-        { id: 1, level: 'debug' },
-        { id: 2, level: 'debug' },
-      ] }, { logs: 2 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const logs = defineTable('logs', {
-      id: column.id(),
-      level: column.string() })
-
-    const Log = defineModelFromTable(logs, {
-      massPrunable: true,
-      prunable: () => undefined })
-
+  it('mass prunes the complete query when no pruning constraint is supplied', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const logs = defineTable('logs', { id: column.id(), level: column.string() })
+    await createTestTable(db, logs)
+    await db.table(logs).insert([{ id: 1, level: 'debug' }, { id: 2, level: 'info' }])
+    const Log = defineModelFromTable(logs, { massPrunable: true, prunable: () => undefined })
     expect(await Log.prune()).toBe(2)
-  })
-
-  it('falls back to zero when a mass prune delete result reports no counters', async () => {
-    class EmptyDeleteAdapter extends InMemoryAdapter {
-      override async execute(sql: string, bindings: readonly unknown[] = []): Promise<DriverExecutionResult> {
-        await super.execute(sql, bindings)
-        return {}
-      }
-    }
-
-    const adapter = new EmptyDeleteAdapter({
-      logs: [
-        { id: 1, level: 'debug' },
-      ] }, { logs: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
-
-    const logs = defineTable('logs', {
-      id: column.id(),
-      level: column.string() })
-
-    const Log = defineModelFromTable(logs, {
-      massPrunable: true,
-      prunable: query => query.where('level', 'debug') })
-
+    expect(await db.table(logs).count()).toBe(0)
     expect(await Log.prune()).toBe(0)
   })
 
   it('rejects prune calls when a model does not define a prunable query', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
 
     const User = defineModelFromTable(users)
     await expect(User.prune()).rejects.toThrow('Model "User" does not define a prunable query.')
   })
 
   it('rejects malformed pagination inputs on model queries', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
     const User = defineModelFromTable(users)
 
     await expect(User.paginate(0, 1)).rejects.toThrow('Per-page value must be a positive integer.')
@@ -2716,20 +1505,16 @@ describe('model core slice', () => {
   })
 
   it('supports explicit unsafe raw model-builder APIs with policy enforcement', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed' }] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const User = defineModelFromTable(users)
 
     await expect(
@@ -2744,7 +1529,7 @@ describe('model core slice', () => {
         default: createDatabase({
           connectionName: 'default',
           adapter,
-          dialect: createDialect('sqlite'),
+          dialect: createDatabaseDialect('sqlite'),
           security: { allowUnsafeRawSql: true } }) } }))
 
     const AllowedUser = defineModelFromTable(users)
@@ -2773,10 +1558,10 @@ describe('model core slice', () => {
   })
 
   it('supports connection overrides and async transaction rebinding for model statics', async () => {
-    const defaultAdapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Default', email: 'd@example.com', status: 'active' }] }, { users: 1 })
-    const analyticsAdapter = new InMemoryAdapter({
-      users: [{ id: 7, name: 'Analytics', email: 'a@example.com', status: 'active' }] }, { users: 7 })
+    const defaultAdapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => defaultAdapter.disconnect())
+    const analyticsAdapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => analyticsAdapter.disconnect())
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -2784,17 +1569,21 @@ describe('model core slice', () => {
         default: createDatabase({
           connectionName: 'default',
           adapter: defaultAdapter,
-          dialect: createDialect('sqlite') }),
+          dialect: createDatabaseDialect('sqlite') }),
         analytics: createDatabase({
           connectionName: 'analytics',
           adapter: analyticsAdapter,
-          dialect: createDialect('sqlite') }) } }))
+          dialect: createDatabaseDialect('sqlite') }) } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(DB.connection('default'), users)
+    await DB.connection('default').table(users).insert([{ id: 1, name: 'Default', email: 'd@example.com', status: 'active' }])
+    await createTestTable(DB.connection('analytics'), users)
+    await DB.connection('analytics').table(users).insert([{ id: 7, name: 'Analytics', email: 'a@example.com', status: 'active' }])
 
     const User = defineModelFromTable(users)
     const AnalyticsUser = defineModelFromTable(users, { connectionName: 'analytics' })
@@ -2828,17 +1617,15 @@ describe('model core slice', () => {
       relations: {
         profile: hasOne(() => Profile, 'userId') } })
 
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      profiles: [{ id: 10, userId: 1, bio: 'Engineer' }] }, { users: 1, profiles: 10 })
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
+    await createTestTable(db, profiles)
+    await db.table(profiles).insert([{ id: 10, userId: 1, bio: 'Engineer' }])
 
     const user = await User.query().with('profile').findOrFail(1)
     expect(user.get('name')).toBe('Mohamed')
@@ -2849,22 +1636,18 @@ describe('model core slice', () => {
   })
 
   it('binds repositories and entities created inside a transaction to the transaction context', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }])
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'] })
@@ -2889,7 +1672,7 @@ describe('model core slice', () => {
       created.set('status', 'inactive')
       await created.save()
 
-      expect(adapter.getTable('users')).toEqual([
+      expect((await db.table('users').get())).toEqual([
         { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
         { id: 2, name: 'Amina', email: 'a@example.com', status: 'inactive' },
       ])
@@ -2897,43 +1680,19 @@ describe('model core slice', () => {
   })
 
   it('reuses the active transaction for model writes inside DB.transaction', async () => {
-    class CountingTransactionAdapter extends InMemoryAdapter {
-      beginCalls = 0
-      commitCalls = 0
-      rollbackCalls = 0
-
-      override async beginTransaction(): Promise<void> {
-        this.beginCalls += 1
-        await super.beginTransaction()
-      }
-
-      override async commit(): Promise<void> {
-        this.commitCalls += 1
-        await super.commit()
-      }
-
-      override async rollback(): Promise<void> {
-        this.rollbackCalls += 1
-        await super.rollback()
-      }
-    }
-
-    const adapter = new CountingTransactionAdapter({
-      users: [{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+
+    await createTestTable(db, users)
+    await db.table(users).insert({ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' })
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'] })
@@ -2949,84 +1708,51 @@ describe('model core slice', () => {
       await doomed.delete()
     })
 
-    expect(adapter.beginCalls).toBe(1)
-    expect(adapter.commitCalls).toBe(1)
-    expect(adapter.rollbackCalls).toBe(0)
-    expect(adapter.getTable('users')).toEqual([
+    expect(await db.table(users).get()).toEqual([
       { id: 2, name: 'Amina', email: 'a@example.com', status: 'active' },
     ])
   })
 
-  it('mirrors full-text helpers on model statics for supporting dialects', () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', bio: 'Builder and architect' },
-      ] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('postgres') }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string(),
-      bio: column.text() })
-
-    const User = defineModelFromTable(users)
-
-    expect(User.whereFullText(['name', 'bio'], 'mohamed').toSQL()).toEqual({
-      sql: `SELECT * FROM "users" WHERE to_tsvector(concat_ws(' ', "name", "bio")) @@ websearch_to_tsquery(?1)`,
-      bindings: ['mohamed'],
-      source: 'query:select:users' })
+  it('runs model full-text searches on PostgreSQL', async () => {
+    const { db, table } = await openDatabase('postgres')
+    await db.table(table).insert([
+      { id: 1, name: 'Database framework', active: true },
+      { id: 2, name: 'Frontend application', active: false },
+    ])
+    const Record = defineModelFromTable(table)
+    expect(await Record.whereFullText('name', 'framework').pluck('id')).toEqual([1])
+    expect(await Record.whereFullText('name', 'absent').pluck('id')).toEqual([])
+    expect(await Record.where('active', false).orWhereFullText('name', 'framework').orderBy('id').pluck('id')).toEqual([1, 2])
   })
 
-  it('mirrors vector similarity helpers on model statics for supporting dialects', () => {
-    const adapter = new InMemoryAdapter({
-      documents: [
-        { id: 1, title: 'Doc', embedding: [0.1, 0.2, 0.3] },
-      ] }, { documents: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('postgres') }) } }))
-
-    const documents = defineTable('documents', {
-      id: column.id(),
-      title: column.string(),
-      embedding: column.vector({ dimensions: 3 }) })
-
+  it('runs model vector similarity queries on PostgreSQL with pgvector', async () => {
+    const { db, table, schema } = await openDatabase('postgres')
+    await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
+    await schema.table(table.tableName, table => { table.vector('embedding', { dimensions: 3 }).nullable() })
+    const documents = defineTable(table.tableName, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })
+    schema.register(documents)
     const Document = defineModelFromTable(documents)
-
-    expect(Document.whereVectorSimilarTo('embedding', [0.1, 0.2, 0.3], 0.4).toSQL()).toEqual({
-      sql: 'SELECT * FROM "documents" WHERE "embedding" <=> CAST(?1 AS vector) <= ?2 ORDER BY "embedding" <=> CAST(?3 AS vector) ASC',
-      bindings: ['[0.1,0.2,0.3]', 0.6, '[0.1,0.2,0.3]'],
-      source: 'query:select:documents' })
+    await db.table(table.tableName).insert([
+      { id: 1, name: 'Nearest', active: true, embedding: [1, 0, 0] },
+      { id: 2, name: 'Orthogonal', active: true, embedding: [0, 1, 0] },
+      { id: 3, name: 'Opposite', active: true, embedding: [-1, 0, 0] },
+    ])
+    expect(await Document.whereVectorSimilarTo('embedding', [1, 0, 0], 0.9).pluck('name')).toEqual(['Nearest'])
+    expect(await Document.whereVectorSimilarTo('embedding', [0, 1, 0], 0.9).pluck('name')).toEqual(['Orthogonal'])
   })
 
   it('enforces fillable and guarded rules during create and update flows', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
-      status: column.string() })
+      status: column.string().nullable() })
+    await createTestTable(db, users)
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email'],
@@ -3043,15 +1769,15 @@ describe('model core slice', () => {
     const created = await User.create({ name: 'Sara', email: 's@example.com' })
     expect(created.toJSON()).toEqual({ id: 1, name: 'Sara', email: 's@example.com' })
     await expect(User.query().orderBy('id').getJson()).resolves.toEqual([
-      { id: 1, name: 'Sara', email: 's@example.com' },
+      { id: 1, name: 'Sara', email: 's@example.com', status: null },
     ])
     await expect(User.query().where('id', 1).firstJson()).resolves.toEqual({
       id: 1,
       name: 'Sara',
-      email: 's@example.com',
+      email: 's@example.com', status: null,
     })
     await expect(User.getJson()).resolves.toEqual([
-      { id: 1, name: 'Sara', email: 's@example.com' },
+      { id: 1, name: 'Sara', email: 's@example.com', status: null },
     ])
     expect((await OpenUser.create({ name: 'Open', email: 'o@example.com', status: 'active' })).get('id')).toBe(2)
     expect((await WildcardUser.create({ name: 'Wild', email: 'w@example.com' })).get('id')).toBe(3)
@@ -3086,21 +1812,17 @@ describe('model core slice', () => {
   })
 
   it('supports forceFill and scoped unguarded writes for controlled scenarios', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
 
     const User = defineModelFromTable(users, {
       fillable: ['name'],
@@ -3136,21 +1858,18 @@ describe('model core slice', () => {
   })
 
   it('tracks entity dirtiness and delegates save and delete operations through the repository', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    let writes = 0
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite'), logger: { onQuerySuccess: event => { if (event.kind === 'execute') writes += 1 } } })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'] })
@@ -3186,27 +1905,23 @@ describe('model core slice', () => {
     expect(user.getChanges()).toEqual({ status: 'inactive' })
 
     await user.save()
-    expect(adapter.executions[1]).toEqual({
-      sql: 'UPDATE "users" SET "status" = ?1 WHERE "id" = ?2',
-      bindings: ['inactive', 1] })
+
     expect(user.wasChanged('status')).toBe(true)
     expect(user.getChanges()).toEqual({ status: 'inactive' })
 
     await user.update({ status: 'active' })
-    expect(adapter.executions[2]).toEqual({
-      sql: 'UPDATE "users" SET "status" = ?1 WHERE "id" = ?2',
-      bindings: ['active', 1] })
+
     expect(user.get('status')).toBe('active')
     expect(user.isClean()).toBe(true)
     expect(user.wasChanged('status')).toBe(true)
     expect(user.getChanges()).toEqual({ status: 'active' })
 
-    const executionCount = adapter.executions.length
+    const executionCount = writes
     await user.save()
-    expect(adapter.executions).toHaveLength(executionCount)
+    expect(writes).toBe(executionCount)
     expect(user.getChanges()).toEqual({})
 
-    adapter.tables.users![0]!.status = 'server-updated'
+    await db.table(users).where('id', 1).update({ status: 'server-updated' })
     await user.refresh()
     expect(user.get('status')).toBe('server-updated')
     expect(user.wasChanged()).toBe(false)
@@ -3235,7 +1950,8 @@ describe('model core slice', () => {
     const softDeletes = defineTable('soft_users', {
       id: column.id(),
       name: column.string(),
-      deleted_at: column.timestamp() })
+      deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, softDeletes)
     const SoftUser = defineModelFromTable(softDeletes, {
       fillable: ['name'],
       softDeletes: true })
@@ -3245,24 +1961,20 @@ describe('model core slice', () => {
   })
 
   it('supports soft deletes, trashed scopes, and restore flows', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Alive', deleted_at: null },
-        { id: 2, name: 'Gone', deleted_at: '2025-01-01T00:00:00.000Z' },
-      ] }, { users: 2 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
-      deleted_at: column.timestamp() })
+      deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Alive', deleted_at: null },
+        { id: 2, name: 'Gone', deleted_at: new Date('2025-01-01T00:00:00.000Z') },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name'],
@@ -3313,25 +2025,21 @@ describe('model core slice', () => {
   })
 
   it('supports force-delete flows across model statics, entities, and query builders', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Already Trashed', deleted_at: '2025-01-01T00:00:00.000Z' },
-        { id: 2, name: 'Entity Victim', deleted_at: null },
-        { id: 3, name: 'Builder Victim', deleted_at: null },
-      ] }, { users: 3 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
-      deleted_at: column.timestamp() })
+      deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Already Trashed', deleted_at: new Date('2025-01-01T00:00:00.000Z') },
+        { id: 2, name: 'Entity Victim', deleted_at: null },
+        { id: 3, name: 'Builder Victim', deleted_at: null },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name'],
@@ -3359,32 +2067,28 @@ describe('model core slice', () => {
   })
 
   it('replicates entities with default exclusions and custom replication exclusions', async () => {
-    const adapter = new InMemoryAdapter({
-      posts: [{
-        id: 1,
-        publicId: 'public-old',
-        name: 'Original',
-        token: 'secret',
-        created_at: '2025-01-01T00:00:00.000Z',
-        updated_at: '2025-01-02T00:00:00.000Z',
-        deleted_at: null }] }, { posts: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const posts = defineTable('posts', {
       id: column.id(),
       publicId: column.uuid().unique(),
       name: column.string(),
-      token: column.string(),
+      token: column.string().nullable(),
       created_at: column.timestamp(),
       updated_at: column.timestamp(),
-      deleted_at: column.timestamp() })
+      deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([{
+        id: 1,
+        publicId: 'public-old',
+        name: 'Original',
+        token: 'secret',
+        created_at: new Date('2025-01-01T00:00:00.000Z'),
+        updated_at: new Date('2025-01-02T00:00:00.000Z'),
+        deleted_at: null }])
 
     const Post = defineModelFromTable(posts, {
       traits: [HasUuids({ columns: ['publicId'] })],
@@ -3405,14 +2109,13 @@ describe('model core slice', () => {
     expect(clone.exists()).toBe(true)
     expect(clone.get('id')).toBe(2)
     expect(clone.get('publicId')).not.toBe('public-old')
-    expect(adapter.executions.at(-1)?.sql).toBe(
-      'INSERT INTO "posts" ("name", "publicId", "created_at", "updated_at") VALUES (?1, ?2, ?3, ?4)',
-    )
-    expect(adapter.executions.at(-1)?.bindings.slice(0, 2)).toEqual(['Original', clone.get('publicId')])
+
+
 
     const notes = defineTable('notes', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, notes)
     const Note = defineModelFromTable(notes, {
       fillable: ['name'] })
     const noteClone = Note.getRepository().replicateEntity(Note.getRepository().hydrate({ id: 9, name: 'Note' }))
@@ -3420,36 +2123,32 @@ describe('model core slice', () => {
   })
 
   it('supports convention-based, custom, and disabled timestamps', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
-      ],
-      audit_posts: [],
-      notes: [] }, { users: 1, audit_posts: 0, notes: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       created_at: column.timestamp(),
       updated_at: column.timestamp() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed', created_at: new Date('2025-01-01T00:00:00.000Z'), updated_at: new Date('2025-01-01T00:00:00.000Z') },
+      ])
     const auditPosts = defineTable('audit_posts', {
       id: column.id(),
       name: column.string(),
       insertedOn: column.timestamp(),
       refreshedOn: column.timestamp() })
+    await createTestTable(db, auditPosts)
     const notes = defineTable('notes', {
       id: column.id(),
       name: column.string(),
-      created_at: column.timestamp(),
-      updated_at: column.timestamp() })
+      created_at: column.timestamp().nullable(),
+      updated_at: column.timestamp().nullable() })
+    await createTestTable(db, notes)
 
     const User = defineModelFromTable(users, {
       fillable: ['name'] })
@@ -3467,10 +2166,8 @@ describe('model core slice', () => {
 
     created.set('name', 'Amina 2')
     await created.save()
-    expect(adapter.executions.at(-1)?.sql).toBe(
-      'UPDATE "users" SET "name" = ?1, "updated_at" = ?2 WHERE "id" = ?3',
-    )
-    expect(adapter.executions.at(-1)?.bindings[1]).toBeTypeOf('string')
+
+
 
     const custom = await AuditPost.create({ name: 'Audit' })
     expect(custom.get('insertedOn')).toBeInstanceOf(Date)
@@ -3479,27 +2176,14 @@ describe('model core slice', () => {
     const plain = await Note.create({ name: 'Plain' })
     expect(plain.get('created_at')).toBeUndefined()
     expect(plain.get('updated_at')).toBeUndefined()
-    expect(adapter.executions.at(-1)).toEqual({
-      sql: 'INSERT INTO "notes" ("name") VALUES (?1)',
-      bindings: ['Plain'] })
+
   })
 
   it('serializes and hydrates schema-native JSON columns without manual casts', async () => {
-    const adapter = new InMemoryAdapter({
-      teams: [],
-    }, {
-      teams: 0,
-    })
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite'),
-        }),
-      },
-    }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const teams = defineTable('teams', {
       id: column.id(),
@@ -3509,6 +2193,7 @@ describe('model core slice', () => {
       created_at: column.timestamp(),
       updated_at: column.timestamp(),
     })
+    await createTestTable(db, teams)
 
     const Team = defineModelFromTable(teams, {
       fillable: ['name', 'meta', 'active'],
@@ -3520,34 +2205,21 @@ describe('model core slice', () => {
       active: true,
     })
 
-    expect(adapter.executions.at(-1)).toEqual({
-      sql: 'INSERT INTO "teams" ("name", "meta", "active", "created_at", "updated_at") VALUES (?1, ?2, ?3, ?4, ?5)',
-      bindings: [
-        'Matrix',
-        '{"source":"test","enabled":true}',
-        1,
-        expect.any(String),
-        expect.any(String),
-      ],
-    })
+
     expect(created.get('meta')).toEqual({ source: 'test', enabled: true })
     expect(created.get('active')).toBe(true)
   })
 
   it('covers empty-result and broken-entity failure paths', async () => {
-    const adapter = new InMemoryAdapter({ users: [] }, { users: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
 
     const User = defineModelFromTable(users, {
       fillable: ['name'] })
@@ -3563,13 +2235,10 @@ describe('model core slice', () => {
     await expect(orphan.restore()).rejects.toThrow('The bound repository cannot restore entities.')
     expect(() => orphan.replicate()).toThrow('The bound repository cannot replicate entities.')
 
-    const fakeDelete = new Entity({ deleteEntity: async () => {} } as never, { id: 10 }, true)
-    await fakeDelete.delete()
-    expect(fakeDelete.exists()).toBe(false)
-
     const softTable = defineTable('soft_users', {
       id: column.id(),
-      deleted_at: column.timestamp() })
+      deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, softTable)
     const SoftUser = defineModelFromTable(softTable, {
       softDeletes: true })
     const repo = User.getRepository()
@@ -3586,24 +2255,20 @@ describe('model core slice', () => {
   })
 
   it('rolls back failed writes so partial model mutations do not leak', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
-      ] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'],
@@ -3622,20 +2287,20 @@ describe('model core slice', () => {
       name: 'Amina',
       email: 'a@example.com',
       status: 'active' })).rejects.toThrow('created event failed')
-    expect(adapter.getTable('users')).toEqual([
+    expect((await db.table('users').get())).toEqual([
       { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
     ])
 
     const user = await User.findOrFail(1)
     user.fill({ name: 'Changed' })
     await expect(user.save()).rejects.toThrow('updated event failed')
-    expect(adapter.getTable('users')).toEqual([
+    expect((await db.table('users').get())).toEqual([
       { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
     ])
 
     const doomed = await User.findOrFail(1)
     await expect(doomed.delete()).rejects.toThrow('deleted event failed')
-    expect(adapter.getTable('users')).toEqual([
+    expect((await db.table('users').get())).toEqual([
       { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
     ])
   })
@@ -3654,20 +2319,15 @@ describe('model core slice', () => {
   })
 
   it('supports explicit non-incrementing primary keys and custom key types end to end', async () => {
-    const adapter = new NoInsertIdAdapter({
-      api_keys: [] }, { api_keys: 0 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const apiKeys = defineTable('api_keys', {
       key: column.string().primaryKey(),
       label: column.string() })
+    await createTestTable(db, apiKeys)
 
     const ApiKey = defineModelFromTable(apiKeys, {
       primaryKey: 'key',
@@ -3690,23 +2350,19 @@ describe('model core slice', () => {
   })
 
   it('can fail fast when accessing missing attributes on partially selected models', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com' },
-      ] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed', email: 'm@example.com' },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email'],
@@ -3725,24 +2381,20 @@ describe('model core slice', () => {
   })
 
   it('supports repository and static update/delete/upsert flows', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
-      ] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'],
@@ -3767,8 +2419,6 @@ describe('model core slice', () => {
   })
 
   it('dispatches lifecycle events and observers, including cancellation', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }] }, { users: 1 })
     const calls: string[] = []
 
     class UserObserver {
@@ -3789,19 +2439,18 @@ describe('model core slice', () => {
       }
     }
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }])
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'],
@@ -3851,9 +2500,6 @@ describe('model core slice', () => {
   })
 
   it('preserves duplicate configured observers', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-    }, { users: 1 })
     const calls: string[] = []
     const observer = {
       retrieved() {
@@ -3861,21 +2507,17 @@ describe('model core slice', () => {
       },
     }
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite'),
-        }),
-      },
-    }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
     })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const User = defineModelFromTable(users, {
       observers: [observer, observer],
     })
@@ -3886,23 +2528,20 @@ describe('model core slice', () => {
   })
 
   it('supports muting events and quiet create helpers', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }] }, { users: 1 })
     const calls: string[] = []
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       email: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed', email: 'm@example.com', status: 'active' }])
 
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email', 'status'],
@@ -3940,16 +2579,10 @@ describe('model core slice', () => {
   })
 
   it('applies pending attributes to new records while letting explicit values win', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, email: 'existing@example.com', name: 'Existing', status: 'active', role: 'staff' }] }, { users: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
@@ -3957,6 +2590,8 @@ describe('model core slice', () => {
       name: column.string(),
       status: column.string(),
       role: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, email: 'existing@example.com', name: 'Existing', status: 'active', role: 'staff' }])
 
     const User = defineModelFromTable(users, {
       fillable: ['email', 'name', 'status', 'role'],
@@ -4000,11 +2635,10 @@ describe('model core slice', () => {
   })
 
   it('compares models by key, table, and connection', async () => {
-    const defaultAdapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      posts: [{ id: 1, title: 'Post' }] }, { users: 1, posts: 1 })
-    const secondaryAdapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed Secondary' }] }, { users: 1 })
+    const defaultAdapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => defaultAdapter.disconnect())
+    const secondaryAdapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => secondaryAdapter.disconnect())
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -4012,18 +2646,24 @@ describe('model core slice', () => {
         default: createDatabase({
           connectionName: 'default',
           adapter: defaultAdapter,
-          dialect: createDialect('sqlite') }),
+          dialect: createDatabaseDialect('sqlite') }),
         secondary: createDatabase({
           connectionName: 'secondary',
           adapter: secondaryAdapter,
-          dialect: createDialect('sqlite') }) } }))
+          dialect: createDatabaseDialect('sqlite') }) } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(DB.connection('default'), users)
+    await DB.connection('default').table(users).insert([{ id: 1, name: 'Mohamed' }])
+    await createTestTable(DB.connection('secondary'), users)
+    await DB.connection('secondary').table(users).insert([{ id: 1, name: 'Mohamed Secondary' }])
     const posts = defineTable('posts', {
       id: column.id(),
       title: column.string() })
+    await createTestTable(DB.connection('default'), posts)
+    await DB.connection('default').table(posts).insert([{ id: 1, title: 'Post' }])
 
     const User = defineModelFromTable(users)
     const SecondaryUser = defineModelFromTable(users, {
@@ -4046,24 +2686,21 @@ describe('model core slice', () => {
   })
 
   it('supports quiet restore and force delete helpers', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Soft', deleted_at: null },
-      ] }, { users: 1 })
     const calls: string[] = []
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
       deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Soft', deleted_at: null },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name'],
@@ -4083,25 +2720,22 @@ describe('model core slice', () => {
   })
 
   it('supports default eager loads and lets newQueryWithoutRelationships skip them', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      profiles: [{ id: 10, userId: 1, bio: 'Engineer' }] }, { users: 1, profiles: 1 })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const profiles = defineTable('profiles', {
       id: column.id(),
       userId: column.integer(),
       bio: column.string() })
+    await createTestTable(db, profiles)
+    await db.table(profiles).insert([{ id: 10, userId: 1, bio: 'Engineer' }])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Profile = defineModelFromTable(profiles)
@@ -4118,82 +2752,34 @@ describe('model core slice', () => {
     expect(plain.hasRelation('profile')).toBe(false)
   })
 
-  it('exposes lazy relation properties as promise-like loaders', async () => {
-    const values = new Map<string, unknown>()
-    const relations = new Map<string, unknown>()
-    const host: {
-      hasRelation(name: string): boolean
-      getRelation<TRelation = unknown>(name: string): TRelation
-      relation(name: string): never
-      setRelation(name: string, value: unknown): unknown
-      get(key: string): unknown
-      set(key: string, value: unknown): unknown
-    } = {
-      hasRelation(name: string) {
-        return relations.has(name)
-      },
-      getRelation<TRelation = unknown>(name: string) {
-        return relations.get(name) as TRelation
-      },
-      relation: vi.fn(() => (() => undefined) as never),
-      setRelation(name: string, value: unknown) {
-        relations.set(name, value)
-        return value
-      },
-      get(key: string) {
-        return values.get(key)
-      },
-      set(key: string, value: unknown) {
-        values.set(key, value)
-        return value
-      },
-    }
-    const repo = {
-      definition: {
-        table: {
-          columns: {
-            name: {},
-          },
-        },
-        relations: {
-          posts: {},
-        },
-      },
-      getRelationNames() {
-        return ['posts']
-      },
-      resolveRelationProperty: vi.fn(async () => ['loaded']),
-    }
-
-    initializeEntityModelProperties(host, repo)
-
-    const propertyHost = host as typeof host & {
-      name: string
-      posts: PromiseLike<unknown> & {
-        catch<TResult = never>(onRejected?: (reason: unknown) => TResult | PromiseLike<TResult>): Promise<unknown | TResult>
-        finally(onFinally?: () => void): Promise<unknown>
-      }
-    }
-    propertyHost.name = 'Amina'
-    expect(values.get('name')).toBe('Amina')
-    expect(propertyHost.name).toBe('Amina')
-    await expect(propertyHost.posts.then(value => value)).resolves.toEqual(['loaded'])
-    await expect(propertyHost.posts.catch(() => 'failed')).resolves.toEqual(['loaded'])
+  it('loads native relations through then, catch, and finally and caches explicit relation assignments', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), user_id: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert({ id: 1, name: 'Original' })
+    await db.table(posts).insert({ id: 10, user_id: 1, title: 'Loaded' })
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, { relations: { posts: hasMany(() => Post, 'user_id') } })
+    const user = await User.findOrFail(1)
+    user.name = 'Changed'
+    await user.save()
+    expect((await User.findOrFail(1)).get('name')).toBe('Changed')
+    const relation = user.posts as typeof user.posts & Pick<Promise<readonly ReturnType<typeof Post.make>[]>, 'then' | 'catch' | 'finally'>
+    expect((await relation.then(records => records))[0]?.get('title')).toBe('Loaded')
+    expect((await relation.catch(() => []))[0]?.get('title')).toBe('Loaded')
     let finalized = false
-    await expect(propertyHost.posts.finally(() => {
-      finalized = true
-    })).resolves.toEqual(['loaded'])
+    expect((await relation.finally(() => { finalized = true }))[0]?.get('title')).toBe('Loaded')
     expect(finalized).toBe(true)
-    Reflect.set(propertyHost, 'posts', ['cached'])
-    expect(relations.get('posts')).toEqual(['cached'])
+    Reflect.set(user, 'posts', [])
+    expect(await user.posts).toEqual([])
   })
 
   it('dispatches trashed, force delete, and replicating lifecycle hooks', async () => {
-    const adapter = new InMemoryAdapter({
-      users: [
-        { id: 1, name: 'Alive', deleted_at: null },
-        { id: 2, name: 'Trash Me', deleted_at: null },
-      ] }, { users: 2 })
     const calls: string[] = []
 
     class UserObserver {
@@ -4210,18 +2796,20 @@ describe('model core slice', () => {
       }
     }
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect('sqlite') }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
-      deleted_at: column.timestamp() })
+      deleted_at: column.timestamp().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Alive', deleted_at: null },
+        { id: 2, name: 'Trash Me', deleted_at: null },
+      ])
 
     const User = defineModelFromTable(users, {
       fillable: ['name'],

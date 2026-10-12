@@ -1,4 +1,10 @@
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
+import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
+import { importBundledRuntimeModule } from '../../core/src/runtimeModule'
+import type { holoRuntimeInternals as CoreRuntimeInternals } from '../../core/src/portable/holo'
+import { resolve } from 'node:path'
+import * as sessionModule from '../../session/src'
+import { createNativeSessionStore } from '../../auth/tests/support/native-session'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
 import auth, { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, resetAuthRuntime, tokens } from '../../auth/src'
 import type { AuthProviderAdapter, AuthTokenStore, PersonalAccessTokenRecord } from '../../auth/src'
@@ -13,22 +19,6 @@ import {
   socialAuthInternals,
 } from '../src'
 
-type SessionRecord = {
-  readonly id: string
-  readonly store: string
-  readonly data: Readonly<Record<string, unknown>>
-  readonly createdAt: Date
-  readonly lastActivityAt: Date
-  readonly expiresAt: Date
-  readonly rememberTokenHash?: string
-}
-
-type SessionStore = {
-  read(sessionId: string): Promise<SessionRecord | null>
-  write(record: SessionRecord): Promise<void>
-  delete(sessionId: string): Promise<void>
-}
-
 type UserRecord = {
   id: number
   name?: string
@@ -38,159 +28,21 @@ type UserRecord = {
   email_verified_at?: Date | null
 }
 
-class InMemorySessionStore implements SessionStore {
-  readonly records = new Map<string, SessionRecord>()
-  async read(sessionId: string): Promise<SessionRecord | null> {
-    return this.records.get(sessionId) ?? null
-  }
-  async write(record: SessionRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-  async delete(sessionId: string): Promise<void> {
-    this.records.delete(sessionId)
-  }
-}
-
-class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
-  readonly users = new Map<number, UserRecord>()
-  readonly usersByEmail = new Map<string, number>()
-  nextId = 1
-
-  async findById(id: string | number): Promise<UserRecord | null> {
-    const normalized = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
-    return this.users.get(normalized) ?? null
-  }
-
-  async findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<UserRecord | null> {
-    const value = typeof credentials.email === 'string' ? credentials.email : ''
-    const id = this.usersByEmail.get(value)
-    return typeof id === 'number' ? this.users.get(id) ?? null : null
-  }
-
-  async create(input: {
-    readonly name?: string
-    readonly email: string
-    readonly password?: string | null
-    readonly avatar?: string | null
-    readonly email_verified_at?: Date | null
-  }): Promise<UserRecord> {
-    const created: UserRecord = {
-      id: this.nextId,
-      name: input.name,
-      email: input.email,
-      password: input.password,
-      avatar: input.avatar,
-      email_verified_at: input.email_verified_at,
-    }
-    this.nextId += 1
-    this.users.set(created.id, created)
-    this.usersByEmail.set(created.email, created.id)
-    return created
-  }
-
-  getId(user: UserRecord): string | number {
-    return user.id
-  }
-
-  serialize(user: UserRecord) {
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatar: user.avatar ?? null,
-      email_verified_at: user.email_verified_at ?? null,
-    }
-  }
-}
-
-class InMemoryTokenStore implements AuthTokenStore {
-  async create(_record: PersonalAccessTokenRecord): Promise<void> {}
-  async findById(_id: string): Promise<PersonalAccessTokenRecord | null> { return null }
-  async listByUserId(_provider: string, _userId: string | number): Promise<readonly PersonalAccessTokenRecord[]> { return [] }
-  async update(_record: PersonalAccessTokenRecord): Promise<void> {}
-  async delete(_id: string): Promise<void> {}
-  async deleteByUserId(_provider: string, _userId: string | number): Promise<number> { return 0 }
-}
-
-class InMemoryStateStore {
-  readonly records = new Map<string, {
-    provider: string
-    state: string
-    codeVerifier: string
-    guard: string
-    browserBinding?: string
-    createdAt: Date
-  }>()
-  async create(record: {
-    provider: string
-    state: string
-    codeVerifier: string
-    guard: string
-    browserBinding?: string
-    createdAt: Date
-  }): Promise<void> {
-    this.records.set(`${record.provider}:${record.state}`, record)
-  }
-  async read(provider: string, state: string) {
-    return this.records.get(`${provider}:${state}`) ?? null
-  }
-  async delete(provider: string, state: string): Promise<void> {
-    this.records.delete(`${provider}:${state}`)
-  }
-}
-
-class InMemoryIdentityStore {
-  readonly records = new Map<string, {
-    provider: string
-    providerUserId: string
-    guard: string
-    authProvider: string
-    userId: string | number
-    email?: string
-    emailVerified: boolean
-    profile: Readonly<Record<string, unknown>>
-    tokens?: unknown
-    linkedAt: Date
-    updatedAt: Date
-  }>()
-
-  async findByProviderUserId(provider: string, providerUserId: string) {
-    return this.records.get(`${provider}:${providerUserId}`) ?? null
-  }
-
-  async save(record: {
-    provider: string
-    providerUserId: string
-    guard: string
-    authProvider: string
-    userId: string | number
-    email?: string
-    emailVerified: boolean
-    profile: Readonly<Record<string, unknown>>
-    tokens?: unknown
-    linkedAt: Date
-    updatedAt: Date
-  }): Promise<void> {
-    this.records.set(`${record.provider}:${record.providerUserId}`, record)
-  }
-}
-
-function configureRuntime(options: {
+async function configureRuntime(options: {
   emailVerificationRequired?: boolean
   socialGuard?: 'web' | 'admin' | 'api'
   socialMapToProvider?: 'users' | 'admins'
   encryptTokens?: boolean
 } = {}) {
-  const sessionStore = new InMemorySessionStore()
+  const sessionStore = createNativeSessionStore()
   configureSessionRuntime({
     config: {
-      driver: 'database',
+      driver: 'file',
       stores: {
-        database: {
-          name: 'database',
-          driver: 'database',
-          connection: 'main',
-          table: 'sessions',
+        file: {
+          name: 'file',
+          driver: 'file',
+          path: sessionStore.path,
         },
       },
       cookie: {
@@ -207,12 +59,13 @@ function configureRuntime(options: {
       rememberMeLifetime: 43200,
     },
     stores: {
-      database: sessionStore,
+      file: sessionStore,
     },
   })
 
-  const usersProvider = new InMemoryProviderAdapter()
-  const adminsProvider = new InMemoryProviderAdapter()
+  const persistence = await createNativeAuthPersistence()
+  const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord>
+  const adminsProvider = persistence.providers.admins as AuthProviderAdapter<UserRecord>
   const context = authRuntimeInternals.createMemoryAuthContext()
   configureAuthRuntime({
     config: defineAuthConfig({
@@ -249,12 +102,12 @@ function configureRuntime(options: {
       users: usersProvider,
       admins: adminsProvider,
     },
-    tokens: new InMemoryTokenStore(),
+    tokens: persistence.tokens,
     context,
   })
 
-  const stateStore = new InMemoryStateStore()
-  const identityStore = new InMemoryIdentityStore()
+  const { holoRuntimeInternals } = await importBundledRuntimeModule(persistence.projectRoot, resolve(import.meta.dirname, '../../core/src/portable/holo.ts')) as { holoRuntimeInternals: typeof CoreRuntimeInternals }
+  const { stateStore, identityStore } = await holoRuntimeInternals.createCoreSocialBindings(persistence.projectRoot, { ...persistence.loadedConfig, auth: { ...persistence.loadedConfig.auth, social: {} } }, sessionModule)
   const exchangeProfiles = new Map<string, {
     profile: { id: string, email?: string, emailVerified?: boolean, name?: string, avatar?: string }
     tokens: { accessToken: string, refreshToken?: string }
@@ -293,6 +146,7 @@ function configureRuntime(options: {
   })
 
   return {
+    persistence,
     sessionStore,
     usersProvider,
     adminsProvider,
@@ -303,7 +157,7 @@ function configureRuntime(options: {
   }
 }
 
-function reconfigureSocialMapping(runtime: ReturnType<typeof configureRuntime>, mapToProvider: 'users' | 'admins'): void {
+function reconfigureSocialMapping(runtime: Awaited<ReturnType<typeof configureRuntime>>, mapToProvider: 'users' | 'admins'): void {
   configureAuthRuntime({
     config: defineAuthConfig({
       defaults: {
@@ -334,7 +188,7 @@ function reconfigureSocialMapping(runtime: ReturnType<typeof configureRuntime>, 
       users: runtime.usersProvider,
       admins: runtime.adminsProvider,
     },
-    tokens: new InMemoryTokenStore(),
+    tokens: runtime.persistence.tokens,
     context: runtime.context,
   })
 }
@@ -388,7 +242,7 @@ describe('@holo-js/auth-social', () => {
     expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<SocialAuthFacade['redirect']>[1]>()
     expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<SocialAuthFacade['callback']>[1]>()
 
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const redirectResponse = await redirect('google', {
       method: 'GET',
       node: {
@@ -444,7 +298,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('only trusts forwarded event origins when proxy trust is enabled', async () => {
-    configureRuntime()
+    await configureRuntime()
     const previousTrustProxy = process.env.HOLO_SECURITY_TRUST_PROXY
 
     try {
@@ -489,7 +343,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('builds a redirect URL with state and PKCE and rejects unknown callback state', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const response = await redirect('google', new Request('https://app.test/auth/google'))
     expect(response.status).toBe(302)
     const location = response.headers.get('location')
@@ -500,7 +354,7 @@ describe('@holo-js/auth-social', () => {
     expect(response.headers.get('set-cookie')).toContain('holo_oauth_state_google=')
     expect(response.headers.get('set-cookie')).toContain('HttpOnly')
     expect(response.headers.get('set-cookie')).toContain('SameSite=Lax')
-    expect(runtime.stateStore.records.size).toBe(1)
+    expect(await runtime.stateStore.read('google', new URL(response.headers.get('location')!).searchParams.get('state')!)).not.toBeNull()
 
     const invalid = await callback('google', new Request('https://app.test/auth/google/callback?state=bad&code=demo'))
     expect(invalid).toMatchObject({
@@ -511,7 +365,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('rejects callbacks that do not carry the browser-bound state cookie', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
     const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
     runtime.exchangeProfiles.set('code-without-cookie', {
@@ -533,11 +387,11 @@ describe('@holo-js/auth-social', () => {
       message: 'Invalid or expired OAuth state.',
     })
     expect(await runtime.stateStore.read('google', state)).toBeTruthy()
-    expect(runtime.identityStore.records.size).toBe(0)
+    expect(await runtime.persistence.db.table('auth_identities').count()).toBe(0)
   })
 
   it('links by existing identity first and signs the linked local user in', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const localUser = await runtime.usersProvider.create({
       name: 'Existing User',
       email: 'existing@example.com',
@@ -592,7 +446,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('uses the persisted guard and auth provider for an existing social identity after mapping changes', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const localUser = await runtime.usersProvider.create({
       name: 'Original User',
       email: 'original@example.com',
@@ -653,12 +507,12 @@ describe('@holo-js/auth-social', () => {
     expect(storedIdentity).toMatchObject({
       guard: 'web',
       authProvider: 'users',
-      userId: localUser.id,
+      userId: String(localUser.id),
     })
   })
 
   it('fails closed when a persisted social identity binding is no longer configured', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const localUser = await runtime.usersProvider.create({
       name: 'Bound User',
       email: 'bound@example.com',
@@ -731,7 +585,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('links to an existing local user by verified email and creates a new user when no local match exists', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const existing = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -754,7 +608,7 @@ describe('@holo-js/auth-social', () => {
     })
     let response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-link`))
     expect(response.ok).toBe(true)
-    expect((await runtime.identityStore.findByProviderUserId('google', 'google-link'))?.userId).toBe(existing.id)
+    expect((await runtime.identityStore.findByProviderUserId('google', 'google-link'))?.userId).toBe(String(existing.id))
 
     redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
     state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
@@ -778,7 +632,7 @@ describe('@holo-js/auth-social', () => {
         name: 'New Social User',
       },
     })
-    expect(runtime.usersProvider.usersByEmail.has('new@example.com')).toBe(true)
+    expect(Boolean(await runtime.usersProvider.findByCredentials({ email: 'new@example.com' }))).toBe(true)
 
     redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
     state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
@@ -800,11 +654,11 @@ describe('@holo-js/auth-social', () => {
         email: 'redirect@example.com',
       },
     })
-    expect(runtime.usersProvider.usersByEmail.has('redirect@example.com')).toBe(true)
+    expect(Boolean(await runtime.usersProvider.findByCredentials({ email: 'redirect@example.com' }))).toBe(true)
   })
 
   it('preserves the auth provider marker on linked social users', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       socialGuard: 'admin',
     })
 
@@ -826,7 +680,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('keeps mapToProvider sessions on the mapped auth provider during callback login', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       socialMapToProvider: 'admins',
     })
 
@@ -860,15 +714,15 @@ describe('@holo-js/auth-social', () => {
     expect(storedIdentity).toMatchObject({
       guard: 'web',
       authProvider: 'admins',
-      userId: 1,
+      userId: '1',
     })
 
-    expect(runtime.usersProvider.users.size).toBe(0)
-    expect(runtime.adminsProvider.users.size).toBe(1)
+    expect(await runtime.persistence.db.table('users').count()).toBe(0)
+    expect(await runtime.persistence.db.table('admins').count()).toBe(1)
   })
 
   it('does not bind an unverified social email onto an existing local account', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const existing = await runtime.usersProvider.create({
       name: 'Existing Local User',
       email: 'ava@example.com',
@@ -894,13 +748,13 @@ describe('@holo-js/auth-social', () => {
     expect(response.ok).toBe(true)
 
     const storedIdentity = await runtime.identityStore.findByProviderUserId('google', 'google-unverified-existing')
-    expect(storedIdentity?.userId).not.toBe(existing.id)
-    expect(runtime.usersProvider.users.size).toBe(2)
-    expect(runtime.usersProvider.usersByEmail.has('google-unverified-existing@google.social.local')).toBe(true)
+    expect(storedIdentity?.userId).not.toBe(String(existing.id))
+    expect(await runtime.persistence.db.table('users').count()).toBe(2)
+    expect(Boolean(await runtime.usersProvider.findByCredentials({ email: 'google-unverified-existing@google.social.local' }))).toBe(true)
   })
 
   it('accepts OAuth callbacks submitted as form posts', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
     const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
     runtime.exchangeProfiles.set('code-form-post', {
@@ -936,7 +790,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('blocks unverified email when local policy requires verification and allows it otherwise', async () => {
-    const blockedRuntime = configureRuntime({
+    const blockedRuntime = await configureRuntime({
       emailVerificationRequired: true,
     })
     let redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
@@ -960,7 +814,7 @@ describe('@holo-js/auth-social', () => {
     resetAuthRuntime()
     resetSessionRuntime()
 
-    const allowedRuntime = configureRuntime()
+    const allowedRuntime = await configureRuntime()
     redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
     state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
     allowedRuntime.exchangeProfiles.set('code-allow', {
@@ -982,7 +836,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('supports social login against a non-default guard/provider and can encrypt stored tokens', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       socialGuard: 'admin',
       encryptTokens: true,
     })
@@ -1018,7 +872,7 @@ describe('@holo-js/auth-social', () => {
     const session = await auth.guard(response.guard).loginUsing(response.user)
     expect(runtime.context.getSessionId('admin')).toBeTypeOf('string')
     expect(session.cookies.join('; ')).toContain('holo_session=')
-    expect(runtime.adminsProvider.usersByEmail.has('admin@example.com')).toBe(true)
+    expect(Boolean(await runtime.adminsProvider.findByCredentials({ email: 'admin@example.com' }))).toBe(true)
 
     const storedIdentity = await runtime.identityStore.findByProviderUserId('google', 'google-admin')
     expect(storedIdentity?.tokens).toMatchObject({
@@ -1033,7 +887,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('returns the linked user for token guards without creating a session', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       socialGuard: 'api',
     })
     const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
@@ -1075,7 +929,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('fails closed for missing provider runtime, missing config activation, and PKCE mismatch', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     configureSocialAuthRuntime({
       providers: {},
       stateStore: runtime.stateStore,
@@ -1159,7 +1013,7 @@ describe('@holo-js/auth-social', () => {
       providers: {
         users: runtime.usersProvider,
       },
-      tokens: new InMemoryTokenStore(),
+      tokens: runtime.persistence.tokens,
       context: runtime.context,
     })
     await expect(redirect('google', new Request('https://app.test/auth/google'))).rejects.toThrow(
@@ -1260,7 +1114,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('rejects missing browser bindings and malformed state cookies', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     await runtime.stateStore.create({
       provider: 'google',
       state: 'missing-binding',
@@ -1292,7 +1146,7 @@ describe('@holo-js/auth-social', () => {
   })
 
   it('validates local users, ids, guards, and provider adapters at social boundaries', async () => {
-    let runtime = configureRuntime()
+    let runtime = await configureRuntime()
     runtime.usersProvider.findByCredentials = async () => 'invalid' as never
     await expect(socialAuthInternals.resolveLinkedUser('google', {
       id: 'primitive-user',
@@ -1300,7 +1154,7 @@ describe('@holo-js/auth-social', () => {
       emailVerified: true,
     }, { accessToken: 'token' })).rejects.toThrow('lookups must return object users')
 
-    runtime = configureRuntime()
+    runtime = await configureRuntime()
     runtime.usersProvider.create = async () => null as never
     await expect(socialAuthInternals.resolveLinkedUser('google', {
       id: 'null-user',
@@ -1313,7 +1167,7 @@ describe('@holo-js/auth-social', () => {
       ['string-id', ' local-user ', true],
       ['invalid-id', {}, false],
     ] as const) {
-      runtime = configureRuntime()
+      runtime = await configureRuntime()
       runtime.usersProvider.getId = () => userId as never
       if (succeeds) runtime.usersProvider.serialize = undefined as never
       const result = socialAuthInternals.resolveLinkedUser('google', {
@@ -1337,7 +1191,7 @@ describe('@holo-js/auth-social', () => {
       }),
       session: getSessionRuntime(),
       providers: {},
-      tokens: new InMemoryTokenStore(),
+      tokens: runtime.persistence.tokens,
       context: runtime.context,
     })
     await expect(socialAuthInternals.resolveLinkedUser('google', {

@@ -332,14 +332,18 @@ const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 
+type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
+
 function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
+  mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoDbQueryCacheBridge__?: {
       bridge?: DatabaseQueryCacheBridge
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
+      mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
     }
   }
 
@@ -369,11 +373,28 @@ export function onDatabaseDependencyInvalidated(
 
   return () => {
     state.dependencyInvalidationListeners?.delete(internalListener)
+    state.mutationPreviousRowsRequirements?.delete(internalListener)
   }
 }
 
 export function resetDatabaseDependencyInvalidationListeners(): void {
   getQueryCacheBridgeState().dependencyInvalidationListeners = undefined
+  getQueryCacheBridgeState().mutationPreviousRowsRequirements = undefined
+}
+
+function setMutationPreviousRowsRequirement(listener: DatabaseDependencyInvalidationListener, requirement: MutationPreviousRowsRequirement): void {
+  const state = getQueryCacheBridgeState()
+  state.mutationPreviousRowsRequirements ??= new Map()
+  state.mutationPreviousRowsRequirements.set(listener as DatabaseDependencyInvalidationListenerInternal, requirement)
+}
+
+function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
+  const requirements = getQueryCacheBridgeState().mutationPreviousRowsRequirements
+  if (!requirements) return false
+  for (const requirement of requirements.values()) {
+    if (requirement(connectionName, tableName, columns)) return true
+  }
+  return false
 }
 
 export async function collectDatabaseQueryDependencies<TValue>(
@@ -1372,6 +1393,7 @@ function isPatchableOffsetObservation(
   orderBy: readonly DatabaseQueryOrderObservation[],
 ): boolean {
   return typeof plan.offset === 'undefined'
+    || plan.offset === 0
     || (
       typeof plan.limit === 'number'
       && plan.offset > 0
@@ -1998,6 +2020,8 @@ export async function invalidateQueryCacheDependencies(
 }
 
 export const queryCacheInternals = {
+  setMutationPreviousRowsRequirement,
+  requiresMutationPreviousRows,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,
   configureDatabaseQueryCacheBridge,
   createDatabaseMutationEvent,

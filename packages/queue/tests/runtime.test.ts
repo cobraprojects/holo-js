@@ -1,10 +1,16 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { QueueDriverFactory, QueueJobEnvelope, QueueJsonValue, QueueReservedJob, RegisterableQueueJobDefinition } from '../src'
+import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
+import { createQueueDbRuntimeOptions } from '../../queue-db/src'
+import { redisQueueDriverFactory } from '../../queue-redis/src'
+import { startRedisService } from '../../session/tests/support/redis'
+import type { QueueJobEnvelope, QueueJsonValue, QueueReservedJob, RegisterableQueueJobDefinition } from '../src'
 import {
   Queue,
+  runQueueWorker,
+  clearQueueConnection,
   QueueReleaseUnsupportedError,
   configureQueueRuntime,
   defineJob,
@@ -41,49 +47,6 @@ const sharedRedisConfig = {
     },
   },
 } as const
-
-type DispatchedQueueJob = {
-  readonly connection: unknown
-  readonly job: QueueReservedJob['envelope']
-}
-
-function createAsyncDriverFactory(
-  driverName: 'redis' | 'database',
-  dispatched: (entry: DispatchedQueueJob) => void,
-  close = vi.fn(async () => {}),
-): QueueDriverFactory {
-  return {
-    driver: driverName,
-    create(connection, _context) {
-      return {
-        name: connection.name,
-        driver: connection.driver,
-        mode: 'async' as const,
-        async dispatch(job) {
-          dispatched({
-            connection,
-            job,
-          })
-
-          return {
-            jobId: job.id,
-            synchronous: false,
-          }
-        },
-        async clear() {
-          return 0
-        },
-        close,
-        async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
-          return null as QueueReservedJob<TPayload> | null
-        },
-        async acknowledge() {},
-        async release() {},
-        async delete() {},
-      }
-    },
-  }
-}
 
 afterEach(() => {
   resetQueueRegistry()
@@ -150,491 +113,46 @@ export default {
     }
   })
 
-  it('clears cached queue plugin load failures before resetQueueRuntime returns', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-reset-plugin-'))
-
+  it('executes persisted plugin jobs through normalized configuration', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    if (port === undefined) throw new Error('Expected an owned Redis port')
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-native-queue-plugin-'))
     try {
-      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-        name: 'queue-reset-plugin-fixture',
-        private: true,
-      }, null, 2))
-      await mkdir(join(projectRoot, 'config'), { recursive: true })
-      await writeFile(join(projectRoot, 'config/app.mjs'), `
+      await mkdir(join(projectRoot, 'node_modules/holo-plugin-native-queue'), { recursive: true })
+      await symlink(resolve(import.meta.dirname, '../../..', 'packages'), join(projectRoot, 'node_modules/@holo-js'))
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module' }))
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-native-queue')
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({ name: 'holo-plugin-native-queue', type: 'module', holo: { plugin: './plugin.mjs' } }))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), "export default { id: 'native-queue', contributes: { queue: { drivers: { native: { runtime: './driver.mjs' } } } } }")
+      const driverPath = join(pluginRoot, 'driver.mjs')
+      await writeFile(driverPath, `
+import { redisQueueDriverFactory } from '@holo-js/queue-redis'
 export default {
-  plugins: ['holo-plugin-queue-reset'],
-}
-`)
-      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue-reset')
-      await mkdir(pluginRoot, { recursive: true })
-      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
-        name: 'holo-plugin-queue-reset',
-        type: 'module',
-        holo: {
-          plugin: './plugin.mjs',
-        },
-      }, null, 2))
-      await writeFile(join(pluginRoot, 'plugin.mjs'), `
-export default {
-  id: 'queue-reset-plugin',
-  contributes: {
-    queue: {
-      drivers: {
-        reset: {
-          runtime: './driver.mjs',
-        },
-      },
-    },
+  driver: 'native',
+  create(connection, context) {
+    return redisQueueDriverFactory.create({ ...connection, driver: 'redis', redis: { host: '127.0.0.1', port: ${port}, db: 0 } }, context)
   },
 }
 `)
-      await writeFile(join(pluginRoot, 'driver.mjs'), `
-export default {
-  driver: 'reset',
-}
-`)
-
-      let firstError: unknown
-      try {
-        await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue-reset'])
-      } catch (error) {
-        firstError = error
-      }
-
-      resetQueueRuntime()
-
-      let secondError: unknown
-      try {
-        await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue-reset'])
-      } catch (error) {
-        secondError = error
-      }
-
-      expect(firstError).toBeInstanceOf(Error)
-      expect(secondError).toBeInstanceOf(Error)
-      expect(secondError).not.toBe(firstError)
+      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-native-queue'])
+      configureQueueRuntime({ config: { default: 'native', failed: false, connections: { native: { driver: 'native', queue: 'native-jobs', retryAfter: 30, blockFor: 0 } } } })
+      const handled: string[] = []
+      registerNamedJob('native.deliver', defineJob({ async handle(payload: { message: string }) { handled.push(payload.message) } }))
+      await expect(dispatch('native.deliver', { message: 'persisted' })).resolves.toMatchObject({ connection: 'native', queue: 'native-jobs', synchronous: false })
+      expect(handled).toEqual([])
+      const first = await runQueueWorker({ connection: 'native', stopWhenEmpty: true })
+      expect(first.processed).toBe(1)
+      expect(handled).toEqual(['persisted'])
+      const second = await runQueueWorker({ connection: 'native', stopWhenEmpty: true })
+      expect(second.processed).toBe(0)
+      expect(handled).toEqual(['persisted'])
     } finally {
+      await shutdownQueueRuntime()
       resetQueuePluginDriverFactories()
       await rm(projectRoot, { recursive: true, force: true })
     }
-  })
-
-  it('loads queue drivers contributed by active Holo plugins into the runtime', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-plugin-'))
-
-    try {
-      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-        name: 'queue-plugin-fixture',
-        private: true,
-      }, null, 2))
-      await mkdir(join(projectRoot, 'config'), { recursive: true })
-      await writeFile(join(projectRoot, 'config/app.mjs'), `
-export default {
-  plugins: ['holo-plugin-queue'],
-}
-`)
-      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue')
-      await mkdir(pluginRoot, { recursive: true })
-      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
-        name: 'holo-plugin-queue',
-        type: 'module',
-        holo: {
-          plugin: './plugin.mjs',
-        },
-      }, null, 2))
-      await writeFile(join(pluginRoot, 'plugin.mjs'), `
-export default {
-  id: 'queue-plugin',
-  contributes: {
-    queue: {
-      drivers: {
-        plugin: {
-          runtime: './driver.mjs',
-        },
-      },
-    },
-  },
-}
-`)
-      await writeFile(join(pluginRoot, 'driver.mjs'), `
-export const factory = {
-  driver: 'plugin',
-  create(connection) {
-    return {
-      name: connection.name,
-      driver: connection.driver,
-      mode: 'async',
-      async dispatch(job) {
-        return {
-          jobId: job.id,
-          synchronous: false,
-        }
-      },
-      async clear() {
-        return 0
-      },
-      async reserve() {
-        return null
-      },
-      async acknowledge() {},
-      async release() {},
-      async delete() {},
-    }
-  },
-}
-`)
-
-      const firstFactories = await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue'])
-      const secondFactories = await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue'])
-      const equivalentPathFactories = await loadQueuePluginDriverFactories(`${projectRoot}/.`, ['holo-plugin-queue'])
-      expect(firstFactories.map(factory => factory.driver)).toEqual(['plugin'])
-      expect(secondFactories.map(factory => factory.driver)).toEqual(['plugin'])
-      expect(equivalentPathFactories).toBe(firstFactories)
-
-      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue'])
-      expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.get('plugin')?.driver).toBe('plugin')
-      await expect(loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue'])).resolves.toBeUndefined()
-    } finally {
-      resetQueuePluginDriverFactories()
-      await rm(projectRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('uses plugin queue drivers through normalized runtime config', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-config-plugin-'))
-
-    try {
-      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-        name: 'queue-config-plugin-fixture',
-        private: true,
-      }, null, 2))
-      await mkdir(join(projectRoot, 'config'), { recursive: true })
-      await writeFile(join(projectRoot, 'config/app.mjs'), `
-export default {
-  plugins: ['holo-plugin-queue-config'],
-}
-`)
-      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue-config')
-      await mkdir(pluginRoot, { recursive: true })
-      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
-        name: 'holo-plugin-queue-config',
-        type: 'module',
-        holo: {
-          plugin: './plugin.mjs',
-        },
-      }, null, 2))
-      await writeFile(join(pluginRoot, 'plugin.mjs'), `
-export default {
-  id: 'queue-config-plugin',
-  contributes: {
-    queue: {
-      drivers: {
-        plugin: {
-          runtime: './driver.mjs',
-        },
-      },
-    },
-  },
-}
-`)
-      await writeFile(join(pluginRoot, 'driver.mjs'), `
-export const driver = 'plugin'
-export function create(connection) {
-    return {
-      name: connection.name,
-      driver: connection.driver,
-      mode: 'async',
-      async dispatch(job) {
-        return {
-          jobId: job.id,
-          synchronous: false,
-        }
-      },
-      async clear() {
-        return 0
-      },
-      async reserve() {
-        return null
-      },
-      async acknowledge() {},
-      async release() {},
-      async delete() {},
-    }
-}
-`)
-
-      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue-config'])
-      configureQueueRuntime({
-        config: {
-          default: 'plugin',
-          connections: {
-            plugin: {
-              driver: 'plugin',
-              queue: 'plugin-jobs',
-            },
-          },
-        },
-      })
-      registerNamedJob('plugin.job', {
-        async handle() {
-          return undefined
-        },
-      })
-
-      await expect(dispatch('plugin.job', {})).resolves.toMatchObject({
-        connection: 'plugin',
-        queue: 'plugin-jobs',
-        synchronous: false,
-      })
-    } finally {
-      resetQueuePluginDriverFactories()
-      await rm(projectRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('invalidates cached connection drivers when plugin driver factories are loaded', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-plugin-invalidation-'))
-    const firstClose = vi.fn(async () => {})
-
-    try {
-      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-        name: 'queue-plugin-invalidation-fixture',
-        private: true,
-      }, null, 2))
-      await mkdir(join(projectRoot, 'config'), { recursive: true })
-      await writeFile(join(projectRoot, 'config/app.mjs'), `
-export default {
-  plugins: ['holo-plugin-queue-replacement'],
-}
-`)
-      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue-replacement')
-      await mkdir(pluginRoot, { recursive: true })
-      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
-        name: 'holo-plugin-queue-replacement',
-        type: 'module',
-        holo: {
-          plugin: './plugin.mjs',
-        },
-      }, null, 2))
-      await writeFile(join(pluginRoot, 'plugin.mjs'), `
-export default {
-  id: 'queue-replacement-plugin',
-  contributes: {
-    queue: {
-      drivers: {
-        plugin: {
-          runtime: './driver.mjs',
-        },
-      },
-    },
-  },
-}
-`)
-      await writeFile(join(pluginRoot, 'driver.mjs'), `
-export const driver = 'plugin'
-export function create(connection) {
-    return {
-      name: connection.name,
-      driver: connection.driver,
-      mode: 'async',
-      async dispatch(job) {
-        return {
-          jobId: \`plugin:\${job.id}\`,
-          synchronous: false,
-        }
-      },
-      async clear() {
-        return 0
-      },
-      async close() {},
-      async reserve() {
-        return null
-      },
-      async acknowledge() {},
-      async release() {},
-      async delete() {},
-    }
-}
-`)
-      configureQueueRuntime({
-        config: {
-          default: 'plugin',
-          connections: {
-            plugin: {
-              driver: 'plugin',
-              queue: 'plugin-jobs',
-            },
-            secondary: {
-              driver: 'sync',
-              queue: 'secondary-jobs',
-            },
-          },
-        },
-        driverFactories: [{
-          driver: 'plugin',
-          create(connection) {
-            return {
-              name: connection.name,
-              driver: connection.driver,
-              mode: 'async' as const,
-              async dispatch(job) {
-                return {
-                  jobId: `first:${job.id}`,
-                  synchronous: false,
-                }
-              },
-              async clear() {
-                return 0
-              },
-              close: firstClose,
-              async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
-                return null as QueueReservedJob<TPayload> | null
-              },
-              async acknowledge() {},
-              async release() {},
-              async delete() {},
-            }
-          },
-        }],
-      })
-      registerNamedJob('plugin.invalidate', {
-        async handle() {
-          return undefined
-        },
-      })
-
-      await expect(dispatch('plugin.invalidate', {})).resolves.toMatchObject({
-        jobId: expect.stringMatching(/^first:/),
-      })
-      const secondaryDriver = queueRuntimeInternals.resolveConnectionDriver('secondary')
-
-      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue-replacement'])
-
-      expect(firstClose).toHaveBeenCalledTimes(1)
-      expect(queueRuntimeInternals.getQueueRuntimeState().drivers.get('secondary')).toBe(secondaryDriver)
-      await expect(dispatch('plugin.invalidate', {})).resolves.toMatchObject({
-        jobId: expect.stringMatching(/^plugin:/),
-      })
-    } finally {
-      resetQueuePluginDriverFactories()
-      await rm(projectRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('loads no queue plugin drivers when no plugins contribute factories', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-no-plugin-drivers-'))
-
-    try {
-      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ private: true }), 'utf8')
-      await expect(loadQueuePluginDrivers(projectRoot, [])).resolves.toBeUndefined()
-    } finally {
-      resetQueuePluginDriverFactories()
-      await rm(projectRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('invalidates cached inline sync drivers when plugin driver factories are loaded', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-sync-plugin-invalidation-'))
-    const firstClose = vi.fn(async () => {})
-
-    try {
-      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-        name: 'queue-sync-plugin-invalidation-fixture',
-        private: true,
-      }, null, 2))
-      await mkdir(join(projectRoot, 'config'), { recursive: true })
-      await writeFile(join(projectRoot, 'config/app.mjs'), `
-export default {
-  plugins: ['holo-plugin-sync-replacement'],
-}
-`)
-      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-sync-replacement')
-      await mkdir(pluginRoot, { recursive: true })
-      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
-        name: 'holo-plugin-sync-replacement',
-        type: 'module',
-        holo: {
-          plugin: './plugin.mjs',
-        },
-      }, null, 2))
-      await writeFile(join(pluginRoot, 'plugin.mjs'), `
-export default {
-  id: 'sync-replacement-plugin',
-  contributes: {
-    queue: {
-      drivers: {
-        sync: {
-          runtime: './driver.mjs',
-        },
-      },
-    },
-  },
-}
-`)
-      await writeFile(join(pluginRoot, 'driver.mjs'), `
-export default {
-  driver: 'sync',
-  create(connection) {
-    return {
-      name: connection.name,
-      driver: connection.driver,
-      mode: 'sync',
-      async dispatch(job) {
-        return {
-          jobId: \`plugin:\${job.id}\`,
-          synchronous: true,
-          result: 'plugin',
-        }
-      },
-      async clear() {
-        return 0
-      },
-      async close() {},
-    }
-  },
-}
-`)
-      configureQueueRuntime({
-        driverFactories: [{
-          driver: 'sync',
-          create(connection) {
-            return {
-              name: connection.name,
-              driver: connection.driver,
-              mode: 'sync' as const,
-              async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
-                job: QueueJobEnvelope<TPayload>,
-              ) {
-                return {
-                  jobId: `first:${job.id}`,
-                  synchronous: true,
-                  result: 'first' as TResult,
-                }
-              },
-              async clear() {
-                return 0
-              },
-              close: firstClose,
-            }
-          },
-        }],
-      })
-      registerNamedJob('sync.invalidate', {
-        async handle() {
-          return 'handled'
-        },
-      })
-
-      await expect(dispatchSync<Record<string, never>, string>('sync.invalidate', {})).resolves.toBe('first')
-
-      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-sync-replacement'])
-
-      expect(firstClose).toHaveBeenCalledTimes(1)
-      await expect(dispatchSync<Record<string, never>, string>('sync.invalidate', {})).resolves.toBe('plugin')
-    } finally {
-      resetQueuePluginDriverFactories()
-      await rm(projectRoot, { recursive: true, force: true })
-    }
-  })
+  }, 30000)
 
   it('accepts shared redis config when configuring Redis-backed runtime connections', () => {
     configureQueueRuntime({
@@ -1175,209 +693,72 @@ export default {
     expect(warn).toHaveBeenCalledWith('[Holo Queue] onFailed hook failed for job "jobs.fail-sync-warn": hook blew up')
   })
 
-  it('does not run terminal failure hooks when async dispatch enqueueing fails before execution', async () => {
-    const onFailed = vi.fn()
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        {
-          driver: 'redis',
-          create(connection, _context) {
-            return {
-              name: connection.name,
-              driver: connection.driver,
-              mode: 'async' as const,
-              async dispatch() {
-                throw new Error('enqueue failed')
-              },
-              async clear() {
-                return 0
-              },
-              async close() {},
-              async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
-                return null as QueueReservedJob<TPayload> | null
-              },
-              async acknowledge() {},
-              async release() {},
-              async delete() {},
-            }
-          },
-        },
-      ],
-    })
-
-    registerNamedJob('jobs.async-enqueue-failure', {
-      async handle() {},
-      async onFailed() {
-        onFailed()
-      },
-    })
-
-    await expect(dispatch('jobs.async-enqueue-failure', {
-      ok: true,
-    }).onConnection('redis').dispatch()).rejects.toThrow('enqueue failed')
-    expect(onFailed).not.toHaveBeenCalled()
+  it('does not run terminal failure hooks when a real database rejects enqueueing', async () => {
+    const database = await createSQLiteQueueHarness()
+    try {
+      await database.schema.dropTable('jobs')
+      let failed = 0
+      registerNamedJob('jobs.async-enqueue-failure', {
+        async handle() {},
+        onFailed() { failed += 1 },
+      })
+      await expect(dispatch('jobs.async-enqueue-failure', { ok: true })).rejects.toThrow('no such table: jobs')
+      expect(failed).toBe(0)
+    } finally {
+      await database.cleanup()
+    }
   })
 
-  it('supports fluent dispatch overrides individually and in combination for async connections', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'emails',
-          },
-          database: {
-            driver: 'database',
-            queue: 'reports',
-          },
-        },
+  it('routes real queued jobs using definition defaults and fluent overrides', async () => {
+    const database = await createSQLiteQueueHarness({ queueConfig: {
+      default: 'database', failed: false,
+      connections: {
+        database: { driver: 'database', connection: 'default', table: 'jobs', queue: 'reports' },
+        secondary: { driver: 'database', connection: 'default', table: 'jobs', queue: 'emails' },
       },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createAsyncDriverFactory('redis', dispatched),
-        createAsyncDriverFactory('database', dispatched),
-      ],
-    })
-
-    registerNamedJob('mail.send', {
-      connection: 'database',
-      queue: 'mailers',
-      tries: 5,
-      async handle() {},
-    })
-
-    const dateDelay = new Date('2030-01-01T00:00:00.000Z')
-    const connectionOnly = await dispatch('mail.send', { recipient: 'a@example.com' }).onConnection('redis')
-    const queueOnly = await dispatch('mail.send', { recipient: 'b@example.com' }).onQueue('priority').dispatch()
-    const delayed = await dispatch('mail.send', { recipient: 'c@example.com' }).delay(30).dispatch()
-    const combined = await dispatch('mail.send', { recipient: 'd@example.com' })
-      .onConnection('redis')
-      .onQueue('critical')
-      .delay(dateDelay)
-      .dispatch()
-    const optionsDispatch = await dispatch('mail.send', { recipient: 'e@example.com' }, {
-      connection: 'redis',
-      queue: 'bulk',
-      delay: 45,
-    })
-
-    expect(connectionOnly.connection).toBe('redis')
-    expect(queueOnly.queue).toBe('priority')
-    expect(delayed.synchronous).toBe(false)
-    expect(combined).toEqual({
-      jobId: expect.any(String),
-      connection: 'redis',
-      queue: 'critical',
-      synchronous: false,
-    })
-    expect(optionsDispatch).toEqual({
-      jobId: expect.any(String),
-      connection: 'redis',
-      queue: 'bulk',
-      synchronous: false,
-    })
-    expect(dispatched).toHaveBeenCalledTimes(5)
-    expect(dispatched.mock.calls[0]?.[0]).toMatchObject({
-      connection: {
-        name: 'redis',
-      },
-      job: {
-        connection: 'redis',
-        queue: 'mailers',
-        maxAttempts: 5,
-      },
-    })
-    expect(dispatched.mock.calls[1]?.[0]).toMatchObject({
-      connection: {
-        name: 'database',
-      },
-      job: {
-        connection: 'database',
-        queue: 'priority',
-      },
-    })
-    expect(dispatched.mock.calls[2]?.[0]).toMatchObject({
-      job: {
-        connection: 'database',
-        queue: 'mailers',
-        availableAt: expect.any(Number),
-      },
-    })
-    expect(dispatched.mock.calls[3]?.[0]).toMatchObject({
-      connection: {
-        name: 'redis',
-      },
-      job: {
-        connection: 'redis',
-        queue: 'critical',
-        availableAt: dateDelay.getTime(),
-      },
-    })
-    expect(dispatched.mock.calls[4]?.[0]).toMatchObject({
-      connection: {
-        name: 'redis',
-      },
-      job: {
-        connection: 'redis',
-        queue: 'bulk',
-        availableAt: expect.any(Number),
-      },
-    })
+    } })
+    try {
+      const handled: string[] = []
+      registerNamedJob('mail.send', defineJob({
+        connection: 'database', queue: 'mailers', tries: 5,
+        handle(payload: { recipient: string }) { handled.push(payload.recipient) },
+      }))
+      await dispatch('mail.send', { recipient: 'a' }).onConnection('secondary')
+      await dispatch('mail.send', { recipient: 'b' }).onQueue('priority')
+      await dispatch('mail.send', { recipient: 'c' }).delay(30)
+      await dispatch('mail.send', { recipient: 'd' }).onConnection('secondary').onQueue('critical').delay(new Date(Date.now() + 60000))
+      await dispatch('mail.send', { recipient: 'e' }, { connection: 'secondary', queue: 'bulk', delay: 45 })
+      const attempts: number[] = []
+      expect(await runQueueWorker({ connection: 'secondary', queueNames: ['mailers'], once: true, onJobProcessed(event) { attempts.push(event.maxAttempts) } })).toMatchObject({ processed: 1 })
+      expect(await runQueueWorker({ connection: 'database', queueNames: ['priority'], once: true })).toMatchObject({ processed: 1 })
+      expect(await runQueueWorker({ connection: 'database', queueNames: ['mailers'], once: true })).toMatchObject({ processed: 0 })
+      expect(await runQueueWorker({ connection: 'secondary', queueNames: ['critical', 'bulk'], once: true })).toMatchObject({ processed: 0 })
+      expect(handled).toEqual(['a', 'b'])
+      expect(attempts).toEqual([5])
+      expect(await clearQueueConnection('database', { queueNames: ['mailers'] })).toBe(1)
+      expect(await clearQueueConnection('secondary', { queueNames: ['critical', 'bulk'] })).toBe(2)
+    } finally {
+      await database.cleanup()
+    }
   })
 
-  it('supports Queue.connection(name) and useQueueConnection(name) facade access', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-
-    configureQueueRuntime({
-      config: {
-        default: 'sync',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'emails',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: new Map<string, QueueDriverFactory>([
-        ['redis', createAsyncDriverFactory('redis', dispatched)],
-      ]),
-    })
-
-    registerNamedJob('users.notify', {
-      async handle(payload) {
-        return payload
-      },
-    })
-
-    const queued = await Queue.connection('redis').dispatch('users.notify', { ok: true })
-    const syncResult = await useQueueConnection('redis').dispatchSync<{ readonly ok: boolean }, { readonly ok: boolean }>('users.notify', { ok: true })
-
-    expect(queued.connection).toBe('redis')
-    expect(syncResult).toEqual({ ok: true })
-    expect(dispatched).toHaveBeenCalledTimes(1)
+  it('executes asynchronous and synchronous jobs through the named connection facades', async () => {
+    const database = await createSQLiteQueueHarness()
+    try {
+      let handled = 0
+      registerNamedJob('users.notify', defineJob({
+        handle(payload: { ok: boolean }) { handled += 1
+          return payload },
+      }))
+      expect(await Queue.connection('database').dispatch('users.notify', { ok: true })).toMatchObject({ connection: 'database', synchronous: false })
+      expect(handled).toBe(0)
+      expect(await useQueueConnection('database').dispatchSync<{ ok: boolean }, { ok: boolean }>('users.notify', { ok: true })).toEqual({ ok: true })
+      expect(handled).toBe(1)
+      expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ processed: 1 })
+      expect(handled).toBe(2)
+    } finally {
+      await database.cleanup()
+    }
   })
 
   it('validates payloads and driver resolution errors across edge cases', async () => {
@@ -1487,125 +868,37 @@ export default {
     })).resolves.toBe('continued')
   })
 
-  it('creates and caches driver factories and resolved drivers cleanly', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    const redisFactory = createAsyncDriverFactory('redis', dispatched)
-    const defaultFactories = queueRuntimeInternals.createQueueDriverFactoryMap()
-    const arrayFactories = queueRuntimeInternals.createQueueDriverFactoryMap([redisFactory])
-    const mapFactories = queueRuntimeInternals.createQueueDriverFactoryMap(new Map<string, QueueDriverFactory>([
-      ['redis', redisFactory],
-    ]))
-
-    expect(queueRuntimeInternals.createDefaultDriverFactories().has('sync')).toBe(true)
-    expect(queueRuntimeInternals.createDefaultDriverFactories().has('redis')).toBe(false)
-    expect(queueRuntimeInternals.createDefaultDriverFactories().has('database')).toBe(false)
-    expect(defaultFactories.has('sync')).toBe(true)
-    expect(arrayFactories.get('sync')).toBeDefined()
-    expect(arrayFactories.get('redis')).toBe(redisFactory)
-    expect(mapFactories.get('redis')).toBe(redisFactory)
-
-    configureQueueRuntime({
-      config: normalizeQueueConfig({
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'emails',
-          },
-        },
-      }, sharedRedisConfig),
-      driverFactories: [redisFactory],
-    })
-
-    registerNamedJob('jobs.resolve', {
-      async handle(payload) {
-        return payload
+  it('retains queued jobs and registered handlers when resetting the runtime', async () => {
+    const database = await createSQLiteQueueHarness()
+    const handled: string[] = []
+    const job = defineJob({
+      async handle(payload: { message: string }) {
+        handled.push(payload.message)
+        return payload.message
       },
     })
+    try {
+      registerNamedJob('jobs.cleanup', job)
+      await job.dispatch({ message: 'queued before reset' })
+      resetQueueRuntime()
 
-    const redisDriver = queueRuntimeInternals.resolveConnectionDriver('redis')
-    const sameRedisDriver = queueRuntimeInternals.resolveConnectionDriver('redis')
-    const syncDriver = queueRuntimeInternals.resolveSyncExecutionDriver()
-    const sameSyncDriver = queueRuntimeInternals.resolveSyncExecutionDriver()
+      await expect(job.dispatch({ message: 'sync after reset' })).resolves.toMatchObject({
+        connection: 'sync',
+        synchronous: true,
+      })
+      await expect(job.dispatchSync({ message: 'sync result after reset' })).resolves.toBe('sync result after reset')
+      expect(handled).toEqual(['sync after reset', 'sync result after reset'])
 
-    expect(redisDriver).toBe(sameRedisDriver)
-    expect(syncDriver).toBe(sameSyncDriver)
-    expect(redisDriver.mode).toBe('async')
-    expect(syncDriver.mode).toBe('sync')
-    expect(queueRuntimeInternals.resolveDriverFactory(
-      queueRuntimeInternals.getQueueRuntimeState(),
-      queueRuntimeInternals.resolveConnectionConfig(queueRuntimeInternals.getQueueRuntimeState().config, 'redis'),
-    )).toBe(redisFactory)
-
-    await expect(dispatch('jobs.resolve', {
-      ok: true,
-    }).onConnection('redis').dispatch()).resolves.toMatchObject({
-      connection: 'redis',
-      synchronous: false,
-    })
-    expect(dispatched).toHaveBeenCalledTimes(1)
-    expect(() => queueRuntimeInternals.resolveDriverFactory(
-      queueRuntimeInternals.getQueueRuntimeState(),
-      {
-        name: 'broken',
-        driver: 'sqs',
-      } as never,
-    )).toThrow('Queue connection "broken" uses driver "sqs" but no queue driver factory is registered.')
-  })
-
-  it('resets runtime state without clearing registered jobs', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    const close = vi.fn(async () => {})
-
-    registerNamedJob('jobs.cleanup', {
-      async handle() {
-        return 'done'
-      },
-    })
-
-    configureQueueRuntime({
-      config: normalizeQueueConfig({
-        default: 'database',
-        connections: {
-          database: {
-            driver: 'database',
-            queue: 'reports',
-          },
-        },
-      }),
-      driverFactories: [
-        createAsyncDriverFactory('database', dispatched, close),
-      ],
-    })
-
-    expect(listRegisteredQueueJobs()).toHaveLength(1)
-    expect(Queue.connection().name).toBe('database')
-    expect(queueRuntimeInternals.getQueueRuntimeState().drivers.size).toBe(0)
-
-    await dispatch('jobs.cleanup', {
-      ok: true,
-    }).dispatch()
-    expect(queueRuntimeInternals.getQueueRuntimeState().drivers.size).toBe(1)
-
-    resetQueueRuntime()
-
-    expect(listRegisteredQueueJobs().map(entry => entry.name)).toEqual(['jobs.cleanup'])
-    expect(Queue.connection().name).toBe('sync')
-    expect(queueRuntimeInternals.getQueueRuntimeState().drivers.size).toBe(0)
-    expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.size).toBe(1)
-    await vi.waitFor(() => {
-      expect(close).toHaveBeenCalledTimes(1)
-    })
-    await expect(dispatch('jobs.cleanup', {
-      ok: true,
-    }).dispatch()).resolves.toMatchObject({
-      connection: 'sync',
-      queue: 'default',
-      synchronous: true,
-    })
+      configureQueueRuntime({
+        config: { default: 'database', connections: { database: { driver: 'database', connection: 'default', table: 'jobs' } } },
+        ...createQueueDbRuntimeOptions(),
+      })
+      await runQueueWorker({ connection: 'database', once: true })
+      expect(handled).toEqual(['sync after reset', 'sync result after reset', 'queued before reset'])
+      expect(await database.readJobRows()).toEqual([])
+    } finally {
+      await database.cleanup()
+    }
   })
 
   it('unregisters individual jobs without clearing the entire registry', async () => {
@@ -1621,176 +914,63 @@ export default {
     expect(listRegisteredQueueJobs().map(entry => entry.name)).toEqual(['jobs.keep'])
   })
 
-  it('exposes the stable runtime accessor and awaits driver teardown during shutdown', async () => {
-    let releaseClose: (() => void) | undefined
-    const close = vi.fn(() => new Promise<void>((resolve) => {
-      releaseClose = resolve
-    }))
-
-    registerNamedJob('jobs.shutdown', {
-      async handle() {},
-    })
-
-    configureQueueRuntime({
-      config: {
-        default: 'database',
-        connections: {
-          database: {
-            driver: 'database',
-            queue: 'reports',
-          },
-        },
+  it('preserves persisted jobs and handlers across shutdown and restart', async () => {
+    const database = await createSQLiteQueueHarness()
+    const handled: string[] = []
+    const job = defineJob({
+      async handle(payload: { message: string }) {
+        handled.push(payload.message)
       },
-      driverFactories: [
-        createAsyncDriverFactory('database', vi.fn<(entry: DispatchedQueueJob) => void>(), close),
-      ],
     })
+    try {
+      registerNamedJob('jobs.shutdown', job)
+      await job.dispatch({ message: 'before shutdown' })
+      await shutdownQueueRuntime()
+      await shutdownQueueRuntime()
+      await job.dispatch({ message: 'after shutdown' })
+      expect(handled).toEqual(['after shutdown'])
 
-    const beforeDispatch = getQueueRuntime()
-    expect(beforeDispatch.config.default).toBe('database')
-    expect(beforeDispatch.drivers.size).toBe(0)
-    expect(queueRuntimeInternals.createQueueRuntimeBinding(queueRuntimeInternals.getQueueRuntimeState())).toEqual(beforeDispatch)
-
-    await dispatch('jobs.shutdown', {
-      ok: true,
-    }).dispatch()
-
-    const shutdownPromise = shutdownQueueRuntime()
-    expect(close).toHaveBeenCalledTimes(1)
-    expect(listRegisteredQueueJobs()).toHaveLength(1)
-
-    releaseClose?.()
-    await shutdownPromise
-
-    expect(getQueueRuntime().config.default).toBe('sync')
-    expect(getQueueRuntime().drivers.size).toBe(0)
-    expect(listRegisteredQueueJobs().map(entry => entry.name)).toEqual(['jobs.shutdown'])
-    await expect(dispatch('jobs.shutdown', {
-      ok: true,
-    }).dispatch()).resolves.toMatchObject({
-      connection: 'sync',
-      queue: 'default',
-      synchronous: true,
-    })
+      configureQueueRuntime({
+        config: { default: 'database', connections: { database: { driver: 'database', connection: 'default', table: 'jobs' } } },
+        ...createQueueDbRuntimeOptions(),
+      })
+      await runQueueWorker({ connection: 'database', once: true })
+      expect(handled).toEqual(['after shutdown', 'before shutdown'])
+      expect(await database.readJobRows()).toEqual([])
+    } finally {
+      await database.cleanup()
+    }
   })
 
-  it.each([1, 2])('reports %i asynchronous shutdown failures and releases owned drivers once', async (failureCount) => {
-    const failures = [new Error('first close failed'), new Error('second close failed')].slice(0, failureCount)
-    const closed: string[] = []
-    registerNamedJob('jobs.close-failures', { async handle() {} })
-    configureQueueRuntime({
-      config: {
-        default: 'first',
-        connections: {
-          first: { driver: 'database', queue: 'first' },
-          second: { driver: 'database', queue: 'second' },
-        },
-      },
-      driverFactories: [{
-        ...createAsyncDriverFactory('database', () => {}),
-        create(connection, context) {
-          const driver = createAsyncDriverFactory('database', () => {}).create(connection, context)
-          return {
-            ...driver,
-            close() {
-              closed.push(connection.name)
-              const failure = failures[connection.name === 'first' ? 0 : 1]
-              if (failure) throw failure
-              return Promise.resolve()
-            },
-          }
-        },
-      }],
-    })
-    await dispatch('jobs.close-failures', {}).onConnection('first').dispatch()
-    await dispatch('jobs.close-failures', {}).onConnection('second').dispatch()
-
-    if (failureCount === 1) await expect(shutdownQueueRuntime()).rejects.toBe(failures[0])
-    else await expect(shutdownQueueRuntime()).rejects.toMatchObject({ errors: failures })
-    expect(getQueueRuntime().drivers.size).toBe(0)
-    expect(getQueueRuntime().config.default).toBe('sync')
+  it('preserves real Redis jobs across shutdown after the server denies QUIT', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    const admin = service.clients[0]
+    if (port === undefined || !admin) throw new Error('Expected an owned Redis server')
+    await admin.acl('SETUSER', 'worker', 'on', '>secret', '~*', '+@all')
+    const options = {
+      config: { default: 'redis', connections: { redis: { driver: 'redis' as const, queue: 'shutdown', connection: 'default' } } },
+      redisConfig: { default: 'default', connections: { default: { name: 'default', host: '127.0.0.1', port, db: 0, username: 'worker', password: 'secret' } } },
+      driverFactories: [redisQueueDriverFactory],
+    }
+    const handled: string[] = []
+    registerNamedJob('jobs.shutdown', { async handle(payload: { message: string }) { handled.push(payload.message) } })
+    configureQueueRuntime(options)
+    await dispatch('jobs.shutdown', { message: 'before shutdown' }).dispatch()
+    await admin.acl('SETUSER', 'worker', '-quit')
     await shutdownQueueRuntime()
-    expect(closed).toEqual(['first', 'second'])
-  })
+    await admin.acl('SETUSER', 'worker', '+quit')
+    configureQueueRuntime(options)
+    await runQueueWorker({ connection: 'redis', once: true })
+    expect(handled).toEqual(['before shutdown'])
+    expect(await clearQueueConnection('redis')).toBe(0)
+    await shutdownQueueRuntime()
+  }, 15000)
 
-  it('closes cached drivers when runtime configuration changes and swallows close failures', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    const close = vi.fn(async () => {})
-    const failingClose = vi.fn(async () => {
-      throw new Error('close failed')
-    })
-
+  it('uses the default queue name when no queue is configured', async () => {
     configureQueueRuntime({
-      config: {
-        default: 'redis',
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createAsyncDriverFactory('redis', dispatched, close),
-      ],
+      config: { default: 'sync', connections: { sync: { driver: 'sync' } } },
     })
-
-    registerNamedJob('jobs.reconfigure', {
-      async handle() {},
-    })
-
-    await dispatch('jobs.reconfigure', {
-      ok: true,
-    }).dispatch()
-    configureQueueRuntime({
-      driverFactories: [
-        createAsyncDriverFactory('redis', dispatched, failingClose),
-      ],
-    })
-
-    await vi.waitFor(() => {
-      expect(close).toHaveBeenCalledTimes(1)
-    })
-
-    expect(queueRuntimeInternals.getQueueRuntimeState().drivers.size).toBe(0)
-    queueRuntimeInternals.closeQueueDrivers([])
-    await Promise.resolve()
-  })
-
-  it('swallows explicit closeQueueDrivers teardown failures', async () => {
-    queueRuntimeInternals.closeQueueDrivers([{
-      name: 'broken',
-      driver: 'sync',
-      mode: 'sync',
-      async dispatch() {
-        return {
-          jobId: 'broken',
-          synchronous: true,
-          result: undefined,
-        }
-      },
-      async clear() {
-        return 0
-      },
-      async close() {
-        throw new Error('close failed')
-      },
-    }])
-
-    await Promise.resolve()
-  })
-
-  it('falls back to the default queue name when runtime config is already normalized without a queue value', async () => {
-    queueRuntimeInternals.getQueueRuntimeState().config = {
-      default: 'sync',
-      failed: false,
-      connections: {
-        sync: {
-          name: 'sync',
-          driver: 'sync',
-        },
-      },
-    } as never
 
     registerNamedJob('jobs.default-queue', {
       async handle(_payload, context) {

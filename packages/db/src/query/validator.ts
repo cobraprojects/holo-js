@@ -1,3 +1,4 @@
+import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import type { TableColumnsShape } from '../schema/types'
 import type {
@@ -60,39 +61,10 @@ function assertRawPlaceholderBindings(sql: string, bindings: readonly unknown[],
   const questionNumbered = new Set<number>()
   const dollarNumbered = new Set<number>()
 
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index]
-    if (char === '?') {
-      let digits = ''
-      let cursor = index + 1
-      while (cursor < sql.length && /\d/.test(sql[cursor]!)) {
-        digits += sql[cursor]!
-        cursor += 1
-      }
-
-      if (digits.length > 0) {
-        questionNumbered.add(Number(digits))
-        index = cursor - 1
-        continue
-      }
-
-      anonymousCount += 1
-      continue
-    }
-
-    if (char === '$') {
-      let digits = ''
-      let cursor = index + 1
-      while (cursor < sql.length && /\d/.test(sql[cursor]!)) {
-        digits += sql[cursor]!
-        cursor += 1
-      }
-
-      if (digits.length > 0) {
-        dollarNumbered.add(Number(digits))
-        index = cursor - 1
-      }
-    }
+  for (const placeholder of rawSqlPlaceholders(sql)) {
+    if (typeof placeholder.index === 'undefined') anonymousCount += 1
+    else if (placeholder.style === '?') questionNumbered.add(placeholder.index)
+    else dollarNumbered.add(placeholder.index)
   }
 
   const numberedSets = [questionNumbered, dollarNumbered].filter(set => set.size > 0)
@@ -114,6 +86,9 @@ function assertRawPlaceholderBindings(sql: string, bindings: readonly unknown[],
   const numbered = questionNumbered.size > 0 ? questionNumbered : dollarNumbered
   if (numbered.size > 0) {
     const highest = Math.max(...numbered)
+    if (numbered.has(0)) {
+      throw new SecurityError(`${kind} SQL must use contiguous numbered placeholders starting at 1.`)
+    }
     if (bindings.length !== highest) {
       throw new SecurityError(`${kind} SQL placeholder count does not match the provided bindings.`)
     }

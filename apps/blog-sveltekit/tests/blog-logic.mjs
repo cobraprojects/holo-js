@@ -1,9 +1,13 @@
+import { broadcastRaw } from '@holo-js/broadcast'
+import { assertExampleAppQueueMaintenance } from '../../../tests/example-app-maintenance.mjs'
 import assert from 'node:assert/strict'
 
 import authorization, { AuthorizationError } from '@holo-js/authorization'
 import cache from '@holo-js/cache'
 import { assertExampleAppCacheBehavior } from '../../../tests/example-app-cache.mjs'
 import { initializeHoloAdapterProject } from '@holo-js/core'
+import { DB, createSchemaService } from '@holo-js/db'
+import IndexBlogPost from '../server/jobs/blog/index-post.ts'
 
 import Category from '../server/models/Category.ts'
 import Comment from '../server/models/Comment.ts'
@@ -131,6 +135,8 @@ try {
   assert.equal((await getAdminCategoriesData()).categories.length, 2)
   assert.equal((await getAdminTagsData()).tags.length, 3)
   assert.equal((await getAdminPostsData()).posts.length, 2)
+  await IndexBlogPost.dispatch({ action: 'updated', postId: featuredPost.id })
+  await assertExampleAppQueueMaintenance(DB, IndexBlogPost, featuredPost, broadcastRaw, createSchemaService)
 } finally {
   await project.runtime.shutdown()
 }

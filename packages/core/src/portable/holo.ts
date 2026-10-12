@@ -46,6 +46,7 @@ import {
   connectionAsyncContext,
   configureDB,
   DB,
+  parseDatabaseDriver,
   registerDatabaseDriverFactory,
   resetDB,
   unregisterDatabaseDriverFactory,
@@ -248,6 +249,7 @@ type NotificationsModule = Pick<typeof NotificationsFeature,
   | 'defineNotification'
   | 'notify'
   | 'notifyUsing'
+  | 'notificationsRuntimeInternals'
   | 'resetNotificationsRuntime'
 >
 
@@ -255,6 +257,7 @@ type BroadcastModule = Pick<typeof BroadcastFeature,
   | 'configureBroadcastRuntime'
   | 'getBroadcastRuntimeBindings'
   | 'broadcastRaw'
+  | 'broadcastRuntimeInternals'
   | 'resetBroadcastRuntime'
 >
 
@@ -264,6 +267,7 @@ type MailModule = Pick<typeof MailFeature,
   | 'configureMailRuntime'
   | 'getMailRuntimeBindings'
   | 'sendMail'
+  | 'mailRuntimeInternals'
   | 'resetMailRuntime'
 >
 
@@ -406,7 +410,7 @@ async function loadConfiguredDatabaseDrivers<TCustom extends HoloConfigMap>(
       if (connection.startsWith('mysql://') || connection.startsWith('mysql2://')) return 'mysql'
       return 'sqlite'
     }
-    return connection.driver ?? 'sqlite'
+    return parseDatabaseDriver(connection.driver, 'sqlite')
   }))
   const factories: DatabaseDriverFactory[] = []
   for (const driver of drivers) {
@@ -1478,6 +1482,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         ? { renderView: options.renderView ?? getHoloRenderingRuntime().renderView }
         : {}),
     })
+    if (queueModule) {
+      await mailModule.mailRuntimeInternals.ensureMailQueueJobRegistered()
+    }
   }
 
   const broadcastConfigured = hasLoadedConfigFile(loadedConfig, 'broadcast')
@@ -1497,6 +1504,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
           }
         : {}),
     })
+    if (queueModule) {
+      await broadcastModule.broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
+    }
   }
 
   const notificationsConfigured = hasLoadedConfigFile(loadedConfig, 'notifications')
@@ -1527,6 +1537,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         ? { broadcaster: createCoreNotificationBroadcaster(broadcastModule) }
         : {}),
     })
+    if (queueModule) {
+      await notificationsModule.notificationsRuntimeInternals.ensureNotificationsQueueJobRegistered()
+    }
   }
 
   const notificationsRuntimeBindings = notificationsModule?.getNotificationsRuntimeBindings()

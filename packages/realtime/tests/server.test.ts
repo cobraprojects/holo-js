@@ -10,18 +10,18 @@ import {
   resetRealtimeRuntime,
   resolveRealtimeDefinition,
 } from '../src/server'
-import { createFakeDatabase } from './helpers/fake-database'
+import { openRealtimeDatabase } from './helpers/native-database'
 
 describe('@holo-js/realtime server definition resolution', () => {
   it('executes query and mutation requests independently of broadcast transport', async () => {
-    const database = createFakeDatabase(() => [])
+    const database = await openRealtimeDatabase()
     const user = {
       id: 10,
       email: 'current@example.com',
       can: async () => true,
     }
     configureRealtimeRuntime({
-      db: () => database.connection,
+      db: () => database.db,
       loadAuthModule: async () => ({
         getAuthRuntime: () => ({
           user: async () => user,

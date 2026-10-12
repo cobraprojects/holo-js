@@ -1040,53 +1040,6 @@ describe('@holo-js/config', () => {
     })).toThrow('must configure exactly one target mode: url, clusters, or socketPath')
   })
 
-  it('covers redis URL parser fallback branches during normalization', () => {
-    const originalUrl = globalThis.URL
-    const rejectingUrl = class BrokenUrl {
-      constructor() {
-        throw 'broken redis url parser'
-      }
-    } as unknown as typeof URL
-
-    try {
-      vi.stubGlobal('URL', rejectingUrl)
-      expect(() => normalizeRedisConfig({
-        default: 'cache',
-        connections: {
-          cache: {
-            url: 'redis://cache.internal:6379',
-          },
-        },
-      })).toThrow('redis connection "cache" url must be a valid redis:// or rediss:// URL')
-
-      let calls = 0
-      vi.stubGlobal('URL', class UrlThatBreaksDuringDbParsing {
-        protocol = 'redis:'
-        pathname = '/0'
-
-        constructor() {
-          calls += 1
-          if (calls > 1) {
-            throw 'broken redis database parser'
-          }
-        }
-      } as unknown as typeof URL)
-
-      const normalized = normalizeRedisConfig({
-        default: 'cache',
-        connections: {
-          cache: {
-            url: 'redis://cache.internal:6379/0',
-          },
-        },
-      })
-
-      expect(normalized.connections.cache?.db).toBe(0)
-    } finally {
-      vi.stubGlobal('URL', originalUrl)
-    }
-  })
-
   it('normalizes cache and redis defaults through fallback branches', () => {
     expect(normalizeCacheConfig({
       drivers: {

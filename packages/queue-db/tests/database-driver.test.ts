@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setTimeout } from 'node:timers/promises'
+import { afterEach, describe, expect, it } from 'vitest'
 import { DB } from '@holo-js/db'
-import { connectionAsyncContext } from '@holo-js/db'
 import { configureQueueRuntime, queueRuntimeInternals } from '@holo-js/queue'
 import {
   createQueueDbRuntimeOptions,
@@ -8,7 +8,6 @@ import {
   DatabaseQueueDriver,
   DatabaseQueueDriverError,
 } from '../src'
-import { createQueueDatabaseContextMock } from './support/dialect'
 import { createSQLiteQueueHarness, type SQLiteQueueHarness } from './support/sqlite-queue'
 import { runSharedQueueDriverContract } from '../../queue/tests/support/shared-driver-contract'
 
@@ -45,7 +44,6 @@ function createEnvelope(name: string, overrides: Partial<{
 }
 
 afterEach(async () => {
-  vi.useRealTimers()
   while (harnesses.length > 0) {
     await harnesses.pop()?.cleanup()
   }
@@ -53,8 +51,6 @@ afterEach(async () => {
 
 describe('@holo-js/queue-db database driver', () => {
   it('dispatches, reserves, releases, acknowledges, deletes, and clears queued jobs', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(1_000)
 
     const harness = await createSQLiteQueueHarness({
       queueConfig: {
@@ -73,19 +69,20 @@ describe('@holo-js/queue-db database driver', () => {
     })
     harnesses.push(harness)
 
+    const delayedAvailableAt = Date.now() + 2_200
     await harness.driver.dispatch(createEnvelope('jobs.immediate', {
       id: 'job-immediate',
-      createdAt: 1_000,
+      createdAt: Date.now(),
     }))
     await harness.driver.dispatch(createEnvelope('jobs.delayed', {
       id: 'job-delayed',
-      availableAt: 5_000,
-      createdAt: 1_000,
+      availableAt: delayedAvailableAt,
+      createdAt: Date.now(),
     }))
     await harness.driver.dispatch(createEnvelope('jobs.mail', {
       id: 'job-mail',
       queue: 'mail',
-      createdAt: 1_000,
+      createdAt: Date.now(),
     }))
 
     const firstReserved = await harness.driver.reserve({
@@ -99,7 +96,7 @@ describe('@holo-js/queue-db database driver', () => {
       },
     })
 
-    await harness.driver.release(firstReserved!, { delaySeconds: 3 })
+    await harness.driver.release(firstReserved!, { delaySeconds: 1 })
     expect(await harness.driver.reserve({
       queueNames: ['default'],
       workerId: 'worker-1',
@@ -110,7 +107,7 @@ describe('@holo-js/queue-db database driver', () => {
     })).toBe(1)
     expect((await harness.readJobRows()).map(row => row.id)).toEqual(['job-delayed', 'job-immediate'])
 
-    vi.setSystemTime(4_100)
+    await setTimeout(1_050)
     const releasedReserved = await harness.driver.reserve({
       queueNames: ['default'],
       workerId: 'worker-1',
@@ -123,7 +120,7 @@ describe('@holo-js/queue-db database driver', () => {
     })
     await harness.driver.acknowledge(releasedReserved!)
 
-    vi.setSystemTime(5_100)
+    await setTimeout(Math.max(0, delayedAvailableAt - Date.now()) + 50)
     const delayedReserved = await harness.driver.reserve({
       queueNames: ['default'],
       workerId: 'worker-1',
@@ -144,8 +141,6 @@ describe('@holo-js/queue-db database driver', () => {
   })
 
   it('reclaims jobs whose visibility timeout expired and leaves active reservations out of clear()', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(10_000)
 
     const harness = await createSQLiteQueueHarness({
       queueConfig: {
@@ -166,11 +161,11 @@ describe('@holo-js/queue-db database driver', () => {
 
     await harness.driver.dispatch(createEnvelope('jobs.active', {
       id: 'job-active',
-      createdAt: 10_000,
+      createdAt: Date.now(),
     }))
     await harness.driver.dispatch(createEnvelope('jobs.pending', {
       id: 'job-pending',
-      createdAt: 10_000,
+      createdAt: Date.now(),
     }))
 
     const activeReservation = await harness.driver.reserve({
@@ -182,7 +177,7 @@ describe('@holo-js/queue-db database driver', () => {
     expect(await harness.driver.clear()).toBe(1)
     expect((await harness.readJobRows()).map(row => row.id)).toEqual(['job-active'])
 
-    vi.setSystemTime(11_500)
+    await setTimeout(1_100)
     const reclaimedReservation = await harness.driver.reserve({
       queueNames: ['default'],
       workerId: 'worker-2',
@@ -259,120 +254,40 @@ describe('@holo-js/queue-db database driver', () => {
     await expect(driver.clear()).rejects.toThrow('failed to clear queued jobs: DB facade is not configured with a ConnectionManager.')
   })
 
-  it('retries the same queue when a reservation update loses the race', async () => {
-    const queryCompiled = vi.fn()
-      .mockResolvedValueOnce({
-        rows: [{
-          id: 'job-1',
-          job: 'jobs.raced',
-          connection: 'database',
-          queue: 'default',
-          payload: JSON.stringify({ ok: true }),
-          attempts: 0,
-          max_attempts: 1,
-          created_at: 1,
-        }],
-        rowCount: 1,
-      })
-      .mockResolvedValueOnce({
-        rows: [{
-          id: 'job-2',
-          job: 'jobs.next',
-          connection: 'database',
-          queue: 'default',
-          payload: JSON.stringify({ ok: true }),
-          attempts: 0,
-          max_attempts: 1,
-          created_at: 2,
-        }],
-        rowCount: 1,
-      })
-    const executeCompiled = vi.fn()
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ affectedRows: 1 })
-    const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock({
-      async query<TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[]) {
-        return await queryCompiled({ sql, bindings }) as { rows: TRow[], rowCount: number }
-      },
-      async execute(sql: string, bindings: readonly unknown[]) {
-        return await executeCompiled({ sql, bindings })
-      },
-    }))
-    const driver = new DatabaseQueueDriver({
-      name: 'database',
-      driver: 'database',
-      connection: 'default',
-      table: 'jobs',
-      queue: 'default',
-      retryAfter: 1,
-      sleep: 1,
-    }, {} as never)
+  it('reserves each queued job at most once across concurrent workers', async () => {
+    const harness = await createSQLiteQueueHarness()
+    harnesses.push(harness)
+    await harness.driver.dispatch(createEnvelope('jobs.first', { id: 'job-1' }))
+    await harness.driver.dispatch(createEnvelope('jobs.second', { id: 'job-2' }))
 
-    await expect(driver.reserve({
+    const reservations = await Promise.all(['worker-1', 'worker-2', 'worker-3'].map(workerId => harness.driver.reserve({
       queueNames: ['default'],
-      workerId: 'worker-1',
-    })).resolves.toMatchObject({
-      envelope: {
-        id: 'job-2',
-      },
-    })
-    expect(queryCompiled).toHaveBeenCalledTimes(2)
-    expect(executeCompiled).toHaveBeenCalledTimes(2)
-
-    spy.mockRestore()
+      workerId,
+    })))
+    const reserved = reservations.filter(reservation => reservation !== null)
+    expect(reserved.map(reservation => reservation.envelope.id).sort()).toEqual(['job-1', 'job-2'])
+    expect(reservations.filter(reservation => reservation === null)).toHaveLength(1)
+    await Promise.all(reserved.map(reservation => harness.driver.acknowledge(reservation)))
+    expect(await harness.readJobRows()).toEqual([])
   })
 
-  it('returns zero when clear reports no affected rows', async () => {
-    const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock())
-
-    const driver = new DatabaseQueueDriver({
-      name: 'database',
-      driver: 'database',
-      connection: 'default',
-      table: 'jobs',
-      queue: 'default',
-      retryAfter: 1,
-      sleep: 1,
-    }, {} as never)
-    await expect(driver.clear()).resolves.toBe(0)
-
-    spy.mockRestore()
+  it('returns zero when clearing an empty queue', async () => {
+    const harness = await createSQLiteQueueHarness()
+    harnesses.push(harness)
+    await expect(harness.driver.clear()).resolves.toBe(0)
   })
 
-  it('reuses the active async-context connection when it matches the configured database connection', async () => {
-    const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
-    const activeConnection = createQueueDatabaseContextMock({
-      connectionName: 'default',
-      async execute(sql: string, bindings: readonly unknown[]) {
-        return await executeCompiled({ sql, bindings })
-      },
-    })
-    const initialize = vi.spyOn(activeConnection, 'initialize')
-
-    const spy = vi.spyOn(DB, 'connection').mockImplementation(() => {
-      throw new Error('DB.connection() should not be used when an active matching connection exists.')
-    })
-
-    const driver = new DatabaseQueueDriver({
-      name: 'database',
-      driver: 'database',
-      connection: 'default',
-      table: 'jobs',
-      queue: 'default',
-      retryAfter: 1,
-      sleep: 1,
-    }, {} as never)
-
-    await expect(connectionAsyncContext.run({
-      connectionName: 'default',
-      connection: activeConnection,
-    }, async () => driver.clear())).resolves.toBe(0)
-
-    expect(initialize).toHaveBeenCalledTimes(1)
-    expect(executeCompiled).toHaveBeenCalledTimes(1)
-
-    spy.mockRestore()
+  it('rolls back queue writes together with the application transaction', async () => {
+    const harness = await createSQLiteQueueHarness()
+    harnesses.push(harness)
+    await expect(DB.transaction(async () => {
+      await harness.driver.dispatch(createEnvelope('jobs.transaction', { id: 'rolled-back-job' }))
+      expect((await harness.readJobRows()).map(row => row.id)).toEqual(['rolled-back-job'])
+      throw new Error('application transaction failed')
+    })).rejects.toThrow('application transaction failed')
+    expect(await harness.readJobRows()).toEqual([])
   })
+
 })
 
 runSharedQueueDriverContract({

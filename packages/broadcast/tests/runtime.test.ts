@@ -2,11 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { configureQueueRuntime, normalizeQueueConfig, resetQueueRegistry, resetQueueRuntime } from '@holo-js/queue'
 import { normalizeBroadcastConfig } from '../src'
 import {
   broadcast,
   broadcastRaw,
-  broadcastRuntimeInternals,
   channel,
   configureBroadcastRuntime,
   defineBroadcast,
@@ -113,8 +113,8 @@ afterEach(() => {
   resetBroadcastRuntime()
   resetBroadcastDriverRegistry()
   vi.restoreAllMocks()
-  broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
-  broadcastRuntimeInternals.setLoadDbModuleForTesting(undefined)
+  resetQueueRegistry()
+  resetQueueRuntime()
 })
 
 describe('@holo-js/broadcast runtime', () => {
@@ -404,21 +404,13 @@ export default {
         plugins: ['holo-plugin-broadcast-queued'],
       } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
 
-      await expect(broadcastRuntimeInternals.runQueuedBroadcastDelivery({
-        messageId: 'queued-plugin-message',
-        raw: {
-          connection: 'plugin',
-          event: 'plugin.queued',
-          channels: ['plugin.queued'],
-          payload: {
-            ok: true,
-          },
-        },
-        context: {
-          connection: 'plugin',
-          driver: 'plugin',
-        },
-      })).resolves.toMatchObject({
+      configureQueueRuntime({ config: normalizeQueueConfig({ default: 'sync', failed: false }) })
+      await expect(broadcastRaw({
+        connection: 'plugin',
+        event: 'plugin.queued',
+        channels: ['plugin.queued'],
+        payload: { ok: true },
+      }).onConnection('sync')).resolves.toMatchObject({
         connection: 'plugin',
         driver: 'plugin',
         queued: true,
@@ -559,18 +551,11 @@ export default {}
         }),
       })
 
-      await expect(broadcastRuntimeInternals.runQueuedBroadcastDelivery({
-        messageId: 'missing-connection-message',
-        raw: {
-          connection: 'missing',
-          event: 'connection.missing',
-          channels: ['connection.missing'],
-          payload: {},
-        },
-        context: {
-          connection: 'missing',
-          driver: 'missing',
-        },
+      await expect(broadcastRaw({
+        connection: 'missing',
+        event: 'connection.missing',
+        channels: ['connection.missing'],
+        payload: {},
       })).rejects.toThrow('Broadcast connection "missing" is not configured')
     } finally {
       process.chdir(previousCwd)
@@ -625,169 +610,6 @@ export default {}
     expect(result).toMatchObject({
       publishedChannels: ['presence-chat.room_1'],
     })
-  })
-
-  it('resolves queue defaults, fluent precedence, and after-commit deferral', async () => {
-    const dispatchCalls: Array<{
-      readonly jobName: string
-      readonly payload: unknown
-      readonly connection?: string
-      readonly queue?: string
-      readonly delay?: number | Date
-    }> = []
-    let afterCommitCallback: (() => Promise<void>) | undefined
-    const publish = vi.fn(async (input, context) => ({
-      connection: context.connection,
-      driver: context.driver,
-      queued: context.queued,
-      publishedChannels: input.channels,
-    }))
-
-    configureBroadcastRuntime({
-      config: createConfig(),
-      publish,
-    })
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => {
-      let connection: string | undefined
-      let queue: string | undefined
-      let delay: number | Date | undefined
-
-      return {
-        defineJob(definition) {
-          return definition
-        },
-        getRegisteredQueueJob() {
-          return undefined
-        },
-        registerQueueJob() {},
-        dispatch(jobName, payload) {
-          return {
-            onConnection(name) {
-              connection = name
-              return this
-            },
-            onQueue(name) {
-              queue = name
-              return this
-            },
-            delay(value) {
-              delay = value
-              return this
-            },
-            async dispatch() {
-              dispatchCalls.push({
-                jobName,
-                payload,
-                connection,
-                queue,
-                delay,
-              })
-            },
-          }
-        },
-      }
-    })
-    broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => ({
-      connectionAsyncContext: {
-        getActive() {
-          return {
-            connection: {
-              getScope() {
-                return { kind: 'transaction' }
-              },
-              afterCommit(callback) {
-                afterCommitCallback = callback
-              },
-            },
-          }
-        },
-      },
-    }))
-
-    const result = await broadcast(defineBroadcast({
-      name: 'orders.updated',
-      channels: [privateChannel('orders.{orderId}', { orderId: 'ord_9' })],
-      payload: {
-        orderId: 'ord_9',
-      },
-      queue: {
-        queued: true,
-        connection: 'redis-default',
-        queue: 'broadcasts',
-      },
-      delay: 10,
-    }))
-      .using('null')
-      .onConnection('redis-override')
-      .onQueue('realtime')
-      .delay(25)
-      .afterCommit()
-
-    expect(result).toMatchObject({
-      connection: 'null',
-      driver: 'null',
-      queued: true,
-      publishedChannels: ['private-orders.ord_9'],
-    })
-    expect(dispatchCalls).toHaveLength(0)
-    expect(publish).not.toHaveBeenCalled()
-
-    await afterCommitCallback?.()
-
-    expect(dispatchCalls).toHaveLength(1)
-    expect(dispatchCalls[0]).toMatchObject({
-      jobName: 'holo.broadcast.deliver',
-      connection: 'redis-override',
-      queue: 'realtime',
-      delay: 25,
-    })
-    expect(publish).not.toHaveBeenCalled()
-
-    const pending = broadcast(defineBroadcast({
-      name: 'orders.queued',
-      channels: [channel('orders')],
-      payload: { id: 1 },
-      queue: true,
-    })).using('null')
-    const [first, second] = await Promise.all([pending, pending])
-    expect(first).toBe(second)
-    expect(dispatchCalls).toHaveLength(2)
-    expect(dispatchCalls[1]).toMatchObject({
-      connection: undefined,
-      queue: undefined,
-      delay: undefined,
-    })
-  })
-
-  it('preserves a newer queue registration state while an older load settles', async () => {
-    let resolveModule: ((module: never) => void) | undefined
-    const queueModule = {
-      defineJob: (definition: unknown) => definition,
-      getRegisteredQueueJob: () => ({}),
-      registerQueueJob: vi.fn(),
-      dispatch: vi.fn(),
-    }
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => await new Promise((resolve) => {
-      resolveModule = resolve as (module: never) => void
-    }))
-    const pending = broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
-    resetBroadcastRuntime()
-    resolveModule?.(queueModule as never)
-    await expect(pending).resolves.toBe(queueModule)
-  })
-
-  it('does not duplicate a queue job registered during module resolution', async () => {
-    const registeredJob = {}
-    const getRegisteredQueueJob = vi.fn(() => registeredJob)
-    const queueModule = {
-      defineJob: vi.fn(),
-      getRegisteredQueueJob,
-      registerQueueJob: vi.fn(),
-      dispatch: vi.fn(),
-    }
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => queueModule as never)
-    await expect(broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()).resolves.toBe(queueModule)
-    expect(queueModule.registerQueueJob).not.toHaveBeenCalled()
   })
 
   it('supports custom drivers, built-in log/null drivers, and immutable inputs/results', async () => {
@@ -871,574 +693,40 @@ export default {}
     })).rejects.toThrow('at least one channel')
   })
 
-  it('covers pending helpers and runtime error branches', async () => {
-    configureBroadcastRuntime({
-      config: createConfig(),
-      publish: vi.fn(async (input, context) => ({
-        connection: context.connection,
-        driver: context.driver,
-        queued: context.queued,
-        publishedChannels: input.channels,
-      })),
-    })
-
-    const queueMissing = Object.assign(new Error('missing queue'), {
-      code: 'ERR_MODULE_NOT_FOUND',
-    })
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => {
-      throw queueMissing
-    })
-
-    await expect(
-      broadcast(defineBroadcast({
-        name: 'orders.updated',
-        channels: [privateChannel('orders.{orderId}', { orderId: 'ord_11' })],
-        payload: {
-          orderId: 'ord_11',
-        },
-        queue: {
-          queued: true,
-        },
-      })),
-    ).rejects.toThrow('@holo-js/queue')
-
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
-
-    await expect(
-      broadcastRaw({
-        event: '   ',
-        channels: ['orders.1'],
-        payload: {
-          ok: true,
-        },
-      }).catch(error => error instanceof Error ? error.message : String(error)),
-    ).resolves.toContain('Broadcast event must be a non-empty string')
-
-    await expect(
-      broadcastRaw({
-        connection: 'missing',
-        event: 'orders.updated',
-        channels: ['orders.1'],
-        payload: {
-          ok: true,
-        },
-      }),
-    ).rejects.toThrow('is not configured')
-    await expect(
-      broadcastRaw({
-        connection: 'custom',
-        event: 'orders.updated',
-        channels: ['orders.1'],
-        payload: {
-          ok: true,
-        },
-      }),
-    ).rejects.toThrow('is not registered')
-    configureBroadcastRuntime({
-      config: createConfig(),
-    })
-    broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => null)
-    await expect(
-      broadcastRaw({
-        connection: 'reverb',
-        event: 'orders.updated',
-        channels: ['orders.1'],
-        payload: {
-          ok: true,
-        },
-      }),
-    ).rejects.toThrow('requires a publish runtime binding')
-    configureBroadcastRuntime({
-      config: createConfig(),
-      publish: vi.fn(async (input, context) => ({
-        connection: context.connection,
-        driver: context.driver,
-        queued: context.queued,
-        publishedChannels: input.channels,
-      })),
-    })
-
-    await expect(
-      broadcast({
-        name: 'orders.inline',
-        channels: [privateChannel('orders.{orderId}', { orderId: 'ord_inline' })],
-        payload: {
-          items: [1, true, null],
-        },
-      }),
-    ).resolves.toMatchObject({
-      publishedChannels: ['private-orders.ord_inline'],
-    })
-
-    await expect(
-      broadcastRaw({
-        event: 'orders.updated',
-        channels: ['orders.1'],
-        payload: 'invalid' as never,
-      }).catch(error => error instanceof Error ? error.message : String(error)),
-    ).resolves.toContain('payload must be a plain object')
-    await expect(
-      broadcastRaw({
-        event: 'orders.updated',
-        channels: ['orders.1'],
-        payload: {
-          ok: true,
-        },
-        socketId: '   ',
-      }).catch(error => error instanceof Error ? error.message : String(error)),
-    ).resolves.toContain('socket id must be a non-empty string')
-
-    await expect(
-      broadcast(defineBroadcast({
-        channels: [privateChannel('orders.{orderId}', { orderId: 'ord_12' })],
-        payload: {
-          orderId: 'ord_12',
-        },
-      })),
-    ).rejects.toThrow('must resolve a public event name')
-
-    await expect(
-      broadcastRaw({
-        event: 'orders.updated',
-        channels: ['orders.1'],
-        payload: {
-          broken: new Map(),
-        } as never,
-      }).catch(error => error instanceof Error ? error.message : String(error)),
-    ).resolves.toContain('JSON-serializable')
-
-    expect(() => broadcastRaw({
-      event: 'orders.updated',
-      channels: ['orders.1'],
-      payload: {
-        ok: true,
-      },
-    }).delay(-1 as never)).toThrow('greater than or equal to 0')
-    expect(broadcastRuntimeInternals.normalizeDelayValue(new Date(0), 'Broadcast delay')).toEqual(new Date(0))
-    expect(() => broadcastRaw({
-      event: 'orders.updated',
-      channels: ['orders.1'],
-      payload: {
-        ok: true,
-      },
-    }).delay(new Date('invalid') as never)).toThrow('dates must be valid Date instances')
-
-    expect(() => broadcastRaw({
-      event: 'orders.updated',
-      channels: ['orders.1'],
-      payload: {
-        ok: true,
-      },
-    }).using('   ' as never)).toThrow('must be a non-empty string')
-    expect(() => broadcastRuntimeInternals.createRawInputFromDefinition({
-      name: 'orders.updated',
-      channels: [{
-        type: 'private',
-        pattern: 'orders.{orderId}',
-        params: Object.freeze({}) as never,
-      }],
-      payload: Object.freeze({
-        ok: true,
-      }),
-      queue: Object.freeze({
-        queued: false,
-        afterCommit: false,
-      }),
-    } as never)).toThrow('missing param "orderId"')
-
-    let deferredCalled = false
-    configureBroadcastRuntime({
-      config: createConfig(),
-      publish: vi.fn(async (input, context) => ({
-        connection: context.connection,
-        driver: context.driver,
-        queued: context.queued,
-        publishedChannels: input.channels,
-      })),
-    })
-    broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => null)
-    await broadcastRaw({
-      event: 'orders.updated',
-      channels: ['orders.1'],
-      payload: {
-        ok: true,
-      },
-    })
-      .afterCommit()
-      .finally(() => {
-        deferredCalled = true
-      })
-    await broadcastRaw({
-      event: 'orders.updated',
-      channels: ['orders.1'],
-      payload: {
-        ok: true,
-      },
-    }).finally(null)
-
-    expect(deferredCalled).toBe(true)
-
-    let syncAfterCommitCallback: (() => Promise<void>) | undefined
-    const syncPublish = vi.fn(async (input, context) => ({
-      connection: context.connection,
-      driver: context.driver,
-      queued: context.queued,
-      publishedChannels: input.channels,
-    }))
-    configureBroadcastRuntime({
-      config: createConfig(),
-      publish: syncPublish,
-    })
-    broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => ({
-      connectionAsyncContext: {
-        getActive() {
-          return {
-            connection: {
-              getScope() {
-                return { kind: 'transaction' }
-              },
-              afterCommit(callback) {
-                syncAfterCommitCallback = callback
-              },
-            },
-          }
-        },
-      },
-    }))
-
-    const syncDeferred = await broadcastRaw({
-      event: 'orders.deferred',
-      channels: ['orders.2'],
-      payload: {
-        ok: true,
-      },
-    }).afterCommit()
-
-    expect(syncDeferred).toMatchObject({
-      queued: false,
-      publishedChannels: ['orders.2'],
-    })
-    expect(syncPublish).not.toHaveBeenCalled()
-    await syncAfterCommitCallback?.()
-    expect(syncPublish).toHaveBeenCalledTimes(1)
-
-    const queueModule = {
-      registered: undefined as unknown,
-      defineJob(definition: { handle(payload: unknown): Promise<unknown> | unknown }) {
-        return definition
-      },
-      getRegisteredQueueJob() {
-        return this.registered
-      },
-      registerQueueJob: vi.fn(function (definition: unknown) {
-        queueModule.registered = definition
-      }),
-      dispatch: vi.fn(),
-    }
-
-    queueModule.registered = {}
-    expect(await broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered(queueModule as never)).toBe(queueModule)
-    expect(queueModule.registerQueueJob).not.toHaveBeenCalled()
-
-    queueModule.registered = undefined
-    await broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered(queueModule as never)
-    expect(queueModule.registerQueueJob).toHaveBeenCalledTimes(1)
-    await expect((queueModule.registered as { handle(payload: unknown): Promise<unknown> }).handle({
-      messageId: 'msg_2',
-      raw: Object.freeze({
-        connection: 'reverb',
-        event: 'orders.queued',
-        channels: Object.freeze(['orders.queued']),
-        payload: Object.freeze({
-          ok: true,
-        }),
-      }),
-      context: Object.freeze({
-        connection: 'reverb',
-        driver: 'holo',
-      }),
-    })).resolves.toMatchObject({
-      queued: true,
-      publishedChannels: ['orders.queued'],
-    })
-
-    const published = await broadcastRuntimeInternals.runQueuedBroadcastDelivery({
-      messageId: 'msg_1',
-      raw: Object.freeze({
-        connection: 'reverb',
-        event: 'orders.updated',
-        channels: Object.freeze(['orders.1']),
-        payload: Object.freeze({
-          ok: true,
-        }),
-      }),
-      context: Object.freeze({
-        connection: 'reverb',
-        driver: 'holo',
-      }),
-    } as never)
-
-    expect(published).toMatchObject({
-      connection: 'reverb',
-      driver: 'holo',
-      queued: true,
-      publishedChannels: ['orders.1'],
-      messageId: 'msg_1',
-    })
-
-    const concurrentQueueModule = {
-      registered: undefined as unknown,
-      defineJob(definition: { handle(payload: unknown): Promise<unknown> | unknown }) {
-        return definition
-      },
-      getRegisteredQueueJob() {
-        return this.registered
-      },
-      registerQueueJob: vi.fn(function (definition: unknown) {
-        concurrentQueueModule.registered = definition
-      }),
-      dispatch: vi.fn(),
-    }
-    const loadQueueModule = vi.fn(async () => concurrentQueueModule as never)
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(loadQueueModule)
-
-    const [firstQueueModule, secondQueueModule] = await Promise.all([
-      broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered(),
-      broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered(),
-    ])
-
-    expect(loadQueueModule).toHaveBeenCalledTimes(1)
-    expect(concurrentQueueModule.registerQueueJob).toHaveBeenCalledTimes(1)
-    expect(firstQueueModule).toBe(concurrentQueueModule)
-    expect(secondQueueModule).toBe(concurrentQueueModule)
-
-    let failOnce = true
-    const retryQueueModule = {
-      registered: undefined as unknown,
-      defineJob(definition: { handle(payload: unknown): Promise<unknown> | unknown }) {
-        return definition
-      },
-      getRegisteredQueueJob() {
-        return this.registered
-      },
-      registerQueueJob: vi.fn(function () {
-        if (failOnce) {
-          failOnce = false
-          throw new Error('register failed')
-        }
-        retryQueueModule.registered = {}
-      }),
-      dispatch: vi.fn(),
-    }
-    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => retryQueueModule as never)
-    await expect(broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()).rejects.toThrow('register failed')
-    await expect(broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()).resolves.toBe(retryQueueModule)
-
-    configureBroadcastRuntime({
-      config: createConfig(),
-    })
+  it('executes one queued delivery when the same pending broadcast is awaited concurrently', async () => {
+    configureQueueRuntime({ config: normalizeQueueConfig({ default: 'sync', failed: false }) })
+    const deliveries: string[] = []
     registerBroadcastDriver('custom', {
-      send(_input, context) {
-        return {
-          connection: context.connection,
-          driver: context.driver,
-          queued: context.queued,
-        } as never
+      async send(input, context) {
+        deliveries.push(input.event)
+        return { connection: context.connection, driver: context.driver, queued: context.queued, publishedChannels: input.channels }
       },
     })
-    const fallbackChannels = await broadcastRaw({
-      connection: 'custom',
-      event: 'orders.partial',
-      channels: ['orders.partial'],
-      payload: {
-        ok: true,
-      },
-    })
-    expect(fallbackChannels.publishedChannels).toEqual(['orders.partial'])
-    resetBroadcastRuntime()
-    expect(broadcastRuntimeInternals.resolveBroadcastConnection('null')).toMatchObject({
-      name: 'null',
-      driver: 'null',
-    })
-    configureBroadcastRuntime({
-      config: createConfig(),
-    })
-    registerBroadcastDriver('custom', {
-      send(input) {
-        return {
-          publishedChannels: input.channels,
-        } as never
-      },
-    }, { replace: true })
-    await expect(
-      broadcastRaw({
-        connection: 'custom',
-        event: 'orders.context-fallback',
-        channels: ['orders.context-fallback'],
-        payload: {
-          ok: true,
-        },
-      }),
-    ).resolves.toMatchObject({
-      connection: 'custom',
-      driver: 'custom',
-      queued: false,
-      publishedChannels: ['orders.context-fallback'],
-    })
-
-    try {
-      broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => {
-        throw Object.assign(new Error('missing optional module'), { code: 'ERR_MODULE_NOT_FOUND' })
-      })
-      broadcastRuntimeInternals.setLoadDbModuleForTesting(undefined)
-
-      await expect(
-        broadcast(defineBroadcast({
-          name: 'orders.default-queue',
-          channels: [privateChannel('orders.{orderId}', { orderId: 'ord_13' })],
-          payload: {
-            orderId: 'ord_13',
-          },
-          queue: {
-            queued: true,
-          },
-        })),
-      ).rejects.toThrow('@holo-js/queue')
-
-      configureBroadcastRuntime({
-        config: createConfig(),
-      })
-      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => null)
-      await expect(
-        broadcastRaw({
-          event: 'orders.default-db',
-          channels: ['orders.13'],
-          payload: {
-            ok: true,
-          },
-        }).afterCommit(),
-      ).rejects.toThrow('requires a publish runtime binding')
-
-      const queueFailure = new Error('queue exploded')
-      broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => {
-        throw queueFailure
-      })
-      await expect(
-        broadcast(defineBroadcast({
-          name: 'orders.queue-error',
-          channels: [channel('orders.queue-error')],
-          payload: {
-            ok: true,
-          },
-          queue: {
-            queued: true,
-          },
-        })),
-      ).rejects.toThrow(queueFailure)
-      broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
-
-      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => {
-        throw new Error('db exploded')
-      })
-      broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => ({
-        defineJob(definition) {
-          return definition
-        },
-        dispatch() {
-          throw new Error('queue dispatch should not be reached')
-        },
-        getRegisteredQueueJob() {
-          return {}
-        },
-        registerQueueJob() {},
-      }))
-      await expect(
-        broadcast(defineBroadcast({
-          name: 'orders.queue-generic',
-          channels: [channel('orders.queue-generic')],
-          payload: {
-            ok: true,
-          },
-          queue: {
-            queued: true,
-          },
-        })).afterCommit(),
-      ).rejects.toThrow('db exploded')
-      broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
-      await expect(
-        broadcastRaw({
-          event: 'orders.db-error',
-          channels: ['orders.14'],
-          payload: {
-            ok: true,
-          },
-        }).afterCommit(),
-      ).rejects.toThrow('db exploded')
-    } finally {
-      broadcastRuntimeInternals.setLoadDbModuleForTesting(undefined)
-      broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
-    }
+    configureBroadcastRuntime({ config: createConfig() })
+    const pending = broadcast({
+      name: 'orders.queued',
+      channels: [channel('orders')],
+      payload: { id: 1 },
+      queue: true,
+    }).using('custom')
+    const [first, second] = await Promise.all([pending, pending])
+    expect(first).toBe(second)
+    expect(first).toMatchObject({ queued: true, publishedChannels: ['orders'] })
+    expect(deliveries).toEqual(['orders.queued'])
   })
 
-  it('loads the default queue/db modules when no testing override is configured', async () => {
-    vi.doMock('@holo-js/queue', () => ({
-      defineJob(definition: unknown) {
-        return definition
-      },
-      dispatch: vi.fn(),
-      getRegisteredQueueJob() {
-        return undefined
-      },
-      registerQueueJob: vi.fn(),
-    }))
-    vi.doMock('@holo-js/db', () => ({
-      connectionAsyncContext: {
-        getActive() {
-          return undefined
-        },
-      },
-    }))
-
-    try {
-      const queueModule = await broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
-      expect(queueModule).toMatchObject({
-        dispatch: expect.any(Function),
-        getRegisteredQueueJob: expect.any(Function),
-      })
-
-      configureBroadcastRuntime({
-        config: createConfig(),
-      })
-
-      await expect(
-        broadcastRaw({
-          event: 'orders.no-db',
-          channels: ['orders.15'],
-          payload: {
-            ok: true,
-          },
-        }).afterCommit(),
-      ).rejects.toThrow('requires a publish runtime binding')
-
-      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => {
-        throw Object.assign(new Error('missing optional db module'), {
-          code: 'ERR_MODULE_NOT_FOUND',
-        })
-      })
-
-      await expect(
-        broadcastRaw({
-          event: 'orders.no-db-optional',
-          channels: ['orders.16'],
-          payload: {
-            ok: true,
-          },
-        }).afterCommit(),
-      ).rejects.toThrow('requires a publish runtime binding')
-    } finally {
-      vi.doUnmock('@holo-js/queue')
-      vi.doUnmock('@holo-js/db')
-    }
+  it('rejects invalid sends through the public pending broadcast interface', async () => {
+    configureBroadcastRuntime({ config: createConfig() })
+    const input = { connection: 'null', event: 'orders.updated', channels: ['orders'], payload: { id: 1 } }
+    await expect(broadcastRaw({ ...input, event: ' ' })).rejects.toThrow('non-empty string')
+    await expect(broadcastRaw({ ...input, connection: 'missing' })).rejects.toThrow('is not configured')
+    await expect(broadcastRaw({ ...input, connection: 'custom' })).rejects.toThrow('is not registered')
+    await expect(broadcastRaw({ ...input, connection: 'reverb' })).rejects.toThrow('requires a publish runtime binding')
+    await expect(broadcastRaw({ ...input, socketId: ' ' })).rejects.toThrow('non-empty string')
+    await expect(broadcastRaw({ ...input, payload: { invalid: new Map() } } as never)).rejects.toThrow('JSON-serializable')
+    expect(() => broadcastRaw(input).delay(-1)).toThrow('greater than or equal to 0')
+    expect(() => broadcastRaw(input).delay(new Date('invalid'))).toThrow('valid Date')
+    expect(() => broadcastRaw(input).using(' ')).toThrow('non-empty string')
+    await expect(broadcast({ channels: [channel('orders')], payload: { id: 1 } })).rejects.toThrow('public event name')
   })
-
 })

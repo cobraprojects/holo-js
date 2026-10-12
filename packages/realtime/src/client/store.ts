@@ -6,7 +6,8 @@ import {
   handleRealtimeConnectionError,
 } from './errors'
 import {
-  isPatchedRealtimeSnapshot,
+  applyWireSnapshotPatch,
+  readRealtimeSnapshotPatch,
   isStaleRealtimeSnapshot,
 } from './patching'
 import type {
@@ -184,16 +185,13 @@ export function createSharedRealtimeSnapshot<TResult>(
   currentDataHash: string | undefined,
   nextSnapshot: RealtimeSubscriptionSnapshot<TResult>,
 ): SharedRealtimeSnapshot<TResult> {
-  if (currentSnapshot && isPatchedRealtimeSnapshot(nextSnapshot)) {
+  const patch = readRealtimeSnapshotPatch(nextSnapshot)
+  if (currentSnapshot && patch) {
+    const sharedSnapshot = applyWireSnapshotPatch(currentSnapshot, patch)
     return {
-      changed: nextSnapshot.data !== currentSnapshot.data,
-      hash: nextSnapshot.data === currentSnapshot.data ? currentDataHash : undefined,
-      snapshot: nextSnapshot.data === currentSnapshot.data
-        ? {
-            ...nextSnapshot,
-            data: currentSnapshot.data,
-          }
-        : nextSnapshot,
+      changed: sharedSnapshot.data !== currentSnapshot.data,
+      hash: sharedSnapshot.data === currentSnapshot.data ? currentDataHash : undefined,
+      snapshot: sharedSnapshot,
     }
   }
 

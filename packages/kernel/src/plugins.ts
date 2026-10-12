@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -218,7 +218,7 @@ export async function loadHoloPluginDefinitions(
     }
     const entry = normalizeString(manifest.holo.plugin)!
     assertPackageRelativePath(packageName, entry)
-    const packageRoot = dirname(packageJsonPath)
+    const packageRoot = await realpath(dirname(packageJsonPath))
     const entryPath = resolve(packageRoot, entry)
     const relativeEntry = relative(packageRoot, entryPath)
     if (relativeEntry.startsWith('..') || isAbsolute(relativeEntry)) {

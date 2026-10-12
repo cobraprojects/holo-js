@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   DB,
   DatabaseError,
@@ -7,189 +8,20 @@ import {
   configureDB,
   createConnectionManager,
   createDatabase,
+  createDialect,
   createSchemaService,
   createSeederService,
   defineModel,
   defineSeeder,
   resetDB,
   type DatabaseLogger,
-  type Dialect,
-  type DriverAdapter,
-  type DriverExecutionResult,
-  type DriverQueryResult } from '../src'
+ } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
 
-type Row = Record<string, unknown>
-type TableStore = Record<string, Row[]>
-type CounterStore = Record<string, number>
-
-function cloneRow(row: Row): Row {
-  return { ...row }
-}
-
-class InMemorySeederAdapter implements DriverAdapter {
-  connected = false
-  beginCalls = 0
-  private readonly snapshots: Array<{ tables: string[], records: TableStore, counters: CounterStore }> = []
-
-  constructor(
-    readonly tables: string[] = [],
-    readonly records: TableStore = {},
-    readonly counters: CounterStore = {},
-  ) {}
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    _bindings: readonly unknown[] = [],
-  ): Promise<DriverQueryResult<TRow>> {
-    if (sql.includes('sqlite_master')) {
-      return {
-        rows: this.tables.map(name => ({ name })) as unknown as TRow[],
-        rowCount: this.tables.length }
-    }
-
-    const selectMatch = sql.match(/^SELECT \* FROM "([^"]+)"(?: ORDER BY "([^"]+)" (ASC|DESC))?$/)
-    if (selectMatch) {
-      const [, tableName, orderColumn, direction] = selectMatch
-      const rows = (this.records[tableName!] ?? []).map(cloneRow)
-
-      if (orderColumn) {
-        rows.sort((left, right) => {
-          const a = left[orderColumn]
-          const b = right[orderColumn]
-          if (a === b) return 0
-          if (direction === 'DESC') return a! > b! ? -1 : 1
-          return a! < b! ? -1 : 1
-        })
-      }
-
-      return {
-        rows: rows as TRow[],
-        rowCount: rows.length }
-    }
-
-    return { rows: [] as TRow[], rowCount: 0 }
-  }
-
-  async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    const createTable = sql.match(/^CREATE TABLE IF NOT EXISTS "([^"]+)"/)
-    if (createTable) {
-      if (!this.tables.includes(createTable[1]!)) {
-        this.tables.push(createTable[1]!)
-      }
-      this.records[createTable[1]!] ??= []
-      return { affectedRows: 1 }
-    }
-
-    const dropTable = sql.match(/^DROP TABLE IF EXISTS "([^"]+)"/)
-    if (dropTable) {
-      const tableName = dropTable[1]!
-      const index = this.tables.indexOf(tableName)
-      if (index >= 0) {
-        this.tables.splice(index, 1)
-      }
-      delete this.records[tableName]
-      delete this.counters[tableName]
-      return { affectedRows: 1 }
-    }
-
-    const insertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+)$/)
-    if (insertMatch) {
-      const [, tableName, rawColumns] = insertMatch
-      const columns = rawColumns!.split(', ').map(column => column.replaceAll('"', ''))
-      const rowCount = (sql.match(/\(/g) ?? []).length - 1
-      const rows = this.records[tableName!] ?? (this.records[tableName!] = [])
-      let bindingIndex = 0
-      let lastInsertId: number | undefined
-
-      for (let index = 0; index < rowCount; index += 1) {
-        const row = Object.fromEntries(columns.map(column => [column, bindings[bindingIndex++]]))
-        if (!('id' in row)) {
-          this.counters[tableName!] = (this.counters[tableName!] ?? 0) + 1
-          row.id = this.counters[tableName!]
-          lastInsertId = row.id as number
-        }
-        rows.push(row)
-      }
-
-      return { affectedRows: rowCount, lastInsertId }
-    }
-
-    return { affectedRows: 0 }
-  }
-
-  async beginTransaction(): Promise<void> {
-    this.beginCalls += 1
-    this.snapshots.push({
-      tables: [...this.tables],
-      records: Object.fromEntries(
-        Object.entries(this.records).map(([table, rows]) => [table, rows.map(cloneRow)]),
-      ),
-      counters: { ...this.counters } })
-  }
-
-  async commit(): Promise<void> {
-    this.snapshots.pop()
-  }
-
-  async rollback(): Promise<void> {
-    const snapshot = this.snapshots.pop()
-    if (!snapshot) {
-      return
-    }
-
-    this.tables.splice(0, this.tables.length, ...snapshot.tables)
-
-    for (const key of Object.keys(this.records)) {
-      delete this.records[key]
-    }
-    Object.assign(this.records, snapshot.records)
-
-    for (const key of Object.keys(this.counters)) {
-      delete this.counters[key]
-    }
-    Object.assign(this.counters, snapshot.counters)
-  }
-}
-
-function createDialect(): Dialect {
-  return {
-    name: 'sqlite',
-    capabilities: {
-      returning: false,
-      savepoints: false,
-      concurrentQueries: true,
-      workerThreadExecution: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      jsonValueQuery: true,
-      jsonContains: false,
-      jsonLength: false,
-      schemaQualifiedIdentifiers: false,
-      nativeUpsert: false,
-      ddlAlterSupport: false,
-      introspection: true },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return `?${index}`
-    } }
+function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  onTestFinished(() => adapter.disconnect())
+  return adapter
 }
 
 describe('seeder service slice', () => {
@@ -198,11 +30,11 @@ describe('seeder service slice', () => {
   })
 
   it('registers seeders, preserves registration order, filters by name, and rejects unknown names', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     const calls: string[] = []
     const alpha = defineSeeder({
@@ -236,11 +68,11 @@ describe('seeder service slice', () => {
   })
 
   it('allows seeders to call other registered seeders in order', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     const calls: string[] = []
     const seeders = createSeederService(db, [
@@ -274,11 +106,11 @@ describe('seeder service slice', () => {
   })
 
   it('fails closed when nested seeder calls reference unknown seeders and rolls back prior work', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     const seeders = createSeederService(db, [defineSeeder({
       name: 'root',
@@ -290,16 +122,15 @@ describe('seeder service slice', () => {
       } })])
 
     await expect(seeders.seed({ only: ['root'] })).rejects.toThrow('Seeder "missing" is not registered.')
-    expect(adapter.tables).not.toContain('temp')
-    expect(adapter.records.temp).toBeUndefined()
+    expect(await createSchemaService(db).hasTable('temp')).toBe(false)
   })
 
   it('runs each seeder in a transaction and rolls back failed seeders', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     const seeders = createSeederService(db, [defineSeeder({
       name: 'failing',
@@ -311,16 +142,15 @@ describe('seeder service slice', () => {
       } })])
 
     await expect(seeders.seed()).rejects.toThrow('boom')
-    expect(adapter.tables).not.toContain('temp')
-    expect(adapter.records.temp).toBeUndefined()
+    expect(await createSchemaService(db).hasTable('temp')).toBe(false)
   })
 
   it('can mute model events while seeding', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -351,20 +181,20 @@ describe('seeder service slice', () => {
 
     await seeders.seed()
     expect(createdCalls).toBe(1)
-    expect(adapter.records.users).toHaveLength(1)
+    expect(await db.table('users').get()).toHaveLength(1)
 
     await seeders.seed({ quietly: true })
     expect(createdCalls).toBe(1)
-    expect(adapter.records.users).toHaveLength(2)
+    expect(await db.table('users').get()).toHaveLength(2)
     expect(await DB.table(users).orderBy('id').get()).toHaveLength(2)
   })
 
   it('reuses the active seeder transaction for model writes and nested seeder calls', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect(),
+      dialect: createDialect('sqlite'),
     })
 
     configureDB(createConnectionManager({
@@ -403,21 +233,38 @@ describe('seeder service slice', () => {
 
     await seeders.seed({ only: ['root'] })
 
-    expect(adapter.beginCalls).toBe(1)
-    expect(adapter.records.users).toHaveLength(1)
-    expect(adapter.records.users?.[0]?.name).toBe('Nested Seeder User')
+    expect(await db.table('users').get()).toEqual([{ id: 1, name: 'Nested Seeder User' }])
+  })
+
+  it('rolls back nested seeder model writes when their parent fails', async () => {
+    const db = createDatabase({ connectionName: 'default', adapter: createTestAdapter(), dialect: createDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('users', table => { table.id(); table.string('name') })
+    const User = defineModelFromTable(defineTable('users', { id: column.id(), name: column.string() }), { fillable: ['name'] })
+    const seeders = createSeederService(db, [
+      defineSeeder({ name: 'users', async run() { await User.create({ name: 'Nested' }) } }),
+      defineSeeder({ name: 'root', async run({ call }) { await call('users'); throw new Error('parent failed') } }),
+    ])
+    await expect(seeders.seed({ only: ['root'] })).rejects.toThrow('parent failed')
+    expect(await User.count()).toBe(0)
+    await seeders.seed({ only: ['users'] })
+    expect(await db.table('users').get()).toEqual([{ id: 1, name: 'Nested' }])
   })
 
   it('emits seeder lifecycle logs and blocks production seeding without force', async () => {
-    const adapter = new InMemorySeederAdapter()
+    const adapter = createTestAdapter()
+    const starts: Parameters<NonNullable<DatabaseLogger['onSeederStart']>>[0][] = []
+    const successes: Parameters<NonNullable<DatabaseLogger['onSeederSuccess']>>[0][] = []
+    const failures: Parameters<NonNullable<DatabaseLogger['onSeederError']>>[0][] = []
     const logger: DatabaseLogger = {
-      onSeederStart: vi.fn(),
-      onSeederSuccess: vi.fn(),
-      onSeederError: vi.fn() }
+      onSeederStart: event => { starts.push(event) },
+      onSeederSuccess: event => { successes.push(event) },
+      onSeederError: event => { failures.push(event) },
+    }
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect(),
+      dialect: createDialect('sqlite'),
       logger })
 
     const users = defineSeeder({
@@ -434,20 +281,20 @@ describe('seeder service slice', () => {
     await expect(seeders.seed({ only: ['users'], environment: 'production' })).rejects.toThrow(
       'Seeding in production requires force: true.',
     )
-    expect(logger.onSeederStart).not.toHaveBeenCalled()
+    expect(starts).toEqual([])
 
     await seeders.seed({ only: ['users'], environment: 'production', force: true, quietly: true })
     await expect(seeders.seed({ only: ['failing'], environment: 'development' })).rejects.toThrow('boom')
 
-    expect(logger.onSeederStart).toHaveBeenCalledWith(expect.objectContaining({
+    expect(starts).toContainEqual(expect.objectContaining({
       connectionName: 'default',
       seederName: 'users',
       quietly: true,
       environment: 'production' }))
-    expect(logger.onSeederSuccess).toHaveBeenCalledWith(expect.objectContaining({
+    expect(successes).toContainEqual(expect.objectContaining({
       seederName: 'users',
       durationMs: expect.any(Number) }))
-    expect(logger.onSeederError).toHaveBeenCalledWith(expect.objectContaining({
+    expect(failures).toContainEqual(expect.objectContaining({
       seederName: 'failing',
       environment: 'development',
       durationMs: expect.any(Number),

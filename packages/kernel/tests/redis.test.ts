@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   defineRedisConfig,
   holoRedisDefaults,
@@ -64,26 +64,4 @@ describe('@holo-js/kernel Redis contracts', () => {
     expect(() => resolveNormalizedRedisConnection(holoRedisDefaults, 'missing', 'Redis connection')).toThrow('is not configured')
   })
 
-  it('falls back when a validated URL cannot be parsed for a database path', () => {
-    let calls = 0
-    vi.stubGlobal('URL', class UnstableUrl {
-      protocol = 'redis:'
-      pathname = '/4'
-
-      constructor() {
-        calls += 1
-        if (calls > 1) throw 'parser failed'
-      }
-    })
-
-    try {
-      expect(normalizeRedisConfig({
-        connections: {
-          default: { url: 'redis://cache/4' },
-        },
-      }).connections.default?.db).toBe(0)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
 })

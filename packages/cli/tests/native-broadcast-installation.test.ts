@@ -1,0 +1,97 @@
+import { execFile, spawn } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
+import { once } from 'node:events'
+import { createServer } from 'node:net'
+import { expect, it } from 'vitest'
+import { stagePublishedPackage } from '../../../tests/support/published-package'
+
+const execute = promisify(execFile)
+const root = resolve(import.meta.dirname, '../../..')
+
+it('reports an actionable install hint when the real CLI cannot resolve the broadcast package', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'holo-native-broadcast-installation-'))
+  try {
+    await mkdir(join(projectRoot, 'config'), { recursive: true })
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module' }))
+    await writeFile(join(projectRoot, 'config/broadcast.mjs'), "export default { default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main', secret: 'secret' } } }")
+    await stagePublishedPackage(join(root, 'packages/cli'), join(projectRoot, 'node_modules/@holo-js/cli'), join(root, 'packages/cli/dist'))
+    const result = await execute(process.execPath, ['--input-type=module', '--eval', `
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
+const require = createRequire(import.meta.url)
+assert.throws(() => require.resolve('@holo-js/broadcast'), { code: 'MODULE_NOT_FOUND' })
+const result = spawnSync(process.execPath, ['./node_modules/@holo-js/cli/dist/bin/holo.mjs', 'broadcast:work'], { encoding: 'utf8', timeout: 10000 })
+assert.equal(result.error, undefined)
+assert.notEqual(result.status, 0)
+assert.match(result.stderr, /Unable to load @holo-js\\/broadcast/)
+assert.match(result.stderr, /holo install broadcast/)
+console.log('Native broadcast installation behavior passed')
+`], { cwd: projectRoot })
+    expect(result.stdout).toContain('Native broadcast installation behavior passed')
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true })
+  }
+}, 30000)
+
+it('refreshes prepared channel discovery and accepts a fresh private subscription through the real CLI worker', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'holo-native-broadcast-lifecycle-'))
+  const reservation = createServer()
+  reservation.listen(0, '127.0.0.1')
+  await once(reservation, 'listening')
+  const address = reservation.address()
+  if (!address || typeof address === 'string') throw new Error('Expected a native worker port')
+  await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+  let worker: ReturnType<typeof spawn> | undefined
+  let socket: WebSocket | undefined
+  try {
+    await mkdir(join(projectRoot, 'config'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/channels'), { recursive: true })
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module' }))
+    for (const name of ['cli', 'broadcast', 'db-sqlite']) {
+      await stagePublishedPackage(join(root, 'packages', name), join(projectRoot, 'node_modules/@holo-js', name), join(root, 'packages', name, 'dist'))
+    }
+    await writeFile(join(projectRoot, 'config/app.ts'), "export default { name: 'Broadcast Lifecycle' }")
+    await writeFile(join(projectRoot, 'config/database.ts'), "export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }")
+    await writeFile(join(projectRoot, 'config/broadcast.ts'), `import { defineBroadcastConfig } from '@holo-js/broadcast'; export default defineBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'key', secret: 'secret' } }, worker: { host: '127.0.0.1', port: ${address.port} } })`)
+    const cli = join(projectRoot, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
+    await writeFile(join(projectRoot, 'server/channels/old.ts'), "import { defineChannel } from '@holo-js/broadcast'; export default defineChannel('old.{id}', { type: 'private', authorize() { return false } })")
+    await execute(process.execPath, [cli, 'prepare'], { cwd: projectRoot })
+    await rm(join(projectRoot, 'server/channels/old.ts'))
+    await writeFile(join(projectRoot, 'server/channels/fresh.ts'), "import { defineChannel } from '@holo-js/broadcast'; export default defineChannel('fresh.{id}', { type: 'private', authorize(_user, params) { return params.id === '42' } })")
+    worker = spawn(process.execPath, [cli, 'broadcast:work'], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    worker.stdout?.on('data', chunk => { output += String(chunk) })
+    worker.stderr?.on('data', chunk => { output += String(chunk) })
+    await expect.poll(() => {
+      if (worker?.exitCode !== null) throw new Error(output)
+      return output
+    }, { timeout: 10000 }).toContain('[broadcast] Worker listening on')
+    socket = new WebSocket(`ws://127.0.0.1:${address.port}/app/key`)
+    const packets: Array<{ event: string, channel?: string }> = []
+    socket.addEventListener('message', message => { packets.push(JSON.parse(String(message.data)) as { event: string, channel?: string }) })
+    await new Promise<void>((resolve, reject) => {
+      socket?.addEventListener('open', () => resolve(), { once: true })
+      socket?.addEventListener('error', () => reject(new Error('Native worker connection failed')), { once: true })
+    })
+    socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'private-fresh.42' } }))
+    await expect.poll(() => packets.some(packet => packet.event === 'pusher_internal:subscription_succeeded' && packet.channel === 'private-fresh.42')).toBe(true)
+    const closed = once(worker, 'close')
+    socket.close()
+    worker.kill('SIGINT')
+    const [code] = await closed
+    if (process.platform !== 'win32') expect(code, output).toBe(0)
+    await expect(fetch(`http://127.0.0.1:${address.port}/health`)).rejects.toThrow()
+  } finally {
+    socket?.close()
+    if (worker && worker.exitCode === null && worker.signalCode === null) {
+      const closed = once(worker, 'close')
+      worker.kill('SIGKILL')
+      await closed
+    }
+    await rm(projectRoot, { recursive: true, force: true })
+  }
+}, 30000)

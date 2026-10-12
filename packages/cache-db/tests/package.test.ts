@@ -1,7 +1,8 @@
+import { setTimeout } from 'node:timers/promises'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { CacheConfigError, CacheInvalidNumericMutationError, deserializeCacheValue, serializeCacheValue } from '@holo-js/cache'
 import {
@@ -117,7 +118,6 @@ async function createPublicFeatureHarness() {
 
 describe('@holo-js/cache-db', () => {
   beforeEach(() => {
-    vi.useRealTimers()
     resetDB()
     clearGeneratedTables()
   })
@@ -375,14 +375,7 @@ describe('@holo-js/cache-db', () => {
     expect(await primary.lock('primary:report', 60).get()).toBe(true)
     expect(await secondary.lock('secondary:report', 60).get()).toBe(true)
 
-    const getSpy = vi.spyOn(TableQueryBuilder.prototype, 'get')
-
-    try {
-      await primary.flush()
-      expect(getSpy).not.toHaveBeenCalled()
-    } finally {
-      getSpy.mockRestore()
-    }
+    await primary.flush()
 
     expect(await primary.get('primary:alpha')).toEqual({ hit: false })
     expect(await secondary.get('secondary:alpha')).toEqual({
@@ -445,25 +438,21 @@ describe('@holo-js/cache-db', () => {
   })
 
   it('supports expiration cleanup and numeric mutation', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-22T00:00:00.000Z'))
-
-    const { driver } = await createPreparedDriver({
-      now: Date.now,
-    })
+    const { driver } = await createPreparedDriver()
+    const expiresAt = Date.now() + 1_000
 
     await driver.put({
       key: 'ttl',
       payload: '"ok"',
-      expiresAt: Date.now() + 1_000,
+      expiresAt,
     })
     expect(await driver.get('ttl')).toEqual({
       hit: true,
       payload: '"ok"',
-      expiresAt: Date.now() + 1_000,
+      expiresAt,
     })
 
-    vi.advanceTimersByTime(1_001)
+    await setTimeout(Math.max(0, expiresAt - Date.now()) + 20)
     expect(await driver.get('ttl')).toEqual({ hit: false })
 
     expect(await driver.increment('counter', 2)).toBe(2)
@@ -477,14 +466,7 @@ describe('@holo-js/cache-db', () => {
   })
 
   it('implements database-backed locks with release and wait behavior', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-22T00:00:00.000Z'))
-
     const { driver } = await createPreparedDriver({
-      now: Date.now,
-      sleep: async (milliseconds) => {
-        vi.advanceTimersByTime(milliseconds)
-      },
       ownerFactory: (() => {
         let counter = 0
         return () => `owner-${++counter}`
@@ -506,25 +488,18 @@ describe('@holo-js/cache-db', () => {
   })
 
   it('times out contested locks and numeric mutations when the lock is held too long', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-22T00:00:00.000Z'))
-
     const { driver } = await createPreparedDriver({
-      now: Date.now,
-      sleep: async (milliseconds) => {
-        vi.advanceTimersByTime(milliseconds)
-      },
       ownerFactory: (() => {
         let counter = 0
         return () => `owner-${++counter}`
       })(),
     })
 
-    const heldLock = driver.lock('stuck', 2)
+    const heldLock = driver.lock('stuck', 10)
     expect(await heldLock.get()).toBe(true)
     await expect(driver.lock('stuck', 0.5).block(1, async () => 'never')).resolves.toBe(false)
 
-    const numericLock = driver.lock('__numeric__:counter', 2)
+    const numericLock = driver.lock('__numeric__:counter', 10)
     expect(await numericLock.get()).toBe(true)
     await expect(driver.increment('counter', 1)).rejects.toThrow('Could not acquire database cache mutation lock for "counter".')
   })

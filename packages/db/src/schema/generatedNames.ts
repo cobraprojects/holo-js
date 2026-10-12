@@ -17,10 +17,14 @@ export function assertValidIndexName(
   policy = DEFAULT_INDEX_NAME_LENGTH_POLICY,
 ): void {
   assertValidIdentifierSegment(indexName, 'Index name')
+  assertNameLength(indexName, 'Index', policy)
+}
+
+function assertNameLength(indexName: string, kind: string, policy: IndexNameLengthPolicy): void {
   const byteLength = new TextEncoder().encode(indexName).length
   if (byteLength > policy.maxBytes) {
     throw new SchemaError(
-      `Index name "${indexName}" is ${byteLength} bytes long; ${policy.label} index names must be ${policy.maxBytes} bytes or fewer. Provide a shorter explicit index name.`,
+      `${kind} name "${indexName}" is ${byteLength} bytes long; ${policy.label} ${kind.toLowerCase()} names must be ${policy.maxBytes} bytes or fewer. Provide a shorter explicit ${kind.toLowerCase()} name.`,
     )
   }
 }
@@ -79,5 +83,6 @@ export function resolveGeneratedForeignKeyName(
   const resolvedName = constraintName
     ?? `${sanitizeIdentifierForGeneratedName(tableName)}_${sanitizeIdentifierForGeneratedName(columnName)}_foreign`
   assertValidIdentifierSegment(resolvedName, 'Foreign key name')
+  assertNameLength(resolvedName, 'Foreign key', DEFAULT_INDEX_NAME_LENGTH_POLICY)
   return resolvedName
 }

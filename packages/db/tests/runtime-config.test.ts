@@ -8,6 +8,7 @@ import {
   parseDatabaseDriver,
   resolveRuntimeConnectionManagerOptions,
   DeferredDatabaseDriverAdapter } from '../src'
+import { openDatabase } from './support/database'
 import { DEFAULT_HOLO_PROJECT_PATHS, defineHoloProject, normalizeHoloProjectConfig } from '@holo-js/kernel'
 
 afterEach(() => {
@@ -132,92 +133,27 @@ describe('runtime config helpers', () => {
       redactBindingsInLogs: false })
   })
 
-  it('creates runtime loggers only when enabled and formats log output', () => {
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('logs real %s query and transaction outcomes', async driver => {
     expect(createRuntimeLogger(false)).toBeUndefined()
-
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const logger = createRuntimeLogger(true)
-    expect(logger).toBeDefined()
-
-    logger!.onQuerySuccess!({
-      kind: 'query',
-      connectionName: 'default',
-      scope: 'root',
-      durationMs: 4,
-      sql: 'select 1',
-      bindings: [],
-      rowCount: 2 })
-    logger!.onQuerySuccess!({
-      kind: 'execute',
-      connectionName: 'default',
-      scope: 'root',
-      durationMs: 5,
-      sql: 'delete from users',
-      bindings: [],
-      affectedRows: 3 })
-    logger!.onQuerySuccess!({
-      kind: 'query',
-      connectionName: 'default',
-      scope: 'root',
-      durationMs: 7,
-      sql: 'select now()',
-      bindings: [] })
-    logger!.onQueryError!({
-      kind: 'query',
-      connectionName: 'default',
-      scope: 'root',
-      durationMs: 6,
-      sql: 'select 1',
-      bindings: [],
-      error: new Error('boom') })
-    logger!.onQueryError!({
-      kind: 'query',
-      connectionName: 'default',
-      scope: 'root',
-      durationMs: 8,
-      sql: 'select broken()',
-      bindings: [],
-      error: 'bad query' })
-    logger!.onTransactionStart!({
-      scope: 'transaction',
-      depth: 1,
-      savepointName: 'sp_1' })
-    logger!.onTransactionStart!({
-      scope: 'transaction',
-      depth: 1 })
-    logger!.onTransactionCommit!({
-      scope: 'transaction',
-      depth: 1 })
-    logger!.onTransactionCommit!({
-      scope: 'savepoint',
-      depth: 2,
-      savepointName: 'sp_2' })
-    logger!.onTransactionRollback!({
-      scope: 'savepoint',
-      depth: 2,
-      savepointName: 'sp_2',
-      error: 'rollback failed' })
-    logger!.onTransactionRollback!({
-      scope: 'transaction',
-      depth: 1,
-      error: new Error('tx boom') })
-    logger!.onTransactionRollback!({
-      scope: 'transaction',
-      depth: 1 })
-
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] query ok connection=default scope=root duration=4ms rows=2 sql=select 1')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] execute ok connection=default scope=root duration=5ms affected=3 sql=delete from users')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] query ok connection=default scope=root duration=7ms sql=select now()')
-    expect(errorSpy).toHaveBeenCalledWith('[holo:db] query error connection=default scope=root duration=6ms sql=select 1 error=boom')
-    expect(errorSpy).toHaveBeenCalledWith('[holo:db] query error connection=default scope=root duration=8ms sql=select broken() error=bad query')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction start scope=transaction depth=1 savepoint=sp_1')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction start scope=transaction depth=1')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction commit scope=transaction depth=1')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction commit scope=savepoint depth=2 savepoint=sp_2')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction rollback scope=savepoint depth=2 savepoint=sp_2 error=rollback failed')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction rollback scope=transaction depth=1 error=tx boom')
-    expect(warnSpy).toHaveBeenCalledWith('[holo:db] transaction rollback scope=transaction depth=1')
+    const warnings = vi.spyOn(console, 'warn')
+    const errors = vi.spyOn(console, 'error')
+    const { db, table } = await openDatabase(driver, { logger: createRuntimeLogger(true), security: { debugSqlInLogs: true } })
+    await db.table(table).insert({ id: 1, name: 'Persisted' })
+    expect(await db.table(table).count()).toBe(1)
+    await db.transaction(async tx => { await tx.table(table).insert({ id: 2, name: 'Committed' }) })
+    await expect(db.transaction(async tx => {
+      await tx.table(table).insert({ id: 3, name: 'Rolled back' })
+      throw new Error('transaction failed')
+    })).rejects.toThrow('transaction failed')
+    await expect(db.queryCompiled({ sql: 'SELECT * FROM holo_nonexistent_table', source: 'query' })).rejects.toThrow()
+    expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Persisted', 'Committed'])
+    const output = warnings.mock.calls.flat().join('\n')
+    expect(output).toContain('query ok connection=default')
+    expect(output).toContain('execute ok connection=default')
+    expect(output).toContain('transaction start')
+    expect(output).toContain('transaction commit')
+    expect(output).toContain('transaction rollback')
+    expect(errors.mock.calls.flat().join('\n')).toContain('query error connection=default')
   })
 
   it('resolves runtime connection managers from defaults and explicit groups', () => {

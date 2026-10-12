@@ -1,4 +1,4 @@
-import { belongsTo, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
+import { DB, belongsTo, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -16,7 +16,8 @@ beforeEach(async () => {
     adapter,
     dialect: createDialect('sqlite'),
     connectionName: 'main',
-    logger: { onQuerySuccess: entry => { if (entry.kind === 'query') rowCounts.push(entry.rowCount) } },
+    security: { debugSqlInLogs: true },
+    logger: { onQuerySuccess: entry => { if (entry.kind === 'query' && entry.sql?.startsWith('SELECT ')) rowCounts.push(entry.rowCount) } },
   })
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
@@ -102,7 +103,7 @@ it('keeps projected limited rows shared when hidden values change and patches vi
   ])
   expect(snapshots[1]?.[0]).toBe(snapshots[0]?.[0])
   expect(reads).toBe(1)
-  expect(rowCounts).toEqual([2, 1, 1])
+  expect(rowCounts).toEqual([2])
 })
 
 it('patches stable offset rows locally and refills only after an ordering mutation moves the page', async () => {
@@ -117,7 +118,7 @@ it('patches stable offset rows locally and refills only after an ordering mutati
     await db.table('posts').where('id', 3).update({ title: 'Updated' })
   } }))
   expect(snapshots[1]?.[1]).toBe(snapshots[0]?.[1])
-  expect(rowCounts).toEqual([2, 1])
+  expect(rowCounts).toEqual([2])
   await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: async ({ db }) => {
     await db.table('posts').where('id', 1).update({ id: 6 })
   } }))
@@ -127,7 +128,7 @@ it('patches stable offset rows locally and refills only after an ordering mutati
     [{ id: 4, title: 'Fourth' }, { id: 5, title: 'Fifth' }],
   ])
   expect(reads).toBe(1)
-  expect(rowCounts).toEqual([2, 1, 1, 2])
+  expect(rowCounts).toEqual([2, 2])
 })
 
 it('preserves distinct projection semantics by rerunning an unsafe patch shape', async () => {
@@ -146,7 +147,7 @@ it('preserves distinct projection semantics by rerunning an unsafe patch shape',
     [{ title: 'Fifth' }, { title: 'Fourth' }, { title: 'Second' }, { title: 'Third' }],
   ])
   expect(reads).toBe(2)
-  expect(rowCounts).toEqual([5, 1, 4])
+  expect(rowCounts).toEqual([5, 4])
 })
 
 it('keeps hidden cursor values out of snapshots and shares unaffected projected rows', async () => {
@@ -171,7 +172,7 @@ it('keeps hidden cursor values out of snapshots and shares unaffected projected 
   expect(snapshots[1]?.rows[0]).toBe(snapshots[0]?.rows[0])
   expect(snapshots[1]?.cursor).toBe(snapshots[0]?.cursor)
   expect(reads).toBe(1)
-  expect(rowCounts).toEqual([3, 1, 1])
+  expect(rowCounts).toEqual([3])
 })
 
 it('retains eager-loaded relations when cursor inserts project their visible fields', async () => {
@@ -199,4 +200,24 @@ it('retains eager-loaded relations when cursor inserts project their visible fie
   ])
   expect(reads).toBe(1)
   expect(rowCounts).toEqual([3, 1, 1])
+})
+
+it('patches native scalar lists without rerunning the handler and ignores unrelated updates', async () => {
+  let reads = 0
+  const snapshots: string[][] = []
+  const posts = defineGeneratedTable('posts', { id: column.id(), title: column.string(), body: column.string() })
+  const query = defineRealtimeQuery({ access: 'public', handler: () => {
+    reads += 1
+    return DB.table(posts).orderBy('id').pluck('title')
+  } })
+  await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: error => { throw error } })
+  await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table('posts').where('id', 1).update({ title: 'Updated' }) }))
+  expect(snapshots).toEqual([
+    ['First', 'Second', 'Third', 'Fourth', 'Fifth'],
+    ['Updated', 'Second', 'Third', 'Fourth', 'Fifth'],
+  ])
+  const published = snapshots.length
+  await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table('posts').where('id', 1).update({ body: 'Invisible' }) }))
+  expect(snapshots).toHaveLength(published)
+  expect(reads).toBe(1)
 })

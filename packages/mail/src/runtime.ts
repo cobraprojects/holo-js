@@ -384,7 +384,7 @@ function resolveStorageModule(module: unknown): StorageModule {
 async function loadStorageModule(): Promise<StorageModule> {
   return loadPeerModule({
     loadOverride: getRuntimeState().loadStorageModule,
-    specifier: '@holo-js/storage',
+    specifier: '@holo-js/storage/runtime',
     resolve: resolveStorageModule,
     missing(error) {
       throw new MailError(

@@ -25,9 +25,10 @@
     "build": "tsup",
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run && node --test --test-concurrency=3 ../../tests/forms-native-browser.mjs ../../tests/forms-native-packages.mjs"
   },
   "dependencies": {
+    "@holo-js/kernel": "catalog:",
     "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {

@@ -399,7 +399,10 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
       void version.value
       return currentForm().fields
     },
-    values,
+    get values() {
+      void version.value
+      return values
+    },
     get errors() {
       void version.value
       return currentForm().errors

@@ -6,8 +6,9 @@ import { createNuxtAuthorizationError } from '../authorization-error'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { useRuntimeConfig } from 'nitropack/runtime/config'
 import { defineNitroPlugin } from 'nitropack/runtime/plugin'
+import type { NitroApp } from 'nitropack/types'
 
-export default defineNitroPlugin((nitroApp: { hooks: { hook: (name: string, handler: () => Promise<void>) => void } }) => {
+export default defineNitroPlugin((nitroApp: NitroApp) => {
   const config = useRuntimeConfig()
   configureHoloRuntimeConfig(config)
 
@@ -21,9 +22,11 @@ export default defineNitroPlugin((nitroApp: { hooks: { hook: (name: string, hand
     },
   })
 
-  nitroApp.hooks.hook('request', async () => {
+  const onRequest = nitroApp.h3App.options.onRequest
+  nitroApp.h3App.options.onRequest = async (event) => {
     await project
-  })
+    return await onRequest?.(event)
+  }
 
   nitroApp.hooks.hook('close', async () => {
     try {

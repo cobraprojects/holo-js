@@ -28,8 +28,6 @@ type RuntimeState = {
   bindings?: BroadcastRuntimeBindings
   projectRoot?: string
   pluginNames?: readonly string[]
-  loadQueueModule?: () => Promise<QueueModule>
-  loadDbModule?: () => Promise<DbModule | null>
   queueJobRegistration?: Promise<QueueModule>
 }
 
@@ -112,11 +110,8 @@ function dynamicImport<TModule>(specifier: string): Promise<TModule> {
 }
 
 async function loadQueueModule(): Promise<QueueModule> {
-  const load = getRuntimeState().loadQueueModule
-    ?? (async () => await dynamicImport<QueueModule>('@holo-js/queue'))
-
   try {
-    return await load()
+    return await dynamicImport<QueueModule>('@holo-js/queue')
   } catch (error) {
     if (
       error
@@ -132,11 +127,8 @@ async function loadQueueModule(): Promise<QueueModule> {
 }
 
 async function loadDbModule(): Promise<DbModule | null> {
-  const load = getRuntimeState().loadDbModule
-    ?? (async () => await dynamicImport<DbModule>('@holo-js/db'))
-
   try {
-    return await load()
+    return await dynamicImport<DbModule>('@holo-js/db')
   } catch (error) {
     if (
       error
@@ -674,8 +666,6 @@ export function resetBroadcastRuntime(): void {
   state.bindings = undefined
   state.projectRoot = undefined
   state.pluginNames = undefined
-  state.loadQueueModule = undefined
-  state.loadDbModule = undefined
   state.queueJobRegistration = undefined
   resetBroadcastPluginDrivers()
 }
@@ -737,11 +727,5 @@ export const broadcastRuntimeInternals = {
   resetBroadcastRuntime,
   async runQueuedBroadcastDelivery(payload: QueuedBroadcastPayload) {
     return await runQueuedBroadcastDelivery(payload)
-  },
-  setLoadDbModuleForTesting(loader?: () => Promise<DbModule | null>): void {
-    getRuntimeState().loadDbModule = loader
-  },
-  setLoadQueueModuleForTesting(loader?: () => Promise<QueueModule>): void {
-    getRuntimeState().loadQueueModule = loader
   },
 }

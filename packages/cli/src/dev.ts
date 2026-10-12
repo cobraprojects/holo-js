@@ -37,10 +37,11 @@ export async function runProjectBuild(
   passthroughArgs: readonly string[] = [],
 ): Promise<void> {
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'build')
+  const environment = await loadEnvironment({ cwd: projectRoot, processEnv: process.env })
   const result = spawn(invocation.command, [...invocation.args, ...passthroughArgs], {
     cwd: projectRoot,
     encoding: 'utf8',
-    env: process.env,
+    env: environment.values,
   })
 
   if (result.stdout) {
@@ -85,7 +86,7 @@ export async function runProjectStartServer(
     const serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
     if (session.signal.aborted) return
 
-    const result = await session.launch(invocation, serverArgs).completion
+    const result = await (await session.launch(invocation, serverArgs)).completion
     if (result.kind === 'error') throw result.error
     if (session.signal.aborted) return
     if (result.code !== 0) {

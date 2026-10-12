@@ -108,11 +108,11 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       case 'time':
         return `time(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'year':
-        return `strftime('%Y', ${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
+        return `CAST(strftime('%Y', ${column}) AS INTEGER) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'month':
-        return `strftime('%m', ${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
+        return `CAST(strftime('%m', ${column}) AS INTEGER) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'day':
-        return `strftime('%d', ${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
+        return `CAST(strftime('%d', ${column}) AS INTEGER) ${predicate.operator.toUpperCase()} ${placeholder}`
       default:
         return super.compileDatePredicate(predicate, placeholder)
     }

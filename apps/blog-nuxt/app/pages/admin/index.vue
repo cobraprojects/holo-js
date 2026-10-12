@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { useFlux } from '@holo-js/flux-vue'
+import { useFlux, useFluxPresence } from '@holo-js/flux-vue'
 
 const { data } = await useFetch('/api/admin/dashboard', {
   pick: ['postCount', 'publishedCount', 'categoryCount', 'tagCount'],
 })
 const latestPostChange = ref('Waiting for post activity')
+const presence = useFluxPresence('blog.admin.presence')
 
 useFlux('blog.admin', 'blog.post.changed', (payload) => {
   latestPostChange.value = `${payload.action}: ${payload.title}`
@@ -23,6 +24,7 @@ useFlux('blog.admin', 'blog.post.changed', (payload) => {
     <article class="panel live-panel">
       <strong>Live post activity</strong>
       <div data-testid="broadcast-post-activity">{{ latestPostChange }}</div>
+      <div data-testid="broadcast-presence">{{ JSON.stringify(presence.members) }}</div>
     </article>
     <div class="links">
       <NuxtLink to="/admin/posts">Manage posts</NuxtLink>

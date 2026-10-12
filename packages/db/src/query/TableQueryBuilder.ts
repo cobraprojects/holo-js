@@ -13,6 +13,7 @@ import {
   inferAutomaticQueryCacheInvalidationPlan,
   inferDatabaseQueryObservationDependencies,
   normalizeQueryCacheConfig,
+  queryCacheInternals,
   rebindDatabaseQueryObservationAggregate,
   rebindDatabaseQueryObservationCursorPagination,
   rebindDatabaseQueryObservationPagination,
@@ -88,6 +89,7 @@ import type {
   QueryJsonUpdateOperation,
   QueryOperator,
   QueryPredicateNode,
+  QueryPredicate,
   QuerySelection,
   SelectQueryPlan,
 } from './ast'
@@ -179,8 +181,9 @@ export class TableQueryBuilder<
     plan?: SelectQueryPlan,
     private readonly queryCacheConfig?: NormalizedQueryCacheConfig,
   ) {
-    this.source = createTableSource(table)
-    this.plan = plan ?? createSelectQueryPlan(this.source)
+    const source = plan?.source ?? createTableSource(table)
+    this.source = source.table ? source : { ...source, table: this.connection.getSchemaRegistry().get(source.tableName) }
+    this.plan = plan ? withSource(plan, this.source) : createSelectQueryPlan(this.source)
   }
 
   getTableName(): string {
@@ -498,7 +501,7 @@ export class TableQueryBuilder<
       boolean,
       column,
       operator: normalized.operator as QueryOperator,
-      value: this.normalizePredicateValueForColumn(column, normalized.value),
+      ...this.normalizeComparisonValue(column, normalized.value, normalized.operator),
     }))
   }
 
@@ -545,7 +548,7 @@ export class TableQueryBuilder<
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: this.normalizePredicateValueForColumn(column, normalized.value),
+      value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
     }))
   }
 
@@ -743,7 +746,7 @@ export class TableQueryBuilder<
       boolean: 'and',
       column,
       operator: 'in',
-      value: this.normalizePredicateValueForColumn(column, values),
+      ...this.normalizeComparisonValue(column, values, 'in'),
     }))
   }
 
@@ -753,7 +756,7 @@ export class TableQueryBuilder<
       boolean: 'and',
       column,
       operator: 'not in',
-      value: this.normalizePredicateValueForColumn(column, values),
+      ...this.normalizeComparisonValue(column, values, 'not in'),
     }))
   }
 
@@ -766,7 +769,7 @@ export class TableQueryBuilder<
       boolean: 'and',
       column,
       operator: 'between',
-      value: this.normalizePredicateValueForColumn(column, range) as readonly [unknown, unknown],
+      ...this.normalizeComparisonValue(column, range, 'between'),
     }))
   }
 
@@ -779,7 +782,7 @@ export class TableQueryBuilder<
       boolean: 'and',
       column,
       operator: 'not between',
-      value: this.normalizePredicateValueForColumn(column, range) as readonly [unknown, unknown],
+      ...this.normalizeComparisonValue(column, range, 'not between'),
     }))
   }
 
@@ -1379,15 +1382,16 @@ export class TableQueryBuilder<
       ? createDatabaseQueryObservation
       : createDatabaseQueryFallbackObservation
     recordDatabaseQueryDependencies(observationDependencies)
-    if (!cacheConfig || this.plan.lockMode) {
-      const result = await this.connection.queryCompiled<TRow>(statement)
+    const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
+    if (!cacheConfig || this.plan.lockMode || expired) {
+      const rows = await this.queryRows<TRow>(statement)
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
         createObservation,
-        result.rows,
+        rows,
       )
-      return result.rows
+      return rows
     }
 
     const bridge = getDatabaseQueryCacheBridge()
@@ -1404,8 +1408,8 @@ export class TableQueryBuilder<
         cacheKey,
         cacheConfig.flexible,
         async () => {
-          const result = await this.connection.queryCompiled<TRow>(statement)
-          return result.rows
+          const rows = await this.queryRows<TRow>(statement)
+          return rows
         },
         {
           driver: cacheConfig.driver,
@@ -1429,8 +1433,8 @@ export class TableQueryBuilder<
       cacheKey,
       normalizeAtomicQueryCacheTtl(cacheConfig.ttl),
       async () => {
-        const result = await this.connection.queryCompiled<TRow>(statement)
-        return result.rows
+        const rows = await this.queryRows<TRow>(statement)
+        return rows
       },
       {
         driver: cacheConfig.driver,
@@ -1444,6 +1448,25 @@ export class TableQueryBuilder<
       rows,
     )
     return rows
+  }
+
+  private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
+    const { rows } = await this.connection.queryCompiled<TRow>(statement)
+    const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
+    if (aggregates.length === 0) return rows
+    return rows.map(row => {
+      const values: Record<string, unknown> = { ...row }
+      for (const selection of aggregates) {
+        const value = row[selection.alias]
+        if (value == null) continue
+        const number = this.normalizeAggregateMetadataNumber(value)
+        if (typeof number === 'undefined' || (Number.isInteger(number) && !Number.isSafeInteger(number))) {
+          throw new CompilerError(`Query aggregate "${selection.aggregate}" returned an invalid numeric value for "${selection.alias}".`)
+        }
+        values[selection.alias] = number
+      }
+      return values as TRow
+    })
   }
 
   private async recordCollectedQueryObservation<TRow extends Record<string, unknown>>(
@@ -1969,45 +1992,57 @@ export class TableQueryBuilder<
   async pluck<TKey extends SelectedColumnNames<TSelectedRow>>(
     column: TKey,
   ): Promise<Array<TSelectedRow[TKey]>> {
-    const rows = await this.get<Record<string, unknown>>()
-    const result = rows.map(row => row[column] as TSelectedRow[TKey])
-    rebindDatabaseQueryObservationScalarList(rows, result, column)
+    const rows = await this.scalarQuery(column).get<Record<string, unknown>>()
+    const key = column.slice(column.lastIndexOf('.') + 1)
+    const result = rows.map(row => row[key] as TSelectedRow[TKey])
+    rebindDatabaseQueryObservationScalarList(rows, result, key)
     return result
   }
 
   async value<TKey extends SelectedColumnNames<TSelectedRow>>(
     column: TKey,
   ): Promise<TSelectedRow[TKey] | undefined> {
-    const row = await this.first<Record<string, unknown>>()
-    const result = row?.[column] as TSelectedRow[TKey] | undefined
-    rebindDatabaseQueryObservationScalar(row, result, column)
+    const row = await this.scalarQuery(column).first<Record<string, unknown>>()
+    const key = column.slice(column.lastIndexOf('.') + 1)
+    const result = row?.[key] as TSelectedRow[TKey] | undefined
+    rebindDatabaseQueryObservationScalar(row, result, key)
     return result
   }
 
   async valueOrFail<TKey extends SelectedColumnNames<TSelectedRow>>(
     column: TKey,
   ): Promise<TSelectedRow[TKey]> {
-    const row = await this.first<Record<string, unknown>>()
-    if (!row || typeof row[column] === 'undefined') {
+    const row = await this.scalarQuery(column).first<Record<string, unknown>>()
+    const key = column.slice(column.lastIndexOf('.') + 1)
+    if (!row || typeof row[key] === 'undefined') {
       throw new CompilerError(`Query returned no value for column "${column}".`)
     }
 
-    const result = row[column] as TSelectedRow[TKey]
-    rebindDatabaseQueryObservationScalar(row, result, column)
+    const result = row[key] as TSelectedRow[TKey]
+    rebindDatabaseQueryObservationScalar(row, result, key)
     return result
   }
 
   async soleValue<TKey extends SelectedColumnNames<TSelectedRow>>(
     column: TKey,
   ): Promise<TSelectedRow[TKey]> {
-    const row = await this.sole<Record<string, unknown>>()
-    if (typeof row[column] === 'undefined') {
+    const row = await this.scalarQuery(column).sole<Record<string, unknown>>()
+    const key = column.slice(column.lastIndexOf('.') + 1)
+    if (typeof row[key] === 'undefined') {
       throw new CompilerError(`Query returned no value for column "${column}".`)
     }
 
-    const result = row[column] as TSelectedRow[TKey]
-    rebindDatabaseQueryObservationScalar(row, result, column)
+    const result = row[key] as TSelectedRow[TKey]
+    rebindDatabaseQueryObservationScalar(row, result, key)
     return result
+  }
+
+  private scalarQuery(column: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    if (this.plan.selections.length > 0
+      || (hasActiveDatabaseDependencyCollector() && !this.plan.distinct && this.plan.joins.length === 0 && !column.includes('.'))) {
+      return this
+    }
+    return this.clone(withSelections(this.plan, [column]))
   }
 
   async sum(column: string): Promise<number> {
@@ -2025,7 +2060,7 @@ export class TableQueryBuilder<
 
     const values = this.extractNumericValues(rows, column, 'avg')
     const sum = values.reduce((total, value) => total + value, 0)
-    const result = sum / values.length
+    const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
     }
@@ -2042,7 +2077,7 @@ export class TableQueryBuilder<
     }
 
     const values = this.extractNumericValues(rows, column, 'min')
-    const result = Math.min(...values)
+    const result = values.length > 0 ? Math.min(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({
         column,
@@ -2064,7 +2099,7 @@ export class TableQueryBuilder<
     }
 
     const values = this.extractNumericValues(rows, column, 'max')
-    const result = Math.max(...values)
+    const result = values.length > 0 ? Math.max(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({
         column,
@@ -2086,18 +2121,30 @@ export class TableQueryBuilder<
   async insert(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
   ): Promise<DriverExecutionResult> {
+    return this.executeInsert(values)
+  }
+
+  private async executeInsert(
+    values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
+    returnGeneratedId = false,
+  ): Promise<DriverExecutionResult> {
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
+    const primaryKey = this.source.table?.columns[this.resolvePrimaryKeyColumn()]
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
+      || (this.connection.getCapabilities().returning
+        && (returnGeneratedId || (primaryKey?.hasDefault === true && primaryKey.idStrategy !== 'autoIncrement')))
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, { returning: true }),
           true,
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
-          createInsertQueryPlan(this.source, rows),
+          createInsertQueryPlan(this.source, rows, {
+            returningColumn: returnGeneratedId ? this.resolvePrimaryKeyColumn() : undefined,
+          }),
         ))
     await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId)
     return {
@@ -2135,7 +2182,7 @@ export class TableQueryBuilder<
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
-    const result = await this.insert(values)
+    const result = await this.executeInsert(values, true)
     return result.lastInsertId
   }
 
@@ -2192,7 +2239,20 @@ export class TableQueryBuilder<
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
-    const mutationRows = hasInvalidationListeners && !useReturningRows
+    const needsPreviousRows = hasInvalidationListeners && (!useReturningRows || queryCacheInternals.requiresMutationPreviousRows(
+      this.connection.getConnectionName(),
+      this.source.tableName,
+      Object.keys(normalizedValues),
+    ))
+    if (needsPreviousRows && this.connection.getScope().kind === 'root') {
+      return this.connection.writeTransaction(transaction => new TableQueryBuilder(
+        this.source.table ?? this.source.tableName,
+        transaction,
+        this.plan,
+        this.queryCacheConfig,
+      ).update(values))
+    }
+    const mutationRows = needsPreviousRows
       ? await this.captureUpdatedMutationRows(normalizedValues)
       : undefined
     const result: MutationExecutionResult = useReturningRows
@@ -2202,7 +2262,7 @@ export class TableQueryBuilder<
       : await this.connection.executeCompiled(this.getCompiler().compile(
         createUpdateQueryPlan(this.source, this.plan.predicates, normalizedValues),
       ))
-    const capturedRows = result.rows ?? mutationRows
+    const capturedRows = result.rows ? { ...result.rows, previousRows: mutationRows?.previousRows } : mutationRows
     if (result.affectedRows !== 0) {
       await this.invalidateMutationQueries(normalizedValues, capturedRows)
     }
@@ -2276,6 +2336,7 @@ export class TableQueryBuilder<
     const plan = Object.freeze({
       ...createSelectQueryPlan(this.source),
       predicates: this.plan.predicates,
+      lockMode: this.connection.getCapabilities().lockForUpdate && this.connection.getScope().kind !== 'root' ? 'update' : undefined,
     }) satisfies SelectQueryPlan
     const result = await this.connection.queryCompiled(this.getCompiler().compile(plan))
     if (result.rows.length === 0) {
@@ -2720,13 +2781,14 @@ export class TableQueryBuilder<
     column: string,
     kind: 'sum' | 'avg' | 'min' | 'max',
   ): number[] {
-    return rows.map((row) => {
+    return rows.flatMap((row) => {
       const value = row[column]
+      if (value === null) return []
       if (typeof value !== 'number' || Number.isNaN(value)) {
         throw new CompilerError(`Query aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return value
+      return [value]
     })
   }
 
@@ -2749,7 +2811,14 @@ export class TableQueryBuilder<
     return normalizeQueryWriteValue(this.source.table, this.connection.getDriver(), columnName, value)
   }
 
-  private normalizePredicateValueForColumn(columnName: string, value: unknown): unknown {
-    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), columnName, value)
+  private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
+    return {
+      value: this.normalizePredicateValueForColumn(columnName, value, operator),
+      ...(this.source.table?.columns[columnName]?.kind === 'json' ? { valueType: 'json' as const } : {}),
+    }
+  }
+
+  private normalizePredicateValueForColumn(columnName: string, value: unknown, operator: unknown = '='): unknown {
+    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
   }
 }

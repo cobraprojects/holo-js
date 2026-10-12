@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { chmod, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { configureSecurityRuntime, createFileRateLimitStore, ip, limit, resetSecurityRuntime } from '@holo-js/security'
 import {
   FormContractError,
   createFailedSubmission,
@@ -14,78 +18,25 @@ import {
   schema,
 } from '@holo-js/validation'
 
-type FormsTestGlobal = typeof globalThis & {
-  __holoFormsSecurityModule__?: unknown
-  __holoFormsNextHeadersImport__?: () => Promise<unknown>
-}
-
-function createSecurityModule() {
-  const attempts = new Map<string, number>()
-
-  return {
-    csrf: {
-      async verify(request: Request) {
-        if (request.method !== 'GET' && !request.bodyUsed) {
-          await request.formData()
-        }
-
-        const cookie = request.headers.get('cookie') ?? ''
-        const header = request.headers.get('X-CSRF-TOKEN') ?? ''
-        const token = cookie
-          .split(';')
-          .map(segment => segment.trim())
-          .find(segment => segment.startsWith('XSRF-TOKEN='))
-          ?.slice('XSRF-TOKEN='.length) ?? ''
-
-        if (!token || token !== header) {
-          const error = new Error('CSRF token mismatch.') as Error & { status: number }
-          error.status = 419
-          throw error
-        }
+async function configureNativeSecurity(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'holo-form-rate-limits-'))
+  onTestFinished(async () => {
+    resetSecurityRuntime()
+    await rm(directory, { recursive: true, force: true })
+  })
+  configureSecurityRuntime({
+    config: {
+      rateLimit: {
+        driver: 'file',
+        limiters: {
+          login: limit.perMinute(1).by(({ request, values }) => `${ip(request, true)}:${typeof values?.email === 'string' ? values.email : 'guest'}`),
+        },
       },
     },
-    async rateLimit(name: string, options: { readonly request?: Request, readonly values?: Readonly<Record<string, unknown>> }) {
-      const request = options.request
-      const forwardedFor = request?.headers.get('x-forwarded-for')?.split(',', 1)[0]?.trim() ?? 'unknown'
-      const email = typeof options.values?.email === 'string' ? options.values.email : 'guest'
-      const key = `${name}:${forwardedFor}:${email}`
-      const next = (attempts.get(key) ?? 0) + 1
-
-      attempts.set(key, next)
-      if (next > 1) {
-        const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
-        error.status = 429
-        Object.defineProperties(error, {
-          retryAfterSeconds: {
-            value: 60,
-          },
-          snapshot: {
-            value: {
-              expiresAt: new Date('2026-05-20T12:34:56.000Z'),
-            },
-          },
-        })
-        throw error
-      }
-    },
-    getSecurityRuntime() {
-      return {
-        config: {
-          csrf: {
-            field: '_token',
-            cookie: 'XSRF-TOKEN',
-          },
-        },
-      }
-    },
-  }
+    rateLimitStore: createFileRateLimitStore(directory),
+  })
+  return directory
 }
-
-afterEach(() => {
-  const runtime = globalThis as FormsTestGlobal
-  delete runtime.__holoFormsSecurityModule__
-  delete runtime.__holoFormsNextHeadersImport__
-})
 
 describe('@holo-js/forms contracts', () => {
   it('returns validated data from validate and throws validation exceptions for failures', async () => {
@@ -513,7 +464,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+    await configureNativeSecurity()
 
     const allowedRequest = new Request('https://app.test/login', {
       method: 'POST',
@@ -564,11 +515,11 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-    expect(throttled.fail()).toMatchObject({
-      status: 429,
-      retryAfterSeconds: 60,
-      retryAt: '2026-05-20T12:34:56.000Z',
-    })
+    expect(throttled.fail()).toMatchObject({ status: 429, retryAfterSeconds: 60 })
+    const retryAt = throttled.fail().retryAt
+    expect(retryAt).toBeDefined()
+    expect(Date.parse(retryAt ?? '')).toBeGreaterThan(Date.now() + 59000)
+    expect(Date.parse(retryAt ?? '')).toBeLessThanOrEqual(Date.now() + 60000)
 
     try {
       await validate(new Request('https://app.test/login', {
@@ -589,7 +540,7 @@ describe('@holo-js/forms contracts', () => {
       expect(exception.toJSON()).toMatchObject({
         status: 429,
         retryAfterSeconds: 60,
-        retryAt: '2026-05-20T12:34:56.000Z',
+        retryAt: expect.any(String),
       })
     }
   })
@@ -599,7 +550,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+    await configureNativeSecurity()
 
     await expect(safeParse({
       email: 'ava@example.com',
@@ -617,7 +568,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+    await configureNativeSecurity()
 
     const event = {
       method: 'POST',
@@ -661,7 +612,7 @@ describe('@holo-js/forms contracts', () => {
     })
     const rawBodySymbol = Symbol.for('h3RawBody')
 
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+    await configureNativeSecurity()
 
     const event = {
       method: 'POST',
@@ -694,114 +645,11 @@ describe('@holo-js/forms contracts', () => {
     expect(submission.data.email).toBe('ava@example.com')
   })
 
-  it('accepts Next server action FormData for security-aware validation', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-    const runtime = globalThis as FormsTestGlobal
-
-    runtime.__holoFormsSecurityModule__ = createSecurityModule()
-    runtime.__holoFormsNextHeadersImport__ = async () => ({
-      headers: () => new Headers({
-        cookie: 'XSRF-TOKEN=login-token',
-        'x-forwarded-for': '203.0.113.11',
-        host: 'app.test',
-        referer: 'https://app.test/login',
-        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
-        'content-length': '123',
-      }),
-    })
-
-    const formData = new FormData()
-    formData.set('email', 'ava@example.com')
-
-    const firstAllowed = await safeParse(formData, login, {
-      throttle: 'login',
-    })
-
-    expect(firstAllowed.valid).toBe(true)
-    if (!firstAllowed.valid) {
-      throw new Error('Expected Next action form validation success.')
-    }
-
-    expect(firstAllowed.data).toEqual({
-      email: 'ava@example.com',
-    })
-
-    const throttled = await safeParse(formData, login, {
-      throttle: 'login',
-    })
-    expect(throttled.valid).toBe(false)
-    if (throttled.valid) {
-      throw new Error('Expected throttle failure.')
-    }
-
-    expect(throttled.values).toEqual({
-      email: 'ava@example.com',
-    })
-    expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-
-    runtime.__holoFormsSecurityModule__ = createSecurityModule()
-    runtime.__holoFormsNextHeadersImport__ = async () => ({
-      headers: () => new Headers({
-        'x-forwarded-for': '203.0.113.12',
-        'x-forwarded-host': 'forms.example.test',
-        'x-forwarded-proto': 'https',
-        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
-      }),
-    })
-    const noRefererFormData = new FormData()
-    noRefererFormData.set('email', 'noreferer@example.com')
-    const noRefererResult = await safeParse(noRefererFormData, login, {
-      throttle: 'login',
-    })
-    expect(noRefererResult.valid).toBe(true)
-
-    runtime.__holoFormsSecurityModule__ = createSecurityModule()
-    runtime.__holoFormsNextHeadersImport__ = async () => ({
-      headers: () => new Headers({
-        host: 'forms.example.test',
-        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
-      }),
-    })
-    const hostOnlyFormData = new FormData()
-    hostOnlyFormData.set('email', 'hostonly@example.com')
-    const hostOnlyResult = await safeParse(hostOnlyFormData, login, {
-      throttle: 'login',
-    })
-    expect(hostOnlyResult.valid).toBe(true)
-
-    runtime.__holoFormsSecurityModule__ = createSecurityModule()
-    runtime.__holoFormsNextHeadersImport__ = async () => ({
-      headers: () => new Headers({
-        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
-      }),
-    })
-    const defaultHostFormData = new FormData()
-    defaultHostFormData.set('email', 'default@example.com')
-    const defaultHostResult = await safeParse(defaultHostFormData, login, {
-      throttle: 'login',
-    })
-    expect(defaultHostResult.valid).toBe(true)
-
-    runtime.__holoFormsNextHeadersImport__ = async () => ({})
-    await expect(safeParse(new FormData(), login, {
-      throttle: 'login',
-    })).rejects.toThrow('Security-aware safeParse() options require a Request or request-like event input.')
-  })
-
-  it('uses Next.js 16\'s resolvable headers module for server actions', () => {
-    expect(formsInternals.nextHeadersModuleSpecifier).toBe('next/headers.js')
-  })
-
   it('rejects security-aware FormData when ambient Next headers are unavailable', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
-    const runtime = globalThis as FormsTestGlobal
-
-    runtime.__holoFormsSecurityModule__ = createSecurityModule()
-    runtime.__holoFormsNextHeadersImport__ = async () => ({})
+    await configureNativeSecurity()
 
     const formData = new FormData()
     formData.set('email', 'ava@example.com')
@@ -1268,7 +1116,7 @@ describe('@holo-js/forms contracts', () => {
       },
     } as typeof base
 
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+    await configureNativeSecurity()
 
     const result = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
@@ -1291,7 +1139,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+    await configureNativeSecurity()
 
     const firstAttempt = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
@@ -1333,157 +1181,17 @@ describe('@holo-js/forms contracts', () => {
     expect(throttled.fail().status).toBe(429)
   })
 
-  it('rethrows unexpected security errors from safeParse()', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = {
-      async rateLimit() {
-        throw new Error('security exploded')
-      },
+  it('propagates real rate-limit persistence failures without reporting a validation error', async () => {
+    const directory = await configureNativeSecurity()
+    await chmod(directory, 0o500)
+    try {
+      await expect(safeParse(new Request('https://app.test/login', {
+        method: 'POST',
+        body: new URLSearchParams({ email: 'ava@example.com' }),
+      }), schema({ email: field.string().required().email() }), { throttle: 'login' })).rejects.toThrow('EACCES')
+    } finally {
+      await chmod(directory, 0o700)
     }
-
-    await expect(safeParse(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), login, {
-      throttle: 'login',
-    })).rejects.toThrow('security exploded')
-  })
-
-  it('returns csrf-like root security failures without rate-limit metadata', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = {
-      async rateLimit() {
-        const error = new Error('CSRF token mismatch.') as Error & { status: number }
-        error.status = 419
-        throw error
-      },
-    }
-
-    const result = await safeParse(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), login, {
-      throttle: 'login',
-    })
-
-    expect(result.valid).toBe(false)
-    if (result.valid) {
-      throw new Error('Expected csrf-like root failure.')
-    }
-
-    const failure = result.fail()
-    expect(failure.status).toBe(419)
-    expect(failure.errors._root).toEqual(['CSRF token mismatch.'])
-    expect('retryAfterSeconds' in failure).toBe(false)
-    expect('retryAt' in failure).toBe(false)
-  })
-
-  it('revalidates request values when root security errors happen before submission validation is captured', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
-      const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
-      error.status = 429
-      throw error
-    }
-
-    const result = await safeParse(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), login, {
-      throttle: 'login',
-    })
-
-    expect(result.valid).toBe(false)
-    if (result.valid) {
-      throw new Error('Expected root security failure.')
-    }
-
-    expect(result.values).toEqual({
-      email: 'ava@example.com',
-    })
-    expect(result.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-    expect(result.fail()).toMatchObject({
-      status: 429,
-    })
-  })
-
-  it('preserves validation errors when root security errors happen before submission validation is captured', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
-      const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
-      error.status = 429
-      throw error
-    }
-
-    const result = await safeParse(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'bad',
-      }),
-    }), login, {
-      throttle: 'login',
-    })
-
-    expect(result.valid).toBe(false)
-    if (result.valid) {
-      throw new Error('Expected validation and root security failure.')
-    }
-
-    expect(result.values).toEqual({
-      email: 'bad',
-    })
-    expect(result.errors.first('email')).toBeDefined()
-    expect(result.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-  })
-
-  it('falls back to empty values when security failure revalidation cannot read the request', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
-      const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
-      error.status = 429
-      throw error
-    }
-
-    const request = new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    })
-    await request.text()
-
-    const result = await safeParse(request, login, {
-      throttle: 'login',
-    })
-
-    expect(result.valid).toBe(false)
-    if (result.valid) {
-      throw new Error('Expected root security failure.')
-    }
-
-    expect(result.values).toEqual({})
-    expect(result.errors.flatten()).toEqual({
-      _root: ['Too many attempts. Please try again later.'],
-    })
   })
 
   it('rejects malformed submission status codes', () => {

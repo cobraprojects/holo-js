@@ -2,7 +2,6 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import * as configModule from '@holo-js/config'
 import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { normalizeHoloProjectConfig } from '@holo-js/kernel'
 import { authorizationInternals } from '../../authorization/src/index'
@@ -346,51 +345,10 @@ export default defineAuthConfig({
     expect(output).toContain('exportName: "guardedExport"')
   })
 
-  it('uses empty authorization guards when the loaded config has no auth block', async () => {
-    vi.spyOn(configModule, 'loadConfigDirectory').mockResolvedValue({} as Awaited<ReturnType<typeof configModule.loadConfigDirectory>>)
-
+  it('rejects discovery when the native auth configuration fails to load', async () => {
     const root = await createProject()
-    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
-
-    await expect(readFile(join(root, '.holo-js/generated/authorization/types.d.ts'), 'utf8'))
-      .resolves.toContain('interface AuthorizationGuardRegistry {}')
-  })
-
-  it('surfaces auth config load failures while writing authorization types', async () => {
-    const root = await createProject()
-    const configError = new Error('broken auth config')
-
-    vi.spyOn(configModule, 'loadConfigDirectory').mockRejectedValue(configError)
-
-    await expect(writeGeneratedProjectRegistry(root, {
-      version: 1,
-      generatedAt: '2026-01-01T00:00:00.000Z',
-      paths: {
-        models: 'server/models',
-        migrations: 'server/db/migrations',
-        seeders: 'server/db/seeders',
-        commands: 'server/commands',
-        jobs: 'server/jobs',
-        events: 'server/events',
-        listeners: 'server/listeners',
-        broadcast: 'server/broadcast',
-        channels: 'server/channels',
-        authorizationPolicies: 'server/policies',
-        authorizationAbilities: 'server/abilities',
-        generatedSchema: '.holo-js/generated/schema.generated.ts',
-      },
-      models: [],
-      migrations: [],
-      seeders: [],
-      commands: [],
-      jobs: [],
-      events: [],
-      listeners: [],
-      broadcast: [],
-      channels: [],
-      authorizationPolicies: [],
-      authorizationAbilities: [],
-    })).rejects.toThrow(configError)
+    await writeFile(join(root, 'config/auth.ts'), 'export default { invalid syntax }')
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig())).rejects.toThrow()
   })
 
   it('fails when a discovered policy file does not export a Holo policy definition', async () => {

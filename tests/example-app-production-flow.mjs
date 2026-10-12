@@ -1,8 +1,9 @@
 import { stopExampleAppProcess as stopProductionServer } from './example-app-process.mjs'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { assertExampleAppAuthFlow } from './example-app-auth-flow.mjs'
 import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
+import { assertExampleAppFormsBrowserFlow } from './example-app-forms-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from './example-app-token-auth-flow.mjs'
 
 async function waitForProductionApp(baseUrl, expectedTitle, child, output) {
@@ -70,6 +71,61 @@ async function assertBrowserAuth(baseUrl, framework) {
         page.getByRole('button', { name: /^Sign in/i }).click(),
       ])
       await page.waitForLoadState('networkidle')
+      const guard = account.destination === '/admin' ? 'web' : 'admin'
+      const otherGuard = guard === 'web' ? 'admin' : 'web'
+      const current = await context.request.get(`/api/auth/user?guard=${guard}`)
+      assert.equal(current.status(), 200)
+      assert.equal((await current.json()).authenticated, true)
+      const other = await context.request.get(`/api/auth/user?guard=${otherGuard}`)
+      assert.equal(other.status(), 200)
+      assert.equal((await other.json()).authenticated, false)
+      await page.goto(account.path, { waitUntil: 'networkidle' })
+      assert.equal(new URL(page.url()).pathname, account.destination)
+      if (framework === 'nuxt') {
+        for (const mode of ['guest-regex', 'guest-function', 'guest-wildcard']) {
+          const response = await context.request.get(`/framework/auth?mode=${mode}&guard=${guard}`, { maxRedirects: 0 })
+          assert.equal(response.status(), 302, `${guard} ${mode}`)
+          assert.equal(response.headers().location, account.destination)
+        }
+        for (const mode of ['guest-self', 'guest-unmatched', 'auth-wildcard']) {
+          const response = await context.request.get(`/framework/auth?mode=${mode}&guard=${guard}`, { maxRedirects: 0 })
+          assert.equal(response.status(), 200, await response.text())
+        }
+        await page.goto(`/framework/auth?guard=${guard}`, { waitUntil: 'networkidle' })
+        assert.equal(await page.getByTestId('authenticated').innerText(), 'true')
+        assert.equal(await page.getByTestId('user').innerText(), account.email)
+        await page.goto(`/framework/auth?guard=${guard}&absolute=1`, { waitUntil: 'networkidle' })
+        await page.getByRole('button', { name: 'Refresh authentication', exact: true }).click()
+        await page.getByTestId('authenticated').filter({ hasText: 'true' }).waitFor()
+        assert.equal(await page.getByTestId('user').innerText(), account.email)
+        const invalidGuard = await context.request.get('/api/auth/user?guard=missing')
+        assert.equal(invalidGuard.status(), 400)
+        await page.goto('/framework/auth?guard=missing', { waitUntil: 'networkidle' })
+        assert.equal(await page.getByTestId('authenticated').innerText(), 'false')
+        assert.equal(await page.getByTestId('provider').innerText(), 'none')
+        assert.equal(await page.getByTestId('user').innerText(), 'none')
+        await page.goto(`/framework/auth?guard=${otherGuard}`, { waitUntil: 'networkidle' })
+        assert.equal(await page.getByTestId('authenticated').innerText(), 'false')
+        assert.equal(await page.getByTestId('user').innerText(), 'none')
+        await page.goto(`/framework/auth?guard=${guard}`, { waitUntil: 'networkidle' })
+        const csrfCookie = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')
+        assert.ok(csrfCookie)
+        const headers = { origin: baseUrl, 'x-csrf-token': decodeURIComponent(csrfCookie.value) }
+        const endpoint = guard === 'admin' ? '/api/super-admin' : '/api'
+        const logout = await context.request.post(`${endpoint}/logout`, { headers })
+        assert.equal(logout.status(), 200, await logout.text())
+        await page.getByRole('button', { name: 'Refresh authentication', exact: true }).click()
+        await page.getByTestId('authenticated').filter({ hasText: 'false' }).waitFor()
+        assert.equal(await page.getByTestId('user').innerText(), 'none')
+        const login = await context.request.post(`${endpoint}/login`, {
+          headers, form: { email: account.email, password: account.password },
+        })
+        assert.equal(login.status(), 200, await login.text())
+        await page.getByRole('button', { name: 'Refresh authentication', exact: true }).click()
+        await page.getByTestId('authenticated').filter({ hasText: 'true' }).waitFor()
+        assert.equal(await page.getByTestId('user').innerText(), account.email)
+        await page.goto(account.destination, { waitUntil: 'networkidle' })
+      }
       let blocked = false
       if (framework === 'nuxt') {
         const session = await context.newCDPSession(page)
@@ -96,6 +152,15 @@ async function assertBrowserAuth(baseUrl, framework) {
       }
       await page.goto(account.destination, { waitUntil: 'networkidle' })
       assert.equal(new URL(page.url()).pathname, account.path)
+      if (framework === 'nuxt') {
+        for (const mode of ['auth-regex', 'auth-function', 'auth-wildcard']) {
+          const response = await context.request.get(`/framework/auth?mode=${mode}&guard=${guard}`, { maxRedirects: 0 })
+          assert.equal(response.status(), 302, `${guard} ${mode}`)
+          assert.equal(response.headers().location, account.path)
+        }
+        const response = await context.request.get(`/framework/auth?mode=auth-self&guard=${guard}`, { maxRedirects: 0 })
+        assert.equal(response.status(), 200, await response.text())
+      }
       assert.deepEqual(observed.failures, [])
     } finally {
       await context.close()
@@ -108,6 +173,43 @@ async function expectPageText(page, expectedText) {
   assert.match(body, new RegExp(expectedText))
 }
 
+async function assertFailedProductionInitialization(cwd, baseUrl, env, portArguments) {
+  let output = ''
+  const child = spawn('bun', ['run', 'start', ...portArguments], {
+    cwd,
+    detached: true,
+    env: { ...process.env, ...env, DB_DRIVER: 'invalid' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  child.stdout.on('data', chunk => output += String(chunk))
+  child.stderr.on('data', chunk => output += String(chunk))
+  try {
+    const deadline = Date.now() + 20000
+    let failed = false
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) {
+        assert.notEqual(child.exitCode, 0, output)
+        failed = true
+        break
+      }
+      const response = await fetch(`${baseUrl}/api/auth/user`).catch(() => undefined)
+      if (response) {
+        const body = await response.text()
+        assert.equal(response.status, 500, body)
+        const payload = response.headers.get('content-type')?.includes('application/json') ? JSON.parse(body) : undefined
+        output += typeof payload?.message === 'string' ? payload.message : body
+        failed = true
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    assert.ok(failed, `The production app must reject requests when database initialization fails.\n${output}`)
+    assert.match(output, /Unsupported Holo database driver "invalid"/)
+  } finally {
+    await stopProductionServer(child, 'SIGINT')
+  }
+}
+
 export async function assertExampleAppProductionFlow({
   cwd,
   baseUrl,
@@ -115,11 +217,27 @@ export async function assertExampleAppProductionFlow({
   expectedTitle,
   auth,
 }) {
+  const framework = cwd.split('/').at(-1)?.replace('blog-', '')
+  for (const argument of ['--port=433434', '--port=abc', '--port=', '--port']) {
+    const invalidPort = spawnSync('bun', ['run', 'start', argument], {
+      cwd,
+      env: { ...process.env, ...env },
+      encoding: 'utf8',
+      timeout: 10000,
+    })
+    assert.equal(invalidPort.error, undefined)
+    assert.notEqual(invalidPort.status, 0)
+    assert.match(invalidPort.stderr, /--port must be an integer between 0 and 65535/)
+  }
+  const port = new URL(baseUrl).port
+  const portArguments = env.DB_DRIVER === 'postgres' ? [`--port=${port}`] : env.DB_DRIVER === 'mysql' ? ['--port', port] : []
+  const serverEnv = portArguments.length > 0 ? { ...env, PORT: '1', NITRO_PORT: '1' } : env
+  await assertFailedProductionInitialization(cwd, baseUrl, serverEnv, portArguments)
   let output = ''
-  const child = spawn('bun', ['run', 'start'], {
+  const child = spawn('bun', ['run', 'start', ...portArguments], {
     cwd,
     detached: true,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...serverEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout?.on('data', chunk => output += String(chunk))
@@ -128,6 +246,7 @@ export async function assertExampleAppProductionFlow({
   try {
     await waitForProductionApp(baseUrl, expectedTitle, child, () => output)
     await assertBrowserNavigation(baseUrl, expectedTitle)
+    if (framework === 'nuxt' || framework === 'sveltekit') await assertExampleAppFormsBrowserFlow({ baseUrl, framework })
     await assertExampleAppAuthFlow({
       baseUrl,
       getOutput: () => output,
@@ -140,6 +259,6 @@ export async function assertExampleAppProductionFlow({
       /UnhandledPromiseRejection|uncaughtException|ReferenceError|TypeError:/,
     )
   } finally {
-    await stopProductionServer(child)
+    await stopProductionServer(child, 'SIGINT')
   }
 }

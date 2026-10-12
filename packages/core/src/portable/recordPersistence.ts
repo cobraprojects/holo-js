@@ -103,15 +103,15 @@ export function serializeNotificationRecordForRow(record: {
   readonly readAt?: Date | null
   readonly createdAt: Date
   readonly updatedAt: Date
-}): Record<string, unknown> {
+}, driver: string): Record<string, unknown> {
   return {
     id: record.id,
     type: record.type ?? null,
     notifiable_type: record.notifiableType,
     notifiable_id: String(record.notifiableId),
     data: JSON.stringify(record.data ?? null),
-    read_at: record.readAt ? record.readAt.toISOString() : null,
-    created_at: record.createdAt.toISOString(),
-    updated_at: record.updatedAt.toISOString(),
+    read_at: record.readAt ? serializeAuthTimestamp(record.readAt, driver) : null,
+    created_at: serializeAuthTimestamp(record.createdAt, driver),
+    updated_at: serializeAuthTimestamp(record.updatedAt, driver),
   }
 }

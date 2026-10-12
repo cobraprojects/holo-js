@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { DB } from '@holo-js/db'
-import { connectionAsyncContext } from '@holo-js/db'
 import {
   configureQueueRuntime,
   flushFailedQueueJobs,
@@ -11,8 +10,6 @@ import {
   retryFailedQueueJobs,
   runQueueWorker,
 } from '@holo-js/queue'
-import { createQueueDbRuntimeOptions } from '../src'
-import { createQueueDatabaseContextMock, createQueueTestDialect } from './support/dialect'
 import { createSQLiteQueueHarness, type SQLiteQueueHarness } from './support/sqlite-queue'
 
 const harnesses: SQLiteQueueHarness[] = []
@@ -189,44 +186,22 @@ describe('@holo-js/queue-db failed job store', () => {
     await expect(flushFailedQueueJobs()).rejects.toThrow('Failed job store could not flush failed jobs')
   })
 
-  it('falls back to error.message and zero affected rows when the store driver omits them', async () => {
-    const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock())
+  it('persists an error without a stack and handles absent failed jobs', async () => {
+    const harness = await createSQLiteQueueHarness({ createFailedTable: true })
+    harnesses.push(harness)
+    const error = new Error('message fallback')
+    error.stack = ''
 
-    try {
-      configureQueueRuntime({
-        config: {
-          default: 'database',
-          failed: {
-            driver: 'database',
-            connection: 'default',
-            table: 'failed_jobs',
-          },
-          connections: {
-            database: {
-              driver: 'database',
-              connection: 'default',
-              table: 'jobs',
-            },
-          },
-        },
-        ...createQueueDbRuntimeOptions(),
-      })
-
-      const error = new Error('message fallback')
-      error.stack = ''
-
-      await expect(persistFailedQueueJob({
-        reservationId: 'reservation-1',
-        reservedAt: 1,
-        envelope: createEnvelope('jobs.fallback', 'fallback-job'),
-      }, error)).resolves.toMatchObject({
-        exception: 'message fallback',
-      })
-      await expect(forgetFailedQueueJob('missing')).resolves.toBe(false)
-      await expect(flushFailedQueueJobs()).resolves.toBe(0)
-    } finally {
-      spy.mockRestore()
-    }
+    const persisted = await persistFailedQueueJob({
+      reservationId: 'reservation-1',
+      reservedAt: Date.now(),
+      envelope: createEnvelope('jobs.fallback', 'fallback-job'),
+    }, error)
+    expect(persisted).toMatchObject({ exception: 'message fallback' })
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ exception: 'message fallback' })])
+    await expect(forgetFailedQueueJob('missing')).resolves.toBe(false)
+    await expect(flushFailedQueueJobs()).resolves.toBe(1)
+    await expect(flushFailedQueueJobs()).resolves.toBe(0)
   })
 
   it('persists worker failures before removing exhausted jobs', async () => {
@@ -266,58 +241,18 @@ describe('@holo-js/queue-db failed job store', () => {
     ])
   })
 
-  it('reuses the active async-context connection for the failed-job store when names match', async () => {
-    const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
-    const activeConnection = createQueueDatabaseContextMock({
-      connectionName: 'default',
-      dialect: createQueueTestDialect('sqlite'),
-      async execute(sql, bindings) {
-        return await executeCompiled({ sql, bindings })
-      },
-    })
-
-    const spy = vi.spyOn(DB, 'connection').mockImplementation(() => {
-      throw new Error('DB.connection() should not be used when an active matching connection exists.')
-    })
-
-    try {
-      configureQueueRuntime({
-        config: {
-          default: 'database',
-          failed: {
-            driver: 'database',
-            connection: 'default',
-            table: 'failed_jobs',
-          },
-          connections: {
-            database: {
-              driver: 'database',
-              connection: 'default',
-              table: 'jobs',
-            },
-          },
-        },
-        ...createQueueDbRuntimeOptions(),
-      })
-
-      const error = new Error('active-context failure')
-      error.stack = ''
-
-      await expect(connectionAsyncContext.run({
-        connectionName: 'default',
-        connection: activeConnection,
-      }, async () => persistFailedQueueJob({
+  it('rolls back a failed job together with the application transaction', async () => {
+    const harness = await createSQLiteQueueHarness({ createFailedTable: true })
+    harnesses.push(harness)
+    await expect(DB.transaction(async () => {
+      await persistFailedQueueJob({
         reservationId: 'reservation-1',
-        reservedAt: 1,
-        envelope: createEnvelope('jobs.active-context', 'active-context-job'),
-      }, error))).resolves.toMatchObject({
-        jobId: 'active-context-job',
-        exception: 'active-context failure',
-      })
-
-      expect(executeCompiled).toHaveBeenCalledTimes(1)
-    } finally {
-      spy.mockRestore()
-    }
+        reservedAt: Date.now(),
+        envelope: createEnvelope('jobs.transaction', 'transaction-job'),
+      }, new Error('transaction failure'))
+      expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: 'transaction-job' })])
+      throw new Error('application transaction failed')
+    })).rejects.toThrow('application transaction failed')
+    expect(await listFailedQueueJobs()).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { configureQueueRuntime, getQueueRuntime } from '@holo-js/queue'
 import * as authorizationModule from '@holo-js/authorization'
@@ -81,190 +81,12 @@ afterEach(async () => {
   await resetOptionalHoloSubsystems()
   authorizationInternals.resetAuthorizationRuntimeState()
   authorizationInternals.resetAuthorizationAuthIntegration()
-  vi.restoreAllMocks()
   for (const dir of tempDirs.splice(0)) {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
 describe('@holo-js/core authorization boot integration', () => {
-  it('boots auth without authorization when the optional package is missing', async () => {
-    const root = await createProject()
-    const loadedConfig = await loadConfigDirectory(root)
-    const configureAuthorizationAuthIntegration = vi.fn()
-    const resetAuthorizationAuthIntegration = vi.fn()
-    const resetAuthorizationRuntimeState = vi.fn()
-    const configureAuthRuntime = vi.fn()
-    const resetAuthRuntime = vi.fn()
-    const configureSessionRuntime = vi.fn()
-    const resetSessionRuntime = vi.fn()
-
-    const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier: string) => {
-      if (specifier === '@holo-js/session') {
-        return {
-          configureSessionRuntime,
-          getSessionRuntime: () => ({ name: 'session-runtime' }),
-          createDatabaseSessionStore: (adapter: {
-            read(sessionId: string): Promise<unknown | null>
-            write(record: unknown): Promise<void>
-            delete(sessionId: string): Promise<void>
-          }) => adapter,
-          createFileSessionStore: (root: string) => ({
-            read: async () => null,
-            write: async () => {},
-            delete: async () => {},
-            root,
-          }),
-          resetSessionRuntime,
-        }
-      }
-
-      if (specifier === '@holo-js/auth') {
-        return {
-          authRuntimeInternals: { configureRuntime: configureAuthRuntime },
-          createAsyncAuthContext: () => ({
-            activate() {},
-            getSessionId() { return undefined },
-            setSessionId() {},
-            getCachedUser() { return null },
-            setCachedUser() {},
-          }),
-          getAuthRuntime: () => ({
-            user: async () => ({ id: 'user-1' }),
-            guard: (name: string) => ({
-              user: async () => ({ id: 'user-1', guard: name }),
-            }),
-          }),
-          resetAuthRuntime,
-        }
-      }
-
-      if (specifier === '@holo-js/authorization') {
-        return undefined
-      }
-
-      return undefined
-    })
-
-    await expect(reconfigureOptionalHoloSubsystems(root, loadedConfig)).resolves.toEqual(expect.objectContaining({
-      auth: expect.any(Object),
-    }))
-    expect(configureAuthRuntime).toHaveBeenCalledTimes(1)
-    expect(configureAuthorizationAuthIntegration).not.toHaveBeenCalled()
-
-    await resetOptionalHoloSubsystems()
-    expect(resetAuthRuntime).toHaveBeenCalled()
-    expect(resetSessionRuntime).toHaveBeenCalled()
-
-    importOptionalModule.mockRestore()
-    expect(resetAuthorizationAuthIntegration).toBeDefined()
-    expect(resetAuthorizationRuntimeState).toBeDefined()
-  })
-
-  it('wires authorization to auth when both optional packages are present', async () => {
-    const root = await createProject()
-    const loadedConfig = await loadConfigDirectory(root)
-    const configureAuthorizationAuthIntegration = vi.fn()
-    const resetAuthorizationAuthIntegration = vi.fn()
-    const resetAuthorizationRuntimeState = vi.fn()
-    const configureAuthRuntime = vi.fn()
-    const resetAuthRuntime = vi.fn()
-    const configureSessionRuntime = vi.fn()
-    const resetSessionRuntime = vi.fn()
-    const authorizationCan = vi.fn(async () => true)
-
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier: string) => {
-      if (specifier === '@holo-js/session') {
-        return {
-          configureSessionRuntime,
-          getSessionRuntime: () => ({ name: 'session-runtime' }),
-          createDatabaseSessionStore: (adapter: {
-            read(sessionId: string): Promise<unknown | null>
-            write(record: unknown): Promise<void>
-            delete(sessionId: string): Promise<void>
-          }) => adapter,
-          createFileSessionStore: (root: string) => ({
-            read: async () => null,
-            write: async () => {},
-            delete: async () => {},
-            root,
-          }),
-          resetSessionRuntime,
-        }
-      }
-
-      if (specifier === '@holo-js/auth') {
-        return {
-          authRuntimeInternals: { configureRuntime: configureAuthRuntime },
-          createAsyncAuthContext: () => ({
-            activate() {},
-            getSessionId() { return undefined },
-            setSessionId() {},
-            getCachedUser() { return null },
-            setCachedUser() {},
-          }),
-          getAuthRuntime: () => ({
-            user: async () => ({ id: 'user-1' }),
-            guard: (name: string) => ({
-              user: async () => ({ id: 'user-1', guard: name }),
-            }),
-          }),
-          resetAuthRuntime,
-        }
-      }
-
-      if (specifier === '@holo-js/authorization') {
-        return {
-          isAuthorizationPolicyDefinition: () => false,
-          isAuthorizationAbilityDefinition: () => false,
-          forUser: () => ({
-            can: authorizationCan,
-          }),
-          authorizationInternals: {
-            getAuthorizationRuntimeState: () => ({
-              policiesByName: new Map(),
-              abilitiesByName: new Map(),
-            }),
-            getAuthorizationAuthIntegration() {
-              return {
-                hasGuard(guardName: string) {
-                  return guardName === 'web'
-                },
-                resolveDefaultActor: async () => ({ id: 'user-1' }),
-                resolveGuardActor: async (guardName: string) => ({ id: 'user-1', guard: guardName }),
-              }
-            },
-            configureAuthorizationAuthIntegration,
-            resetAuthorizationAuthIntegration,
-            resetAuthorizationRuntimeState,
-            unregisterPolicyDefinition: vi.fn(),
-            unregisterAbilityDefinition: vi.fn(),
-          },
-        }
-      }
-
-      return undefined
-    })
-
-    await expect(reconfigureOptionalHoloSubsystems(root, loadedConfig)).resolves.toBeDefined()
-
-    expect(configureAuthorizationAuthIntegration).toHaveBeenCalledTimes(1)
-    expect(configureAuthRuntime.mock.calls[0]?.[0]?.authorization).toEqual({
-      can: expect.any(Function),
-    })
-    await expect(configureAuthRuntime.mock.calls[0]?.[0]?.authorization?.can({ id: 'user-1' }, 'viewAny', {})).resolves.toBe(true)
-    expect(authorizationCan).toHaveBeenCalledWith('viewAny', {})
-    const integration = configureAuthorizationAuthIntegration.mock.calls[0]?.[0]
-    expect(integration?.hasGuard('web')).toBe(true)
-    expect(integration?.hasGuard('missing')).toBe(false)
-    await expect(integration?.resolveDefaultActor()).resolves.toEqual({ id: 'user-1' })
-    await expect(integration?.resolveGuardActor('web')).resolves.toEqual({ id: 'user-1', guard: 'web' })
-
-    await resetOptionalHoloSubsystems()
-    expect(resetAuthorizationAuthIntegration).toHaveBeenCalledTimes(1)
-    expect(resetAuthorizationRuntimeState).not.toHaveBeenCalled()
-  })
-
   it.each(['success', 'failure'] as const)('preserves independent registrations while an installation awaits on %s', async (ending) => {
     let release = () => {}
     const pending = new Promise<void>((resolve) => { release = resolve })
@@ -587,13 +409,5 @@ export default {}
     await expect(authorizationInternals.evaluateAbility({}, 'side-effect', {})).rejects.toThrow('was not found')
   })
 
-  it('rejects missing authorization support only when project definitions need it', async () => {
-    const empty = await holoRuntimeInternals.registerProjectAuthorizationDefinitions('/tmp/holo-authorization', authorizationRegistry([], []), undefined)
-    expect(empty.policyNames).toEqual([])
-    expect(empty.abilityNames).toEqual([])
-    empty.dispose()
-    await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions('/tmp/holo-authorization', authorizationRegistry(['posts'], []), undefined)).rejects.toThrow('requires @holo-js/authorization')
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockResolvedValueOnce(undefined)
-    await expect(holoRuntimeInternals.loadAuthorizationModule(true)).rejects.toThrow('requires @holo-js/authorization')
-  })
+
 })

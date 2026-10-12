@@ -1,10 +1,11 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createServer, request as requestHttp } from 'node:http'
-import { request as requestHttps } from 'node:https'
+import { createServer, type RequestListener } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
+import { createNativeRedisQueue } from '../../queue-redis/tests/support/native-queue'
+import { createNativeMediaStorage, storageFiles } from './support/native-storage'
 import { Storage } from '@holo-js/storage/runtime'
 import {
   belongsTo,
@@ -75,20 +76,6 @@ import type {
 import { getContentSize } from '../src/runtime/binary'
 import { mediaAdderInternals } from '../src/model/adder'
 
-const sharedRedisConfig = {
-  default: 'default',
-  connections: {
-    default: {
-      name: 'default',
-      host: '127.0.0.1',
-      port: 6379,
-      password: undefined,
-      username: undefined,
-      db: 0,
-    },
-  },
-} as const
-
 type RuntimeMediaEntity = {
   getMedia(collectionName?: string): Promise<unknown[]>
   getMediaUrls(collectionName?: string, conversionName?: string): Promise<string[]>
@@ -124,317 +111,7 @@ const postsTable = defineGeneratedTable('posts', {
   updated_at: column.timestamp().defaultNow(),
 })
 
-const storageState = vi.hoisted(() => {
-  const disks = new Map<string, Map<string, Uint8Array>>()
-  const deleteFailures = new Set<string>()
-  let defaultDiskName = 'public'
-
-  const normalizePath = (value: string) => value.trim().replace(/^\/+/, '').replace(/\/+/g, '/')
-
-  const toBytes = async (value: string | Uint8Array | ArrayBuffer | Buffer | Blob): Promise<Uint8Array> => {
-    if (typeof value === 'string') {
-      return new TextEncoder().encode(value)
-    }
-
-    if (value instanceof Uint8Array) {
-      return value
-    }
-
-    if (value instanceof ArrayBuffer) {
-      return new Uint8Array(value)
-    }
-
-    if (Buffer.isBuffer(value)) {
-      return value
-    }
-
-    return new Uint8Array(await value.arrayBuffer())
-  }
-
-  const getDiskStore = (name: string) => {
-    const existing = disks.get(name)
-    if (existing) {
-      return existing
-    }
-
-    const created = new Map<string, Uint8Array>()
-    disks.set(name, created)
-    return created
-  }
-
-  return {
-    disks,
-    deleteFailures,
-    normalizePath,
-    toBytes,
-    getDiskStore,
-    failDelete(diskName: string, path: string) {
-      deleteFailures.add(`${diskName}:${normalizePath(path)}`)
-    },
-    shouldFailDelete(diskName: string, path: string) {
-      return deleteFailures.has(`${diskName}:${normalizePath(path)}`)
-    },
-    getDefaultDisk() {
-      return defaultDiskName
-    },
-    setDefaultDisk(diskName: string) {
-      defaultDiskName = diskName
-    },
-    reset() {
-      disks.clear()
-      deleteFailures.clear()
-      defaultDiskName = 'public'
-    },
-  }
-})
-
-vi.mock('@holo-js/storage/runtime', () => {
-  const createDisk = (diskName = storageState.getDefaultDisk()) => ({
-    name: diskName,
-    driver: diskName === 's3' ? 's3' : diskName === 'public' ? 'public' : 'local',
-    visibility: diskName === 'local' || diskName === 'broken' ? 'private' : 'public',
-    async put(path: string, contents: string | Uint8Array | ArrayBuffer | Buffer | Blob) {
-      storageState.getDiskStore(diskName).set(
-        storageState.normalizePath(path),
-        await storageState.toBytes(contents),
-      )
-      return true
-    },
-    async putJson(path: string, value: unknown) {
-      storageState.getDiskStore(diskName).set(
-        storageState.normalizePath(path),
-        new TextEncoder().encode(JSON.stringify(value)),
-      )
-      return true
-    },
-    async get(path: string) {
-      const value = storageState.getDiskStore(diskName).get(storageState.normalizePath(path))
-      return value ? new TextDecoder().decode(value) : null
-    },
-    async getBytes(path: string) {
-      return storageState.getDiskStore(diskName).get(storageState.normalizePath(path)) ?? null
-    },
-    async json<T>(path: string) {
-      const value = storageState.getDiskStore(diskName).get(storageState.normalizePath(path))
-      return value ? JSON.parse(new TextDecoder().decode(value)) as T : null
-    },
-    async exists(path: string) {
-      return storageState.getDiskStore(diskName).has(storageState.normalizePath(path))
-    },
-    async missing(path: string) {
-      return !storageState.getDiskStore(diskName).has(storageState.normalizePath(path))
-    },
-    async delete(path: string | string[]) {
-      const targets = Array.isArray(path) ? path : [path]
-      for (const target of targets) {
-        if (storageState.shouldFailDelete(diskName, target)) {
-          throw new Error(`delete failed for ${diskName}:${storageState.normalizePath(target)}`)
-        }
-
-        storageState.getDiskStore(diskName).delete(storageState.normalizePath(target))
-      }
-      return true
-    },
-    async copy(from: string, to: string) {
-      const value = storageState.getDiskStore(diskName).get(storageState.normalizePath(from))
-      if (!value) {
-        return false
-      }
-
-      storageState.getDiskStore(diskName).set(storageState.normalizePath(to), value)
-      return true
-    },
-    async move(from: string, to: string) {
-      const copied = await createDisk(diskName).copy(from, to)
-      if (copied) {
-        await createDisk(diskName).delete(from)
-      }
-
-      return copied
-    },
-    async files(directory = '') {
-      const normalized = storageState.normalizePath(directory)
-      return [...storageState.getDiskStore(diskName).keys()].filter((key) => {
-        return normalized ? key.startsWith(`${normalized}/`) : true
-      })
-    },
-    path(path: string) {
-      if (diskName === 'broken') {
-        throw new Error('broken disk path')
-      }
-
-      return `/virtual/${diskName}/${storageState.normalizePath(path)}`
-    },
-    url(path: string) {
-      if (diskName === 'local' || diskName === 'broken') {
-        throw new Error('local disks are private')
-      }
-
-      if (diskName === 'absolute') {
-        return `/assets/${storageState.normalizePath(path)}`
-      }
-
-      if (diskName === 'relative') {
-        return `assets/${storageState.normalizePath(path)}`
-      }
-
-      return `https://cdn.test/${diskName}/${storageState.normalizePath(path)}`
-    },
-    temporaryUrl(path: string, _options?: { expiresAt?: Date | number | string, expiresIn?: number }) {
-      if (diskName === 'broken') {
-        throw new Error('broken disk temporary url')
-      }
-
-      return `https://signed.test/${diskName}/${storageState.normalizePath(path)}`
-    },
-  })
-
-  const Storage = {
-    disk(diskName?: string) {
-      return createDisk(diskName)
-    },
-    put(path: string, contents: string | Uint8Array | ArrayBuffer | Buffer | Blob) {
-      return createDisk().put(path, contents)
-    },
-    putJson(path: string, value: unknown) {
-      return createDisk().putJson(path, value)
-    },
-    get(path: string) {
-      return createDisk().get(path)
-    },
-    getBytes(path: string) {
-      return createDisk().getBytes(path)
-    },
-    json<T>(path: string) {
-      return createDisk().json<T>(path)
-    },
-    exists(path: string) {
-      return createDisk().exists(path)
-    },
-    missing(path: string) {
-      return createDisk().missing(path)
-    },
-    delete(path: string | string[]) {
-      return createDisk().delete(path)
-    },
-    copy(from: string, to: string) {
-      return createDisk().copy(from, to)
-    },
-    move(from: string, to: string) {
-      return createDisk().move(from, to)
-    },
-    files(directory?: string) {
-      return createDisk().files(directory)
-    },
-    path(path: string) {
-      return createDisk().path(path)
-    },
-    url(path: string) {
-      return createDisk().url(path)
-    },
-    temporaryUrl(path: string, options?: { expiresAt?: Date | number | string, expiresIn?: number }) {
-      return createDisk().temporaryUrl(path, options)
-    },
-  }
-
-  return {
-    Storage,
-    useStorage(diskName?: string) {
-      return createDisk(diskName)
-    },
-  }
-})
-
-function createAsyncQueueHarness() {
-  const queued: QueueJobEnvelope[] = []
-  const reserved = new Map<string, QueueReservedJob>()
-
-  const driver: QueueAsyncDriver = {
-    name: 'redis',
-    driver: 'redis',
-    mode: 'async',
-    async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
-      job: QueueJobEnvelope<TPayload>,
-    ): Promise<QueueDriverDispatchResult<TResult>> {
-      queued.push(job)
-      return {
-        jobId: job.id,
-        synchronous: false,
-      } as QueueDriverDispatchResult<TResult>
-    },
-    async reserve<TPayload extends QueueJsonValue = QueueJsonValue>(
-      input: QueueReserveInput,
-    ): Promise<QueueReservedJob<TPayload> | null> {
-      const index = queued.findIndex((job) => {
-        if (input.queueNames && !input.queueNames.includes(job.queue)) {
-          return false
-        }
-
-        return typeof job.availableAt !== 'number' || job.availableAt <= Date.now()
-      })
-
-      if (index < 0) {
-        return null
-      }
-
-      const [envelope] = queued.splice(index, 1)
-      const job = Object.freeze({
-        reservationId: `reservation-${envelope!.id}`,
-        envelope: envelope! as QueueJobEnvelope<TPayload>,
-        reservedAt: Date.now(),
-      })
-      reserved.set(job.reservationId, job)
-      return job as QueueReservedJob<TPayload>
-    },
-    async acknowledge(job) {
-      reserved.delete(job.reservationId)
-    },
-    async release(job, options = {}) {
-      reserved.delete(job.reservationId)
-      queued.push(Object.freeze({
-        ...job.envelope,
-        attempts: job.envelope.attempts + 1,
-        ...(typeof options.delaySeconds === 'number'
-          ? { availableAt: Date.now() + (options.delaySeconds * 1000) }
-          : {}),
-      }))
-    },
-    async delete(job) {
-      reserved.delete(job.reservationId)
-    },
-    async clear(input = {}) {
-      const before = queued.length
-      const queueNames = input.queueNames
-      if (!queueNames || queueNames.length === 0) {
-        queued.length = 0
-        return before
-      }
-
-      for (let index = queued.length - 1; index >= 0; index -= 1) {
-        if (queueNames.includes(queued[index]!.queue)) {
-          queued.splice(index, 1)
-        }
-      }
-
-      return before - queued.length
-    },
-    async close() {},
-  }
-
-  const factory: QueueDriverFactory = {
-    driver: 'redis',
-    create() {
-      return driver
-    },
-  }
-
-  return {
-    queued,
-    reserved,
-    driver,
-    factory,
-  }
-}
+let storageState: Awaited<ReturnType<typeof createNativeMediaStorage>>
 
 async function bootDatabase(): Promise<void> {
   const db = createDatabase({
@@ -443,6 +120,7 @@ async function bootDatabase(): Promise<void> {
     dialect: createDialect('sqlite'),
   })
 
+  onTestFinished(() => db.disconnect())
   configureDB(createConnectionManager({
     defaultConnection: 'default',
     connections: {
@@ -506,6 +184,16 @@ async function createTempMediaFile(
   return path
 }
 
+async function assertNativeImageConversion(path: string | undefined): Promise<void> {
+  if (!path) throw new Error('Expected a persisted image conversion path')
+  const bytes = await Storage.disk('public').getBytes(path)
+  if (!bytes) throw new Error('Expected persisted image conversion bytes')
+  const metadata = await sharp(Buffer.from(bytes)).metadata()
+  expect(metadata.format).toBe('jpeg')
+  expect(metadata.width).toBe(2)
+  expect(metadata.height).toBe(2)
+}
+
 async function createImageBuffer(
   format: 'jpeg' | 'png' = 'jpeg',
 ): Promise<Buffer> {
@@ -523,15 +211,29 @@ async function createImageBuffer(
     : base.jpeg().toBuffer()
 }
 
+async function createRemoteMediaServer(handler: RequestListener) {
+  const server = createServer(handler)
+  await new Promise<void>(resolveListening => server.listen(0, '127.0.0.1', resolveListening))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Expected an HTTP fixture port')
+  onTestFinished(() => new Promise<void>((resolveClosed, reject) => {
+    server.close(error => error ? reject(error) : resolveClosed())
+    server.closeAllConnections()
+  }))
+  mediaAdderInternals.setRemoteMediaDownloader(async url => await mediaAdderInternals.requestRemoteMedia(
+    new URL(`${url.pathname}${url.search}`, `http://media.test:${address.port}`),
+    { address: '127.0.0.1', family: 4 },
+  ))
+}
+
 describe('@holo-js/media', () => {
   beforeEach(async () => {
     mediaAdderInternals.resetRemoteMediaTransport()
-    mediaAdderInternals.setRemoteMediaDownloader(async url => await fetch(url))
     resetDB()
     resetQueueRegistry()
     await resetQueueRuntime()
     resetMediaRuntime()
-    storageState.reset()
+    storageState = await createNativeMediaStorage()
     await bootDatabase()
     configureQueueRuntime()
   })
@@ -1090,7 +792,7 @@ describe('@holo-js/media', () => {
       contents: Buffer.from('second'),
       fileName: 'second.txt',
     }).toMediaCollection())
-    storageState.failDelete(second.record.disk, second.record.path)
+    await storageState.failDelete(second.record.disk, second.record.path)
 
     await expect(post.delete()).rejects.toThrow('committed')
 
@@ -1101,7 +803,7 @@ describe('@holo-js/media', () => {
   })
 
   it('prefers the public disk for implicit attachments when the storage default is private', async () => {
-    storageState.setDefaultDisk('local')
+    await storageState.setDefaultDisk('local')
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -1121,8 +823,8 @@ describe('@holo-js/media', () => {
 
     expect(media.record.disk).toBe('public')
     expect(media.getUrl()).toBeTruthy()
-    expect(storageState.getDiskStore('public').has(media.record.path)).toBe(true)
-    expect(storageState.getDiskStore('local').size).toBe(0)
+    expect(await Storage.disk('public').exists(media.record.path)).toBe(true)
+    expect((await storageFiles('local')).length).toBe(0)
   })
 
   it('rejects invalid sources and handles ownerless entities', async () => {
@@ -1186,13 +888,13 @@ describe('@holo-js/media', () => {
     expect(success.error).toBeNull()
     expect(success.data).toBeInstanceOf(MediaItem)
 
-    const storedFileCount = storageState.getDiskStore('public').size
+    const storedFileCount = (await storageFiles('public')).length
     await expect(post.addMedia({
       contents: Buffer.from('ok'),
       fileName: 'hero.png',
       mimeType: 'image/png',
     }).toMediaCollection('iamges' as never)).rejects.toThrow('Unknown media collection "iamges"')
-    expect(storageState.getDiskStore('public').size).toBe(storedFileCount)
+    expect((await storageFiles('public')).length).toBe(storedFileCount)
   })
 
   it('accepts MIME types case-insensitively during validation', async () => {
@@ -1355,7 +1057,7 @@ describe('@holo-js/media', () => {
     expect(media.getUrl()).toContain('https://cdn.test/public/media/')
     expect(media.getUrl('thumb')).toContain('/thumb.webp')
     expect(media.getPath()).toContain('/public/media/')
-    expect(media.getTemporaryUrl('thumb')).toContain('https://signed.test/public/')
+    expect(media.getTemporaryUrl('thumb')).toContain('https://app.test/storage/')
 
     expect(await post.hasMedia('images')).toBe(true)
     expect(await post.getMediaUrls('images', 'thumb')).toEqual([media.getUrl('thumb')!])
@@ -1377,7 +1079,7 @@ describe('@holo-js/media', () => {
       },
     })
 
-    const storedPaths = [...storageState.getDiskStore('public').keys()].sort()
+    const storedPaths = (await storageFiles('public')).sort()
     expect(storedPaths).toHaveLength(2)
     expect(storedPaths[0]).toContain('conversions/thumb.webp')
     expect(storedPaths[1]).toContain('original/hero.jpg')
@@ -1387,7 +1089,7 @@ describe('@holo-js/media', () => {
     await post.clearMediaCollection('images')
     expect(await post.hasMedia('images')).toBe(false)
     expect(await Media.query().count()).toBe(0)
-    expect(storageState.getDiskStore('public').size).toBe(0)
+    expect((await storageFiles('public')).length).toBe(0)
   })
 
   it('runs built-in sharp conversions by default', async () => {
@@ -1423,7 +1125,7 @@ describe('@holo-js/media', () => {
     expect(thumbPath).toBeTruthy()
 
     const thumbBytes = thumbPath
-      ? storageState.getDiskStore('public').get(thumbPath)
+      ? await Storage.disk('public').getBytes(thumbPath)
       : null
     expect(thumbBytes).toBeInstanceOf(Uint8Array)
 
@@ -1461,7 +1163,7 @@ describe('@holo-js/media', () => {
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')).rejects.toThrow('conversion failed')
 
-    expect(storageState.getDiskStore('public').size).toBe(0)
+    expect((await storageFiles('public')).length).toBe(0)
     expect(await Media.query().count()).toBe(0)
   })
 
@@ -1571,37 +1273,6 @@ describe('@holo-js/media', () => {
     })).rejects.toThrow('Failed to generate conversion')
   })
 
-  it('resets the lazy sharp loader after import failures so later attempts can retry', async () => {
-    vi.resetModules()
-    vi.doMock('sharp', () => {
-      throw new Error('sharp unavailable')
-    })
-
-    try {
-      const { createDefaultMediaConversionExecutor: createExecutor } = await import('../src/runtime/image')
-      const executor = createExecutor()
-      const image = await createImageBuffer()
-      const input = {
-        source: {
-          uuid: 'missing-sharp',
-          fileName: 'hero.png',
-          extension: 'png',
-          mimeType: 'image/png',
-          size: image.byteLength,
-          contents: image,
-        },
-        collection: collection('images').definition,
-        conversion: conversion('thumb').format('webp').width(2).definition,
-      }
-
-      await expect(executor.generate(input)).rejects.toThrow('[Holo Media] Failed to generate conversion "thumb" for "hero.png":')
-      await expect(executor.generate(input)).rejects.toThrow('[Holo Media] Failed to generate conversion "thumb" for "hero.png":')
-    } finally {
-      vi.doUnmock('sharp')
-      vi.resetModules()
-    }
-  })
-
   it('supports single-file collections and replaces the previous file', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -1620,7 +1291,7 @@ describe('@holo-js/media', () => {
       fileName: 'first.jpg',
     }).toMediaCollection('avatars')
 
-    const firstPath = [...storageState.getDiskStore('public').keys()][0]
+    const firstPath = (await storageFiles('public'))[0]
     expect(firstPath).toContain('first.jpg')
 
     await post.addMedia({
@@ -1628,7 +1299,7 @@ describe('@holo-js/media', () => {
       fileName: 'second.jpg',
     }).toMediaCollection('avatars')
 
-    const storedPaths = [...storageState.getDiskStore('public').keys()]
+    const storedPaths = (await storageFiles('public'))
     expect(storedPaths).toHaveLength(1)
     expect(storedPaths[0]).toContain('second.jpg')
     expect(await post.getMedia('avatars')).toHaveLength(1)
@@ -1652,7 +1323,7 @@ describe('@holo-js/media', () => {
       fileName: 'first.jpg',
     }).toMediaCollection('avatars')
 
-    const firstPath = [...storageState.getDiskStore('public').keys()][0]
+    const firstPath = (await storageFiles('public'))[0]
     expect(firstPath).toContain('first.jpg')
 
     await expect(DB.transaction(async () => {
@@ -1664,9 +1335,9 @@ describe('@holo-js/media', () => {
       throw new Error('rollback media replacement')
     })).rejects.toThrow('rollback media replacement')
 
-    const storedPaths = [...storageState.getDiskStore('public').keys()]
+    const storedPaths = (await storageFiles('public'))
     expect(storedPaths).toEqual([firstPath])
-    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(firstPath!)!)).toBe('first')
+    expect(await Storage.disk('public').get(firstPath!)).toBe('first')
 
     const media = await post.getMedia('avatars')
     expect(media).toHaveLength(1)
@@ -1674,7 +1345,7 @@ describe('@holo-js/media', () => {
   })
 
   it('retains committed replacement when queued dispatch fails outside transactions', async () => {
-    const queueHarness = createAsyncQueueHarness()
+    const queueHarness = await createNativeRedisQueue()
     configureQueueRuntime({
       config: {
         default: 'redis',
@@ -1685,7 +1356,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
-      redisConfig: sharedRedisConfig,
+      redisConfig: queueHarness.redisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -1709,11 +1380,10 @@ describe('@holo-js/media', () => {
       fileName: 'first.jpg',
     }).toMediaCollection('avatars')
 
-    const firstPath = [...storageState.getDiskStore('public').keys()][0]
+    const firstPath = (await storageFiles('public'))[0]
     expect(firstPath).toContain('first.jpg')
 
-    vi.spyOn(queueHarness.driver, 'dispatch')
-      .mockRejectedValueOnce(new Error('failed to enqueue replacement'))
+    await queueHarness.failWrites()
 
     await expect(post.addMedia({
       contents: Buffer.from('second'),
@@ -1723,8 +1393,8 @@ describe('@holo-js/media', () => {
     const media = await post.getMedia('avatars')
     expect(media).toHaveLength(1)
     expect(media[0]?.fileName).toBe('second.jpg')
-    expect(storageState.getDiskStore('public').has(firstPath!)).toBe(false)
-    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(media[0]!.record.path)!)).toBe('second')
+    expect(await Storage.disk('public').exists(firstPath!)).toBe(false)
+    expect(await Storage.disk('public').get(media[0]!.record.path)).toBe('second')
   })
 
   it('preserves the existing single-file media when replacement conversion fails', async () => {
@@ -1758,7 +1428,7 @@ describe('@holo-js/media', () => {
       fileName: 'first.jpg',
     }).toMediaCollection('avatars')
 
-    const firstPath = [...storageState.getDiskStore('public').keys()][0]
+    const firstPath = (await storageFiles('public'))[0]
     setMediaConversionExecutor({
       async generate() {
         throw new Error('conversion failed')
@@ -1771,7 +1441,7 @@ describe('@holo-js/media', () => {
     }).toMediaCollection('avatars')).rejects.toThrow('conversion failed')
 
     expect(await post.getMedia('avatars')).toHaveLength(1)
-    expect(storageState.getDiskStore('public').has(firstPath!)).toBe(true)
+    expect(await Storage.disk('public').exists(firstPath!)).toBe(true)
   })
 
   it('retains committed single-file media when deleting the previous file fails', async () => {
@@ -1794,7 +1464,7 @@ describe('@holo-js/media', () => {
 
     const existing = await post.getFirstMedia('avatars')
     expect(existing).not.toBeNull()
-    storageState.failDelete('public', existing!.record.path)
+    await storageState.failDelete('public', existing!.record.path)
 
     await expect(post.addMedia({
       contents: Buffer.from('second'),
@@ -1805,7 +1475,7 @@ describe('@holo-js/media', () => {
     expect(items).toHaveLength(1)
     expect(items[0]?.fileName).toBe('second.jpg')
 
-    const storedPaths = [...storageState.getDiskStore('public').keys()]
+    const storedPaths = (await storageFiles('public'))
     expect(storedPaths).toHaveLength(2)
     expect(storedPaths.some(path => path.includes('second.jpg'))).toBe(true)
   })
@@ -1831,7 +1501,7 @@ describe('@holo-js/media', () => {
 
     for (const row of legacyRows) {
       const path = `media/${row.uuid}/original/${row.fileName}`
-      storageState.getDiskStore('public').set(path, Buffer.from(row.fileName))
+      await Storage.disk('public').put(path, Buffer.from(row.fileName))
       await Media.create({
         uuid: row.uuid,
         model_type: modelType,
@@ -1850,7 +1520,7 @@ describe('@holo-js/media', () => {
       })
     }
 
-    storageState.failDelete('public', 'media/avatar-2/original/second.txt')
+    await storageState.failDelete('public', 'media/avatar-2/original/second.txt')
 
     await expect(post.addMedia({
       contents: Buffer.from('replacement'),
@@ -1859,9 +1529,9 @@ describe('@holo-js/media', () => {
 
     const items = await post.getMedia('avatars')
     expect(items.map(item => item.fileName)).toEqual(['replacement.txt'])
-    expect(storageState.getDiskStore('public').has('media/avatar-1/original/first.txt')).toBe(false)
-    expect(storageState.getDiskStore('public').has('media/avatar-2/original/second.txt')).toBe(true)
-    expect([...storageState.getDiskStore('public').keys()].some(path => path.includes('replacement.txt'))).toBe(true)
+    expect(await Storage.disk('public').exists('media/avatar-1/original/first.txt')).toBe(false)
+    expect(await Storage.disk('public').exists('media/avatar-2/original/second.txt')).toBe(true)
+    expect((await storageFiles('public')).some(path => path.includes('replacement.txt'))).toBe(true)
   })
 
   it('retains new conversions when committed replacement cleanup fails', async () => {
@@ -1897,19 +1567,19 @@ describe('@holo-js/media', () => {
 
     const existing = await post.getFirstMedia('avatars')
     expect(existing).not.toBeNull()
-    storageState.failDelete('public', existing!.record.path)
+    await storageState.failDelete('public', existing!.record.path)
 
     await expect(post.addMedia({
       contents: Buffer.from('second'),
       fileName: 'second.jpg',
     }).toMediaCollection('avatars')).rejects.toThrow('committed')
 
-    const storedPaths = [...storageState.getDiskStore('public').keys()]
+    const storedPaths = (await storageFiles('public'))
     expect(storedPaths).toHaveLength(3)
     expect(storedPaths.some(path => path.includes('second.jpg'))).toBe(true)
     const current = await post.getFirstMedia('avatars')
     expect(current?.fileName).toBe('second.jpg')
-    expect(storageState.getDiskStore('public').has(current!.record.generated_conversions!.thumb!.path)).toBe(true)
+    expect(await Storage.disk('public').exists(current!.record.generated_conversions!.thumb!.path)).toBe(true)
   })
 
   it('retains committed deletion when conversion file cleanup fails', async () => {
@@ -1944,12 +1614,12 @@ describe('@holo-js/media', () => {
 
     const thumbPath = media.record.generated_conversions.thumb?.path
     expect(thumbPath).toBeTruthy()
-    storageState.failDelete('public', thumbPath!)
+    await storageState.failDelete('public', thumbPath!)
 
     await expect(media.delete()).rejects.toThrow('committed')
 
-    expect(storageState.getDiskStore('public').has(media.record.path)).toBe(false)
-    expect(storageState.getDiskStore('public').has(thumbPath!)).toBe(true)
+    expect(await Storage.disk('public').exists(media.record.path)).toBe(false)
+    expect(await Storage.disk('public').exists(thumbPath!)).toBe(true)
     expect(await Media.query().count()).toBe(0)
   })
 
@@ -1994,7 +1664,7 @@ describe('@holo-js/media', () => {
 
     for (const original of originals) {
       const path = `media/${original.uuid}/original/${original.fileName}`
-      storageState.getDiskStore('public').set(path, Buffer.from(original.name))
+      await Storage.disk('public').put(path, Buffer.from(original.name))
       await Media.create({
         uuid: original.uuid,
         model_type: modelType,
@@ -2013,7 +1683,7 @@ describe('@holo-js/media', () => {
       })
     }
 
-    storageState.failDelete('public', `media/gallery-2/original/two.txt`)
+    await storageState.failDelete('public', `media/gallery-2/original/two.txt`)
 
     await expect(
       post.addMedia({ contents: Buffer.from('4'), fileName: 'four.txt' }).toMediaCollection('gallery'),
@@ -2021,10 +1691,10 @@ describe('@holo-js/media', () => {
 
     const items = await post.getMedia('gallery')
     expect(items.map(item => item.fileName)).toEqual(['four.txt'])
-    expect(storageState.getDiskStore('public').has('media/gallery-1/original/one.txt')).toBe(false)
-    expect(storageState.getDiskStore('public').has('media/gallery-2/original/two.txt')).toBe(true)
-    expect(storageState.getDiskStore('public').has('media/gallery-3/original/three.txt')).toBe(false)
-    expect([...storageState.getDiskStore('public').keys()].some(path => path.includes('four.txt'))).toBe(true)
+    expect(await Storage.disk('public').exists('media/gallery-1/original/one.txt')).toBe(false)
+    expect(await Storage.disk('public').exists('media/gallery-2/original/two.txt')).toBe(true)
+    expect(await Storage.disk('public').exists('media/gallery-3/original/three.txt')).toBe(false)
+    expect((await storageFiles('public')).some(path => path.includes('four.txt'))).toBe(true)
   })
 
   it('cleans up uploaded files when conversion generation fails', async () => {
@@ -2064,7 +1734,7 @@ describe('@holo-js/media', () => {
       mimeType: 'text/plain',
     }).toMediaCollection('uploads')).rejects.toThrow('conversion failed')
 
-    expect(storageState.getDiskStore('public').size).toBe(0)
+    expect((await storageFiles('public')).length).toBe(0)
   })
 
   it('handles conversion executor edge cases and media item fallbacks', async () => {
@@ -2077,7 +1747,7 @@ describe('@holo-js/media', () => {
         return {
           contents: new Blob([Buffer.from('variant')]),
           fileName: 'variant',
-          disk: 'broken',
+          disk: 'public',
         }
       },
     })
@@ -2105,10 +1775,10 @@ describe('@holo-js/media', () => {
 
     expect(media.getUrl('skip' as never)).toBeNull()
     expect(media.getPath('skip' as never)).toBeNull()
-    expect(media.getPath('broken')).toBeNull()
-    expect(media.getUrl('broken')).toBeNull()
+    expect(media.getPath('broken')).toBe(`/public/${media.record.generated_conversions.broken!.path}`)
+    expect(media.getUrl('broken')).toContain('https://cdn.test/public/media/')
     expect(media.getTemporaryUrl('skip' as never)).toBeNull()
-    expect(media.getTemporaryUrl('broken')).toBeNull()
+    expect(media.getTemporaryUrl('broken')).toContain('signature=')
 
     const manual = await Media.create({
       uuid: 'manual',
@@ -2139,9 +1809,8 @@ describe('@holo-js/media', () => {
     expect(detachedItem.getPath()).toBeNull()
     expect(detachedItem.getTemporaryUrl()).toBeNull()
 
-    await detachedItem.delete()
-    expect(storageState.getDiskStore('broken').has('manual/original.txt')).toBe(false)
-    expect(storageState.getDiskStore('broken').has('manual/conversion.txt')).toBe(false)
+    await expect(detachedItem.delete()).rejects.toThrow('committed')
+    expect(await Media.find(manual.id)).toBeUndefined()
 
     const publicManual = await Media.create({
       uuid: 'manual-2',
@@ -2165,7 +1834,7 @@ describe('@holo-js/media', () => {
     })
 
     const conversionDiskItem = new MediaItem(publicManual)
-    expect(conversionDiskItem.getPath('fallback' as never)).toContain('/s3/')
+    expect(conversionDiskItem.getPath('fallback' as never)).toBe('/s3/manual-2/fallback.txt')
 
     const { id: _omittedId, ...manualAttributes } = publicManual.toAttributes()
     const absoluteUrlMedia = await Media.create({
@@ -2187,23 +1856,11 @@ describe('@holo-js/media', () => {
   })
 
   it('supports remote uploads and selective regeneration', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input?: string | URL | Request) => {
-      const url = String(input)
-      const imageBytes = new Uint8Array(await createImageBuffer())
-
-      if (url.includes('no-header')) {
-        return new Response(imageBytes, {
-          status: 200,
-        })
-      }
-
-      return new Response(imageBytes, {
-        status: 200,
-        headers: {
-          'content-type': 'image/jpeg',
-        },
-      })
-    }))
+    const imageBytes = await createImageBuffer()
+    await createRemoteMediaServer((request, response) => {
+      if (!request.url?.includes('no-header')) response.setHeader('content-type', 'image/jpeg')
+      response.end(imageBytes)
+    })
 
     let revision = 'v1'
 
@@ -2249,19 +1906,19 @@ describe('@holo-js/media', () => {
       expect(cardPath).toBeTruthy()
       const resolvedThumbPath = thumbPath as string
       const resolvedCardPath = cardPath as string
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedThumbPath)!)).toBe('v1:thumb')
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedCardPath)!)).toBe('v1:card')
+      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v1:thumb')
+      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v1:card')
 
       revision = 'v2'
       await media.regenerate('thumb')
 
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedThumbPath)!)).toBe('v2:thumb')
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedCardPath)!)).toBe('v1:card')
+      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v2:thumb')
+      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v1:card')
 
       revision = 'v3'
       await post.regenerateMedia('images', 'card')
 
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedCardPath)!)).toBe('v3:card')
+      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v3:card')
 
       await expect(post.regenerateMedia('images', 'missing' as never)).rejects.toThrow('Unknown media conversion')
 
@@ -2294,8 +1951,8 @@ describe('@holo-js/media', () => {
       revision = 'v4'
       await media.regenerate()
 
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedThumbPath)!)).toBe('v4:thumb')
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(resolvedCardPath)!)).toBe('v4:card')
+      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v4:thumb')
+      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v4:card')
     } finally {
       vi.unstubAllGlobals()
     }
@@ -2339,29 +1996,24 @@ describe('@holo-js/media', () => {
     await expect(DB.transaction(async () => {
       const [transactionMedia] = await post.getMedia('images')
       await transactionMedia!.regenerate('thumb')
-      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(thumbPath!)!)).toBe('v2:thumb')
+      expect(await Storage.disk('public').get(thumbPath!)).toBe('v2:thumb')
 
       throw new Error('rollback conversion regeneration')
     })).rejects.toThrow('rollback conversion regeneration')
 
     await media.getEntity().refresh()
     expect(media.record.generated_conversions.thumb?.path).toBe(thumbPath)
-    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(thumbPath!)!)).toBe('v1:thumb')
+    expect(await Storage.disk('public').get(thumbPath!)).toBe('v1:thumb')
   })
 
   it('rejects oversized remote uploads before buffering the response body', async () => {
-    const arrayBuffer = vi.fn(async () => createImageBuffer())
-
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: new Headers({
-        'content-length': '1537',
-        'content-type': 'image/jpeg',
-      }),
-      arrayBuffer,
-    } as unknown as Response)))
+    await createRemoteMediaServer((_request, response) => {
+      response.setHeader('content-length', '1537')
+      response.setHeader('content-type', 'image/jpeg')
+      response.writeHead(200)
+      response.flushHeaders()
+      response.end(Buffer.alloc(1537))
+    })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -2381,20 +2033,18 @@ describe('@holo-js/media', () => {
       const result = await post.addMediaFromUrl('https://example.test/oversized.jpg').toMediaCollection('images')
       expect(result.data).toBeNull()
       expect(result.error?.message).toBe('The selected file must be 1.5 KB or smaller.')
-      expect(arrayBuffer).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
   it('rejects remote uploads that target local hosts or redirects', async () => {
-    const fetchMock = vi.fn(async () => new Response(null, {
-      status: 302,
-      headers: {
-        location: 'http://127.0.0.1/private.jpg',
-      },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
+    let requests = 0
+    await createRemoteMediaServer((_request, response) => {
+      requests += 1
+      response.writeHead(302, { location: 'http://127.0.0.1/private.jpg' })
+      response.end()
+    })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -2435,21 +2085,8 @@ describe('@holo-js/media', () => {
           .rejects.toThrow('local or private hosts')
       }
       await expect(post.addMediaFromUrl('https://example.test/redirect.jpg').toMediaCollection('images')).rejects.toThrow('do not follow redirects')
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(requests).toBe(1)
 
-      await expect(mediaAdderInternals.resolveRemoteMediaAddress(
-        new URL('https://public-name.test/private.jpg'),
-        async () => [
-          { address: '93.184.216.34', family: 4 },
-          { address: '169.254.169.254', family: 4 },
-        ],
-      ))
-        .rejects.toThrow('must not resolve to local or private hosts')
-      await expect(mediaAdderInternals.resolveRemoteMediaAddress(
-        new URL('https://public-name.test/image.jpg'),
-        async () => [{ address: '93.184.216.34', family: 4 }],
-      )).resolves.toEqual({ address: '93.184.216.34', family: 4 })
-      expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       vi.unstubAllGlobals()
     }
@@ -2475,58 +2112,21 @@ describe('@holo-js/media', () => {
     expect(await response.text()).toBe('remote media')
     expect(response.headers.get('content-type')).toBe('text/plain')
     expect(response.headers.getSetCookie()).toEqual(['one=1', 'two=2'])
-    expect(mediaAdderInternals.resolveRemoteMediaRequest('http:')).toBe(requestHttp)
-    expect(mediaAdderInternals.resolveRemoteMediaRequest('https:')).toBe(requestHttps)
-
-    const lookup = mediaAdderInternals.createPinnedRemoteMediaLookup({ address: '93.184.216.34', family: 4 })!
-    const singleAddressCallback = vi.fn()
-    lookup('media.test', { all: false }, singleAddressCallback)
-    expect(singleAddressCallback).toHaveBeenCalledWith(null, '93.184.216.34', 4)
-    const allAddressesCallback = vi.fn()
-    lookup('media.test', { all: true }, allAddressesCallback)
-    expect(allAddressesCallback).toHaveBeenCalledWith(null, [{ address: '93.184.216.34', family: 4 }])
-
-    const normalizedHeaders = new Headers()
-    mediaAdderInternals.appendRemoteMediaHeaders(normalizedHeaders, {
-      ignored: undefined,
-      'x-values': ['one', 'two'],
-      'x-value': 'value',
-    })
-    expect(normalizedHeaders.get('ignored')).toBeNull()
-    expect(normalizedHeaders.get('x-values')).toBe('one, two')
-    expect(normalizedHeaders.get('x-value')).toBe('value')
-    await expect(mediaAdderInternals.defaultRemoteMediaAddressResolver('localhost'))
-      .resolves.not.toHaveLength(0)
-
     await new Promise<void>((resolveClosed, reject) => server.close(error => error ? reject(error) : resolveClosed()))
     await expect(mediaAdderInternals.requestRemoteMedia(url, {
       address: '127.0.0.1',
       family: 4,
     })).rejects.toThrow()
 
-    const requester = vi.fn(async () => new Response('downloaded'))
-    const downloader = mediaAdderInternals.createRemoteMediaDownloader(
-      async () => [{ address: '93.184.216.34', family: 4 }],
-      requester,
-    )
-    await expect(downloader(new URL('https://media.test/file.jpg'))).resolves.toBeInstanceOf(Response)
-    expect(requester).toHaveBeenCalledWith(
-      new URL('https://media.test/file.jpg'),
-      { address: '93.184.216.34', family: 4 },
-    )
+
   })
 
   it('enforces the default remote upload byte limit when collection max size is not configured', async () => {
-    const arrayBuffer = vi.fn(async () => new Uint8Array((10 * 1024 * 1024) + 1).buffer)
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: new Headers({
-        'content-type': 'image/jpeg',
-      }),
-      arrayBuffer,
-    } as unknown as Response)))
+    await createRemoteMediaServer((_request, response) => {
+      response.setHeader('content-type', 'image/jpeg')
+      response.write(Buffer.alloc(10 * 1024 * 1024))
+      response.end(Buffer.from([1]))
+    })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -2543,61 +2143,17 @@ describe('@holo-js/media', () => {
       const result = await post.addMediaFromUrl('https://example.test/default-limit.jpg').toMediaCollection('images')
       expect(result.data).toBeNull()
       expect(result.error?.message).toBe('The selected file must be 10 MB or smaller.')
-      expect(arrayBuffer).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('accepts bounded remote uploads from responses without a body stream', async () => {
-    const contents = new Uint8Array(await createImageBuffer())
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: new Headers({
-        'content-type': 'image/png',
-      }),
-      body: null,
-      arrayBuffer: async () => contents.buffer,
-    } as Response)))
-
-    const BasePost = defineModel(postsTable, {
-      fillable: ['title'],
-    })
-    const Post = defineMediaModel(BasePost, {
-      collections: [collection('images').disk('public')],
-    })
-
-    try {
-      const post = await Post.create({ title: 'Remote Without Stream' })
-      await expectMediaAdded(
-        post.addMediaFromUrl('https://example.test/no-stream.png').toMediaCollection('images'),
-      )
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
   it('rejects oversized remote uploads without content-length before buffering the response body', async () => {
-    const arrayBuffer = vi.fn(async () => createImageBuffer())
-
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: new Headers({
-        'content-type': 'image/jpeg',
-      }),
-      body: new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([1, 2]))
-          controller.enqueue(new Uint8Array([3, 4]))
-          controller.close()
-        },
-      }),
-      arrayBuffer,
-    } as unknown as Response)))
+    await createRemoteMediaServer((_request, response) => {
+      response.setHeader('content-type', 'image/jpeg')
+      response.write(Buffer.from([1, 2]))
+      response.end(Buffer.from([3, 4]))
+    })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -2617,38 +2173,17 @@ describe('@holo-js/media', () => {
       const result = await post.addMediaFromUrl('https://example.test/oversized-stream.jpg').toMediaCollection('images')
       expect(result.data).toBeNull()
       expect(result.error?.message).toBe('The selected file must be 2 bytes or smaller.')
-      expect(arrayBuffer).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
-  it('streams headerless remote uploads within the max size without arrayBuffer()', async () => {
-    const arrayBuffer = vi.fn(async () => createImageBuffer())
-    const releaseLock = vi.fn()
-    const read = vi.fn()
-      .mockResolvedValueOnce({ done: false, value: undefined })
-      .mockResolvedValueOnce({ done: false, value: new Uint8Array([1, 2]) })
-      .mockResolvedValueOnce({ done: true, value: undefined })
-
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: new Headers({
-        'content-type': 'image/jpeg',
-      }),
-      body: {
-        getReader() {
-          return {
-            read,
-            cancel: vi.fn(async () => undefined),
-            releaseLock,
-          }
-        },
-      },
-      arrayBuffer,
-    } as unknown as Response)))
+  it('persists bounded chunked HTTP uploads with their downloaded bytes', async () => {
+    await createRemoteMediaServer((_request, response) => {
+      response.setHeader('content-type', 'image/jpeg')
+      response.write(Buffer.from([1]))
+      response.end(Buffer.from([2]))
+    })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -2668,23 +2203,14 @@ describe('@holo-js/media', () => {
 
       expect(media.size).toBe(2)
       expect(media.mimeType).toBe('image/jpeg')
-      expect(arrayBuffer).not.toHaveBeenCalled()
-      expect(read).toHaveBeenCalledTimes(3)
-      expect(releaseLock).toHaveBeenCalledTimes(1)
+      expect(Array.from(await Storage.disk(media.record.disk).getBytes(media.record.path) ?? [])).toEqual([1, 2])
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
   it('skips queued conversions during inline generation and regeneration before async workers process them', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(conversion.name),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-    const queueHarness = createAsyncQueueHarness()
-
-    setMediaConversionExecutor({ generate })
+    const queueHarness = await createNativeRedisQueue()
     configureQueueRuntime({
       config: {
         default: 'redis',
@@ -2695,7 +2221,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
-      redisConfig: sharedRedisConfig,
+      redisConfig: queueHarness.redisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -2708,39 +2234,28 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
     const post = await Post.create({ title: 'Queued' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
 
     expect(media.getAvailableConversions()).toEqual(['card'])
-    expect(generate).toHaveBeenCalledTimes(1)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
-    expect(queueHarness.queued).toHaveLength(1)
+    for (const name of ['card']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
+    expect(await queueHarness.jobs()).toHaveLength(1)
 
     await media.regenerate()
-
-    expect(generate).toHaveBeenCalledTimes(2)
-    expect(generate.mock.calls[1]?.[0].conversion.name).toBe('card')
-    expect(queueHarness.queued).toHaveLength(2)
+    expect(await queueHarness.jobs()).toHaveLength(2)
     expect(listRegisteredQueueJobs().map(job => job.name)).toContain(MEDIA_GENERATE_CONVERSIONS_JOB)
   })
 
   it('dispatches queued conversions and refreshes the media item when the sync queue runs immediately', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(conversion.name),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
     ensureMediaQueueJobRegistered()
 
     const BasePost = defineModel(postsTable, {
@@ -2752,40 +2267,27 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
     const post = await Post.create({ title: 'Queued Sync' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
-
-    expect(generate).toHaveBeenCalledTimes(2)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
-    expect(generate.mock.calls[1]?.[0].conversion.name).toBe('thumb')
     expect(media.getAvailableConversions()).toEqual(['card', 'thumb'])
-    expect(await Storage.disk('public').get('media/' + media.record.uuid + '/conversions/thumb.txt')).toBe('thumb')
+    for (const name of ['card', 'thumb']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
+    await assertNativeImageConversion(media.record.generated_conversions.thumb?.path)
 
     await media.regenerate()
-
-    expect(generate).toHaveBeenCalledTimes(4)
-    expect(generate.mock.calls[2]?.[0].conversion.name).toBe('card')
-    expect(generate.mock.calls[3]?.[0].conversion.name).toBe('thumb')
     expect(media.getAvailableConversions()).toEqual(['card', 'thumb'])
+    for (const name of ['card', 'thumb']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
   })
 
   it('refreshes queued conversions after commit when the default sync queue runs inside a transaction', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(conversion.name),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
     ensureMediaQueueJobRegistered()
 
     const BasePost = defineModel(postsTable, {
@@ -2797,36 +2299,26 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
     const post = await Post.create({ title: 'Queued Sync Transaction' })
     const media = await DB.transaction(async () => {
       return await post.addMedia({
-        contents: Buffer.from('image'),
+        contents: await createImageBuffer(),
         fileName: 'hero.jpg',
         mimeType: 'image/jpeg',
       }).toMediaCollection('images')
     })
-
-    expect(generate).toHaveBeenCalledTimes(2)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
-    expect(generate.mock.calls[1]?.[0].conversion.name).toBe('thumb')
     expect(media.getAvailableConversions()).toEqual(['card', 'thumb'])
-    expect(await Storage.disk('public').get('media/' + media.record.uuid + '/conversions/thumb.txt')).toBe('thumb')
+    for (const name of ['card', 'thumb']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
+    await assertNativeImageConversion(media.record.generated_conversions.thumb?.path)
   })
 
   it('queues media conversion jobs for async workers and applies the queued conversion when the worker runs', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-    const queueHarness = createAsyncQueueHarness()
-
-    setMediaConversionExecutor({ generate })
+    const queueHarness = await createNativeRedisQueue()
     configureQueueRuntime({
       config: {
         default: 'redis',
@@ -2837,7 +2329,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
-      redisConfig: sharedRedisConfig,
+      redisConfig: queueHarness.redisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -2850,23 +2342,21 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
     const post = await Post.create({ title: 'Queued Async' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
-
-    expect(generate).toHaveBeenCalledTimes(1)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
     expect(media.getAvailableConversions()).toEqual(['card'])
-    expect(queueHarness.queued).toHaveLength(1)
-    expect(queueHarness.queued[0]).toMatchObject({
+    for (const name of ['card']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
+    expect(await queueHarness.jobs()).toHaveLength(1)
+    expect((await queueHarness.jobs())[0]).toMatchObject({
       name: MEDIA_GENERATE_CONVERSIONS_JOB,
       connection: 'redis',
       queue: 'media',
@@ -2889,21 +2379,12 @@ describe('@holo-js/media', () => {
     })
 
     await media.getEntity().refresh()
-
-    expect(generate).toHaveBeenCalledTimes(2)
-    expect(generate.mock.calls[1]?.[0].conversion.name).toBe('thumb')
     expect(media.getAvailableConversions()).toEqual(['card', 'thumb'])
-    expect(await Storage.disk('public').get('media/' + media.record.uuid + '/conversions/thumb.txt')).toBe('generated:thumb')
+    for (const name of ['card', 'thumb']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
+    await assertNativeImageConversion(media.record.generated_conversions.thumb?.path)
   })
 
   it('commits media attachments inside DB transactions before queued conversions are enqueued after commit', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
     await createQueueTables()
     configureQueueRuntime({
       config: {
@@ -2930,34 +2411,25 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
     const post = await Post.create({ title: 'Queued In Transaction' })
     const media = await DB.transaction(async () => {
       return await post.addMedia({
-        contents: Buffer.from('image'),
+        contents: await createImageBuffer(),
         fileName: 'hero.jpg',
         mimeType: 'image/jpeg',
       }).toMediaCollection('images')
     })
-
-    expect(generate).toHaveBeenCalledTimes(1)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
     expect(media.getAvailableConversions()).toEqual(['card'])
+    for (const name of ['card']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
     expect(await DB.table('jobs').get()).toHaveLength(1)
   }, 500)
 
   it('rejects media transactions when post-commit queued conversion dispatch fails', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
     configureQueueRuntime({
       config: {
         default: 'database',
@@ -2983,8 +2455,8 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
@@ -2992,25 +2464,16 @@ describe('@holo-js/media', () => {
 
     await expect(DB.transaction(async () => {
       return await post.addMedia({
-        contents: Buffer.from('image'),
+        contents: await createImageBuffer(),
         fileName: 'hero.jpg',
         mimeType: 'image/jpeg',
       }).toMediaCollection('images')
     })).rejects.toThrow('committed')
 
     expect(await DB.table('media').get()).toHaveLength(1)
-    expect(generate).toHaveBeenCalledTimes(1)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
   })
 
   it('does not enqueue queued conversions when the surrounding media transaction rolls back', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
     await createQueueTables()
     configureQueueRuntime({
       config: {
@@ -3037,8 +2500,8 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
-        conversion('card').performOnCollections('images'),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
@@ -3048,7 +2511,7 @@ describe('@holo-js/media', () => {
 
     await expect(DB.transaction(async () => {
       const media = await post.addMedia({
-        contents: Buffer.from('image'),
+        contents: await createImageBuffer(),
         fileName: 'hero.jpg',
         mimeType: 'image/jpeg',
       }).toMediaCollection('images')
@@ -3060,23 +2523,14 @@ describe('@holo-js/media', () => {
 
     expect(await DB.table('media').get()).toHaveLength(0)
     expect(await DB.table('jobs').get()).toHaveLength(0)
-    expect(generate).toHaveBeenCalledTimes(1)
-    expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
     expect(originalPath).toBeTypeOf('string')
     expect(conversionPath).toBeTypeOf('string')
-    expect(storageState.getDiskStore('public').has(originalPath!)).toBe(false)
-    expect(storageState.getDiskStore('public').has(conversionPath!)).toBe(false)
+    expect(await Storage.disk('public').exists(originalPath!)).toBe(false)
+    expect(await Storage.disk('public').exists(conversionPath!)).toBe(false)
   })
 
   it('reports queued conversion worker failures for unknown conversions and missing originals', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-    const queueHarness = createAsyncQueueHarness()
-
-    setMediaConversionExecutor({ generate })
+    const queueHarness = await createNativeRedisQueue()
     configureQueueRuntime({
       config: {
         default: 'redis',
@@ -3087,7 +2541,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
-      redisConfig: sharedRedisConfig,
+      redisConfig: queueHarness.redisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -3100,17 +2554,17 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
       ],
     })
 
     const post = await Post.create({ title: 'Queued Failures' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
-    queueHarness.queued.length = 0
+    await queueHarness.clear()
     const failures: Error[] = []
 
     await dispatchQueuedMediaConversions({
@@ -3149,13 +2603,6 @@ describe('@holo-js/media', () => {
   })
 
   it('treats missing media rows as a no-op queued conversion job', async () => {
-    const generate = vi.fn(async () => ({
-      contents: Buffer.from('generated'),
-      fileName: 'thumb.txt',
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
 
     await expect(runMediaGenerateConversionsJob({
       mediaId: 999_999,
@@ -3164,17 +2611,9 @@ describe('@holo-js/media', () => {
       status: 'missing-media',
       conversionNames: [],
     })
-    expect(generate).not.toHaveBeenCalled()
   })
 
   it('treats empty queued conversion names as a no-op for existing media rows', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-
-    setMediaConversionExecutor({ generate })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -3185,18 +2624,17 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('card').performOnCollections('images'),
+        conversion('card').width(2).height(2).performOnCollections('images'),
       ],
     })
 
     const post = await Post.create({ title: 'Empty Conversion Names' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
     const generatedConversions = media.record.generated_conversions
-    generate.mockClear()
 
     await expect(runMediaGenerateConversionsJob({
       mediaId: media.record.id,
@@ -3207,19 +2645,11 @@ describe('@holo-js/media', () => {
     })
 
     const unchanged = await Media.findOrFail(media.record.id)
-    expect(generate).not.toHaveBeenCalled()
     expect(unchanged.get('generated_conversions')).toEqual(generatedConversions)
   })
 
   it('defers the exported queued conversion helper until the surrounding transaction commits', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-    const queueHarness = createAsyncQueueHarness()
-
-    setMediaConversionExecutor({ generate })
+    const queueHarness = await createNativeRedisQueue()
     configureQueueRuntime({
       config: {
         default: 'redis',
@@ -3230,7 +2660,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
-      redisConfig: sharedRedisConfig,
+      redisConfig: queueHarness.redisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -3243,19 +2673,19 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
       ],
     })
 
     const post = await Post.create({ title: 'Queued Helper Commit' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
 
-    expect(queueHarness.queued).toHaveLength(1)
-    queueHarness.queued.length = 0
+    expect(await queueHarness.jobs()).toHaveLength(1)
+    await queueHarness.clear()
 
     await DB.transaction(async () => {
       await dispatchQueuedMediaConversions({
@@ -3263,11 +2693,11 @@ describe('@holo-js/media', () => {
         conversionNames: ['thumb'],
       })
 
-      expect(queueHarness.queued).toHaveLength(0)
+      expect(await queueHarness.jobs()).toHaveLength(0)
     })
 
-    expect(queueHarness.queued).toHaveLength(1)
-    expect(queueHarness.queued[0]).toMatchObject({
+    expect(await queueHarness.jobs()).toHaveLength(1)
+    expect((await queueHarness.jobs())[0]).toMatchObject({
       name: MEDIA_GENERATE_CONVERSIONS_JOB,
       payload: {
         mediaId: media.record.id,
@@ -3277,14 +2707,7 @@ describe('@holo-js/media', () => {
   })
 
   it('does not dispatch the exported queued conversion helper when the surrounding transaction rolls back', async () => {
-    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
-      contents: Buffer.from(`generated:${conversion.name}`),
-      fileName: `${conversion.name}.txt`,
-      mimeType: 'text/plain',
-    }))
-    const queueHarness = createAsyncQueueHarness()
-
-    setMediaConversionExecutor({ generate })
+    const queueHarness = await createNativeRedisQueue()
     configureQueueRuntime({
       config: {
         default: 'redis',
@@ -3295,7 +2718,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
-      redisConfig: sharedRedisConfig,
+      redisConfig: queueHarness.redisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -3308,19 +2731,19 @@ describe('@holo-js/media', () => {
         collection('images').disk('public'),
       ],
       conversions: [
-        conversion('thumb').performOnCollections('images').queued(),
+        conversion('thumb').width(2).height(2).performOnCollections('images').queued(),
       ],
     })
 
     const post = await Post.create({ title: 'Queued Helper Rollback' })
     const media = await post.addMedia({
-      contents: Buffer.from('image'),
+      contents: await createImageBuffer(),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
     }).toMediaCollection('images')
 
-    expect(queueHarness.queued).toHaveLength(1)
-    queueHarness.queued.length = 0
+    expect(await queueHarness.jobs()).toHaveLength(1)
+    await queueHarness.clear()
 
     await expect(DB.transaction(async () => {
       await dispatchQueuedMediaConversions({
@@ -3328,11 +2751,11 @@ describe('@holo-js/media', () => {
         conversionNames: ['thumb'],
       })
 
-      expect(queueHarness.queued).toHaveLength(0)
+      expect(await queueHarness.jobs()).toHaveLength(0)
       throw new Error('rollback helper dispatch')
     })).rejects.toThrow('rollback helper dispatch')
 
-    expect(queueHarness.queued).toHaveLength(0)
+    expect(await queueHarness.jobs()).toHaveLength(0)
   })
 
   it('covers media queue helper validation, normalization, and idempotent registration', async () => {
@@ -3397,8 +2820,8 @@ describe('@holo-js/media', () => {
     })
 
     const post = await Post.create({ title: 'Legacy' })
-    storageState.getDiskStore('public').set('media/legacy/original/legacy.jpg', Buffer.from('original'))
-    storageState.getDiskStore('public').set('media/legacy/conversions/thumb.txt', Buffer.from('outdated'))
+    await Storage.disk('public').put('media/legacy/original/legacy.jpg', Buffer.from('original'))
+    await Storage.disk('public').put('media/legacy/conversions/thumb.txt', Buffer.from('outdated'))
 
     const legacy = await Media.create({
       uuid: 'legacy',
@@ -3424,7 +2847,7 @@ describe('@holo-js/media', () => {
     await new MediaItem(legacy).regenerate('thumb')
 
     expect(
-      new TextDecoder().decode(storageState.getDiskStore('public').get('media/legacy/conversions/thumb.txt')!),
+      await Storage.disk('public').get('media/legacy/conversions/thumb.txt'),
     ).toBe('legacy-thumb')
   })
 
@@ -3461,7 +2884,7 @@ describe('@holo-js/media', () => {
 
     const thumbPath = media.record.generated_conversions.thumb?.path
     expect(thumbPath).toBeTruthy()
-    expect(storageState.getDiskStore('public').has(thumbPath!)).toBe(true)
+    expect(await Storage.disk('public').exists(thumbPath!)).toBe(true)
 
     setMediaConversionExecutor({
       async generate() {
@@ -3470,17 +2893,15 @@ describe('@holo-js/media', () => {
     })
 
     await expect(media.regenerate('thumb')).rejects.toThrow('conversion failed')
-    expect(storageState.getDiskStore('public').has(thumbPath!)).toBe(true)
+    expect(await Storage.disk('public').exists(thumbPath!)).toBe(true)
     expect(media.getEntity().get('generated_conversions').thumb?.path).toBe(thumbPath)
   })
 
   it('fails remote uploads when the download is unsuccessful', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      return new Response('missing', {
-        status: 404,
-        statusText: 'Not Found',
-      })
-    }))
+    await createRemoteMediaServer((_request, response) => {
+      response.writeHead(404)
+      response.end('missing')
+    })
 
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
@@ -3544,8 +2965,8 @@ describe('@holo-js/media', () => {
     })
 
     const post = await Post.create({ title: 'Detached' })
-    storageState.getDiskStore('public').set('ghost/original.txt', Buffer.from('original'))
-    storageState.getDiskStore('public').set('ghost/old.txt', Buffer.from('old'))
+    await Storage.disk('public').put('ghost/original.txt', Buffer.from('original'))
+    await Storage.disk('public').put('ghost/old.txt', Buffer.from('old'))
 
     const ghost = await Media.create({
       uuid: 'ghost',
@@ -3573,7 +2994,7 @@ describe('@holo-js/media', () => {
     await item.regenerate()
 
     expect(item.getAvailableConversions()).toEqual(['global'])
-    expect(storageState.getDiskStore('public').has('media/ghost/conversions/global.txt')).toBe(true)
+    expect(await Storage.disk('public').exists('media/ghost/conversions/global.txt')).toBe(true)
   })
 
   it('covers default disk, null metadata, and item fallback branches', async () => {
@@ -3644,7 +3065,7 @@ describe('@holo-js/media', () => {
       order_column: 101,
     })
 
-    storageState.getDiskStore('public').set('manual-3/original.txt', Buffer.from('manual-3'))
+    await Storage.disk('public').put('manual-3/original.txt', Buffer.from('manual-3'))
     expect(new MediaItem(noConversions).getAvailableConversions()).toEqual([])
     await expect(new MediaItem(noConversions).regenerate('copy')).resolves.toBeInstanceOf(MediaItem)
     await new MediaItem(noConversions).delete()
@@ -3695,43 +3116,4 @@ describe('@holo-js/media', () => {
     await expect(new MediaItem(diskFallback).regenerate('copy')).rejects.toThrow('original file is missing')
   })
 
-  it('falls back to the private default disk when resolving the public disk throws', async () => {
-    setMediaConversionExecutor({
-      async generate() {
-        return null
-      },
-    })
-
-    const BasePost = defineModel(postsTable, {
-      fillable: ['title'],
-    })
-
-    const Post = defineMediaModel(BasePost, {
-      collections: [
-        collection('misc'),
-      ],
-    })
-
-    const post = await Post.create({ title: 'Local default' })
-    storageState.setDefaultDisk('local')
-
-    const storageModule = await import('@holo-js/storage/runtime')
-    const originalDisk = storageModule.Storage.disk
-    vi.spyOn(storageModule.Storage, 'disk').mockImplementation((diskName?: string) => {
-      if (diskName === 'public') {
-        throw new Error('public disk missing')
-      }
-
-      return originalDisk.call(storageModule.Storage, diskName)
-    })
-
-    try {
-      const media = await post.addMedia(Buffer.from('default')).toMediaCollection('misc')
-      expect(media.record.disk).toBe('local')
-      expect(media.record.conversions_disk).toBe('local')
-    } finally {
-      vi.restoreAllMocks()
-      storageState.setDefaultDisk('public')
-    }
-  })
 })

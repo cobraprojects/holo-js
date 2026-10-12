@@ -1,4 +1,6 @@
 import type { DatabaseMutationEvent } from './dependencies'
+import { aggregateMutationCannotChangeValue } from './query-aggregate-common'
+import { readMutationValueKeys, valueKeysChangeColumns } from './predicate-matching'
 import {
   matchesGroupedCountHaving,
   readGroupedAggregateNumericContribution,
@@ -114,6 +116,11 @@ function readGroupedAggregateMutationDeltas(
   mutation: DatabaseMutationEvent,
   supportsRemovals = false,
 ): readonly GroupedAggregateDelta[] | undefined {
+  if (aggregateMutationCannotChangeValue(query, { kind: groupedAggregate.kind, column: groupedAggregate.aggregateColumn }, mutation)
+    && !valueKeysChangeColumns(readMutationValueKeys(mutation), [groupedAggregate.groupColumn])) {
+    return []
+  }
+
   return groupedAggregate.kind === 'sum'
     ? readGroupedSumMutationDeltas(query, groupedAggregate, mutation, supportsRemovals)
     : readGroupedCountMutationDeltas(query, groupedAggregate, mutation)

@@ -22,6 +22,7 @@ type RedisClientOptions = {
 }
 
 type RedisClusterOptions = {
+  readonly lazyConnect: true
   readonly redisOptions: RedisClientOptions
 }
 
@@ -174,6 +175,7 @@ function createRedisClusterOptions(
   const startupNodes = resolveClusterStartupNodes(config)
 
   return {
+    lazyConnect: true,
     redisOptions: {
       password: config.password,
       username: config.username,

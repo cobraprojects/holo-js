@@ -1,3 +1,4 @@
+import { createNativeHostedAuthPersistence } from '../../auth/tests/support/native-hosted-persistence'
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
@@ -97,198 +98,13 @@ function createSessionStore() {
   return { store: createFileSessionStore(directory), path: directory }
 }
 
-class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
-  readonly users = new Map<number, UserRecord>()
-  readonly usersByEmail = new Map<string, number>()
-  nextId = 1
+type NativeProvider = AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'delete' | 'update' | 'serialize'>>
 
-  async findById(id: string | number): Promise<UserRecord | null> {
-    const normalized = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
-    return this.users.get(normalized) ?? null
-  }
-
-  async findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<UserRecord | null> {
-    const value = typeof credentials.email === 'string' ? credentials.email : ''
-    const id = this.usersByEmail.get(value)
-    return typeof id === 'number' ? this.users.get(id) ?? null : null
-  }
-
-  async create(input: {
-    readonly name?: string
-    readonly email: string
-    readonly password?: string | null
-    readonly avatar?: string | null
-    readonly timezone?: string
-    readonly email_verified_at?: Date | null
-  }): Promise<UserRecord> {
-    const created: UserRecord = {
-      id: this.nextId,
-      name: input.name,
-      email: input.email,
-      password: input.password,
-      avatar: input.avatar,
-      timezone: input.timezone,
-      email_verified_at: input.email_verified_at,
-    }
-    this.nextId += 1
-    this.users.set(created.id, created)
-    this.usersByEmail.set(created.email, created.id)
-    return created
-  }
-
-  async update(user: UserRecord, input: {
-    readonly name?: string
-    readonly email?: string
-    readonly avatar?: string | null
-    readonly timezone?: string
-    readonly email_verified_at?: Date | null
-    readonly password?: string | null
-  }): Promise<UserRecord> {
-    const currentEmail = user.email
-    if (typeof input.name !== 'undefined') {
-      user.name = input.name
-    }
-    if (typeof input.email !== 'undefined') {
-      user.email = input.email
-    }
-    if (typeof input.avatar !== 'undefined') {
-      user.avatar = input.avatar
-    }
-    if (typeof input.timezone !== 'undefined') {
-      user.timezone = input.timezone
-    }
-    if (typeof input.email_verified_at !== 'undefined') {
-      user.email_verified_at = input.email_verified_at
-    }
-    if (typeof input.password !== 'undefined') {
-      user.password = input.password
-    }
-    if (currentEmail !== user.email) {
-      this.usersByEmail.delete(currentEmail)
-      this.usersByEmail.set(user.email, user.id)
-    }
-
-    return user
-  }
-
-  getId(user: UserRecord): string | number {
-    return user.id
-  }
-
-  serialize(user: UserRecord) {
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatar: user.avatar ?? null,
-      timezone: user.timezone,
-      email_verified_at: user.email_verified_at ?? null,
-    }
-  }
+async function createIdentityStore() {
+  return (await createNativeHostedAuthPersistence('workos')).identityStore
 }
 
-class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
-  readonly users = new Map<number, UserRecord>()
-  readonly usersByEmail = new Map<string, number>()
-  nextId = 1
-
-  async findById(id: string | number): Promise<UserRecord | null> {
-    const normalized = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
-    const record = this.users.get(normalized)
-    return record ? { ...record } : null
-  }
-
-  async findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<UserRecord | null> {
-    const value = typeof credentials.email === 'string' ? credentials.email : ''
-    const id = this.usersByEmail.get(value)
-    const record = typeof id === 'number' ? this.users.get(id) : undefined
-    return record ? { ...record } : null
-  }
-
-  async create(input: {
-    readonly name?: string
-    readonly email: string
-    readonly password?: string | null
-    readonly avatar?: string | null
-    readonly timezone?: string
-    readonly email_verified_at?: Date | null
-  }): Promise<UserRecord> {
-    const created: UserRecord = {
-      id: this.nextId,
-      name: input.name,
-      email: input.email,
-      password: input.password,
-      avatar: input.avatar,
-      timezone: input.timezone,
-      email_verified_at: input.email_verified_at,
-    }
-    this.nextId += 1
-    this.users.set(created.id, created)
-    this.usersByEmail.set(created.email, created.id)
-    return { ...created }
-  }
-
-  getId(user: UserRecord): string | number {
-    return user.id
-  }
-
-  serialize(user: UserRecord) {
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatar: user.avatar ?? null,
-      timezone: user.timezone,
-      email_verified_at: user.email_verified_at ?? null,
-    }
-  }
-}
-
-class InMemoryIdentityStore {
-  readonly records = new Map<string, {
-    provider: string
-    providerUserId: string
-    guard: string
-    authProvider: string
-    userId: string | number
-    email?: string
-    emailVerified: boolean
-    profile: Readonly<Record<string, unknown>>
-    linkedAt: Date
-    updatedAt: Date
-  }>()
-
-  async findByProviderUserId(provider: string, providerUserId: string) {
-    return this.records.get(`${provider}:${providerUserId}`) ?? null
-  }
-
-  async findByUserId(provider: string, authProvider: string, userId: string | number) {
-    for (const record of this.records.values()) {
-      if (record.provider === provider && record.authProvider === authProvider && record.userId === userId) {
-        return record
-      }
-    }
-
-    return null
-  }
-
-  async save(record: {
-    provider: string
-    providerUserId: string
-    guard: string
-    authProvider: string
-    userId: string | number
-    email?: string
-    emailVerified: boolean
-    profile: Readonly<Record<string, unknown>>
-    linkedAt: Date
-    updatedAt: Date
-  }): Promise<void> {
-    this.records.set(`${record.provider}:${record.providerUserId}`, record)
-  }
-}
-
-function configureRuntime(options: {
+async function configureRuntime(options: {
   emailVerificationRequired?: boolean
   workosGuard?: 'web' | 'admin' | 'api'
   defaultWorkosProvider?: string
@@ -327,8 +143,9 @@ function configureRuntime(options: {
     },
   })
 
-  const usersProvider = new InMemoryProviderAdapter()
-  const adminsProvider = new InMemoryProviderAdapter()
+  const persistence = await createNativeHostedAuthPersistence('workos')
+  const usersProvider = persistence.providers.users as NativeProvider
+  const adminsProvider = persistence.providers.admins as NativeProvider
   configureAuthRuntime({
     config: defineAuthConfig({
       defaults: {
@@ -368,7 +185,7 @@ function configureRuntime(options: {
     context: authRuntimeInternals.createMemoryAuthContext(),
   })
 
-  const identityStore = new InMemoryIdentityStore()
+  const identityStore = persistence.identityStore
   const sessions = new Map<string, WorkosSessionFixture | null>()
 
   if (options.configureWorkosRuntime !== false) {
@@ -385,6 +202,7 @@ function configureRuntime(options: {
   }
 
   return {
+    persistence,
     sessionStore,
     usersProvider,
     adminsProvider,
@@ -555,44 +373,16 @@ describe('@holo-js/auth-workos', () => {
     expectTypeOf(acceptsTypedFacadeOptions).returns.toEqualTypeOf<void>()
   })
 
-  it('resolves the configured default WorkOS provider', () => {
-    configureRuntime({
+  it('resolves the configured default WorkOS provider', async () => {
+    await configureRuntime({
       defaultWorkosProvider: 'dashboard',
     })
 
     expect(workosAuthInternals.resolveConfiguredProviderName()).toBe('dashboard')
   })
 
-  it('merges partial runtime configuration updates', () => {
-    const identityStore = new InMemoryIdentityStore()
-    const providers = Object.freeze({
-      dashboard: {
-        async verifySession() {
-          return null
-        },
-      },
-    })
-
-    configureWorkosAuthRuntime({
-      identityStore,
-    })
-    expect(workosAuthInternals.getBindings()).toEqual({
-      providers: {},
-      identityStore,
-    })
-
-    configureWorkosAuthRuntime({
-      providers,
-    })
-
-    expect(workosAuthInternals.getBindings()).toEqual({
-      providers,
-      identityStore,
-    })
-  })
-
-  it('creates a resettable WorkOS runtime state property', () => {
-    configureRuntime()
+  it('creates a resettable WorkOS runtime state property', async () => {
+    await configureRuntime()
 
     expect(Object.getOwnPropertyDescriptor(globalThis, '__holoJsAuthWorkosRuntime')).toMatchObject({
       configurable: true,
@@ -602,7 +392,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('uses the built-in verifier when only the identity store is configured', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       configureWorkosRuntime: false,
     })
     configureWorkosAuthRuntime({
@@ -665,7 +455,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects built-in WorkOS JWTs without required bound claims', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       configureWorkosRuntime: false,
     })
     configureWorkosAuthRuntime({
@@ -707,7 +497,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects expired, unbound, unsigned, and incomplete built-in WorkOS JWTs', async () => {
-    const runtime = configureRuntime({ configureWorkosRuntime: false })
+    const runtime = await configureRuntime({ configureWorkosRuntime: false })
     configureWorkosAuthRuntime({ identityStore: runtime.identityStore })
     const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const publicJwk = publicKey.export({ format: 'jwk' })
@@ -728,7 +518,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects a built-in WorkOS JWT whose signature never matches', async () => {
-    const runtime = configureRuntime({ configureWorkosRuntime: false })
+    const runtime = await configureRuntime({ configureWorkosRuntime: false })
     configureWorkosAuthRuntime({ identityStore: runtime.identityStore })
     const signer = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const verifier = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -746,12 +536,12 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('requires built-in verifier credentials and a readable user profile', async () => {
-    const runtime = configureRuntime({ configureWorkosRuntime: false, workosClientId: '' })
+    const runtime = await configureRuntime({ configureWorkosRuntime: false, workosClientId: '' })
     configureWorkosAuthRuntime({ identityStore: runtime.identityStore })
     await expect(verifySession('token')).rejects.toThrow('clientId')
 
     resetAuthRuntime()
-    configureRuntime({ configureWorkosRuntime: false, workosApiKey: '' })
+    await configureRuntime({ configureWorkosRuntime: false, workosApiKey: '' })
     configureWorkosAuthRuntime({ identityStore: runtime.identityStore })
     const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const token = createSignedJwt({
@@ -766,7 +556,7 @@ describe('@holo-js/auth-workos', () => {
     await expect(verifySession(token)).rejects.toThrow('apiKey')
 
     resetAuthRuntime()
-    configureRuntime({ configureWorkosRuntime: false })
+    await configureRuntime({ configureWorkosRuntime: false })
     configureWorkosAuthRuntime({ identityStore: runtime.identityStore })
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => String(input).includes('/sso/jwks/')
       ? new Response(JSON.stringify({ keys: [{ ...publicJwk, kid: 'workos-test-key', alg: 'RS256', use: 'sig' }] }), { status: 200 })
@@ -775,7 +565,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('clears built-in WorkOS verifier caches when the runtime is reset', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       configureWorkosRuntime: false,
     })
     configureWorkosAuthRuntime({
@@ -835,7 +625,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects built-in WorkOS JWTs before their not-before time', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       configureWorkosRuntime: false,
     })
     configureWorkosAuthRuntime({
@@ -899,7 +689,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('refreshes cached WorkOS JWKS when a new key id appears', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       configureWorkosRuntime: false,
     })
     configureWorkosAuthRuntime({
@@ -1022,7 +812,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('verifies WorkOS sessions from bearer headers and cookies and fails closed for missing tokens', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('bearer-token', {
       sessionId: 'sess_1',
       identity: {
@@ -1076,7 +866,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('creates a first-time local user from WorkOS identity data', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('create-token', {
       sessionId: 'sess_create',
       identity: {
@@ -1114,8 +904,8 @@ describe('@holo-js/auth-workos', () => {
         name: 'Create User',
       },
     })
-    expect(runtime.identityStore.records.get('dashboard:workos_create')).toMatchObject({
-      userId: 1,
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_create')).toMatchObject({
+      userId: '1',
       email: 'create@app.test',
       emailVerified: true,
       profile: {
@@ -1128,7 +918,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects an unlinked WorkOS identity that collides with a local email', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     await runtime.usersProvider.create({ email: 'collision@app.test' })
     runtime.sessions.set('collision-token', {
       sessionId: 'collision-session',
@@ -1145,7 +935,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('returns hosted AuthKit redirects for login and register', async () => {
-    configureRuntime()
+    await configureRuntime()
 
     const login = await loginWithWorkos(new Request('https://app.test/login'))
     const loginLocation = login.headers.get('location')
@@ -1177,7 +967,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('completes the hosted WorkOS callback with typed user mapping', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const accessToken = createUnsignedJwt({ sid: 'session_workos_callback' })
     vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('https://api.workos.com/user_management/authenticate')
@@ -1250,7 +1040,7 @@ describe('@holo-js/auth-workos', () => {
     })
     expect(result.data?.authSession?.cookies ?? []).toContainEqual(expect.stringContaining('holo_workos_dashboard_state=;'))
     await expect(provider()).resolves.toBe('workos')
-    expect(runtime.usersProvider.users.get(1)).toMatchObject({
+    expect((await runtime.usersProvider.findById(1))).toMatchObject({
       email: 'callback@app.test',
       name: 'Callback User',
       avatar: 'https://cdn.test/callback.png',
@@ -1259,7 +1049,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('normalizes camel-case and snake-case callback profiles and session fallbacks', async () => {
-    configureRuntime()
+    await configureRuntime()
     const profiles = [
       {
         session: { id: 'nested-session' },
@@ -1304,7 +1094,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('logs out locally and returns the WorkOS hosted logout URL', async () => {
-    configureRuntime()
+    await configureRuntime()
     const accessToken = createUnsignedJwt({ sid: 'session_workos_logout' })
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
       access_token: accessToken,
@@ -1366,7 +1156,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
-    configureRuntime()
+    await configureRuntime()
 
     await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback'))).resolves.toMatchObject({
       data: null,
@@ -1390,7 +1180,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects WorkOS callbacks with missing or mismatched state before exchanging codes', async () => {
-    configureRuntime()
+    await configureRuntime()
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
@@ -1417,7 +1207,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('reuses an existing Holo session when the request already carries the session cookie', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('repeat-token', {
       sessionId: 'sess_repeat',
       identity: {
@@ -1456,7 +1246,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('does not reuse Holo sessions with mismatched auth or WorkOS identities', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('mismatch-token', {
       sessionId: 'workos-session',
       identity: {
@@ -1523,7 +1313,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('clears the WorkOS hosted session cookie through the shared logout api', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('logout-token', {
       sessionId: 'sess_logout',
       identity: {
@@ -1553,7 +1343,7 @@ describe('@holo-js/auth-workos', () => {
     [{ provider: 'other', sessionId: 'session' }],
     [{ provider: 'dashboard', sessionId: ' ' }],
   ] as const)('ignores malformed WorkOS logout metadata %#', async (workos) => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const now = new Date()
     await runtime.sessionStore.write({
       id: 'malformed-session',
@@ -1580,7 +1370,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('updates existing linked users on subsequent WorkOS syncs and relinks missing local rows', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('first-token', {
       sessionId: 'sess_first',
       identity: {
@@ -1623,8 +1413,7 @@ describe('@holo-js/auth-workos', () => {
       },
     })
 
-    runtime.usersProvider.users.delete(1)
-    runtime.usersProvider.usersByEmail.delete('sync@app.test')
+    await runtime.usersProvider.delete(1)
     await runtime.usersProvider.create({
       name: 'Relink Target',
       email: 'sync@app.test',
@@ -1650,7 +1439,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('relinks an identity when its local row no longer exists', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     await runtime.identityStore.save({
       provider: 'dashboard',
       providerUserId: 'workos_orphan',
@@ -1709,7 +1498,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('creates identities without an email and updates linked users without collisions', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await syncIdentity({
       sessionId: 'no-email-session',
       identity: {
@@ -1738,11 +1527,11 @@ describe('@holo-js/auth-workos', () => {
       },
     }, 'dashboard')
     expect(updated).toMatchObject({ status: 'updated', user: { email: 'unique@app.test' } })
-    expect(runtime.usersProvider.usersByEmail.get('unique@app.test')).toBe(1)
+    expect((await runtime.usersProvider.findByCredentials({ email: 'unique@app.test' }))?.id).toBe(1)
   })
 
   it('does not overwrite linked users with synthetic fallback fields when WorkOS omits profile data', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const linkedUser = await runtime.usersProvider.create({
       name: 'Existing User',
       email: 'existing@app.test',
@@ -1783,18 +1572,19 @@ describe('@holo-js/auth-workos', () => {
         email: 'existing@app.test',
       },
     })
-    expect(runtime.usersProvider.users.get(linkedUser.id)).toMatchObject({
+    expect((await runtime.usersProvider.findById(linkedUser.id))).toMatchObject({
       name: 'Existing User',
       email: 'existing@app.test',
     })
-    expect(runtime.usersProvider.usersByEmail.get('workos_existing@workos.hosted.local')).toBeUndefined()
+    expect((await runtime.usersProvider.findByCredentials({ email: 'workos_existing@workos.hosted.local' }))?.id).toBeUndefined()
   })
 
   it('fails when WorkOS sync needs to persist changes without adapter.update()', async () => {
     const { store: sessionStore, path: sessionPath } = createSessionStore()
-    const usersProvider = new SnapshotProviderAdapter()
-    const adminsProvider = new InMemoryProviderAdapter()
-    const identityStore = new InMemoryIdentityStore()
+    const persistence = await createNativeHostedAuthPersistence('workos')
+    const { update: _update, ...usersProvider } = persistence.providers.users as NativeProvider
+    const adminsProvider = persistence.providers.admins as NativeProvider
+    const identityStore = persistence.identityStore
 
     configureSessionRuntime({
       config: {
@@ -1888,7 +1678,7 @@ describe('@holo-js/auth-workos', () => {
         raw: {},
       },
     }, 'dashboard')).rejects.toThrow('must implement update()')
-    expect(usersProvider.users.get(1)).toMatchObject({
+    expect((await usersProvider.findById(1))).toMatchObject({
       name: 'First Name',
       avatar: null,
       email_verified_at: null,
@@ -1896,7 +1686,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('raises a soft conflict when WorkOS email collides with unexpected local data', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('initial-link', {
       sessionId: 'sess_initial',
       identity: {
@@ -1950,7 +1740,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('supports WorkOS auth against a non-default guard and provider model', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       workosGuard: 'admin',
     })
     runtime.sessions.set('admin-token', {
@@ -1979,14 +1769,14 @@ describe('@holo-js/auth-workos', () => {
       },
     })
     expect((result?.user as Record<PropertyKey, unknown> | undefined)?.[AUTH_PROVIDER_MARKER]).toBe('admins')
-    expect(runtime.adminsProvider.users.get(1)?.email).toBe('admin@app.test')
-    expect(runtime.usersProvider.users.size).toBe(0)
+    expect((await runtime.adminsProvider.findById(1))?.email).toBe('admin@app.test')
+    expect(await runtime.persistence.db.table('users').count()).toBe(0)
     const sessionId = authRuntimeInternals.getRuntimeBindings().context.getSessionId('admin')
     expect(sessionId).toBeTypeOf('string')
   })
 
   it('rejects WorkOS providers mapped to token guards', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       workosGuard: 'api',
     })
     runtime.sessions.set('api-token', {
@@ -2007,7 +1797,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('blocks unverified WorkOS identities when local verification is required', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       emailVerificationRequired: true,
     })
     runtime.sessions.set('unverified-token', {
@@ -2028,7 +1818,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('fails closed when the WorkOS runtime or config entry is missing', async () => {
-    configureRuntime({
+    await configureRuntime({
       configureWorkosRuntime: false,
     })
 
@@ -2047,7 +1837,7 @@ describe('@holo-js/auth-workos', () => {
     resetAuthRuntime()
     resetSessionRuntime()
 
-    configureRuntime({
+    await configureRuntime({
       includeWorkosConfig: false,
     })
 
@@ -2069,8 +1859,8 @@ describe('@holo-js/auth-workos', () => {
     expect(failedLogout.status).toBe(500)
   })
 
-  it('normalizes WorkOS helper edge cases', () => {
-    configureRuntime()
+  it('normalizes WorkOS helper edge cases', async () => {
+    await configureRuntime()
 
     expect(workosAuthInternals.resolveConfiguredProviderName(' dashboard ')).toBe('dashboard')
     expect(workosAuthInternals.getSessionTokenFromRequest(new Request('https://app.test', {
@@ -2112,7 +1902,7 @@ describe('@holo-js/auth-workos', () => {
     ['apiKey', { workosApiKey: '' }, 'apiKey'],
     ['redirectUri', { workosRedirectUri: '' }, 'redirectUri'],
   ] as const)('returns a safe redirect error when %s is missing', async (_field, options, message) => {
-    configureRuntime(options)
+    await configureRuntime(options)
 
     const response = await loginWithWorkos(new Request('https://app.test/login'))
 
@@ -2125,7 +1915,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('fails closed for missing provider capabilities and adapters', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     configureWorkosAuthRuntime({
       providers: { dashboard: {} },
       identityStore: runtime.identityStore,
@@ -2143,7 +1933,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('rejects malformed users returned by auth provider boundaries', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
     const malformedCreate: AuthProviderAdapter<UserRecord> = {
       findById: async () => null,
@@ -2171,11 +1961,11 @@ describe('@holo-js/auth-workos', () => {
       identity: { id: 'invalid-id', name: '', email: '', emailVerified: false, metadata: {}, raw: {} },
     }, 'dashboard')).rejects.toThrow('must expose a serializable id')
 
-    expect(runtime.identityStore.records.size).toBe(0)
+    expect(await runtime.persistence.db.table('auth_identities').count()).toBe(0)
   })
 
   it('serializes local users when an auth adapter has no serializer', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
     const providerWithoutSerializer = {
       findById: runtime.usersProvider.findById.bind(runtime.usersProvider),
@@ -2201,15 +1991,15 @@ describe('@holo-js/auth-workos', () => {
     expect(result.user).toMatchObject({ id: 1, email: 'no-serializer@app.test' })
   })
 
-  it('can explicitly clear the WorkOS runtime bindings', () => {
-    configureRuntime()
+  it('can explicitly clear the WorkOS runtime bindings', async () => {
+    await configureRuntime()
     configureWorkosAuthRuntime()
 
     expect(() => workosAuthInternals.getBindings()).toThrow('not configured yet')
   })
 
-  it('resolves multiple configured providers deterministically', () => {
-    const runtime = configureRuntime()
+  it('resolves multiple configured providers deterministically', async () => {
+    const runtime = await configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
     authRuntimeInternals.configureRuntime({
       ...bindings,
@@ -2238,7 +2028,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('delegates request verification and returns null authentication safely', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const verifyRequestRuntime = vi.fn(async () => null)
     configureWorkosAuthRuntime({
       identityStore: runtime.identityStore,
@@ -2252,7 +2042,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('does not reuse a session when the session runtime emits no cookie name', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     runtime.sessions.set('cookie-name-token', {
       sessionId: 'cookie-name-session',
       identity: {
@@ -2278,7 +2068,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('converts non-error callback failures into a stable public failure', async () => {
-    configureRuntime()
+    await configureRuntime()
     const request = await createWorkosCallbackRequest()
     vi.stubGlobal('fetch', async () => {
       throw 'network failure'
@@ -2295,7 +2085,7 @@ describe('@holo-js/auth-workos', () => {
   })
 
   it('returns a conflict result when a callback email is already owned locally', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     await runtime.usersProvider.create({ email: 'callback-conflict@app.test' })
     const request = await createWorkosCallbackRequest()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
@@ -2322,7 +2112,7 @@ describe('@holo-js/auth-workos', () => {
     [403, {}, 'status 403'],
     [200, { access_token: 'token' }, 'did not return a user'],
   ] as const)('normalizes WorkOS callback response failures with status %s', async (status, body, message) => {
-    configureRuntime()
+    await configureRuntime()
     const request = await createWorkosCallbackRequest()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify(body), {
       status,

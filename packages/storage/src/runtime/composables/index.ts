@@ -123,8 +123,6 @@ export interface StorageRuntimeBindings {
   getStorage(base: string): StorageBackend
 }
 
-let storageRuntimeBindings: StorageRuntimeBindings | undefined
-
 type StorageRuntimeGlobals = typeof globalThis & {
   __holoStorageRuntimeBindings__?: StorageRuntimeBindings
   useRuntimeConfig?: () => StorageRuntimeConfigValue
@@ -355,9 +353,8 @@ async function normalizeContent(value: StorageContent): Promise<Exclude<RawStora
 
 function resolveStorageRuntimeBindings(): StorageRuntimeBindings {
   const runtimeGlobals = getStorageRuntimeGlobals()
-  const configuredBindings = storageRuntimeBindings ?? runtimeGlobals.__holoStorageRuntimeBindings__
+  const configuredBindings = runtimeGlobals.__holoStorageRuntimeBindings__
   if (configuredBindings) {
-    storageRuntimeBindings = configuredBindings
     return configuredBindings
   }
 
@@ -375,7 +372,6 @@ function resolveStorageRuntimeBindings(): StorageRuntimeBindings {
 }
 
 export function configureStorageRuntime(bindings?: StorageRuntimeBindings): void {
-  storageRuntimeBindings = bindings
   const runtimeGlobals = getStorageRuntimeGlobals()
   if (bindings) {
     runtimeGlobals.__holoStorageRuntimeBindings__ = bindings
@@ -386,7 +382,6 @@ export function configureStorageRuntime(bindings?: StorageRuntimeBindings): void
 }
 
 export function resetStorageRuntime(): void {
-  storageRuntimeBindings = undefined
   delete getStorageRuntimeGlobals().__holoStorageRuntimeBindings__
 }
 

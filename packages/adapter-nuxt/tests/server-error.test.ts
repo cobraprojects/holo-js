@@ -1,125 +1,45 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createApp, defineEventHandler } from 'h3'
+import { expect, it } from 'vitest'
 import { ValidationException } from '@holo-js/validation'
-import type { H3Error, H3Event } from 'h3'
+import handleValidationError from '../src/runtime/server/error'
+import { serve } from './support/http'
 
-type H3ErrorJson = Pick<H3Error<unknown>, 'data' | 'message' | 'statusCode' | 'statusMessage'>
-
-function createH3Error(error: Error, statusCode = 500): H3Error {
-  const serializable = error as Error & { readonly toJSON?: () => unknown }
-  const originalToJSON = typeof serializable.toJSON === 'function'
-    ? serializable.toJSON.bind(error)
-    : undefined
-  const toJSON = (): H3ErrorJson => originalToJSON
-    ? originalToJSON() as H3ErrorJson
-    : ({
-      message: error.message,
-      statusCode,
-    })
-
-  return Object.assign(error, {
-    statusCode,
-    fatal: false,
-    unhandled: false,
-    toJSON,
-  })
-}
-
-async function loadErrorHandler() {
-  const send = vi.fn(async () => undefined)
-  const setHeader = vi.fn()
-  const setResponseStatus = vi.fn()
-
-  vi.resetModules()
-  vi.doMock('h3', () => ({
-    send,
-    setHeader,
-    setResponseStatus,
+it('lets native HTTP error handling handle ordinary failures without validation flash cookies', async () => {
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(() => {
+    throw new Error('ordinary failure', { cause: null })
   }))
-  const { default: handler } = await import('../src/runtime/server/error')
-  return {
-    handler,
-    send,
-    setHeader,
-    setResponseStatus,
-  }
-}
-
-afterEach(() => {
-  vi.resetModules()
-  vi.doUnmock('h3')
+  const response = await fetch(await serve(app))
+  expect(response.status).toBe(500)
+  expect(response.headers.get('set-cookie')).toBeNull()
+  expect(await response.json()).toMatchObject({ statusCode: 500 })
 })
 
-describe('Nuxt validation error handler', () => {
-  it('ignores errors without a validation exception in their cause chain', async () => {
-    const { handler, send, setHeader, setResponseStatus } = await loadErrorHandler()
-    const event = {} as H3Event
-    await expect(handler(createH3Error(new Error('ordinary')), event)).resolves.toBeUndefined()
-    await expect(handler(createH3Error(new Error('wrapped', { cause: null })), event)).resolves.toBeUndefined()
-    expect(send).not.toHaveBeenCalled()
-    expect(setHeader).not.toHaveBeenCalled()
-    expect(setResponseStatus).not.toHaveBeenCalled()
+it('serializes wrapped validation failures through a real HTTP response', async () => {
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(() => {
+    throw new Error('wrapped failure', { cause: ValidationException.withMessages({ email: ['Invalid email.'] }) })
+  }))
+  const response = await fetch(await serve(app), { headers: { accept: 'application/json' } })
+  expect(response.status).toBe(422)
+  expect(response.headers.get('content-type')).toContain('application/json')
+  expect(await response.json()).toMatchObject({ status: 422, errors: { email: ['Invalid email.'] } })
+})
+
+it('redirects a real browser form request back to its page with flashed validation errors', async () => {
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(() => {
+    throw ValidationException.withMessages({ image: ['The selected file must be 2 MB or smaller.'] })
+  }))
+  const baseUrl = await serve(app)
+  const response = await fetch(baseUrl + '/profile', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { accept: 'text/html', referer: baseUrl + '/profile/edit' },
+    body: new URLSearchParams({ name: 'Ava' }),
   })
-
-  it('serializes validation exceptions wrapped by Nitro error causes', async () => {
-    const { handler, send, setHeader, setResponseStatus } = await loadErrorHandler()
-    const validationError = ValidationException.withMessages({
-      email: ['These credentials do not match our records.'],
-      password: ['These credentials do not match our records.'],
-    })
-    const event = {
-      get handled() {
-        return true
-      },
-    } as H3Event
-
-    await handler(createH3Error(new Error(validationError.message, { cause: validationError })), event)
-
-    expect(setResponseStatus).toHaveBeenCalledWith(event, 422)
-    expect(setHeader).toHaveBeenCalledWith(event, 'content-type', 'application/json; charset=utf-8')
-    expect(send).toHaveBeenCalledWith(
-      event,
-      JSON.stringify(validationError.toJSON()),
-      'application/json',
-    )
-  })
-
-  it('redirects browser form validation failures with flashed errors', async () => {
-    const { handler, send, setHeader, setResponseStatus } = await loadErrorHandler()
-    const validationError = ValidationException.withMessages({
-      image: ['The selected file must be 2 MB or smaller.'],
-    })
-    const responseHeaders = new Map<string, number | string | readonly string[]>()
-    const event = {
-      path: '/admin/posts/create',
-      node: {
-        req: {
-          method: 'POST',
-          headers: {
-            accept: 'text/html',
-            host: 'app.test',
-            referer: 'https://app.test/admin/posts/new',
-          },
-        },
-        res: {
-          statusCode: 422,
-          statusMessage: 'Unprocessable Content',
-          getHeader: (name: string) => responseHeaders.get(name),
-          setHeader: (name: string, value: number | string | readonly string[]) => {
-            responseHeaders.set(name, value)
-          },
-        },
-      },
-    }
-
-    await handler(createH3Error(validationError, 422), event as H3Event)
-
-    expect(setResponseStatus).not.toHaveBeenCalled()
-    expect(setHeader).not.toHaveBeenCalled()
-    expect(event.node.res.statusCode).toBe(303)
-    expect(event.node.res.statusMessage).toBe('See Other')
-    expect(responseHeaders.get('location')).toBe('/admin/posts/new')
-    expect(String(responseHeaders.get('content-type'))).toBe('text/html; charset=utf-8')
-    expect(String(responseHeaders.get('set-cookie'))).toContain('holo_form_failure=')
-    expect(send).toHaveBeenCalledWith(event, '', 'text/html')
-  })
+  expect(response.status).toBe(303)
+  expect(response.headers.get('location')).toBe('/profile/edit')
+  expect(response.headers.get('set-cookie')).toContain('holo_form_failure=')
+  expect(await response.text()).toBe('')
 })

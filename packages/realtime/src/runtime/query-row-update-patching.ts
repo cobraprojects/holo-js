@@ -106,6 +106,10 @@ export function applyUpdateMutationToRows(
     return applyUpdatedMutationRowsToQuery(rows, query, mutation, context, mutation.values)
   }
 
+  if (context.relationKeys?.length && mutation.rows?.length) {
+    return applyUpdatedMutationRowsToQuery(rows, query, mutation, context, mutation.values)
+  }
+
   if (exactIdsDiffer(context.exactQueryId, context.exactMutationId)) {
     return UNCHANGED_ROWS_RESULT
   }

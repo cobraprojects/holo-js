@@ -83,6 +83,7 @@ export interface QueryPredicate {
   readonly column: string
   readonly operator: QueryOperator
   readonly value: unknown
+  readonly valueType?: 'json'
 }
 
 export interface QueryColumnPredicate {
@@ -223,6 +224,7 @@ export interface InsertQueryPlan {
   readonly source: QuerySource
   readonly ignoreConflicts: boolean
   readonly returning?: boolean
+  readonly returningColumn?: string
   readonly values: readonly Record<string, unknown>[]
 }
 
@@ -546,13 +548,14 @@ export function withOffset(plan: SelectQueryPlan, offset?: number): SelectQueryP
 export function createInsertQueryPlan(
   source: QuerySource,
   values: readonly Record<string, unknown>[],
-  options: { ignoreConflicts?: boolean, returning?: boolean } = {},
+  options: { ignoreConflicts?: boolean, returning?: boolean, returningColumn?: string } = {},
 ): InsertQueryPlan {
   return Object.freeze({
     kind: 'insert',
     source,
     ignoreConflicts: options.ignoreConflicts ?? false,
     returning: options.returning === true,
+    returningColumn: options.returningColumn,
     values: Object.freeze(values.map(value => Object.freeze({ ...value }))),
   })
 }

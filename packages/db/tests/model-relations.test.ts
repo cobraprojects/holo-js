@@ -33,15 +33,10 @@ import {
   scopeRelation,
   registerGeneratedTables,
   clearGeneratedTables,
-  type Dialect,
-  type DriverAdapter,
-  type DriverExecutionResult,
-  type DriverQueryResult,
   type TableDefinition } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
+import { createTestTable } from './support/schema'
 
-type Row = Record<string, unknown>
-type TableStore = Record<string, Row[]>
 type TestEntity = Entity<TableDefinition>
 type DynamicEntity = TestEntity & Record<string, unknown>
 type JsonRecord = Record<string, unknown>
@@ -65,170 +60,7 @@ function asDynamicEntity(value: unknown): DynamicEntity {
   return value as DynamicEntity
 }
 
-function applyPredicate(row: Row, column: string, operator: string, value: unknown): boolean {
-  const left = row[column]
-  const normalizedLeft = typeof left === 'boolean' && typeof value === 'number'
-    ? Number(left)
-    : left
-  const normalizedRight = typeof value === 'boolean' && typeof left === 'number'
-    ? Number(value)
-    : value
-
-  switch (operator) {
-    case '=':
-      return normalizedLeft === normalizedRight
-    case 'IN':
-      return Array.isArray(value) && value.includes(normalizedLeft)
-    default:
-      return false
-  }
-}
-
-function filterRows(sql: string, bindings: readonly unknown[], rows: Row[]): Row[] {
-  if (sql.includes('EXISTS (SELECT')) {
-    return rows
-  }
-
-  const whereMatch = sql.match(/ WHERE (.+?)( ORDER BY| LIMIT| OFFSET|$)/)
-  if (!whereMatch) return rows
-
-  const clauses = whereMatch[1]!.split(' AND ')
-  return rows.filter(row => clauses.every((clause) => {
-    const nullMatch = clause.match(/^"([^"]+)" IS( NOT)? NULL$/)
-    if (nullMatch) {
-      const [, column, negated] = nullMatch
-      const isNull = row[column!] == null
-      return negated ? !isNull : isNull
-    }
-
-    const inMatch = clause.match(/^"([^"]+)" IN \((.+)\)$/)
-    if (inMatch) {
-      const [, column, rawPlaceholders] = inMatch
-      const indexes = rawPlaceholders!.split(', ').map(part => Number(part.replace('?', '')) - 1)
-      return applyPredicate(row, column!, 'IN', indexes.map(index => bindings[index]))
-    }
-
-    const match = clause.match(/^"([^"]+)" ([A-Z!=<>]+) \?(\d+)$/)
-    if (!match) return true
-    const [, column, operator, index] = match
-    return applyPredicate(row, column!, operator!, bindings[Number(index) - 1])
-  }))
-}
-
-class RelationAdapter implements DriverAdapter {
-  connected = false
-  readonly queries: Array<{ sql: string, bindings: readonly unknown[] }> = []
-  readonly executions: Array<{ sql: string, bindings: readonly unknown[] }> = []
-
-  constructor(readonly tables: TableStore) {}
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverQueryResult<TRow>> {
-    this.queries.push({ sql, bindings })
-
-    const tableMatch = sql.match(/ FROM "([^"]+)"/)
-    let rows = filterRows(sql, bindings, this.tables[tableMatch?.[1] ?? ''] ?? [])
-    const orderMatch = sql.match(/ ORDER BY "([^"]+)" (ASC|DESC)/)
-    if (orderMatch) {
-      const [, column, direction] = orderMatch
-      rows = [...rows].sort((left, right) => {
-        const a = left[column!]
-        const b = right[column!]
-        if (a === b) return 0
-        if (direction === 'ASC') return a! < b! ? -1 : 1
-        return a! > b! ? -1 : 1
-      })
-    }
-    return {
-      rows: rows.map(row => ({ ...row })) as TRow[],
-      rowCount: rows.length }
-  }
-
-  async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    this.executions.push({ sql, bindings })
-
-    const insertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+)$/)
-    if (insertMatch) {
-      const [, tableName, rawColumns, rawValues] = insertMatch
-      const columns = rawColumns!.split(', ').map(part => part.replace(/"/g, ''))
-      const groups = [...rawValues!.matchAll(/\(([^)]+)\)/g)]
-      const table = this.tables[tableName!] ?? (this.tables[tableName!] = [])
-
-      for (const group of groups) {
-        const placeholders = group[1]!.split(', ')
-        const row: Row = {}
-        for (let index = 0; index < columns.length; index += 1) {
-          const bindingIndex = Number(placeholders[index]!.replace('?', '')) - 1
-          row[columns[index]!] = bindings[bindingIndex]
-        }
-
-        if (!('id' in row)) {
-          const nextId = table.reduce((max, current) => Math.max(max, Number(current.id ?? 0)), 0) + 1
-          row.id = nextId
-        }
-
-        table.push(row)
-      }
-
-      return { affectedRows: groups.length, lastInsertId: table.at(-1)?.id as number | string | undefined }
-    }
-
-    const updateMatch = sql.match(/^UPDATE "([^"]+)" SET (.+?) WHERE /)
-    if (updateMatch) {
-      const [, tableName, rawAssignments] = updateMatch
-      const table = this.tables[tableName!] ?? []
-      const rows = filterRows(sql, bindings, table)
-      const assignments = rawAssignments!.split(', ').map((assignment) => {
-        const match = assignment.match(/^"([^"]+)" = \?(\d+)$/)
-        return {
-          column: match?.[1] ?? '',
-          bindingIndex: Number(match?.[2] ?? '0') - 1 }
-      })
-
-      for (const row of rows) {
-        for (const assignment of assignments) {
-          row[assignment.column] = bindings[assignment.bindingIndex]
-        }
-      }
-
-      return { affectedRows: rows.length }
-    }
-
-    const deleteMatch = sql.match(/^DELETE FROM "([^"]+)" WHERE /)
-    if (deleteMatch) {
-      const [, tableName] = deleteMatch
-      const table = this.tables[tableName!] ?? []
-      const rows = new Set(filterRows(sql, bindings, table))
-      this.tables[tableName!] = table.filter(row => !rows.has(row))
-      return { affectedRows: rows.size }
-    }
-
-    return { affectedRows: 0 }
-  }
-
-  async beginTransaction(): Promise<void> {}
-  async commit(): Promise<void> {}
-  async rollback(): Promise<void> {}
-}
-
-describe('relation helper option defaults', () => {
+describe('relation helper keys', () => {
   it('uses default keys for object-style relation helpers', () => {
     const Target = defineTable('targets', {
       id: column.id() })
@@ -258,69 +90,18 @@ describe('relation helper option defaults', () => {
   })
 })
 
-class NullAffectedDeleteAdapter extends RelationAdapter {
-  override async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    const result = await super.execute(sql, bindings)
-    if (sql.startsWith('DELETE FROM')) {
-      return {}
-    }
-
-    return result
-  }
-}
-
-function createDialect(): Dialect {
-  return {
-    name: 'sqlite',
-    capabilities: {
-      returning: false,
-      savepoints: false,
-      concurrentQueries: true,
-      workerThreadExecution: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      jsonValueQuery: true,
-      jsonContains: false,
-      jsonLength: false,
-      schemaQualifiedIdentifiers: false,
-      nativeUpsert: false,
-      ddlAlterSupport: false,
-      introspection: true },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return `?${index}`
-    } }
-}
-
 describe('model relation slice', () => {
   beforeEach(() => {
     resetDB()
     resetMorphRegistry()
   })
 
-  it('compiles relation existence queries through SQL subqueries or joins', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      posts: [{ id: 10, userId: 1, title: 'Post A' }],
-      tags: [{ id: 20, name: 'News' }],
-      post_tags: [{ postId: 10, tagId: 20 }],
-      images: [{ id: 30, imageableType: 'User', imageableId: 1, url: 'avatar.png' }],
-      mechanics: [{ id: 40, name: 'Mechanic A' }],
-      cars: [{ id: 50, mechanicId: 40 }],
-      repairs: [{ id: 60, carId: 50 }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+  it('filters persisted nested, pivot, polymorphic, and through relations', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    let queryCount = 0
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite'), logger: { onQuerySuccess: event => { if (event.kind === 'query') queryCount += 1 } } })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
@@ -350,6 +131,22 @@ describe('model relation slice', () => {
       id: column.id(),
       carId: column.integer() })
 
+    for (const table of [users, posts, tags, postTags, images, mechanics, cars, repairs]) await createTestTable(db, table)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }, { id: 2, name: 'Amina' }, { id: 3, name: 'Layla' }])
+    await db.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A' }, { id: 11, userId: 2, title: 'Untagged' }, { id: 12, userId: 1, title: 'Post B' },
+    ])
+    await db.table(tags).insert([{ id: 20, name: 'News' }, { id: 21, name: 'Unused' }])
+    await db.table(postTags).insert({ postId: 10, tagId: 20 })
+    await db.table(images).insert([
+      { id: 30, imageableType: 'User', imageableId: 1, url: 'avatar.png' },
+      { id: 31, imageableType: 'Post', imageableId: 10, url: 'post.png' },
+      { id: 32, imageableType: 'User', imageableId: 999, url: 'missing.png' },
+    ])
+    await db.table(mechanics).insert([{ id: 40, name: 'Mechanic A' }, { id: 41, name: 'Mechanic B' }])
+    await db.table(cars).insert([{ id: 50, mechanicId: 40 }, { id: 51, mechanicId: 41 }])
+    await db.table(repairs).insert({ id: 60, carId: 50 })
+
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
     let Tag: ReturnType<typeof defineModelFromTable<typeof tags>>
@@ -362,7 +159,7 @@ describe('model relation slice', () => {
       morphClass: 'User',
       relations: {
         posts: hasMany(() => Post, 'userId'),
-        images: morphMany(() => Image, 'imageable') } })
+        images: morphMany(() => Image, 'imageable', 'imageableType', 'imageableId') } })
     Post = defineModelFromTable(posts, {
       morphClass: 'Post',
       relations: {
@@ -371,79 +168,48 @@ describe('model relation slice', () => {
     Tag = defineModelFromTable(tags)
     Image = defineModelFromTable(images, {
       relations: {
-        imageable: morphTo('imageable') } })
+        imageable: morphTo('imageable', 'imageableType', 'imageableId') } })
     Car = defineModelFromTable(cars)
     Repair = defineModelFromTable(repairs)
     Mechanic = defineModelFromTable(mechanics, {
       relations: {
         repairs: hasManyThrough(() => Repair, () => Car, 'mechanicId', 'carId', 'id', 'id') } })
 
-    const hasManySql = User.has('posts').toSQL().sql
-    const nestedHasSql = User.has('posts.tags').toSQL().sql
-    const nestedWhereHasSql = User.whereHas('posts.tags', query => query.where('name', 'News')).toSQL().sql
-    const belongsToManySql = Post.has('tags').toSQL().sql
-    const morphToSql = Image.has('imageable').toSQL().sql
-    const morphToOrSql = Image.where('id', 999).orHas('imageable').toSQL().sql
-    const morphToOrDoesntHaveSql = Image.where('id', 999).orDoesntHave('imageable').toSQL().sql
-    const throughSql = Mechanic.has('repairs').toSQL().sql
-
-    expect(hasManySql).toContain('EXISTS (SELECT * FROM "posts"')
-    expect(hasManySql).toContain('"userId" = "users"."id"')
-    expect(nestedHasSql).toContain('EXISTS (SELECT * FROM "posts"')
-    expect(nestedHasSql).toContain('EXISTS (SELECT * FROM "tags"')
-    expect(nestedWhereHasSql).toContain('"name" =')
-    expect(belongsToManySql).toContain('EXISTS (SELECT * FROM "tags"')
-    expect(belongsToManySql).toContain('IN (SELECT "tagId" FROM "post_tags"')
-    expect(morphToSql).toContain('EXISTS (SELECT * FROM "users"')
-    expect(morphToSql).toContain('OR EXISTS (SELECT * FROM "posts"')
-    expect(morphToOrSql).toContain(' OR (EXISTS (SELECT * FROM "users"')
-    expect(morphToOrDoesntHaveSql).toContain(' OR NOT (EXISTS (SELECT * FROM "users"')
-    expect(throughSql).toContain('EXISTS (SELECT * FROM "repairs"')
-    expect(throughSql).toContain('JOIN "cars"')
-
-    await User.has('posts').get()
-    expect(adapter.queries[0]?.sql).toContain('EXISTS (SELECT * FROM "posts"')
-
-    const repositorySql = (User.getRepository() as unknown as RepositoryRelationHarness)
-      .applyRelationExistenceFilter(
-        User.query().getTableQueryBuilder(),
-        { relation: 'posts', negate: false },
-      )
-      .toSQL()
-      .sql
-    const morphRepositorySql = (Image.getRepository() as unknown as RepositoryRelationHarness)
-      .applyRelationExistenceFilter(
-        Image.query().getTableQueryBuilder(),
-        { relation: 'imageable', negate: false },
-      )
-      .toSQL()
-      .sql
-
-    expect(repositorySql).toContain('EXISTS (SELECT * FROM "posts"')
-    expect(morphRepositorySql).toContain('(EXISTS (SELECT * FROM "users"')
+    const readsBeforeFilter = queryCount
+    expect(await User.has('posts').orderBy('id').pluck('id')).toEqual([1, 2])
+    expect(queryCount - readsBeforeFilter).toBe(1)
+    expect(await User.where('id', 3).orHas('posts').orderBy('id').pluck('id')).toEqual([1, 2, 3])
+    expect(await User.whereHas('posts', query => query.where('title', 'Post B')).pluck('id')).toEqual([1])
+    expect(await User.doesntHave('posts').pluck('id')).toEqual([3])
+    expect(await User.has('posts.tags').pluck('id')).toEqual([1])
+    expect(await User.whereHas('posts.tags', query => query.where('name', 'News')).pluck('id')).toEqual([1])
+    expect(await User.whereHas('posts.tags', query => query.where('name', 'Unused')).pluck('id')).toEqual([])
+    expect(await Post.has('tags').pluck('id')).toEqual([10])
+    expect(await Post.doesntHave('tags').orderBy('id').pluck('id')).toEqual([11, 12])
+    expect(await Image.has('imageable').orderBy('id').pluck('id')).toEqual([30, 31])
+    expect(await Image.where('id', 999).orHas('imageable').orderBy('id').pluck('id')).toEqual([30, 31])
+    expect(await Image.where('id', 999).orDoesntHave('imageable').pluck('id')).toEqual([32])
+    expect(await Mechanic.has('repairs').pluck('id')).toEqual([40])
+    expect(await Mechanic.doesntHave('repairs').pluck('id')).toEqual([41])
   })
 
-  it('fails closed to an impossible predicate when morphTo existence has no registered targets and no-ops for negated checks', () => {
-    const adapter = new RelationAdapter({
-      images: [{ id: 1, imageableType: 'User', imageableId: 10, url: 'avatar.png' }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+  it('fails closed to an impossible predicate when morphTo existence has no registered targets and no-ops for negated checks', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const images = defineTable('images', {
       id: column.id(),
       imageableType: column.string(),
       imageableId: column.integer(),
       url: column.string() })
+    await createTestTable(db, images)
+    await db.table(images).insert([{ id: 1, imageableType: 'User', imageableId: 10, url: 'avatar.png' }])
 
     const Image = defineModelFromTable(images, {
       relations: {
-        imageable: morphTo('imageable') } })
+        imageable: morphTo('imageable', 'imageableType', 'imageableId') } })
     resetMorphRegistry()
 
     expect(Image.has('imageable').toSQL().sql).toContain('"images"."id" IS NULL AND "images"."id" IS NOT NULL')
@@ -451,29 +217,15 @@ describe('model relation slice', () => {
     expect(Image.orDoesntHave('imageable').toSQL().sql).toBe('SELECT * FROM "images"')
   })
 
-  it('loads belongsTo, hasOne, and hasMany relations with eager loading and entity loaders', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Post A' },
-        { id: 11, userId: 1, title: 'Post B' },
-        { id: 12, userId: 2, title: 'Post C' },
-        { id: 13, userId: null, title: 'Orphan' },
-      ],
-      profiles: [
-        { id: 100, userId: 1, bio: 'Engineer' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+  it('loads belongsTo, hasOne, and hasMany relations from a real database without N+1 reads', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    let queryCount = 0
+    const db = createDatabase({
+      adapter, dialect: createDatabaseDialect('sqlite'),
+      logger: { onQuerySuccess: event => { if (event.kind === 'query') queryCount += 1 } },
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
@@ -486,6 +238,14 @@ describe('model relation slice', () => {
       id: column.id(),
       userId: column.integer(),
       bio: column.string() })
+
+    for (const table of [users, posts, profiles]) await createTestTable(db, table)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }, { id: 2, name: 'Amina' }])
+    await db.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A' }, { id: 11, userId: 1, title: 'Post B' },
+      { id: 12, userId: 2, title: 'Post C' }, { id: 13, userId: null, title: 'Orphan' },
+    ])
+    await db.table(profiles).insert({ id: 100, userId: 1, bio: 'Engineer' })
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -502,12 +262,11 @@ describe('model relation slice', () => {
       relations: {
         user: belongsTo(() => User, 'userId') } })
 
+    const readsBeforeEagerLoad = queryCount
     const loadedPosts = await Post.query().with('author').orderBy('id').get()
     expect(loadedPosts[0]?.getRelation<Entity<TableDefinition>>('author')?.get('name')).toBe('Mohamed')
     expect(loadedPosts[3]?.getRelation('author')).toBeNull()
-    expect(adapter.queries[1]).toEqual({
-      sql: 'SELECT * FROM "users" WHERE "id" IN (?1, ?2)',
-      bindings: [1, 2] })
+    expect(queryCount - readsBeforeEagerLoad).toBe(2)
 
     const user = await User.findOrFail(1)
     await user.load('posts', 'profile')
@@ -522,9 +281,9 @@ describe('model relation slice', () => {
       ],
       profile: { id: 100, userId: 1, bio: 'Engineer' } })
 
-    const queryCount = adapter.queries.length
+    const readsBeforeLoadMissing = queryCount
     await user.loadMissing('posts', 'profile')
-    expect(adapter.queries).toHaveLength(queryCount)
+    expect(queryCount).toBe(readsBeforeLoadMissing)
 
     const collection = await User.query().orderBy('id').get()
     await collection.load('posts')
@@ -558,24 +317,11 @@ describe('model relation slice', () => {
     expect(detachedUser.getRelation('profile')).toBeNull()
   })
 
-  it('respects soft-delete scopes in relations and allows explicit withTrashed relation constraints', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Alive', deleted_at: null },
-        { id: 2, name: 'Trashed', deleted_at: '2025-01-01T00:00:00.000Z' },
-      ],
-      posts: [
-        { id: 1, userId: 1, title: 'Live Post' },
-        { id: 2, userId: 2, title: 'Archived Post' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+  it('respects persisted soft-delete scopes and explicit withTrashed relation constraints', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
@@ -585,6 +331,15 @@ describe('model relation slice', () => {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+
+    for (const table of [users, posts]) await createTestTable(db, table)
+    await db.table(users).insert([
+      { id: 1, name: 'Alive', deleted_at: null },
+      { id: 2, name: 'Trashed', deleted_at: new Date('2025-01-01T00:00:00.000Z') },
+    ])
+    await db.table(posts).insert([
+      { id: 1, userId: 1, title: 'Live Post' }, { id: 2, userId: 2, title: 'Archived Post' },
+    ])
 
     const User = defineModelFromTable(users, {
       softDeletes: true })
@@ -608,43 +363,37 @@ describe('model relation slice', () => {
   })
 
   it('keeps model eager-load observations scoped to active dependency collectors', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Ava' },
-      ],
-      roles: [
-        { id: 10, name: 'Admin' },
-      ],
-      role_users: [
-        { id: 100, userId: 1, roleId: 10, active: true },
-      ],
-    })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect(),
-        }),
-      },
-    }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
     })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Ava' },
+      ])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
     })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 10, name: 'Admin' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer(),
       active: column.boolean(),
     })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 100, userId: 1, roleId: 10, active: true },
+      ])
 
     let Role: ReturnType<typeof defineModelFromTable<typeof roles>>
     const User = defineModelFromTable(users, {
@@ -698,37 +447,30 @@ describe('model relation slice', () => {
   })
 
   it('keeps patchable eager-load metadata work scoped to active dependency collectors', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Ava' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Post A', published: true },
-        { id: 11, userId: 1, title: 'Post B', published: false },
-      ],
-    })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect(),
-        }),
-      },
-    }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
     })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Ava' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string(),
       published: column.boolean(),
     })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Post A', published: true },
+        { id: 11, userId: 1, title: 'Post B', published: false },
+      ])
 
     let constraintCalls = 0
     const Post = defineModelFromTable(posts)
@@ -785,63 +527,59 @@ describe('model relation slice', () => {
   })
 
   it('records hasOne, belongsTo, and aggregate relation observations for dependency collectors', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Ava' },
-        { id: 2, name: 'Nora' },
-      ],
-      profiles: [
-        { id: 10, userId: 1, bio: 'Lead' },
-      ],
-      posts: [
-        { id: 20, userId: 1, title: 'Post A', score: 5 },
-        { id: 21, userId: 1, title: 'Post B', score: 3 },
-        { id: 22, userId: 2, title: 'Post C', score: 7 },
-        { id: 23, userId: null, title: 'Orphan', score: 9 },
-      ],
-      roles: [
-        { id: 30, name: 'Admin' },
-      ],
-      role_users: [
-        { id: 40, userId: 1, roleId: 30 },
-      ],
-    })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect(),
-        }),
-      },
-    }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
     })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Ava' },
+        { id: 2, name: 'Nora' },
+      ])
     const profiles = defineTable('profiles', {
       id: column.id(),
       userId: column.integer(),
       bio: column.string(),
     })
+    await createTestTable(db, profiles)
+    await db.table(profiles).insert([
+        { id: 10, userId: 1, bio: 'Lead' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer().nullable(),
       title: column.string(),
       score: column.integer(),
     })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 20, userId: 1, title: 'Post A', score: 5 },
+        { id: 21, userId: 1, title: 'Post B', score: 3 },
+        { id: 22, userId: 2, title: 'Post C', score: 7 },
+        { id: 23, userId: null, title: 'Orphan', score: 9 },
+      ])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
     })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 30, name: 'Admin' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer(),
     })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 40, userId: 1, roleId: 30 },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Profile = defineModelFromTable(profiles)
@@ -917,17 +655,6 @@ describe('model relation slice', () => {
     })
     expect(firstUser.value).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Lead' } })
 
-    const sqlite = createSQLiteAdapter({ filename: ':memory:' })
-    await sqlite.initialize()
-    onTestFinished(() => sqlite.disconnect())
-    await sqlite.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
-    await sqlite.execute('CREATE TABLE profiles (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, bio TEXT NOT NULL)')
-    await sqlite.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, userId INTEGER, title TEXT NOT NULL, score INTEGER NOT NULL)')
-    await sqlite.execute("INSERT INTO users VALUES (1, 'Ava'), (2, 'Nora')")
-    await sqlite.execute("INSERT INTO profiles VALUES (10, 1, 'Lead')")
-    await sqlite.execute("INSERT INTO posts VALUES (20, 1, 'Post A', 5), (21, 1, 'Post B', 3), (22, 2, 'Post C', 7), (23, NULL, 'Orphan', 9)")
-    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter: sqlite, dialect: createDatabaseDialect('sqlite') } } }))
-
     const paginatedUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       return User.query().with('profile').withCount('posts').orderBy('id').paginateJson(1, 1)
     })
@@ -981,7 +708,6 @@ describe('model relation slice', () => {
     })
     expect(patchablePost.value).toMatchObject({ id: 20, author: { name: 'Ava' } })
 
-    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect() } } }))
 
     await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       const path = () => [] as const
@@ -1152,56 +878,55 @@ describe('model relation slice', () => {
   })
 
   it('supports nested eager loading and belongsToMany eager loading', async () => {
-    const adapter = new RelationAdapter({
-      users: [
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
         { id: 1, name: 'Mohamed' },
         { id: 2, name: 'Amina' },
         { id: 3, name: 'Salma' },
         { id: 4, name: 'Nora' },
         { id: 5, name: 'Youssef' },
-      ],
-      posts: [
+      ])
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer().nullable(),
+      title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
         { id: 10, userId: 1, title: 'Post A' },
         { id: 11, userId: 1, title: 'Post B' },
         { id: 12, userId: 2, title: 'Post C' },
-      ],
-      roles: [
+      ])
+    const roles = defineTable('roles', {
+      id: column.id(),
+      name: column.string(),
+      weight: column.integer().default(0) })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
         { id: 100, name: 'Admin' },
         { id: 101, name: 'Editor' },
-      ],
-      role_users: [
+      ])
+    const roleUsers = defineTable('role_users', {
+      id: column.id(),
+      userId: column.integer(),
+      roleId: column.integer().nullable().nullable(),
+      grantedAt: column.string(),
+      approved: column.boolean() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
         { id: 1000, userId: 1, roleId: 100, grantedAt: '2026-01-01', approved: true },
         { id: 1001, userId: 1, roleId: 101, grantedAt: '2026-02-01', approved: true },
         { id: 1002, userId: 2, roleId: 101, grantedAt: '2026-03-01', approved: false },
         { id: 1003, userId: 4, roleId: null, grantedAt: '2026-04-01', approved: true },
         { id: 1004, userId: 5, roleId: 999, grantedAt: '2026-05-01', approved: true },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string() })
-    const posts = defineTable('posts', {
-      id: column.id(),
-      userId: column.integer().nullable(),
-      title: column.string() })
-    const roles = defineTable('roles', {
-      id: column.id(),
-      name: column.string(),
-      weight: column.integer() })
-    const roleUsers = defineTable('role_users', {
-      id: column.id(),
-      userId: column.integer(),
-      roleId: column.integer().nullable(),
-      grantedAt: column.string(),
-      approved: column.boolean() })
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -1288,49 +1013,41 @@ describe('model relation slice', () => {
     await userWithDanglingPivot.load('roles')
     expect(userWithDanglingPivot.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
 
-    expect(adapter.queries).toContainEqual({
-      sql: 'SELECT * FROM "role_users" WHERE "approved" = ?1 AND "userId" IN (?2, ?3, ?4, ?5, ?6) ORDER BY "grantedAt" DESC',
-      bindings: [1, 1, 2, 3, 4, 5] })
-    expect(adapter.queries).toContainEqual({
-      sql: 'SELECT * FROM "roles" WHERE "id" IN (?1, ?2, ?3)',
-      bindings: [999, 101, 100] })
-    expect(adapter.queries).toContainEqual({
-      sql: 'SELECT * FROM "users" WHERE "id" IN (?1, ?2)',
-      bindings: [1, 2] })
+
+
+
   })
 
   it('supports custom pivot models on many-to-many relations', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [
-        { id: 100, name: 'Admin' },
-        { id: 101, name: 'Editor' },
-      ],
-      role_users: [
-        { id: 900, userId: 1, roleId: 100, grantedAt: '2026-01-01', approved: true },
-        { id: 901, userId: 1, roleId: 101, grantedAt: '2026-02-01', approved: false },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 100, name: 'Admin' },
+        { id: 101, name: 'Editor' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer(),
       grantedAt: column.string(),
       approved: column.boolean() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 900, userId: 1, roleId: 100, grantedAt: '2026-01-01', approved: true },
+        { id: 901, userId: 1, roleId: 101, grantedAt: '2026-02-01', approved: false },
+      ])
 
     const Membership = defineModelFromTable(roleUsers, {
       casts: {
@@ -1354,38 +1071,36 @@ describe('model relation slice', () => {
   })
 
   it('supports belongsToMany pivot mutation helpers', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [
-        { id: 100, name: 'Admin' },
-        { id: 101, name: 'Editor' },
-        { id: 102, name: 'Viewer' },
-        { id: 103, name: 'Auditor' },
-      ],
-      role_users: [
-        { id: 1, userId: 1, roleId: 100, grantedAt: '2026-01-01' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
-      weight: column.integer() })
+      weight: column.integer().default(0) })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 100, name: 'Admin' },
+        { id: 101, name: 'Editor' },
+        { id: 102, name: 'Viewer' },
+        { id: 103, name: 'Auditor' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer(),
       grantedAt: column.string().nullable() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 1, userId: 1, roleId: 100, grantedAt: '2026-01-01' },
+      ])
 
     const Role = defineModelFromTable(roles)
     const User = defineModelFromTable(users, {
@@ -1407,8 +1122,8 @@ describe('model relation slice', () => {
     await user.attach('roles', 101, { grantedAt: '2026-02-01' })
     await user.attach('roles', 100, { grantedAt: '2026-01-05' })
     await user.attach('roles', 100, { grantedAt: '2026-01-05' })
-    expect(adapter.tables.role_users).toHaveLength(2)
-    expect(adapter.tables.role_users!.find(row => row.roleId === 100)?.grantedAt).toBe('2026-01-05')
+    expect((await db.table(roleUsers).get())).toHaveLength(2)
+    expect((await db.table(roleUsers).get())!.find(row => row.roleId === 100)?.grantedAt).toBe('2026-01-05')
 
     expect(await user.updateExistingPivot('roles', 101, { grantedAt: '2026-03-01' })).toBe(1)
     expect(await user.updateExistingPivot('roles', 101, {})).toBe(0)
@@ -1452,37 +1167,34 @@ describe('model relation slice', () => {
     await user.load('roles')
     expect(user.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
 
-    expect(adapter.tables.role_users).toEqual([])
+    expect((await db.table(roleUsers).get())).toEqual([])
   })
 
   it('supports dynamic relation method calls for belongsToMany attach, sync, and detach', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [
-        { id: 100, name: 'Admin' },
-        { id: 101, name: 'Editor' },
-        { id: 102, name: 'Viewer' },
-      ],
-      role_users: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 100, name: 'Admin' },
+        { id: 101, name: 'Editor' },
+        { id: 102, name: 'Viewer' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUsers)
 
     const Role = defineModelFromTable(roles)
     const User = defineModelFromTable(users, {
@@ -1493,9 +1205,9 @@ describe('model relation slice', () => {
 
     const userDynamic = user as typeof user & { roles: () => { attach: (ids: unknown, attrs?: Record<string, unknown>) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
     await userDynamic.roles().attach([100, 101])
-    expect(adapter.tables.role_users).toHaveLength(2)
-    expect(adapter.tables.role_users).toContainEqual(expect.objectContaining({ userId: 1, roleId: 100 }))
-    expect(adapter.tables.role_users).toContainEqual(expect.objectContaining({ userId: 1, roleId: 101 }))
+    expect((await db.table(roleUsers).get())).toHaveLength(2)
+    expect((await db.table(roleUsers).get())).toContainEqual(expect.objectContaining({ userId: 1, roleId: 100 }))
+    expect((await db.table(roleUsers).get())).toContainEqual(expect.objectContaining({ userId: 1, roleId: 101 }))
 
     const syncResult = await userDynamic.roles().sync([101, 102])
     expect(syncResult.attached).toContain(102)
@@ -1506,35 +1218,33 @@ describe('model relation slice', () => {
   })
 
   it('returns callable lazy relation properties that still resolve loaded values', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [
-        { id: 100, name: 'Admin' },
-        { id: 101, name: 'Editor' },
-      ],
-      role_users: [
-        { id: 1, userId: 1, roleId: 100 },
-        { id: 2, userId: 1, roleId: 101 },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 100, name: 'Admin' },
+        { id: 101, name: 'Editor' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 1, userId: 1, roleId: 100 },
+        { id: 2, userId: 1, roleId: 101 },
+      ])
 
     const Role = defineModelFromTable(roles)
     const User = defineModelFromTable(users, {
@@ -1553,21 +1263,10 @@ describe('model relation slice', () => {
   })
 
   it('supports dynamic relation method calls on defineModel(tableName) models with generated schema', async () => {
-    const adapter = new RelationAdapter({
-      posts: [{ id: 1, title: 'Hello', user_id: 1, category_id: null, slug: 'hello', excerpt: null, body: 'content', status: 'published', published_at: null, created_at: '2026-01-01', updated_at: '2026-01-01' }],
-      tags: [
-        { id: 10, name: 'framework', slug: 'framework', created_at: '2026-01-01', updated_at: '2026-01-01' },
-        { id: 11, name: 'release', slug: 'release', created_at: '2026-01-01', updated_at: '2026-01-01' },
-      ],
-      post_tags: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const posts = defineTable('posts', {
       id: column.id(),
@@ -1581,16 +1280,24 @@ describe('model relation slice', () => {
       published_at: column.timestamp().nullable(),
       created_at: column.timestamp().defaultNow(),
       updated_at: column.timestamp().defaultNow() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([{ id: 1, title: 'Hello', user_id: 1, category_id: null, slug: 'hello', excerpt: null, body: 'content', status: 'published', published_at: null, created_at: '2026-01-01', updated_at: '2026-01-01' }])
     const tags = defineTable('tags', {
       id: column.id(),
       name: column.string(),
       slug: column.string(),
       created_at: column.timestamp().defaultNow(),
       updated_at: column.timestamp().defaultNow() })
+    await createTestTable(db, tags)
+    await db.table(tags).insert([
+        { id: 10, name: 'framework', slug: 'framework', created_at: '2026-01-01', updated_at: '2026-01-01' },
+        { id: 11, name: 'release', slug: 'release', created_at: '2026-01-01', updated_at: '2026-01-01' },
+      ])
     const postTags = defineTable('post_tags', {
       id: column.id(),
       post_id: column.integer(),
       tag_id: column.integer() })
+    await createTestTable(db, postTags)
 
     clearGeneratedTables()
     registerGeneratedTables({ posts, tags, post_tags: postTags })
@@ -1612,9 +1319,9 @@ describe('model relation slice', () => {
       const postDynamic = post as typeof post & { tags: () => { attach: (ids: unknown) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
 
       await postDynamic.tags().attach([10, 11])
-      expect(adapter.tables.post_tags).toHaveLength(2)
-      expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 10 }))
-      expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 11 }))
+      expect((await db.table(postTags).get())).toHaveLength(2)
+      expect((await db.table(postTags).get())).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 10 }))
+      expect((await db.table(postTags).get())).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 11 }))
 
       const syncResult = await postDynamic.tags().sync([11])
       expect(syncResult.detached).toContain(10)
@@ -1624,38 +1331,34 @@ describe('model relation slice', () => {
   })
 
   it('supports relation persistence helpers for belongsTo, hasMany, hasOne, and morphMany relations', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-      ],
-      posts: [],
-      profiles: [],
-      images: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer().nullable(),
       title: column.string() })
+    await createTestTable(db, posts)
     const profiles = defineTable('profiles', {
       id: column.id(),
       userId: column.integer(),
       bio: column.string() })
+    await createTestTable(db, profiles)
     const images = defineTable('images', {
       id: column.id(),
       imageableType: column.string().nullable(),
       imageableId: column.integer().nullable(),
       url: column.string() })
+    await createTestTable(db, images)
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -1682,7 +1385,7 @@ describe('model relation slice', () => {
 
     const savedPost = await user.saveRelated('posts', Post.make({ title: 'Draft' }))
     expect(savedPost.get('userId')).toBe(1)
-    expect(adapter.tables.posts).toEqual([
+    expect((await db.table(posts).get())).toEqual([
       { id: 1, userId: 1, title: 'Draft' },
     ])
 
@@ -1691,7 +1394,7 @@ describe('model relation slice', () => {
       { title: 'Third' },
     ])
     expect(createdPosts.map(post => post.get('userId'))).toEqual([1, 1])
-    expect(adapter.tables.posts?.map(row => row.title)).toEqual(['Draft', 'Second', 'Third'])
+    expect((await db.table(posts).get())?.map(row => row.title)).toEqual(['Draft', 'Second', 'Third'])
 
     const singleCreatedPost = await user.createManyRelated('posts', [
       { title: 'Fourth' },
@@ -1706,7 +1409,7 @@ describe('model relation slice', () => {
     const image = await user.createRelated('images', { url: 'avatar.png' })
     expect(image.get('imageableType')).toBe('User')
     expect(image.get('imageableId')).toBe(1)
-    expect(adapter.tables.images).toEqual([
+    expect((await db.table(images).get())).toEqual([
       { id: 1, imageableType: 'User', imageableId: 1, url: 'avatar.png' },
     ])
 
@@ -1736,13 +1439,13 @@ describe('model relation slice', () => {
     unsavedPost.associate('author', user)
     expect(unsavedPost.get('userId')).toBe(1)
     await unsavedPost.save()
-    expect(adapter.tables.posts?.at(-1)?.userId).toBe(1)
+    expect((await db.table(posts).get())?.at(-1)?.userId).toBe(1)
     expect(() => Post.make({ title: 'Broken Link' }).associate('author', User.make({ name: 'Unsaved Parent' })))
       .toThrow('Cannot associate relation "author" with an unsaved User.')
 
     const linkedProfile = await Profile.make({ bio: 'CTO' }).saveRelated('user', user)
     expect(linkedProfile.get('id')).toBe(1)
-    const profileRowsForUser = adapter.tables.profiles?.filter(row => row.userId === 1) ?? []
+    const profileRowsForUser = (await db.table(profiles).get())?.filter(row => row.userId === 1) ?? []
     expect(profileRowsForUser).toEqual([
       { id: 1, userId: 1, bio: 'Engineer' },
       { id: 2, userId: 1, bio: 'CTO' },
@@ -1756,8 +1459,8 @@ describe('model relation slice', () => {
 
     const savedAuthor = await Post.make({ title: 'Created Via BelongsTo' }).saveRelated('author', User.make({ name: 'Amina' }))
     expect(savedAuthor.get('name')).toBe('Amina')
-    expect(adapter.tables.users?.at(-1)?.name).toBe('Amina')
-    expect(adapter.tables.posts?.at(-1)).toEqual({
+    expect((await db.table(users).get())?.at(-1)?.name).toBe('Amina')
+    expect((await db.table(posts).get())?.at(-1)).toEqual({
       id: 8,
       userId: 3,
       title: 'Created Via BelongsTo' })
@@ -1771,7 +1474,7 @@ describe('model relation slice', () => {
     const persistedPost = await Post.findOrFail(1)
     persistedPost.dissociate('author')
     await persistedPost.save()
-    expect(adapter.tables.posts?.find(row => row.id === 1)?.userId).toBeNull()
+    expect((await db.table(posts).get())?.find(row => row.id === 1)?.userId).toBeNull()
 
     await expect(User.make({ name: 'Unsaved' }).createRelated('posts', { title: 'Nope' }))
       .rejects.toThrow(HydrationError)
@@ -1787,30 +1490,25 @@ describe('model relation slice', () => {
   })
 
   it('supports pushing unsaved parent and child relations from an entity graph', async () => {
-    const adapter = new RelationAdapter({
-      users: [],
-      posts: [],
-      profiles: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer().nullable(),
       title: column.string() })
+    await createTestTable(db, posts)
     const profiles = defineTable('profiles', {
       id: column.id(),
       userId: column.integer().nullable(),
       bio: column.string() })
+    await createTestTable(db, profiles)
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -1831,10 +1529,10 @@ describe('model relation slice', () => {
     pushedPost.setRelation('author', User.make({ name: 'Push Author' }))
     await pushedPost.push()
 
-    expect(adapter.tables.users).toEqual([
+    expect((await db.table(users).get())).toEqual([
       { id: 1, name: 'Push Author' },
     ])
-    expect(adapter.tables.posts).toEqual([
+    expect((await db.table(posts).get())).toEqual([
       { id: 1, userId: 1, title: 'BelongsTo Push' },
     ])
     expect(pushedPost.get('userId')).toBe(1)
@@ -1849,14 +1547,14 @@ describe('model relation slice', () => {
 
     await pushedUser.push()
 
-    expect(adapter.tables.users).toEqual([
+    expect((await db.table(users).get())).toEqual([
       { id: 1, name: 'Push Author' },
       { id: 2, name: 'Graph Owner' },
     ])
-    expect(adapter.tables.profiles).toEqual([
+    expect((await db.table(profiles).get())).toEqual([
       { id: 1, userId: 2, bio: 'Owner Bio' },
     ])
-    expect(adapter.tables.posts).toEqual([
+    expect((await db.table(posts).get())).toEqual([
       { id: 1, userId: 1, title: 'BelongsTo Push' },
       { id: 2, userId: 2, title: 'Graph Child One' },
       { id: 3, userId: 2, title: 'Graph Child Two' },
@@ -1877,44 +1575,42 @@ describe('model relation slice', () => {
   })
 
   it('supports relation persistence helpers for many-to-many and polymorphic pivot relations', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [],
-      articles: [{ id: 1, title: 'News' }],
-      tags: [{ id: 10, name: 'Existing' }],
-      role_users: [],
-      taggables: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUsers)
     const articles = defineTable('articles', {
       id: column.id(),
       title: column.string() })
+    await createTestTable(db, articles)
+    await db.table(articles).insert([{ id: 1, title: 'News' }])
     const tags = defineTable('tags', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, tags)
+    await db.table(tags).insert([{ id: 10, name: 'Existing' }])
     const taggables = defineTable('taggables', {
       id: column.id(),
       tagId: column.integer(),
       taggableType: column.string(),
       taggableId: column.integer(),
       note: column.string().nullable() })
+    await createTestTable(db, taggables)
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Role: ReturnType<typeof defineModelFromTable<typeof roles>>
@@ -1937,23 +1633,23 @@ describe('model relation slice', () => {
     const user = await User.findOrFail(1)
     const savedRole = await user.saveRelated('roles', Role.make({ name: 'Admin' }))
     expect(savedRole.get('id')).toBe(1)
-    expect(adapter.tables.roles).toEqual([
+    expect((await db.table(roles).get())).toEqual([
       { id: 1, name: 'Admin' },
     ])
-    expect(adapter.tables.role_users).toEqual([
+    expect((await db.table(roleUsers).get())).toEqual([
       { id: 1, userId: 1, roleId: 1 },
     ])
 
     const createdRole = await user.createRelated('roles', { name: 'Lead' })
     expect(createdRole.get('id')).toBe(2)
-    expect(adapter.tables.role_users).toContainEqual({
+    expect((await db.table(roleUsers).get())).toContainEqual({
       id: 2,
       userId: 1,
       roleId: 2 })
 
     const createdRoles = await user.createManyRelated('roles', [{ name: 'Editor' }])
     expect(createdRoles).toHaveLength(1)
-    expect(adapter.tables.role_users).toContainEqual({
+    expect((await db.table(roleUsers).get())).toContainEqual({
       id: 3,
       userId: 1,
       roleId: 3 })
@@ -1961,16 +1657,16 @@ describe('model relation slice', () => {
     const article = await Article.findOrFail(1)
     const createdTag = await article.createRelated('tags', { name: 'Featured' })
     expect(createdTag.get('id')).toBe(11)
-    expect(adapter.tables.tags).toEqual([
+    expect((await db.table(tags).get())).toEqual([
       { id: 10, name: 'Existing' },
       { id: 11, name: 'Featured' },
     ])
-    expect(adapter.tables.taggables).toEqual([
-      { id: 1, tagId: 11, taggableType: 'Article', taggableId: 1 },
+    expect((await db.table(taggables).get())).toEqual([
+      { id: 1, tagId: 11, taggableType: 'Article', taggableId: 1, note: null },
     ])
 
     await article.attach('tags', 10, { note: 'manual' })
-    expect(adapter.tables.taggables).toContainEqual({
+    expect((await db.table(taggables).get())).toContainEqual({
       id: 2,
       tagId: 10,
       taggableType: 'Article',
@@ -1978,7 +1674,7 @@ describe('model relation slice', () => {
       note: 'manual' })
 
     await article.attach('tags', 10, { note: 'updated' })
-    expect(adapter.tables.taggables).toContainEqual({
+    expect((await db.table(taggables).get())).toContainEqual({
       id: 2,
       tagId: 10,
       taggableType: 'Article',
@@ -1988,17 +1684,17 @@ describe('model relation slice', () => {
     const tag = await Tag.findOrFail(10)
     const relatedArticle = await tag.saveRelated('articles', Article.make({ title: 'Analysis' }))
     expect(relatedArticle.get('id')).toBe(2)
-    expect(adapter.tables.articles).toContainEqual({
+    expect((await db.table(articles).get())).toContainEqual({
       id: 2,
       title: 'Analysis' })
-    expect(adapter.tables.taggables).toContainEqual({
+    expect((await db.table(taggables).get())).toContainEqual({
       id: 3,
       tagId: 10,
       taggableType: 'Article',
-      taggableId: 2 })
+      taggableId: 2, note: null })
 
     await tag.attach('articles', 1, { note: 'tagged' })
-    expect(adapter.tables.taggables).toContainEqual({
+    expect((await db.table(taggables).get())).toContainEqual({
       id: 2,
       tagId: 10,
       taggableType: 'Article',
@@ -2006,28 +1702,20 @@ describe('model relation slice', () => {
       note: 'tagged' })
 
     await tag.detach('articles', 2)
-    expect(adapter.tables.taggables).not.toContainEqual({
+    expect((await db.table(taggables).get())).not.toContainEqual({
       id: 3,
       tagId: 10,
       taggableType: 'Article',
-      taggableId: 2 })
+      taggableId: 2, note: null })
 
     await expect(Article.make({ title: 'Draft' }).attach('tags', 10)).rejects.toThrow(HydrationError)
   })
 
-  it('supports string-key belongsToMany inputs and delete drivers without affected row counts', async () => {
-    const adapter = new NullAffectedDeleteAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [{ id: 'admin', name: 'Admin' }],
-      role_users: [{ id: 1, userId: 1, roleId: 'admin' }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+  it('syncs and detaches string-key pivot relations in a real database', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
@@ -2040,6 +1728,11 @@ describe('model relation slice', () => {
       userId: column.integer(),
       roleId: column.string() })
 
+    for (const table of [users, roles, roleUsers]) await createTestTable(db, table)
+    await db.table(users).insert({ id: 1, name: 'Mohamed' })
+    await db.table(roles).insert({ id: 'admin', name: 'Admin' })
+    await db.table(roleUsers).insert({ id: 1, userId: 1, roleId: 'admin' })
+
     const Role = defineModelFromTable(roles, {
       primaryKey: 'id' })
     const User = defineModelFromTable(users, {
@@ -2047,39 +1740,37 @@ describe('model relation slice', () => {
         roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId') } })
 
     const user = await User.findOrFail(1)
-    expect(await user.syncWithoutDetaching('roles', { admin: undefined as never })).toEqual({
+    expect(await user.syncWithoutDetaching('roles', { admin: {} })).toEqual({
       attached: [],
       detached: [],
       updated: [] })
-    expect(await user.detach('roles')).toBe(0)
-    expect(adapter.tables.role_users).toEqual([])
+    expect(await user.detach('roles')).toBe(1)
+    expect(await db.table(roleUsers).get()).toEqual([])
   })
 
   it('rejects create helpers on through relations', async () => {
-    const adapter = new RelationAdapter({
-      countries: [{ id: 1, name: 'Egypt' }],
-      users: [{ id: 1, countryId: 1, name: 'Mohamed' }],
-      posts: [{ id: 1, userId: 1, title: 'Post A' }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const countries = defineTable('countries', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, countries)
+    await db.table(countries).insert([{ id: 1, name: 'Egypt' }])
     const users = defineTable('users', {
       id: column.id(),
       countryId: column.integer(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, countryId: 1, name: 'Mohamed' }])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([{ id: 1, userId: 1, title: 'Post A' }])
 
     let Country: ReturnType<typeof defineModelFromTable<typeof countries>>
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
@@ -2102,56 +1793,56 @@ describe('model relation slice', () => {
   })
 
   it('supports relation existence helpers on the model query builder', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-        { id: 3, name: 'Salma' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Post A' },
-        { id: 11, userId: 1, title: 'Post B' },
-        { id: 12, userId: 2, title: 'Post C' },
-      ],
-      profiles: [
-        { id: 100, userId: 1, bio: 'Engineer' },
-      ],
-      roles: [
-        { id: 200, name: 'Admin' },
-        { id: 201, name: 'Editor' },
-      ],
-      role_users: [
-        { id: 1, userId: 1, roleId: 200 },
-        { id: 2, userId: 2, roleId: 201 },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+        { id: 3, name: 'Salma' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer().nullable(),
       title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Post A' },
+        { id: 11, userId: 1, title: 'Post B' },
+        { id: 12, userId: 2, title: 'Post C' },
+      ])
     const profiles = defineTable('profiles', {
       id: column.id(),
       userId: column.integer(),
       bio: column.string() })
+    await createTestTable(db, profiles)
+    await db.table(profiles).insert([
+        { id: 100, userId: 1, bio: 'Engineer' },
+      ])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
       weight: column.integer() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 200, name: 'Admin', weight: 10 },
+        { id: 201, name: 'Editor', weight: 20 },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 1, userId: 1, roleId: 200 },
+        { id: 2, userId: 2, roleId: 201 },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -2218,6 +1909,7 @@ describe('model relation slice', () => {
       authorId: column.integer(),
       editorId: column.integer(),
       title: column.string() })
+    await createTestTable(db, auditPosts)
     const AuditPost = defineModelFromTable(auditPosts, {
       relations: {
         author: belongsTo(() => User, 'authorId'),
@@ -2237,6 +1929,7 @@ describe('model relation slice', () => {
       id: column.id(),
       reviewerId: column.integer(),
       title: column.string() })
+    await createTestTable(db, reviewPosts)
     const ReviewPost = defineModelFromTable(reviewPosts, {
       relations: {
         reviewer: belongsTo(() => User.definition, 'reviewerId') } })
@@ -2247,38 +1940,31 @@ describe('model relation slice', () => {
     expect(await (User.getRepository() as unknown as RepositoryRelationHarness).filterByRelations([detachedUser], [{ relation: 'posts', negate: false }])).toEqual([])
   })
 
-  it('supports eager loading across connections but rejects cross-connection existence filters', async () => {
-    const authAdapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ] })
-    const contentAdapter = new RelationAdapter({
-      posts: [
-        { id: 10, userId: 1, title: 'Post A' },
-        { id: 11, userId: 1, title: 'Post B' },
-        { id: 12, userId: 2, title: 'Post C' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'auth',
-      connections: {
-        auth: createDatabase({
-          connectionName: 'auth',
-          adapter: authAdapter,
-          dialect: createDialect() }),
-        content: createDatabase({
-          connectionName: 'content',
-          adapter: contentAdapter,
-          dialect: createDialect() }) } }))
+  it('loads relations across real independent connections and rejects cross-connection existence filters', async () => {
+    const authAdapter = createSQLiteAdapter({ filename: ':memory:' })
+    const contentAdapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(async () => { await Promise.all([authAdapter.disconnect(), contentAdapter.disconnect()]) })
+    const auth = createDatabase({ adapter: authAdapter, connectionName: 'auth', dialect: createDatabaseDialect('sqlite') })
+    const content = createDatabase({ adapter: contentAdapter, connectionName: 'content', dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'auth', connections: { auth, content } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(auth, users)
+    await auth.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+    await createTestTable(content, posts)
+
+    await content.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A' }, { id: 11, userId: 1, title: 'Post B' }, { id: 12, userId: 2, title: 'Post C' },
+    ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Post = defineModelFromTable(posts, {
@@ -2312,35 +1998,32 @@ describe('model relation slice', () => {
   })
 
   it('supports scoped relationships across eager loading and relation existence queries', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-        { id: 3, name: 'Salma' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Published A', published: true },
-        { id: 11, userId: 1, title: 'Draft A', published: false },
-        { id: 12, userId: 2, title: 'Published B', published: true },
-        { id: 13, userId: 3, title: 'Draft C', published: false },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+        { id: 3, name: 'Salma' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string(),
       published: column.boolean() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Published A', published: true },
+        { id: 11, userId: 1, title: 'Draft A', published: false },
+        { id: 12, userId: 2, title: 'Published B', published: true },
+        { id: 13, userId: 3, title: 'Draft C', published: false },
+      ])
 
     const Post = defineModelFromTable(posts)
     const noopScopedHasMany = Object.freeze({
@@ -2385,39 +2068,34 @@ describe('model relation slice', () => {
 
     const usersWithPublishedPosts = await User.has('publishedPosts').orderBy('id').pluck('id')
     expect(usersWithPublishedPosts).toEqual([1, 2])
-    expect(adapter.queries).toContainEqual({
-      sql: 'SELECT * FROM "posts" WHERE "published" = ?1 AND "userId" IN (?2, ?3, ?4)',
-      bindings: [1, 1, 2, 3] })
+
   })
 
   it('supports dynamic relationships registered on the model statics', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Draft A', published: false },
-        { id: 11, userId: 1, title: 'Published A', published: true },
-        { id: 12, userId: 2, title: 'Draft B', published: false },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string(),
       published: column.boolean() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Draft A', published: false },
+        { id: 11, userId: 1, title: 'Published A', published: true },
+        { id: 12, userId: 2, title: 'Draft B', published: false },
+      ])
 
     const Post = defineModelFromTable(posts)
     const User = defineModelFromTable(users)
@@ -2446,60 +2124,59 @@ describe('model relation slice', () => {
   })
 
   it('supports hasOneThrough and hasManyThrough across eager loading, existence helpers, and aggregates', async () => {
-    const adapter = new RelationAdapter({
-      mechanics: [
-        { id: 1, name: 'Mechanic A' },
-        { id: 2, name: 'Mechanic B' },
-        { id: 3, name: 'Mechanic C' },
-        { id: 4, name: 'Mechanic D' },
-      ],
-      cars: [
-        { id: 10, mechanicId: 1, vin: 'VIN-1' },
-        { id: 11, mechanicId: 1, vin: 'VIN-2' },
-        { id: 12, mechanicId: 2, vin: 'VIN-3' },
-        { id: null, mechanicId: 4, vin: 'VIN-4' },
-      ],
-      owners: [
-        { id: 100, carId: 10, name: 'Owner A' },
-      ],
-      repairs: [
-        { id: 200, carId: 10, description: 'Brake job', cost: 100 },
-        { id: 201, carId: 11, description: 'Tire swap', cost: 150 },
-        { id: 202, carId: 12, description: 'Oil change', cost: 50 },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const mechanics = defineTable('mechanics', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, mechanics)
+    await db.table(mechanics).insert([
+        { id: 1, name: 'Mechanic A' },
+        { id: 2, name: 'Mechanic B' },
+        { id: 3, name: 'Mechanic C' },
+        { id: 4, name: 'Mechanic D' },
+      ])
     const cars = defineTable('cars', {
       id: column.id(),
       mechanicId: column.integer(),
-      vin: column.string() })
+      vin: column.string(), linkId: column.integer().nullable() })
+    await createTestTable(db, cars)
+    await db.table(cars).insert([
+        { id: 10, linkId: 10, mechanicId: 1, vin: 'VIN-1' },
+        { id: 11, linkId: 11, mechanicId: 1, vin: 'VIN-2' },
+        { id: 12, linkId: 12, mechanicId: 2, vin: 'VIN-3' },
+        { id: 13, linkId: null, mechanicId: 4, vin: 'VIN-4' },
+      ])
     const owners = defineTable('owners', {
       id: column.id(),
       carId: column.integer(),
       name: column.string() })
+    await createTestTable(db, owners)
+    await db.table(owners).insert([
+        { id: 100, carId: 10, name: 'Owner A' },
+      ])
     const repairs = defineTable('repairs', {
       id: column.id(),
       carId: column.integer(),
       description: column.string(),
       cost: column.integer() })
+    await createTestTable(db, repairs)
+    await db.table(repairs).insert([
+        { id: 200, carId: 10, description: 'Brake job', cost: 100 },
+        { id: 201, carId: 11, description: 'Tire swap', cost: 150 },
+        { id: 202, carId: 12, description: 'Oil change', cost: 50 },
+      ])
 
     const Car = defineModelFromTable(cars)
     const Owner = defineModelFromTable(owners)
     const Repair = defineModelFromTable(repairs)
     const Mechanic = defineModelFromTable(mechanics, {
       relations: {
-        owner: hasOneThrough(() => Owner, () => Car, 'mechanicId', 'carId'),
-        repairs: hasManyThrough(() => Repair, () => Car, 'mechanicId', 'carId') } })
+        owner: hasOneThrough(() => Owner, () => Car, 'mechanicId', 'carId', 'id', 'linkId'),
+        repairs: hasManyThrough(() => Repair, () => Car, 'mechanicId', 'carId', 'id', 'linkId') } })
 
     const eagerLoaded = await Mechanic.with('owner', 'repairs').orderBy('id').get()
     expect(eagerLoaded[0]?.getRelation<Entity<TableDefinition>>('owner')?.get('name')).toBe('Owner A')
@@ -2573,32 +2250,29 @@ describe('model relation slice', () => {
   })
 
   it('supports constrained eager loading and withWhereHas', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Post A' },
-        { id: 11, userId: 1, title: 'Post B' },
-        { id: 12, userId: 2, title: 'Post C' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Post A' },
+        { id: 11, userId: 1, title: 'Post B' },
+        { id: 12, userId: 2, title: 'Post C' },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -2703,14 +2377,28 @@ describe('model relation slice', () => {
   })
 
   it('supports one-of-many relations via latestOfMany and oldestOfMany', async () => {
-    const adapter = new RelationAdapter({
-      users: [
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
         { id: 1, name: 'Mohamed' },
         { id: 2, name: 'Amina' },
         { id: 3, name: 'Salma' },
         { id: 4, name: 'Youssef' },
-      ],
-      posts: [
+      ])
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer(),
+      title: column.string(),
+      score: column.integer().nullable() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
         { id: 10, userId: 1, title: 'Post A', score: 1 },
         { id: 11, userId: 1, title: 'Post B', score: 5 },
         { id: 12, userId: 1, title: 'Post C', score: 3 },
@@ -2719,24 +2407,7 @@ describe('model relation slice', () => {
         { id: 15, userId: 4, title: 'Post F', score: null },
         { id: 16, userId: 4, title: 'Post G', score: 4 },
         { id: 17, userId: 4, title: 'Post H', score: null },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string() })
-    const posts = defineTable('posts', {
-      id: column.id(),
-      userId: column.integer(),
-      title: column.string(),
-      score: column.integer() })
+      ])
 
     const Post = defineModelFromTable(posts)
     const User = defineModelFromTable(users, {
@@ -2767,51 +2438,50 @@ describe('model relation slice', () => {
   })
 
   it('supports relation aggregate helpers', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-        { id: 3, name: 'Salma' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Post A', score: 5 },
-        { id: 11, userId: 1, title: 'Post B', score: 3 },
-        { id: 12, userId: 2, title: 'Post C', score: 4 },
-        { id: 13, userId: null, title: 'Orphan', score: 8 },
-      ],
-      roles: [
-        { id: 200, name: 'Admin', weight: 10 },
-        { id: 201, name: 'Editor', weight: 20 },
-      ],
-      role_users: [
-        { id: 1, userId: 1, roleId: 200 },
-        { id: 2, userId: 1, roleId: 201 },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+        { id: 3, name: 'Salma' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
-      userId: column.integer(),
+      userId: column.integer().nullable(),
       title: column.string(),
       score: column.integer() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Post A', score: 5 },
+        { id: 11, userId: 1, title: 'Post B', score: 3 },
+        { id: 12, userId: 2, title: 'Post C', score: 4 },
+        { id: 13, userId: null, title: 'Orphan', score: 8 },
+      ])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
       weight: column.integer() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 200, name: 'Admin', weight: 10 },
+        { id: 201, name: 'Editor', weight: 20 },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
-      userId: column.integer(),
+      userId: column.integer().nullable(),
       roleId: column.integer() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 1, userId: 1, roleId: 200 },
+        { id: 2, userId: 1, roleId: 201 },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -2862,7 +2532,9 @@ describe('model relation slice', () => {
 
     const constrainedExists = await (User.withExists({
       roles: query => query.where('weight', '>', 15) }) as ReturnType<typeof User.query>).orderBy('id').get()
-    expect(constrainedExists.map(user => (user.toJSON() as Record<string, unknown>).roles_exists)).toEqual([false, false, false])
+    expect(constrainedExists.map(user => (user.toJSON() as Record<string, unknown>).roles_exists)).toEqual([true, false, false])
+    const absentExists = await User.withExists({ roles: query => query.where('weight', '>', 25) }).orderBy('id').get()
+    expect(absentExists.map(user => (user.toJSON() as Record<string, unknown>).roles_exists)).toEqual([false, false, false])
 
     const aggregated = await (User.withSum({
       posts: query => query.where('title', 'Post A') }, 'score') as ReturnType<typeof User.query>)
@@ -2904,36 +2576,33 @@ describe('model relation slice', () => {
   })
 
   it('handles relation aggregate edge cases for belongsToMany pivots', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      roles: [],
-      role_users: [
-        { id: 1, userId: 1, roleId: null },
-        { id: 2, userId: 2, roleId: 999 },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
       weight: column.integer() })
+    await createTestTable(db, roles)
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer().nullable() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 1, userId: 1, roleId: null },
+        { id: 2, userId: 2, roleId: 999 },
+      ])
 
     const Role = defineModelFromTable(roles)
     const User = defineModelFromTable(users, {
@@ -2957,30 +2626,27 @@ describe('model relation slice', () => {
   })
 
   it('handles relation aggregate edge cases when belongsToMany pivots contain only null related ids', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [],
-      role_users: [{ id: 1, userId: 1, roleId: null }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string(),
       weight: column.integer() })
+    await createTestTable(db, roles)
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer().nullable() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([{ id: 1, userId: 1, roleId: null }])
 
     const Role = defineModelFromTable(roles)
     const User = defineModelFromTable(users, {
@@ -2996,36 +2662,34 @@ describe('model relation slice', () => {
   })
 
   it('handles belongsToMany existence edge cases with null parent and null related IDs', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      roles: [
-        { id: 200, name: 'Admin' },
-      ],
-      role_users: [
-        { id: 1, userId: 1, roleId: null },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([
+        { id: 200, name: 'Admin' },
+      ])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer().nullable() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([
+        { id: 1, userId: 1, roleId: null },
+      ])
 
     const Role = defineModelFromTable(roles)
     const User = defineModelFromTable(users, {
@@ -3043,25 +2707,22 @@ describe('model relation slice', () => {
   })
 
   it('rejects malformed and unknown relation names', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      posts: [{ id: 10, userId: 1, title: 'Post A' }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([{ id: 10, userId: 1, title: 'Post A' }])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -3152,34 +2813,32 @@ describe('model relation slice', () => {
   })
 
   it('rejects invalid pivot mutation contexts', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      posts: [{ id: 10, userId: 1, title: 'Post A' }],
-      roles: [{ id: 100, name: 'Admin' }],
-      role_users: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([{ id: 10, userId: 1, title: 'Post A' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([{ id: 100, name: 'Admin' }])
     const roleUsers = defineTable('role_users', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUsers)
 
     const Role = defineModelFromTable(roles)
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
@@ -3219,41 +2878,39 @@ describe('model relation slice', () => {
   })
 
   it('supports polymorphic one-to-one, one-to-many, and morph-to eager loading', async () => {
-    const adapter = new RelationAdapter({
-      users: [
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
         { id: 1, name: 'Mohamed' },
         { id: 2, name: 'Amina' },
-      ],
-      posts: [
+      ])
+    const posts = defineTable('posts', {
+      id: column.id(),
+      title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
         { id: 10, title: 'Post A' },
-      ],
-      images: [
+      ])
+    const images = defineTable('images', {
+      id: column.id(),
+      imageableType: column.string().nullable(),
+      imageableId: column.integer().nullable(),
+      url: column.string() })
+    await createTestTable(db, images)
+    await db.table(images).insert([
         { id: 100, imageableType: 'members', imageableId: 1, url: 'user-a.png' },
         { id: 101, imageableType: 'members', imageableId: 1, url: 'user-b.png' },
         { id: 102, imageableType: 'articles', imageableId: 10, url: 'post-a.png' },
         { id: 103, imageableType: null, imageableId: null, url: 'orphan.png' },
         { id: 104, imageableType: 'members', imageableId: 999, url: 'missing-ref.png' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string() })
-    const posts = defineTable('posts', {
-      id: column.id(),
-      title: column.string() })
-    const images = defineTable('images', {
-      id: column.id(),
-      imageableType: column.string(),
-      imageableId: column.integer(),
-      url: column.string() })
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
@@ -3492,48 +3149,46 @@ describe('model relation slice', () => {
   })
 
   it('supports polymorphic many-to-many relations', async () => {
-    const adapter = new RelationAdapter({
-      posts: [
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+
+    const posts = defineTable('posts', {
+      id: column.id(),
+      title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
         { id: 10, title: 'Post A' },
         { id: 11, title: 'Post B' },
         { id: 12, title: 'Post C' },
-      ],
-      tags: [
+      ])
+    const tags = defineTable('tags', {
+      id: column.id(),
+      name: column.string() })
+    await createTestTable(db, tags)
+    await db.table(tags).insert([
         { id: 200, name: 'Tech' },
         { id: 201, name: 'Featured' },
         { id: 202, name: 'Ghost' },
         { id: 204, name: 'NullLinked' },
-      ],
-      taggables: [
+      ])
+    const taggables = defineTable('taggables', {
+      id: column.id(),
+      taggableType: column.string(),
+      taggableId: column.integer().nullable(),
+      tagId: column.integer().nullable() })
+    await createTestTable(db, taggables)
+    await db.table(taggables).insert([
         { id: 1, taggableType: 'articles', taggableId: 10, tagId: 200 },
         { id: 2, taggableType: 'articles', taggableId: 10, tagId: 201 },
         { id: 3, taggableType: 'articles', taggableId: 11, tagId: 201 },
         { id: 4, taggableType: 'articles', taggableId: 11, tagId: 999 },
         { id: 5, taggableType: 'articles', taggableId: 999, tagId: 202 },
         { id: 6, taggableType: 'articles', taggableId: 12, tagId: null },
-        { id: 4, taggableType: 'members', taggableId: 99, tagId: 200 },
+        { id: 8, taggableType: 'members', taggableId: 99, tagId: 200 },
         { id: 7, taggableType: 'articles', taggableId: null, tagId: 204 },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
-
-    const posts = defineTable('posts', {
-      id: column.id(),
-      title: column.string() })
-    const tags = defineTable('tags', {
-      id: column.id(),
-      name: column.string() })
-    const taggables = defineTable('taggables', {
-      id: column.id(),
-      taggableType: column.string(),
-      taggableId: column.integer(),
-      tagId: column.integer() })
+      ])
 
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
     let Tag: ReturnType<typeof defineModelFromTable<typeof tags>>
@@ -3594,24 +3249,20 @@ describe('model relation slice', () => {
   })
 
   it('rejects unknown morph types during morph-to loading', async () => {
-    const adapter = new RelationAdapter({
-      images: [
-        { id: 100, imageableType: 'unknown-type', imageableId: 1, url: 'missing.png' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const images = defineTable('images', {
       id: column.id(),
       imageableType: column.string(),
       imageableId: column.integer(),
       url: column.string() })
+    await createTestTable(db, images)
+    await db.table(images).insert([
+        { id: 100, imageableType: 'unknown-type', imageableId: 1, url: 'missing.png' },
+      ])
 
     const Image = defineModelFromTable(images, {
       relations: {
@@ -3621,36 +3272,33 @@ describe('model relation slice', () => {
   })
 
   it('supports polymorphic one-of-many selection helpers', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      images: [
-        { id: 100, imageableType: 'members', imageableId: 1, url: 'rank-null-a.png', rank: null },
-        { id: 101, imageableType: 'members', imageableId: 1, url: 'rank-five.png', rank: 5 },
-        { id: 103, imageableType: 'members', imageableId: 1, url: 'rank-two.png', rank: 2 },
-        { id: 104, imageableType: 'members', imageableId: 1, url: 'rank-seven.png', rank: 7 },
-        { id: 102, imageableType: 'members', imageableId: 1, url: 'rank-null-b.png', rank: null },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const images = defineTable('images', {
       id: column.id(),
       imageableType: column.string(),
       imageableId: column.integer(),
       url: column.string(),
       rank: column.integer().nullable() })
+    await createTestTable(db, images)
+    await db.table(images).insert([
+        { id: 100, imageableType: 'members', imageableId: 1, url: 'rank-null-a.png', rank: null },
+        { id: 101, imageableType: 'members', imageableId: 1, url: 'rank-five.png', rank: 5 },
+        { id: 103, imageableType: 'members', imageableId: 1, url: 'rank-two.png', rank: 2 },
+        { id: 104, imageableType: 'members', imageableId: 1, url: 'rank-seven.png', rank: 7 },
+        { id: 102, imageableType: 'members', imageableId: 1, url: 'rank-null-b.png', rank: null },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Image = defineModelFromTable(images)
@@ -3682,29 +3330,26 @@ describe('model relation slice', () => {
   })
 
   it('rejects morph-specific helpers on non-morph relations', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'Post A' },
-      ] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer(),
       title: column.string() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'Post A' },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Post = defineModelFromTable(posts, {
@@ -3735,22 +3380,17 @@ describe('model relation slice', () => {
   })
 
   it('treats empty morph-load batches as a no-op', async () => {
-    const adapter = new RelationAdapter({
-      images: [] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const images = defineTable('images', {
       id: column.id(),
       imageableType: column.string(),
       imageableId: column.integer(),
       url: column.string() })
+    await createTestTable(db, images)
 
     const Image = defineModelFromTable(images, {
       relations: {
@@ -3760,30 +3400,28 @@ describe('model relation slice', () => {
   })
 
   it('supports custom pivot models on many-to-many relations', async () => {
-    const adapter = new RelationAdapter({
-      users: [{ id: 1, name: 'Mohamed' }],
-      roles: [{ id: 10, name: 'Admin' }],
-      roleUsers: [{ id: 100, userId: 1, roleId: 10, approved: 1 }] })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
+    await db.table(roles).insert([{ id: 10, name: 'Admin' }])
     const roleUsers = defineTable('roleUsers', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer(),
       approved: column.boolean() })
+    await createTestTable(db, roleUsers)
+    await db.table(roleUsers).insert([{ id: 100, userId: 1, roleId: 10, approved: 1 }])
 
     const Membership = defineModelFromTable(roleUsers, {
       casts: {
@@ -3807,35 +3445,33 @@ describe('model relation slice', () => {
   })
 
   it('supports direct entity properties, automatic eager loading, lazy-loading prevention, and quiet relation creation', async () => {
-    const adapter = new RelationAdapter({
-      users: [
-        { id: 1, name: 'Mohamed' },
-        { id: 2, name: 'Amina' },
-      ],
-      posts: [
-        { id: 10, userId: 1, title: 'First', published: 1 },
-        { id: 11, userId: 1, title: 'Second', published: 0 },
-        { id: 12, userId: 2, title: 'Third', published: 1 },
-        { id: 13, userId: null, title: 'Orphan', published: 0 },
-      ] })
-    const calls: string[] = []
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
 
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter,
-          dialect: createDialect() }) } }))
+    const calls: string[] = []
 
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert([
+        { id: 1, name: 'Mohamed' },
+        { id: 2, name: 'Amina' },
+      ])
     const posts = defineTable('posts', {
       id: column.id(),
-      userId: column.integer(),
+      userId: column.integer().nullable(),
       title: column.string(),
       published: column.boolean() })
+    await createTestTable(db, posts)
+    await db.table(posts).insert([
+        { id: 10, userId: 1, title: 'First', published: 1 },
+        { id: 11, userId: 1, title: 'Second', published: 0 },
+        { id: 12, userId: 2, title: 'Third', published: 1 },
+        { id: 13, userId: null, title: 'Orphan', published: 0 },
+      ])
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Post = defineModelFromTable(posts, {

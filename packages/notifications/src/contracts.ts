@@ -283,8 +283,8 @@ export interface PendingAnonymousNotification<
     channel: TChannel,
     route: NotificationRouteFor<TChannel>,
   ): PendingAnonymousNotification<AnonymousRoutesWithChannel<TRoutes, TChannel>>
-  notify<TNotification extends NotificationDefinition<unknown, NotificationBuildFactories<unknown>>>(
-    notification: TNotification,
+  notify<TBuild extends NotificationBuildFactories<unknown>>(
+    notification: NotificationDefinition<unknown, TBuild>,
   ): PendingNotificationDispatch<NotificationDispatchResult>
 }
 
@@ -333,10 +333,13 @@ export interface NotificationPage<TData extends NotificationJsonValue = Notifica
 }
 
 export interface NotificationStore {
+  clear(query: NotificationQuery): Promise<number>
   create(record: NotificationRecord): Promise<void>
+  find(query: NotificationQuery, ids: readonly string[]): Promise<readonly NotificationRecord[]>
   list(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
   unread(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
   markAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  markAllAsRead(query: NotificationQuery): Promise<number>
   markAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number>
   delete(query: NotificationQuery, ids: readonly string[]): Promise<number>
 }

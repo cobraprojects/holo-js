@@ -1,33 +1,17 @@
-import type * as FsPromises from 'node:fs/promises'
-import { mkdtemp, mkdir, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { watch } from 'node:fs'
+import { once } from 'node:events'
+import { mkdtemp, mkdir, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runCacheTableCommand } from '../src/cache-migrations'
 import { runQueueFailedTableCommand, runQueueTableCommand } from '../src/queue-migrations'
 import { createMediaTableMigration, runMediaTableCommand } from '../src/media-migrations'
 import { runMakeMigration } from '../src/generators'
 import { ensureProjectConfig, prepareProjectDiscovery } from '../src/project'
 import type { IoStreams } from '../src/cli-types'
-
-const failure = vi.hoisted(() => ({ slug: '' }))
-vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof FsPromises>()
-  return {
-    ...actual,
-    open: async (...args: Parameters<typeof actual.open>) => {
-      const handle = await actual.open(...args)
-      if (failure.slug && String(args[0]).endsWith(`_${failure.slug}.ts`)) {
-        handle.writeFile = async () => {
-          await handle.write('partial file')
-          throw new Error('disk write failed')
-        }
-      }
-      return handle
-    },
-  }
-})
 
 let root: string
 let output: string
@@ -43,10 +27,42 @@ async function migrationFiles(): Promise<string[]> {
   return (await readdir(join(root, 'server/db/migrations')).catch(() => [] as string[])).filter(name => name.endsWith('.ts'))
 }
 
+async function runNativeFileLimit(command: string, args: string[], limit: number, expectedFiles: readonly string[] = []) {
+  for (const name of ['app', 'database', 'queue']) {
+    const source = join(root, `config/${name}.ts`)
+    if (await stat(source).catch(() => undefined)) await rename(source, join(root, `config/${name}.mjs`))
+  }
+  const filenames = new Set<string>()
+  const watcher = watch(join(root, 'server/db/migrations'), (_event, filename) => {
+    if (filename) filenames.add(String(filename))
+  })
+  const child = spawn('python3', ['-c', `
+import os, resource, signal, sys
+signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+resource.setrlimit(resource.RLIMIT_FSIZE, (${limit}, ${limit}))
+os.execv(sys.argv[1], sys.argv[1:])
+`, process.execPath, resolve(import.meta.dirname, '../dist/bin/holo.mjs'), command, ...args], {
+    cwd: root, env: process.env, timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.on('data', chunk => { stdout += String(chunk) })
+  child.stderr.on('data', chunk => { stderr += String(chunk) })
+  try {
+    await once(child, 'close')
+    const deadline = Date.now() + 5000
+    while (expectedFiles.some(expected => ![...filenames].some(filename => filename.includes(expected))) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    return { status: child.exitCode, stdout, stderr, filenames: [...filenames] }
+  } finally {
+    watcher.close()
+  }
+}
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'holo-migration-creation-'))
   output = ''
-  failure.slug = ''
   const stdout = new PassThrough()
   stdout.on('data', chunk => { output += String(chunk) })
   io = { cwd: root, stdin: process.stdin, stdout: stdout as unknown as NodeJS.WriteStream, stderr: process.stderr }
@@ -95,10 +111,11 @@ describe('migration creation commands', () => {
 
   it('removes a partial file after writing fails and preserves existing migrations', async () => {
     await write('server/db/migrations/2026_01_01_000000_existing.ts', 'export default { up() {} }\n')
-    failure.slug = 'failing_write'
-    await expect(runMakeMigration(io, root, { args: ['failing_write'], flags: {} })).rejects.toThrow('disk write failed')
+    const result = await runNativeFileLimit('make:migration', ['failing_write'], 64)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('EFBIG')
     expect(await migrationFiles()).toEqual(['2026_01_01_000000_existing.ts'])
-    expect(output).not.toContain('Created migration:')
+    expect(result.stdout).not.toContain('Created migration:')
   })
 
   it('retains and reports completed files when project preparation fails', async () => {
@@ -156,15 +173,30 @@ describe('migration creation commands', () => {
     expect(await migrationFiles()).toEqual([])
   })
 
-  it('cleans up every owned Queue file after a later batch write fails', async () => {
+  it('cleans up every owned Queue file after a later native batch write fails', async () => {
     await write('config/queue.ts', `export default { default: 'first', connections: {
-      first: { driver: 'database', table: 'new_jobs' }, second: { driver: 'database', table: 'failing_jobs' },
+      first: { driver: 'database', table: 'new_jobs' },
     } }`)
     await write('server/db/migrations/2026_01_01_000000_existing.ts', 'export default { up() {} }\n')
-    failure.slug = 'create_failing_jobs_table'
-    await expect(runQueueTableCommand(io, root)).rejects.toThrow('disk write failed')
+    await runQueueTableCommand(io, root)
+    const created = (await migrationFiles()).find(name => name.includes('create_new_jobs_table'))
+    if (!created) throw new Error('Native reference migration was not created')
+    const reference = join(root, 'server/db/migrations', created)
+    const limit = (await stat(reference)).size
+    await rm(reference)
+    const failingTable = `failing_${'jobs'.repeat(40)}`
+    await write('config/queue.ts', `export default { default: 'first', connections: {
+      first: { driver: 'database', table: 'new_jobs' }, second: { driver: 'database', table: '${failingTable}' },
+    } }`)
+    const project = await ensureProjectConfig(root)
+    await prepareProjectDiscovery(root, project.config)
+    const result = await runNativeFileLimit('queue:table', [], limit, ['create_new_jobs_table', `create_${failingTable}_table`])
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('EFBIG')
+    expect(result.filenames.some(name => name.includes('create_new_jobs_table'))).toBe(true)
+    expect(result.filenames.some(name => name.includes(`create_${failingTable}_table`))).toBe(true)
     expect(await migrationFiles()).toEqual(['2026_01_01_000000_existing.ts'])
-    expect(output).not.toContain('Created migration:')
+    expect(result.stdout).not.toContain('Created migration:')
   })
 
   it('creates configured failed-job tables and refuses repeated creation', async () => {

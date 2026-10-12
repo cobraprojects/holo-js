@@ -85,14 +85,14 @@ describe('@holo-js/flux-vue typing', () => {
 
     const client = createFluxClient({
       manifest,
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     })
     const presenceClient = createFluxClient({
       manifest: presenceManifest,
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     })
     const manualClient = createFluxClient({
-      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+      connector: fluxInternals.createHoloWebSocketConnector(),
     })
 
     const generic = useFlux('orders.{orderId}', 'flux.vue.orders.updated', payload => {

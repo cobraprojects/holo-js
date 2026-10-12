@@ -22,8 +22,9 @@ export function normalizeQueryPredicateValue(
   driver: string,
   columnName: string,
   value: unknown,
+  operator: unknown = '=',
 ): unknown {
-  if (Array.isArray(value)) {
+  if (Array.isArray(value) && typeof operator === 'string' && ['in', 'not in', 'between', 'not between'].includes(operator)) {
     return value.map(item => normalizeQueryWriteValue(table, driver, columnName, item))
   }
   return normalizeQueryWriteValue(table, driver, columnName, value)

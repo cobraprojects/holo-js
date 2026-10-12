@@ -38,10 +38,14 @@
     "nodemailer": "catalog:"
   },
   "peerDependencies": {
+    "@holo-js/db": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/storage": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@holo-js/db": {
+      "optional": true
+    },
     "@holo-js/queue": {
       "optional": true
     },
@@ -50,6 +54,8 @@
     }
   },
   "devDependencies": {
+    "@holo-js/db-sqlite": "catalog:",
+    "esbuild": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

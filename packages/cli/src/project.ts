@@ -85,9 +85,7 @@ import {
 import {
   bundleProjectModule,
   findProjectRoot,
-  resetProjectModuleBundlerForTesting,
   resolveProjectPackageImportSpecifier,
-  setProjectModuleBundlerForTesting,
   writeTextFile,
 } from './project/runtime'
 import {
@@ -317,9 +315,7 @@ export const projectInternals = {
   resolvePackageManagerVersion,
   isSupportedQueueInstallerDriver,
   isSupportedCacheInstallerDriver,
-  resetProjectModuleBundlerForTesting,
   sanitizePackageName,
-  setProjectModuleBundlerForTesting,
   serializeDatabaseConfig,
   serializeProjectConfig,
   scaffoldProject,

@@ -5,6 +5,7 @@ import type {
 } from '../contracts'
 import { updateQueryEntryObservedQueries } from './query-patching'
 import { createResultHash } from './result-hash'
+import { rebindBelongsToObservations } from './query-hydration-observations'
 import {
   areDependencySetsEqual,
   ensureRefreshDeliveryPredicateDependencies,
@@ -139,14 +140,23 @@ export async function deliverPatchedQueryData(
   queries: InternalRealtimeExecutionResult<RealtimeResultFor<typeof entry.definition>>['queries'],
   patchOperations: NonNullable<RefreshDelivery<typeof entry.definition>['patchOperations']>,
 ): Promise<void> {
+  const reboundQueries = rebindBelongsToObservations(queries, data)
+  let dependencies = entry.dependencies
+  if (reboundQueries !== queries) {
+    const previousQueryDependencies = new Set(entry.queries.flatMap(query => query.dependencies))
+    dependencies = Object.freeze([...new Set([
+      ...entry.dependencies.filter(dependency => !previousQueryDependencies.has(dependency)),
+      ...reboundQueries.flatMap(query => query.dependencies),
+    ])])
+  }
   const result = Object.freeze({
     name: entry.definition.name,
     data: data as RealtimeResultFor<typeof entry.definition>,
-    dependencies: entry.dependencies,
-    queries,
+    dependencies,
+    queries: reboundQueries,
   }) satisfies InternalRealtimeExecutionResult<RealtimeResultFor<typeof entry.definition>>
   await deliverRefreshData(entry, {
-    observedQueriesChanged: false,
+    observedQueriesChanged: reboundQueries !== queries,
     patchOperations,
     result,
     resultHashDirty: true,

@@ -5,14 +5,14 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { QueueDriverFactory, QueueJobEnvelope, QueueJsonValue } from '@holo-js/queue'
+import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
 import type { EventReferenceInput, ListenerHandledEvent } from '../src'
 import {
   configureQueueRuntime,
-  defineJob,
+  listFailedQueueJobs,
+  runQueueWorker,
   getRegisteredQueueJob,
   normalizeQueueConfig,
-  queueRuntimeInternals,
   resetQueueRegistry,
   resetQueueRuntime,
 } from '@holo-js/queue'
@@ -23,8 +23,6 @@ import {
   defineListener,
   dispatchEvent,
   ensureEventsQueueJobRegistered,
-  ensureEventsQueueJobRegisteredAsync,
-  eventQueueInternals,
   registerEvent,
   registerListener,
   resetEventsRegistry,
@@ -33,25 +31,6 @@ import {
 } from '../src'
 
 const execFileAsync = promisify(execFile)
-const sharedRedisConfig = {
-  default: 'default',
-  connections: {
-    default: {
-      name: 'default',
-      host: '127.0.0.1',
-      port: 6379,
-      password: undefined,
-      username: undefined,
-      db: 0,
-    },
-  },
-} as const
-
-type DispatchedQueueJob = {
-  readonly connection: unknown
-  readonly job: QueueJobEnvelope<QueueJsonValue>
-}
-
 type PackageManifest = {
   readonly dependencies?: Record<string, string>
   readonly peerDependencies?: Record<string, string>
@@ -72,43 +51,6 @@ async function runBun(args: string[]): Promise<{ stdout: string, stderr: string 
     }
 
     throw error
-  }
-}
-
-function createAsyncDriverFactory(
-  driverName: 'redis' | 'database',
-  dispatched: (entry: DispatchedQueueJob) => void,
-): QueueDriverFactory {
-  return {
-    driver: driverName,
-    create(connection) {
-      return {
-        name: connection.name,
-        driver: connection.driver,
-        mode: 'async' as const,
-        async dispatch(job) {
-          dispatched({
-            connection,
-            job,
-          })
-
-          return {
-            jobId: job.id,
-            synchronous: false,
-          }
-        },
-        async clear() {
-          return 0
-        },
-        async close() {},
-        async reserve() {
-          return null
-        },
-        async acknowledge() {},
-        async release() {},
-        async delete() {},
-      }
-    },
   }
 }
 
@@ -233,250 +175,60 @@ describe('@holo-js/events queue integration', () => {
     expect(order).toEqual(['sync', 'queued'])
   })
 
-  it('applies listener queue defaults and dispatch-time overrides to the internal queue job envelope', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-03T10:00:00.000Z'))
-
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    configureQueueRuntime({
-      config: normalizeQueueConfig({
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'default-events',
-          },
-          database: {
-            driver: 'database',
-            connection: 'default',
-            table: 'jobs',
-            queue: 'db-events',
-          },
-        },
-      }, sharedRedisConfig),
-      driverFactories: [
-        createAsyncDriverFactory('redis', dispatched),
-        createAsyncDriverFactory('database', dispatched),
-      ],
-    })
-
-    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
-      name: 'user.registered',
-    }))
-    registerListener(defineListener({
-      name: 'send.welcome',
-      listensTo: ['user.registered'],
-      queue: true,
-      connection: 'redis',
-      queueName: 'emails',
-      delay: 5,
-      async handle() {},
-    }))
-
-    await dispatchEvent('user.registered', {
-      userId: 'usr-1',
-    })
-    await dispatchEvent('user.registered', {
-      userId: 'usr-2',
-    })
-      .onConnection(' database ')
-      .onQueue(' high ')
-      .delay(10)
-
-    const firstEnvelope = dispatched.mock.calls[0]?.[0]?.job as QueueJobEnvelope
-    const secondEnvelope = dispatched.mock.calls[1]?.[0]?.job as QueueJobEnvelope
-
-    expect(firstEnvelope.name).toBe(EVENTS_INVOKE_LISTENER_JOB)
-    expect(firstEnvelope.connection).toBe('redis')
-    expect(firstEnvelope.queue).toBe('emails')
-    expect(firstEnvelope.availableAt).toBe(new Date('2026-04-03T10:00:05.000Z').getTime())
-    expect(firstEnvelope.payload).toMatchObject({
-      listenerId: 'send.welcome',
-      eventName: 'user.registered',
-      payload: {
-        userId: 'usr-1',
-      },
-    })
-
-    expect(secondEnvelope.connection).toBe('database')
-    expect(secondEnvelope.queue).toBe('high')
-    expect(secondEnvelope.availableAt).toBe(new Date('2026-04-03T10:00:10.000Z').getTime())
-    expect(secondEnvelope.payload).toMatchObject({
-      listenerId: 'send.welcome',
-      eventName: 'user.registered',
-      payload: {
-        userId: 'usr-2',
-      },
-    })
+  it('delays queued listeners and honors the submitted queue override on a real database queue', async () => {
+    const database = await createSQLiteQueueHarness()
+    try {
+      const handled: string[] = []
+      const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+      registerEvent(event)
+      registerListener(defineListener({
+        name: 'send.welcome', listensTo: [event], queue: true, connection: 'database', queueName: 'emails', delay: 1,
+        handle(envelope) { handled.push(envelope.payload.userId) },
+      }))
+      await Event.dispatch(event, { userId: 'default' })
+      await Event.dispatch(event, { userId: 'override' }).onQueue('high').delay(0)
+      expect(await runQueueWorker({ connection: 'database', queueNames: ['emails'], once: true })).toMatchObject({ processed: 0 })
+      expect(await runQueueWorker({ connection: 'database', queueNames: ['high'], once: true })).toMatchObject({ processed: 1 })
+      expect(handled).toEqual(['override'])
+      await new Promise(resolve => setTimeout(resolve, 1100))
+      expect(await runQueueWorker({ connection: 'database', queueNames: ['emails'], once: true })).toMatchObject({ processed: 1 })
+      expect(handled).toEqual(['override', 'default'])
+    } finally {
+      await database.cleanup()
+    }
   })
 
-  it('fails queued listener execution clearly when the listener is removed before worker execution', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    configureQueueRuntime({
-      config: normalizeQueueConfig({
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'events',
-          },
+  it.each(['removed', 'retargeted', 'throws'] as const)('fails a persisted listener job when its listener is %s', async (failure) => {
+    const database = await createSQLiteQueueHarness({ createFailedTable: true })
+    try {
+      const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+      const deleted = defineEvent<{ userId: string }, 'user.deleted'>({ name: 'user.deleted' })
+      registerEvent(event)
+      registerEvent(deleted)
+      let handled = 0
+      registerListener(defineListener({
+        name: 'send.welcome', listensTo: [event], queue: true,
+        handle() {
+          handled += 1
+          throw new Error('listener failed')
         },
-      }, sharedRedisConfig),
-      driverFactories: [createAsyncDriverFactory('redis', dispatched)],
-    })
-
-    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
-      name: 'user.registered',
-    }))
-    const handled = vi.fn(async (_event: ListenerHandledEvent<EventReferenceInput>) => {})
-    registerListener(defineListener({
-      name: 'send.welcome',
-      listensTo: ['user.registered'],
-      queue: true,
-      async handle(event) {
-        await handled(event)
-      },
-    }))
-
-    await dispatchEvent('user.registered', {
-      userId: 'usr-1',
-    })
-
-    const job = dispatched.mock.calls[0]?.[0]?.job as QueueJobEnvelope<QueueJsonValue>
-    expect(unregisterListener('send.welcome')).toBe(true)
-
-    await expect(queueRuntimeInternals.executeRegisteredQueueJob(job)).rejects.toThrow(
-      'Queued listener "send.welcome" is not registered.',
-    )
-    expect(handled).not.toHaveBeenCalled()
-  })
-
-  it('surfaces listener failures through the internal queue job so queue-native retries can occur', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    configureQueueRuntime({
-      config: normalizeQueueConfig({
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'events',
-          },
-        },
-      }, sharedRedisConfig),
-      driverFactories: [createAsyncDriverFactory('redis', dispatched)],
-    })
-
-    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
-      name: 'user.registered',
-    }))
-    registerListener(defineListener({
-      name: 'send.welcome',
-      listensTo: ['user.registered'],
-      queue: true,
-      async handle() {
-        throw new Error('listener failed')
-      },
-    }))
-
-    await dispatchEvent('user.registered', {
-      userId: 'usr-1',
-    })
-
-    const job = dispatched.mock.calls[0]?.[0]?.job as QueueJobEnvelope<QueueJsonValue>
-    await expect(queueRuntimeInternals.executeRegisteredQueueJob(job)).rejects.toThrow('listener failed')
-  })
-
-  it('fails queued listener execution clearly when the listener no longer targets the queued event', async () => {
-    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
-    configureQueueRuntime({
-      config: normalizeQueueConfig({
-        default: 'redis',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-          redis: {
-            driver: 'redis',
-            queue: 'events',
-          },
-        },
-      }, sharedRedisConfig),
-      driverFactories: [createAsyncDriverFactory('redis', dispatched)],
-    })
-
-    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
-      name: 'user.registered',
-    }))
-    registerEvent(defineEvent<{ userId: string }, 'user.deleted'>({
-      name: 'user.deleted',
-    }))
-    registerListener(defineListener({
-      name: 'audit.lifecycle',
-      listensTo: ['user.registered'],
-      queue: true,
-      async handle() {},
-    }))
-
-    await dispatchEvent('user.registered', {
-      userId: 'usr-1',
-    })
-
-    const job = dispatched.mock.calls[0]?.[0]?.job as QueueJobEnvelope<QueueJsonValue>
-    registerListener(defineListener({
-      name: 'audit.lifecycle',
-      listensTo: ['user.deleted'],
-      queue: true,
-      async handle() {},
-    }), {
-      replaceExisting: true,
-    })
-
-    await expect(queueRuntimeInternals.executeRegisteredQueueJob(job)).rejects.toThrow(
-      'Queued listener "audit.lifecycle" is not registered for event "user.registered".',
-    )
-  })
-
-  it('exposes queued-listener helpers for internal consumers', () => {
-    const envelope = eventQueueInternals.createQueuedListenerEventEnvelope({
-      listenerId: 'send.welcome',
-      eventName: 'user.registered',
-      occurredAt: 123,
-      payload: {
-        userId: 'usr-1',
-      },
-    })
-
-    expect(envelope).toEqual({
-      name: 'user.registered',
-      payload: {
-        userId: 'usr-1',
-      },
-      occurredAt: 123,
-    })
-    expect(() => eventQueueInternals.requireQueuedListener('missing.listener')).toThrow(
-      'Queued listener "missing.listener" is not registered.',
-    )
-    expect(() => eventQueueInternals.assertQueuedListenerMatchesEvent({
-      id: 'listener',
-      eventNames: ['user.deleted'],
-      definition: defineListener({
-        name: 'listener',
-        listensTo: ['user.deleted'],
-        queue: true,
-        async handle() {},
-      }),
-    }, 'user.registered')).toThrow(
-      'Queued listener "listener" is not registered for event "user.registered".',
-    )
+      }))
+      await Event.dispatch(event, { userId: 'usr-1' })
+      if (failure === 'removed') unregisterListener('send.welcome')
+      if (failure === 'retargeted') {
+        registerListener(defineListener({ name: 'send.welcome', listensTo: [deleted], queue: true, handle() {} }), { replaceExisting: true })
+      }
+      const errors: string[] = []
+      expect(await runQueueWorker({ connection: 'database', once: true, onJobFailed({ error }) { errors.push(error.message) } })).toMatchObject({ processed: 0, failed: 1 })
+      expect(errors).toEqual([failure === 'throws' ? 'listener failed' : failure === 'removed'
+        ? '[Holo Events] Queued listener "send.welcome" is not registered.'
+        : '[Holo Events] Queued listener "send.welcome" is not registered for event "user.registered".'])
+      expect(handled).toBe(failure === 'throws' ? 1 : 0)
+      expect(await listFailedQueueJobs()).toHaveLength(1)
+      expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ processed: 0, failed: 0 })
+    } finally {
+      await database.cleanup()
+    }
   })
 
   it('registers dispatchable listener jobs synchronously and again after Queue resets', async () => {
@@ -490,31 +242,10 @@ describe('@holo-js/events queue integration', () => {
       handle(envelope) { handled.push(envelope.payload.userId) },
     }))
 
-    expect(ensureEventsQueueJobRegistered()).toBeUndefined()
-    expect(ensureEventsQueueJobRegistered()).toBeUndefined()
-    const registered = getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)
-    expect(registered).toBeDefined()
-    if (!registered) throw new Error('Listener job was not registered')
-    await defineJob(registered.definition).dispatchSync({
-      listenerId: 'send.welcome',
-      eventName: 'user.registered',
-      occurredAt: 123,
-      payload: { userId: 'usr-1' },
-    })
+    await Event.dispatch(event, { userId: 'usr-1' })
     resetQueueRegistry()
-    await expect(ensureEventsQueueJobRegisteredAsync()).resolves.toBeUndefined()
     await Event.dispatch(event, { userId: 'usr-2' })
     expect(handled).toEqual(['usr-1', 'usr-2'])
   })
 
-  it('loads the queue package through the dynamic loader', async () => {
-    const queueModule = await eventQueueInternals.loadQueueModule()
-
-    expect(queueModule).toMatchObject({
-      defineJob: expect.any(Function),
-      dispatch: expect.any(Function),
-      getRegisteredQueueJob: expect.any(Function),
-      registerQueueJob: expect.any(Function),
-    })
-  })
 })

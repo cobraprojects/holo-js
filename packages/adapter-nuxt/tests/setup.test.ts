@@ -1,3 +1,5 @@
+import type { ModuleOptions } from '../src/module'
+import type { TSReference, ViteConfig } from 'nuxt/schema'
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
@@ -5,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { createNativeNuxt } from './support/nuxt'
 import {
   linkInstalledDependenciesForPackage,
   provisionTempPackage,
@@ -17,36 +20,12 @@ const configEntry = JSON.stringify(resolve(packageDir, '../config/src/index.ts')
 const storageEntry = JSON.stringify(resolve(packageDir, '../storage/src/index.ts'))
 const nitropackPackageDir = resolve(repoRoot, 'node_modules/.bun/node_modules/nitropack')
 const tempDirs: string[] = []
+const nativeNuxtInstances: Awaited<ReturnType<typeof createNativeNuxt>>[] = []
 const tempBuildRoots: string[] = []
 let adapterBuildPromise: Promise<{ adapterOutDir: string }> | null = null
 
 type RuntimeConfigShape = Record<string, unknown>
-type NuxtHarnessOptions = {
-  css?: string[]
-  rootDir?: string
-  srcDir: string
-  runtimeConfig?: RuntimeConfigShape & {
-    holoStorage?: unknown
-  }
-  build: {
-    transpile: string[]
-  }
-  vite?: {
-    optimizeDeps?: {
-      include?: string[]
-      [key: string]: unknown
-    }
-    [key: string]: unknown
-  }
-  nitro?: {
-    storage?: Record<string, unknown>
-  }
-}
-
-type NuxtHarness = {
-  options: NuxtHarnessOptions
-  hook: ReturnType<typeof vi.fn>
-}
+type NuxtHarness = Awaited<ReturnType<typeof createNativeNuxt>>
 
 async function createTempBuildRoot(prefix: string): Promise<string> {
   const baseDir = resolve(repoRoot, '.vitest-builds')
@@ -244,26 +223,10 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
   return adapterBuildPromise
 }
 
-function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}): NuxtHarness {
-  return {
-    options: {
-      rootDir,
-      srcDir: rootDir,
-      runtimeConfig,
-      build: {
-        transpile: [] as string[],
-      },
-    },
-    hook: vi.fn(),
-  }
-}
-
-function runHook(
-  nuxt: NuxtHarness,
-  name: string,
-): void {
-  const callback = nuxt.hook.mock.calls.find(([hookName]) => hookName === name)?.[1]
-  callback?.()
+async function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}): Promise<NuxtHarness> {
+  const nuxt = await createNativeNuxt(rootDir, runtimeConfig)
+  nativeNuxtInstances.push(nuxt)
+  return nuxt
 }
 
 function getNitroStorage(nuxt: NuxtHarness): Record<string, unknown> | undefined {
@@ -293,39 +256,17 @@ async function linkHoloPackage(root: string, name: string): Promise<void> {
 
 async function loadAdapterModule() {
   vi.resetModules()
-
-  const addImports = vi.fn()
-  const addPlugin = vi.fn()
-  const addServerImportsDir = vi.fn()
-  const addServerHandler = vi.fn()
-  const addServerPlugin = vi.fn()
-
-  vi.doMock('@nuxt/kit', () => ({
-    defineNuxtModule: (definition: unknown) => definition,
-    createResolver: () => ({
-      resolve: (value: string) => value,
-    }),
-    addImports,
-    addPlugin,
-    addServerImportsDir,
-    addServerHandler,
-    addServerPlugin,
-  }))
-
   const mod = await import('../src/module')
-
   return {
-    module: mod.default,
+    module: {
+      setup: async (options: ModuleOptions, nuxt: NuxtHarness) => await nuxt.runWithContext(() => mod.default(options, nuxt)),
+    },
     moduleInternals: mod.moduleInternals,
-    addImports,
-    addPlugin,
-    addServerImportsDir,
-    addServerHandler,
-    addServerPlugin,
   }
 }
 
 afterEach(async () => {
+  await Promise.all(nativeNuxtInstances.splice(0).map(nuxt => nuxt.close()))
   vi.doUnmock('@nuxt/kit')
   delete process.env.STORAGE_DEFAULT_DISK
   delete process.env.STORAGE_ROUTE_PREFIX
@@ -345,11 +286,14 @@ describe('@holo-js/adapter-nuxt module setup', () => {
   it('registers isolated panel styles when the Panels plugin is active', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/app.ts'), `export default { plugins: ['@holo-js/panels'] }\n`)
-    const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    vi.resetModules()
+    vi.doUnmock('@nuxt/kit')
+    const { default: module } = await import('../src/module')
+    const nuxt = await createNativeNuxt(root)
+    nativeNuxtInstances.push(nuxt)
 
-    await module.setup({}, nuxt as never)
-    await module.setup({}, nuxt as never)
+    await nuxt.runWithContext(() => module({}, nuxt))
+    await nuxt.runWithContext(() => module({}, nuxt))
 
     expect(nuxt.options.css).toEqual(['@holo-js/panels-vue/style.css'])
   })
@@ -490,36 +434,19 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(publishedPlugin).toContain('from "nitropack/runtime/config"')
   }, 60000)
 
-  it('resolves installed Holo client optimizer dependencies from the project root', async () => {
-    const { moduleInternals } = await loadAdapterModule()
-    const emptyRoot = await createProject()
+  it.each([
+    { packages: [], expected: [] },
+    { packages: ['validation'], expected: ['@holo-js/validation > valibot'] },
+    { packages: ['forms', 'validation'], expected: ['@holo-js/forms > @holo-js/validation > valibot', '@holo-js/validation > valibot'] },
+  ])('configures native Vite dependencies for installed packages $packages', async ({ packages, expected }) => {
+    const root = await createProject()
+    for (const name of packages) await linkHoloPackage(root, name)
+    const nuxt = await createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
 
-    expect(moduleInternals.resolveClientOptimizeDeps(emptyRoot)).toEqual([])
-    expect(moduleInternals.isModuleResolutionFailure(null)).toBe(false)
-    expect(moduleInternals.isModuleResolutionFailure({ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' })).toBe(false)
-    expect(moduleInternals.isModuleResolutionFailure({ code: 'MODULE_NOT_FOUND' })).toBe(true)
-    expect(moduleInternals.isModuleResolutionFailure({ code: 'ERR_MODULE_NOT_FOUND' })).toBe(true)
+    await module.setup({}, nuxt)
 
-    const nuxt = createNuxtHarness(emptyRoot)
-    moduleInternals.addViteOptimizeDeps(nuxt.options as never, [])
-    expect(nuxt.options.vite).toBeUndefined()
-
-    moduleInternals.addViteOptimizeDeps(nuxt.options as never, ['@holo-js/validation > valibot'])
-    expect(getOptimizeDepsInclude(nuxt)).toEqual(['@holo-js/validation > valibot'])
-
-    const validationRoot = await createProject()
-    await linkHoloPackage(validationRoot, 'validation')
-    expect(moduleInternals.resolveClientOptimizeDeps(validationRoot)).toEqual([
-      '@holo-js/validation > valibot',
-    ])
-
-    const formsRoot = await createProject()
-    await linkHoloPackage(formsRoot, 'forms')
-    await linkHoloPackage(formsRoot, 'validation')
-    expect(moduleInternals.resolveClientOptimizeDeps(formsRoot)).toEqual([
-      '@holo-js/forms > @holo-js/validation > valibot',
-      '@holo-js/validation > valibot',
-    ])
+    expect(getOptimizeDepsInclude(nuxt)).toEqual(expected)
   })
 
   it('merges Holo client optimizer dependencies without replacing user Vite options', async () => {
@@ -530,7 +457,7 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     await linkHoloPackage(root, 'validation')
 
     const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const nuxt = await createNuxtHarness(root)
     nuxt.options.vite = {
       optimizeDeps: {
         include: [
@@ -541,7 +468,7 @@ describe('@holo-js/adapter-nuxt module setup', () => {
       },
     }
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
     expect(getOptimizeDepsInclude(nuxt)).toEqual([
       'vue',
@@ -581,11 +508,11 @@ export default defineStorageConfig({
 })
 `, 'utf8')
 
-    const { module, addImports, addServerImportsDir, addServerHandler, addServerPlugin } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
-    runHook(nuxt, 'modules:done')
+    await module.setup({}, nuxt)
+    await nuxt.callHook('modules:done')
 
     expect(getNitroStorage(nuxt)).toEqual({
       'holo:local': {
@@ -601,7 +528,7 @@ export default defineStorageConfig({
         base: './storage/assets',
       },
       'holo:media': {
-        driver: './runtime/drivers/s3.js',
+        driver: resolve(packageDir, 'src/runtime/drivers/s3.js'),
         bucket: 'media-bucket',
         region: 'us-east-1',
         endpoint: 'https://s3.us-east-1.amazonaws.com',
@@ -613,21 +540,14 @@ export default defineStorageConfig({
     })
     expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('media')
     expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/files')
-    expect(nuxt.options.build.transpile).toContain('./runtime')
-    expect(addImports).not.toHaveBeenCalled()
-    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
-    expect(addServerImportsDir).toHaveBeenCalledTimes(1)
-    expect(addServerHandler).toHaveBeenCalledWith({
-      route: '/files/**',
-      handler: './runtime/server/routes/storage',
-    })
-    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/storage')
-    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
-    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/forms')
+    expect(nuxt.options.build.transpile).toContain(resolve(packageDir, 'src/runtime'))
+    expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/files/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
+    expect(nuxt.options.nitro.plugins).toContain(resolve(packageDir, 'src/runtime/plugins/storage'))
+    expect(nuxt.options.nitro.plugins).toContain(resolve(packageDir, 'src/runtime/plugins/init'))
+    expect(nuxt.options.nitro.plugins).toContain(resolve(packageDir, 'src/runtime/plugins/forms'))
 
-    const prepareTypesHook = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
-    const references: Array<{ path?: string, types?: string }> = []
-    prepareTypesHook?.({ references })
+    const references: TSReference[] = []
+    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {} })
     expect(references).toEqual([
       { types: '@holo-js/adapter-nuxt' },
       { path: join(root, '.holo-js/generated/auth.d.ts') },
@@ -638,11 +558,11 @@ export default defineStorageConfig({
 
   it('falls back to default storage config when config/storage.ts is absent', async () => {
     const root = await createProject()
-    const { module, addServerHandler } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
-    runHook(nuxt, 'modules:done')
+    await module.setup({}, nuxt)
+    await nuxt.callHook('modules:done')
 
     expect(getNitroStorage(nuxt)).toEqual({
       'holo:local': {
@@ -656,56 +576,43 @@ export default defineStorageConfig({
     })
     expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('local')
     expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/storage')
-    expect(addServerHandler).toHaveBeenCalledWith({
-      route: '/storage/**',
-      handler: './runtime/server/routes/storage',
-    })
+    expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/storage/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
   }, 30000)
 
   it('registers the internal broadcast routes when broadcast is installed', async () => {
     const root = await createProject()
     await linkHoloPackage(root, 'broadcast')
-    const { module, addServerHandler } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
-    expect(addServerHandler).toHaveBeenCalledWith({
-      route: '/broadcasting/config',
-      handler: './runtime/server/routes/broadcast-config.get',
-    })
-    expect(addServerHandler).toHaveBeenCalledWith({
-      route: '/broadcasting/auth',
-      handler: './runtime/server/routes/broadcast-auth.post',
-    })
+    expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/broadcasting/config', handler: resolve(packageDir, 'src/runtime/server/routes/broadcast-config.get') }))
+    expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/broadcasting/auth', handler: resolve(packageDir, 'src/runtime/server/routes/broadcast-auth.post') }))
   }, 30000)
 
   it('registers realtime client transforms once and extends only client Vite configs', async () => {
     const root = await createProject()
     await linkHoloPackage(root, 'realtime')
-    const { module, addPlugin } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
     expect(nuxt.options.vite?.plugins).toHaveLength(1)
-    expect(addPlugin).toHaveBeenCalledWith({ src: './runtime/plugins/realtime', mode: 'all' })
+    expect(nuxt.options.plugins).toContainEqual(expect.objectContaining({ src: resolve(packageDir, 'src/runtime/plugins/realtime.ts'), mode: 'all' }))
 
-    const extend = nuxt.hook.mock.calls.find(([name]) => name === 'vite:extendConfig')?.[1] as (
-      config: { plugins?: unknown[] },
-      context: { isServer: boolean },
-    ) => void
-    const serverConfig: { plugins?: unknown[] } = {}
-    extend(serverConfig, { isServer: true })
+    const serverConfig: ViteConfig = {}
+    await nuxt.callHook('vite:extendConfig', serverConfig, { isServer: true, isClient: false })
     expect(serverConfig.plugins).toBeUndefined()
-    const clientConfig: { plugins?: unknown[] } = {}
-    extend(clientConfig, { isServer: false })
+    const clientConfig: ViteConfig = {}
+    await nuxt.callHook('vite:extendConfig', clientConfig, { isServer: false, isClient: true })
     expect(clientConfig.plugins).toHaveLength(1)
 
-    await module.setup({}, nuxt as never)
-    expect(addPlugin).toHaveBeenCalledTimes(1)
+    await module.setup({}, nuxt)
+    expect(nuxt.options.plugins.filter(plugin => typeof plugin !== 'string' && plugin.src === resolve(packageDir, 'src/runtime/plugins/realtime.ts'))).toHaveLength(1)
   }, 30000)
 
-  it('preserves existing holo nitro storage entries until finalize and skips the public handler when no public local disk exists', async () => {
+  it('preserves existing storage until native module finalization', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `
 import { defineStorageConfig } from ${storageEntry}
@@ -722,11 +629,8 @@ export default defineStorageConfig({
 })
 `, 'utf8')
 
-    const { module, addServerHandler } = await loadAdapterModule()
-    const previousCwd = process.cwd()
-    const nuxt = createNuxtHarness(root)
-    delete (nuxt.options as { rootDir?: string }).rootDir
-    delete (nuxt.options as { runtimeConfig?: Record<string, unknown> }).runtimeConfig
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
     ;(nuxt.options as { nitro?: { storage: Record<string, unknown> } }).nitro = {
       storage: {
         'holo:legacy': {
@@ -736,12 +640,7 @@ export default defineStorageConfig({
       },
     }
 
-    try {
-      process.chdir(root)
-      await module.setup({}, nuxt as never)
-    } finally {
-      process.chdir(previousCwd)
-    }
+    await module.setup({}, nuxt)
 
     expect(getNitroStorage(nuxt)).toEqual({
       'holo:legacy': {
@@ -750,8 +649,7 @@ export default defineStorageConfig({
       },
     })
 
-    delete (nuxt.options as { runtimeConfig?: Record<string, unknown> }).runtimeConfig
-    runHook(nuxt, 'modules:done')
+    await nuxt.callHook('modules:done')
 
     expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('media')
     expect(getNitroStorage(nuxt)).toEqual({
@@ -764,7 +662,7 @@ export default defineStorageConfig({
         base: './storage/app/public',
       },
       'holo:media': {
-        driver: './runtime/drivers/s3.js',
+        driver: resolve(packageDir, 'src/runtime/drivers/s3.js'),
         bucket: 'media-bucket',
         region: 'us-east-1',
         endpoint: 'https://s3.us-east-1.amazonaws.com',
@@ -774,10 +672,7 @@ export default defineStorageConfig({
         forcePathStyleEndpoint: false,
       },
     })
-    expect(addServerHandler).toHaveBeenCalledWith({
-      route: '/storage/**',
-      handler: './runtime/server/routes/storage',
-    })
+    expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/storage/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
   }, 30000)
 
   it('initializes nitro storage containers when nitro exists without a storage map', async () => {
@@ -797,11 +692,10 @@ export default defineStorageConfig({
 `, 'utf8')
 
     const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
-    ;(nuxt.options as { nitro?: Record<string, unknown> }).nitro = {}
-    delete (nuxt.options as { runtimeConfig?: Record<string, unknown> }).runtimeConfig
+    const nuxt = await createNuxtHarness(root)
+    nuxt.options.nitro = {}
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
     expect(getNitroStorage(nuxt)).toMatchObject({
       'holo:local': {
@@ -813,7 +707,7 @@ export default defineStorageConfig({
         base: './storage/app/public',
       },
       'holo:media': {
-        driver: './runtime/drivers/s3.js',
+        driver: resolve(packageDir, 'src/runtime/drivers/s3.js'),
       },
     })
   }, 30000)

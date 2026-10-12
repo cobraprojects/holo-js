@@ -1,69 +1,33 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import type { ModuleOptions } from '../src/module'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
-import type * as HoloConfigModule from '@holo-js/config'
+import type { loadNuxt } from '@nuxt/kit'
+import { createApp, defineEventHandler } from 'h3'
+import { serve } from './support/http'
+import { createNativeNuxt } from './support/nuxt'
+import { writeConfigCache } from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
-import type * as RuntimeComposablesModule from '../src/runtime/composables'
 
 type RuntimeConfigShape = Record<string, unknown>
-type AuthorizationDecisionShape = {
-  readonly message?: string
-  readonly status: 200 | 403 | 404
-}
-type AuthorizationErrorOptions = {
-  readonly authorizationError?: {
-    readonly createError?: (decision: AuthorizationDecisionShape) => Error
-  }
-}
-type MockCallLog = {
-  readonly mock: {
-    readonly calls: readonly (readonly unknown[])[]
-  }
-}
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
 const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/src/index.ts'))
 const tempDirs: string[] = []
 
-function getFirstRuntimeOptions(mock: MockCallLog): AuthorizationErrorOptions {
-  const options = mock.mock.calls[0]?.[1]
-  return options && typeof options === 'object'
-    ? options as AuthorizationErrorOptions
-    : {}
+const nativeNuxtInstances: Awaited<ReturnType<typeof loadNuxt>>[] = []
+
+async function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}) {
+  const nuxt = await createNativeNuxt(rootDir, runtimeConfig)
+  nativeNuxtInstances.push(nuxt)
+  return nuxt
 }
 
-function expectAuthorizationHttpError(options: AuthorizationErrorOptions): void {
-  const error = options.authorizationError?.createError?.({
-    status: 403,
-    message: 'Only admins can delete posts.',
-  }) as Error & {
-    readonly statusCode?: number
-    readonly statusMessage?: string
-  }
-
-  expect(error).toMatchObject({
-    statusCode: 403,
-    statusMessage: 'Only admins can delete posts.',
-  })
-}
-
-function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}) {
-  return {
-    options: {
-      runtimeConfig,
-      build: {
-        transpile: [] as string[],
-      },
-      nitro: {
-        storage: {} as Record<string, Record<string, unknown>>,
-        moduleSideEffects: [] as string[],
-      },
-      srcDir: rootDir,
-      rootDir,
-    },
-    hook: vi.fn(),
-  }
+async function serverImportDirectories(nuxt: Awaited<ReturnType<typeof loadNuxt>>): Promise<readonly string[]> {
+  const dirs: string[] = []
+  await nuxt.callHook('nitro:config', { imports: { dirs } })
+  return dirs
 }
 
 async function createProject(): Promise<string> {
@@ -76,117 +40,19 @@ async function createProject(): Promise<string> {
 
 async function loadAdapterModule() {
   vi.resetModules()
-
-  const addImports = vi.fn()
-  const addServerImportsDir = vi.fn()
-  const addServerHandler = vi.fn()
-  const addServerPlugin = vi.fn()
-
-  vi.doMock('@nuxt/kit', () => ({
-    defineNuxtModule: (definition: unknown) => definition,
-    createResolver: () => ({
-      resolve: (value: string) => value,
-    }),
-    addImports,
-    addServerHandler,
-    addServerPlugin,
-    addServerImportsDir,
-  }))
-
   const mod = await import('../src/module')
-
   return {
-    module: mod.default,
+    module: {
+      setup: async (options: ModuleOptions, nuxt: Awaited<ReturnType<typeof loadNuxt>>) => await nuxt.runWithContext(() => mod.default(options, nuxt)),
+    },
     moduleInternals: mod.moduleInternals,
-    addImports,
-    addServerHandler,
-    addServerImportsDir,
-    addServerPlugin,
   }
 }
 
 async function loadComposables(runtimeConfig: RuntimeConfigShape) {
-  vi.resetModules()
-  vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
-
-  vi.doMock('#app', () => ({
-    useRuntimeConfig: () => runtimeConfig,
-  }))
-
-  return import('../src/runtime/composables')
-}
-
-async function loadRootExports(runtimeConfig: RuntimeConfigShape) {
-  vi.resetModules()
-  vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
-
-  vi.doMock('@nuxt/kit', () => ({
-    defineNuxtModule: (definition: unknown) => definition,
-    createResolver: () => ({
-      resolve: (value: string) => value,
-    }),
-    addImports: vi.fn(),
-    addServerPlugin: vi.fn(),
-    addServerImportsDir: vi.fn(),
-    addServerHandler: vi.fn(),
-  }))
-  vi.doMock('#app', () => ({
-    useRuntimeConfig: () => runtimeConfig,
-  }))
-
-  return import('../src')
-}
-
-async function loadRuntimeExports(runtimeConfig: RuntimeConfigShape) {
-  vi.resetModules()
-
-  const shutdown = vi.fn(async () => {})
-  const initializeHoloAdapterProject = vi.fn(async () => ({
-    runtime: {
-      manager: {
-        connection: () => ({ getDriver: () => 'sqlite' }),
-      },
-      shutdown,
-    },
-  }))
-
-  vi.doMock('nitropack/runtime/plugin', () => ({
-    defineNitroPlugin: (plugin: unknown) => plugin,
-  }))
-  vi.doMock('nitropack/runtime/config', () => ({
-    useRuntimeConfig: () => runtimeConfig,
-  }))
-
-  const configureHoloRuntimeConfig = vi.fn()
-
-  vi.doMock('@holo-js/core', async (importOriginal) => {
-    const actual = await importOriginal<typeof HoloCoreModule>()
-
-    return {
-      ...actual,
-      initializeHoloAdapterProject,
-    }
-  })
-
-  vi.doMock('../src/runtime/composables', async (importOriginal) => {
-    const actual = await importOriginal<typeof RuntimeComposablesModule>()
-
-    return {
-      ...actual,
-      configureHoloRuntimeConfig,
-    }
-  })
-
   const runtime = await import('../src/runtime/composables')
-  const pluginModule = await import('../src/runtime/plugins/init')
-
-  return {
-    runtime,
-    plugin: pluginModule.default,
-    shutdown,
-    configureHoloRuntimeConfig,
-    initializeHoloAdapterProject,
-  }
+  runtime.configureHoloRuntimeConfig(runtimeConfig as Parameters<typeof runtime.configureHoloRuntimeConfig>[0])
+  return runtime
 }
 
 const envKeys = [
@@ -210,7 +76,10 @@ const originalEnv = new Map<string, string | undefined>(
   envKeys.map(key => [key, process.env[key]]),
 )
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(nativeNuxtInstances.splice(0).map(nuxt => nuxt.close()))
+  const runtime = await import('../src/runtime/composables')
+  runtime.resetHoloRuntimeConfig()
   vi.doUnmock('@nuxt/kit')
   vi.doUnmock('#app')
   vi.doUnmock('nitropack/runtime/plugin')
@@ -223,6 +92,9 @@ afterEach(() => {
   vi.doUnmock('@holo-js/storage')
   vi.doUnmock('../src/runtime/composables')
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+  const core = await vi.importActual<typeof HoloCoreModule>('@holo-js/core')
+  await core.resetHoloRuntime()
 
   for (const key of envKeys) {
     const value = originalEnv.get(key)
@@ -238,56 +110,16 @@ afterEach(() => {
 })
 
 describe('@holo-js/adapter-nuxt module setup', () => {
-  it('falls back to srcDir when rootDir and runtimeConfig are absent', async () => {
+  it('loads root configuration when Nuxt uses a separate application source directory', async () => {
     const root = await createProject()
-    await writeFile(join(root, 'config/app.ts'), `
-import { defineAppConfig } from ${packageEntry}
-
-export default defineAppConfig({
-  name: 'Src Dir App',
-})
-`, 'utf8')
-
+    await mkdir(join(root, 'app'))
+    await writeFile(join(root, 'config/app.mjs'), "export default { name: 'Root Config App' }\n")
+    const nuxt = await createNuxtHarness(root)
+    expect(nuxt.options.srcDir).not.toBe(nuxt.options.rootDir)
     const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
-    delete (nuxt.options as { rootDir?: string }).rootDir
-    delete (nuxt.options as { runtimeConfig?: Record<string, unknown> }).runtimeConfig
-
-    await module.setup({}, nuxt as never)
-
-    expect((nuxt.options.runtimeConfig as Record<string, unknown>).holo).toMatchObject({
-      appUrl: 'http://localhost:3000',
-      appEnv: 'development',
-      appDebug: true,
-    })
-    expect((nuxt.options.runtimeConfig as Record<string, unknown>).db).toBeDefined()
-  })
-
-  it('falls back to process.cwd when both rootDir and srcDir are absent', async () => {
-    const root = await createProject()
-    await writeFile(join(root, 'config/app.ts'), `
-import { defineAppConfig } from ${packageEntry}
-
-export default defineAppConfig({
-  name: 'Cwd App',
-})
-`, 'utf8')
-
-    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root)
-    const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
-    delete (nuxt.options as { rootDir?: string }).rootDir
-    delete (nuxt.options as { srcDir?: string }).srcDir
-
-    await module.setup({}, nuxt as never)
-
-    expect((nuxt.options.runtimeConfig as Record<string, unknown>).holo).toMatchObject({
-      appUrl: 'http://localhost:3000',
-      appEnv: 'development',
-      appDebug: true,
-    })
-
-    cwd.mockRestore()
+    await module.setup({}, nuxt)
+    expect(nuxt.options.runtimeConfig.public.holo).toMatchObject({ appName: 'Root Config App' })
+    expect(nuxt.options.runtimeConfig.holo).toMatchObject({ projectRoot: root })
   })
 
   it('loads app and database config files from the project root and wires runtime integrations', async () => {
@@ -323,9 +155,9 @@ export default defineDatabaseConfig({
 `, 'utf8')
 
     const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
     expect((nuxt.options.runtimeConfig.holo as Record<string, unknown>)).toMatchObject({
       appUrl: 'https://env.test',
@@ -354,10 +186,10 @@ export default defineDatabaseConfig({
 
   it('falls back to default config values when config files are absent', async () => {
     const root = await createProject()
-    const { module, addImports, addServerImportsDir, addServerPlugin } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
     expect((nuxt.options.runtimeConfig.holo as Record<string, unknown>)).toMatchObject({
       appUrl: 'http://localhost:3000',
@@ -375,17 +207,18 @@ export default defineDatabaseConfig({
         },
       },
     })
-    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
-    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/forms')
-    expect(addImports).not.toHaveBeenCalled()
-    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
-    expect(addServerImportsDir).toHaveBeenCalledTimes(1)
-    expect(nuxt.options.build.transpile).toContain('./runtime')
+    expect(nuxt.options.nitro.plugins).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/init'))
+    expect(nuxt.options.nitro.plugins).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/forms'))
+    const imports: Parameters<typeof nuxt.callHook<'imports:extend'>>[1] = []
+    await nuxt.callHook('imports:extend', imports)
+    expect(imports).toEqual([])
+    expect(await serverImportDirectories(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/server/auto-imports'))
+    expect(await serverImportDirectories(nuxt)).toHaveLength(1)
+    expect(nuxt.options.build.transpile).toContain(resolve(import.meta.dirname, '../src/runtime'))
     expect(nuxt.options.build.transpile).toContain('@holo-js/auth')
 
-    const prepareTypes = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
-    const references: Array<Record<string, string>> = []
-    prepareTypes?.({ references })
+    const references: Array<{ types: string } | { path: string }> = []
+    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {} })
     expect(references).toContainEqual({ types: '@holo-js/adapter-nuxt' })
     expect(references).toContainEqual({ path: resolve(root, '.holo-js/generated/auth.d.ts') })
     expect(references).toContainEqual({ path: resolve(root, '.holo-js/generated/authorization/types.d.ts') })
@@ -414,96 +247,70 @@ export default defineDatabaseConfig({
       version: 1,
     })}\n`, 'utf8')
     const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
-    const prepareTypes = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
-    const references: Array<Record<string, string>> = []
-    prepareTypes?.({ references })
+    const references: Array<{ types: string } | { path: string }> = []
+    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {} })
     expect(references).toContainEqual({ path: generatedTypePath })
   })
 
-  it('skips malformed cookie segments when decoding auth cookies', async () => {
-    const headers = new Map<string, number | string | readonly string[]>()
+  it('decodes auth cookies and preserves response cookies through native HTTP', async () => {
     vi.resetModules()
-    vi.doMock('nitropack/runtime/context', () => ({
-      useEvent: () => ({
-        request: {
-          headers: new Headers({
-            cookie: '%=invalid-key; broken=%; auth-token=secret%20value',
-          }),
-        },
-        node: {
-          res: {
-            getHeader(name: string) {
-              return headers.get(name)
-            },
-            setHeader(name: string, value: number | string | readonly string[]) {
-              headers.set(name, value)
-            },
-          },
-        },
-      }),
+    const runtime = await import('../src/runtime/composables')
+    const app = createApp()
+    app.use(defineEventHandler(async event => {
+      const accessors = runtime.createNuxtAuthRequestAccessors(event)
+      event.node.res.setHeader('set-cookie', 'theme=dark; Path=/')
+      await accessors.appendResponseCookie?.('holo_session=session-1; Path=/; HttpOnly')
+      await accessors.appendResponseCookie?.('holo_session_remember=remember-1; Path=/; HttpOnly')
+      return {
+        authorization: await accessors.getHeader('Authorization'),
+        missingHeader: await accessors.getHeader('missing') ?? null,
+        brokenCookie: await accessors.getCookie('broken') ?? null,
+        missingCookie: await accessors.getCookie('missing') ?? null,
+        token: await accessors.getCookie('auth-token'),
+      }
     }))
 
-    const runtime = await import('../src/runtime/composables')
-    const accessors = runtime.createNuxtAuthRequestAccessors()
+    const response = await fetch(await serve(app), {
+      headers: {
+        authorization: 'Bearer native',
+        cookie: '%=invalid-key; broken=%; invalid; auth-token=secret%20value',
+      },
+    })
 
-    await expect(accessors.getCookie('broken')).resolves.toBeUndefined()
-    await expect(accessors.getCookie('auth-token')).resolves.toBe('secret value')
-    await accessors.appendResponseCookie?.('holo_session=session-1; Path=/; HttpOnly')
-    await accessors.appendResponseCookie?.('holo_session_remember=remember-1; Path=/; HttpOnly')
-    expect(headers.get('set-cookie')).toEqual([
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      authorization: 'Bearer native',
+      missingHeader: null,
+      brokenCookie: null,
+      missingCookie: null,
+      token: 'secret value',
+    })
+    expect(response.headers.getSetCookie()).toEqual([
+      'theme=dark; Path=/',
       'holo_session=session-1; Path=/; HttpOnly',
       'holo_session_remember=remember-1; Path=/; HttpOnly',
     ])
   })
 
-  it('adapts every supported Nitro request and response header shape', async () => {
-    let event: Record<string, unknown> | undefined
-    const sendRedirect = vi.fn(async () => undefined)
+  it('sends the native auth redirect with its session cookie', async () => {
     vi.resetModules()
-    vi.doMock('nitropack/runtime/context', () => ({ useEvent: () => event }))
-    vi.doMock('h3', () => ({ sendRedirect }))
     const runtime = await import('../src/runtime/composables')
-    const accessors = runtime.createNuxtAuthRequestAccessors()
+    const app = createApp()
+    app.use(defineEventHandler(async event => {
+      const accessors = runtime.createNuxtAuthRequestAccessors(event)
+      await accessors.appendResponseCookie?.('holo_session=session-1; Path=/; HttpOnly')
+      await accessors.redirectResponse?.('/dashboard', 303)
+    }))
 
-    await expect(accessors.getHeader('authorization')).resolves.toBeUndefined()
-    await expect(accessors.getCookie('sid')).resolves.toBeUndefined()
-    await expect(accessors.appendResponseCookie?.('sid=one')).resolves.toBeUndefined()
-    await expect(accessors.redirectResponse?.('/login', 303)).rejects.toThrow('active Nitro event')
+    const response = await fetch(await serve(app), { method: 'POST', redirect: 'manual' })
 
-    event = { headers: new Headers({ authorization: 'Bearer direct' }) }
-    await expect(accessors.getHeader('authorization')).resolves.toBe('Bearer direct')
-    await expect(accessors.getHeader('missing')).resolves.toBeUndefined()
-
-    event = { request: { headers: new Headers({ authorization: 'Bearer request' }) } }
-    await expect(accessors.getHeader('authorization')).resolves.toBe('Bearer request')
-    await expect(accessors.getHeader('missing')).resolves.toBeUndefined()
-
-    const setHeader = vi.fn()
-    const getHeader = vi.fn()
-    event = {
-      node: {
-        req: { headers: { authorization: ['Bearer array'], cookie: 'invalid; other=x' } },
-        res: { getHeader, setHeader },
-      },
-    }
-    await expect(accessors.getHeader('authorization')).resolves.toBe('Bearer array')
-    await expect(accessors.getHeader('missing')).resolves.toBeUndefined()
-    await expect(accessors.getCookie('sid')).resolves.toBeUndefined()
-    await accessors.appendResponseCookie?.('sid=one')
-    expect(setHeader).toHaveBeenLastCalledWith('set-cookie', ['sid=one'])
-
-    getHeader.mockReturnValue('theme=dark')
-    await accessors.appendResponseCookie?.('sid=two')
-    expect(setHeader).toHaveBeenLastCalledWith('set-cookie', ['theme=dark', 'sid=two'])
-    getHeader.mockReturnValue(['theme=dark'])
-    await accessors.appendResponseCookie?.('sid=three')
-    expect(setHeader).toHaveBeenLastCalledWith('set-cookie', ['theme=dark', 'sid=three'])
-    await accessors.redirectResponse?.('/login', 303)
-    expect(sendRedirect).toHaveBeenCalledWith(event, '/login', 303)
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('/dashboard')
+    expect(response.headers.getSetCookie()).toEqual(['holo_session=session-1; Path=/; HttpOnly'])
   })
 
   it.each(['.', 'app'])('registers project server models and schema when Nuxt source directory is %s', async sourceDirectory => {
@@ -521,19 +328,19 @@ export default defineAppConfig({
     await writeFile(join(root, 'server/models/Admin.mts'), 'export default class Admin {}\nexport function prepareAuthCreateInput() {}\n', 'utf8')
     await writeFile(join(root, 'server/models/README.md'), '# ignored\n', 'utf8')
 
-    const { module, addServerImportsDir, addServerPlugin } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
     nuxt.options.srcDir = join(root, sourceDirectory)
     nuxt.options.nitro.moduleSideEffects = ['/application/bootstrap']
     await mkdir(nuxt.options.srcDir, { recursive: true })
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
-    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
-    expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
-    expect(addServerImportsDir).toHaveBeenCalledTimes(2)
-    expect(addServerPlugin).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
+    expect(await serverImportDirectories(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/server/auto-imports'))
+    expect(await serverImportDirectories(nuxt)).toContain(resolve(root, '.holo-js/generated/nuxt-server-imports'))
+    expect(await serverImportDirectories(nuxt)).toHaveLength(2)
+    expect(nuxt.options.nitro.plugins).toContain(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
     expect(nuxt.options.nitro.moduleSideEffects).toEqual(['/application/bootstrap', resolve(root, '.holo-js/generated/schema.generated.ts')])
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
       "import '../schema.generated'",
@@ -566,12 +373,12 @@ export default defineAppConfig({
 `, 'utf8')
     await writeFile(join(root, 'app/models/Profile.ts'), 'export default class Profile {}\n', 'utf8')
 
-    const { module, addServerImportsDir } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
-    expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
+    expect(await serverImportDirectories(nuxt)).toContain(resolve(root, '.holo-js/generated/nuxt-server-imports'))
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
       "import '../schema.generated'",
       '',
@@ -605,12 +412,12 @@ export default defineStorageConfig({
 `, 'utf8')
 
     const { module } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const nuxt = await createNuxtHarness(root)
 
-    await module.setup({}, nuxt as never)
+    await module.setup({}, nuxt)
 
-    expect(nuxt.options.nitro.storage['holo:media']).toMatchObject({
-      driver: './runtime/drivers/s3.js',
+    expect(nuxt.options.nitro.storage?.['holo:media']).toMatchObject({
+      driver: resolve(import.meta.dirname, '../src/runtime/drivers/s3.js'),
       bucket: 'media-bucket',
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
@@ -620,7 +427,7 @@ export default defineStorageConfig({
   it('traces installed runtime-loaded packages into Nitro production output', async () => {
     const root = await createProject()
     const { moduleInternals } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
+    const nuxt = await createNuxtHarness(root)
     const nitro = nuxt.options.nitro as typeof nuxt.options.nitro & {
       externals: {
         external: string[]
@@ -677,8 +484,8 @@ export default defineStorageConfig({
     await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
     await symlink(workspacePackage, installedPackage, 'dir')
     const { module, moduleInternals } = await loadAdapterModule()
-    const nuxt = createNuxtHarness(root)
-    await module.setup({}, nuxt as never)
+    const nuxt = await createNuxtHarness(root)
+    await module.setup({}, nuxt)
     const nitro = nuxt.options.nitro as typeof nuxt.options.nitro & {
       externals?: { trace?: boolean }
       rollupConfig?: { preserveSymlinks?: boolean }
@@ -689,37 +496,6 @@ export default defineStorageConfig({
     expect(moduleInternals.resolveProjectPackageTraceEntry(root, '')).toBeUndefined()
     expect(nitro.externals?.trace).toBe(false)
     expect(nitro.rollupConfig?.preserveSymlinks).toBe(true)
-  })
-
-  it('fails early when an s3 storage disk is configured without @holo-js/storage-s3', async () => {
-    const root = await createProject()
-    await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${storageEntry}
-
-export default defineStorageConfig({
-  disks: {
-    media: {
-      driver: 's3',
-      bucket: 'media-bucket',
-      region: 'us-east-1',
-    },
-  },
-})
-`, 'utf8')
-
-    vi.doMock('@holo-js/storage-s3', () => ({
-      default: undefined,
-    }))
-
-    try {
-      const { module } = await loadAdapterModule()
-      const nuxt = createNuxtHarness(root)
-      await expect(module.setup({}, nuxt as never)).rejects.toThrow(
-        '[@holo-js/adapter-nuxt] S3 storage disks require @holo-js/storage-s3 to be installed.',
-      )
-    } finally {
-      vi.doUnmock('@holo-js/storage-s3')
-    }
   })
 
   it('detects Windows-style storage config paths', async () => {
@@ -796,159 +572,39 @@ export default defineStorageConfig({
     expect(mod.moduleInternals.hasModuleNotFoundCode(new Error('Cannot find package "@holo-js/storage-s3"'), '@holo-js/storage-s3')).toBe(false)
   })
 
-  it('rethrows non-missing optional storage-s3 import errors', async () => {
-    vi.resetModules()
-    vi.doMock('@holo-js/storage-s3', () => {
-      return {
-        get default() {
-          throw new Error('boom')
-        },
-      }
-    })
-
-    try {
-      const mod = await import('../src/module')
-      await expect(mod.moduleInternals.importOptionalStorageS3Module()).rejects.toThrow('boom')
-    } finally {
-      vi.doUnmock('@holo-js/storage-s3')
-      vi.resetModules()
-    }
-  })
-
-  it('prefers cached config artifacts for production module setup', async () => {
+  it('boots from cached configuration without evaluating the replaced live config in production', async () => {
     const root = await createProject()
-    const loadConfigDirectory = vi.fn(async () => ({
-      app: {
-        name: 'Cached App',
-        key: '',
-        url: 'http://localhost:3000',
-        debug: false,
-        env: 'production',
-        paths: {
-          models: 'server/models',
-          migrations: 'server/db/migrations',
-          generatedSchema: '.holo-js/generated/schema.generated.ts',
-          seeders: 'server/db/seeders',
-          observers: 'server/observers',
-          factories: 'server/db/factories',
-          commands: 'server/commands',
-          jobs: 'server/jobs',
-        },
-        models: [],
-        migrations: [],
-        seeders: [],
-      },
-      database: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: ':memory:',
-          },
-        },
-      },
-      storage: {
-        defaultDisk: 'local',
-        routePrefix: '/storage',
-        disks: {},
-      },
-      media: {},
-      custom: {},
-      all: {} as never,
-      environment: {
-        name: 'production',
-        values: {},
-        loadedFiles: [],
-        warnings: [],
-      },
-      loadedFiles: [],
-      warnings: [],
-    }))
-
-    vi.doMock('@holo-js/config', async (importOriginal) => {
-      const actual = await importOriginal<typeof HoloConfigModule>()
-      return {
-        ...actual,
-        loadConfigDirectory,
-      }
-    })
-
+    await writeFile(join(root, 'config/app.mjs'), "export default { name: 'Cached App', env: 'production', debug: false }\n")
+    await writeConfigCache(root, { envName: 'production', processEnv: {} })
+    await writeFile(join(root, 'config/app.mjs'), "throw new Error('Live configuration must not be evaluated')\n")
     vi.stubEnv('NODE_ENV', 'production')
-
     try {
+      const nuxt = await createNuxtHarness(root)
       const { module } = await loadAdapterModule()
-      const nuxt = createNuxtHarness(root)
-
-      await module.setup({}, nuxt as never)
-
-      expect(loadConfigDirectory).toHaveBeenCalledWith(root, {
-        preferCache: true,
-        processEnv: process.env,
-      })
+      await module.setup({}, nuxt)
+      expect(nuxt.options.runtimeConfig.public.holo).toMatchObject({ appName: 'Cached App' })
+      expect(nuxt.options.runtimeConfig.holo).toMatchObject({ appEnv: 'production', appDebug: false })
     } finally {
       vi.unstubAllEnvs()
     }
   })
 
-  it('composes optional storage setup and finalization for every availability state', async () => {
+  it('registers public local storage through the real Nuxt module loader', async () => {
     const root = await createProject()
-    const { addServerHandler, moduleInternals } = await loadAdapterModule()
-    const baseLoaded = {
-      storage: {
-        defaultDisk: 'local',
-        routePrefix: '/storage',
-        disks: {},
-      },
-      loadedFiles: [],
-    }
-
-    expect(moduleInternals.resolveStorageSetup(undefined, baseLoaded as never)).toEqual({
-      options: undefined,
-      normalized: undefined,
-    })
-    expect(() => moduleInternals.resolveStorageSetup(undefined, {
-      ...baseLoaded,
-      loadedFiles: [join(root, 'config/storage.ts')],
-    } as never)).toThrow('Storage config requires @holo-js/storage')
-
-    const normalized = {
-      defaultDisk: 'local',
-      routePrefix: '/storage',
-      disks: {},
-    }
-    const storageModule = {
-      mergeModuleOptions: vi.fn(() => baseLoaded.storage),
-      normalizeModuleOptions: vi.fn(() => normalized),
-      applyNitroStorageConfig: vi.fn(),
-      hasPublicLocalDisk: vi.fn(() => false),
-    }
-    expect(moduleInternals.resolveStorageSetup(storageModule as never, baseLoaded as never)).toEqual({
-      options: baseLoaded.storage,
-      normalized,
-    })
-    const runtimeConfig: Record<string, unknown> = {}
-    moduleInternals.applyStorageRuntimeConfig(runtimeConfig, undefined)
-    expect(runtimeConfig).toEqual({})
-    moduleInternals.applyStorageRuntimeConfig(runtimeConfig, normalized as never)
-    expect(runtimeConfig.holoStorage).toBe(normalized)
-
-    const opts = createNuxtHarness(root).options
-    Object.assign(opts, { _holoStorageModuleOptions: baseLoaded.storage })
-    moduleInternals.finalizeStorageSetup(storageModule as never, opts as never, {
-      resolve: value => value,
-    }, './s3.js')
-    expect(storageModule.applyNitroStorageConfig).toHaveBeenCalledWith(opts, normalized, './s3.js')
-    expect(addServerHandler).not.toHaveBeenCalled()
-
-    storageModule.hasPublicLocalDisk.mockReturnValue(true)
-    moduleInternals.finalizeStorageSetup(storageModule as never, opts as never, {
-      resolve: value => value,
-    }, './s3.js')
-    expect(addServerHandler).toHaveBeenCalledWith({
-      route: '/storage/**',
-      handler: './runtime/server/routes/storage',
-    })
+    await writeFile(join(root, 'config/storage.mjs'), `export default {
+      defaultDisk: 'local', routePrefix: '/assets',
+      disks: { local: { driver: 'public', root: './storage/app/public', visibility: 'public' } },
+    }`)
+    const nuxt = await createNuxtHarness(root)
+    const { module } = await loadAdapterModule()
+    await module.setup({}, nuxt)
+    await nuxt.callHook('modules:done')
+    expect(nuxt.options.runtimeConfig.holoStorage).toMatchObject({ defaultDisk: 'local', routePrefix: '/assets' })
+    expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({
+      route: '/assets/**', handler: resolve(import.meta.dirname, '../src/runtime/server/routes/storage'),
+    }))
   })
+
 })
 
 describe('useHoloDb', () => {
@@ -1249,21 +905,6 @@ describe('useHoloDb', () => {
     })
   })
 
-  it('re-exports the root module surface', async () => {
-    const root = await loadRootExports({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-    })
-
-    expect(typeof root.default).toBe('object')
-    expect(typeof root.holo).toBe('object')
-    expect(typeof root.useHoloDb).toBe('function')
-    expect(typeof root.useHoloEnv).toBe('function')
-    expect(typeof root.useHoloDebug).toBe('function')
-  })
-
   it('throws a type error when runtime config bindings are unavailable', async () => {
     vi.resetModules()
     vi.unstubAllGlobals()
@@ -1322,282 +963,49 @@ describe('useHoloDb', () => {
     expect(() => runtime.useHoloDb()).toThrow('Holo runtime config is not configured.')
   })
 
-  it('routes holo.getApp through the shared adapter helper with runtime env names', async () => {
+  it.each(['production', 'development', 'test'] as const)('boots a real SQLite project through holo.getApp in %s', async appEnv => {
     vi.resetModules()
-    vi.unstubAllGlobals()
-
-    const runtimeConfig = {
-      holo: {
-        appEnv: 'test',
-        projectRoot: '/tmp/nuxt-project',
-      },
-    }
-    const runWithAuthRequestAccessors = vi.fn((_accessors: unknown, callback: () => unknown) => callback())
-    const initializeHoloAdapterProject = vi.fn(async () => ({
-      projectRoot: '/tmp/nuxt-project',
-      config: {
-        app: {
-          env: 'test',
-        },
-      },
-      runtime: { runWithAuthRequestAccessors },
-    }))
-    const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/nuxt-runtime-cwd')
-    vi.stubEnv('NODE_ENV', 'production')
-
-    vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
-    vi.doMock('#app', () => ({
-      useRuntimeConfig: () => runtimeConfig,
-    }))
-    vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal<typeof HoloCoreModule>()
-
-      return {
-        ...actual,
-        initializeHoloAdapterProject,
-      }
-    })
-
-    try {
-      const runtime = await import('../src/runtime/composables')
-      const synchronousResult = runtime.runWithNuxtRequest({}, () => ({ mode: 'sync' as const }))
-      const asynchronousResult = runtime.runWithNuxtRequest({}, async () => ({ mode: 'async' as const }))
-      expectTypeOf(synchronousResult).toEqualTypeOf<Promise<{ mode: 'sync' }>>()
-      expectTypeOf(asynchronousResult).toEqualTypeOf<Promise<{ mode: 'async' }>>()
-      await expect(synchronousResult).resolves.toEqual({ mode: 'sync' })
-      await expect(asynchronousResult).resolves.toEqual({ mode: 'async' })
-      await expect(runtime.holo.getApp()).resolves.toMatchObject({
-        projectRoot: '/tmp/nuxt-project',
-      })
-      expect(runWithAuthRequestAccessors).toHaveBeenCalledTimes(2)
-      expect(initializeHoloAdapterProject).toHaveBeenCalledOnce()
-      expect(runtime.useHoloEnv()).toBe('test')
-      expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
-        envName: 'test',
-        preferCache: true,
-        processEnv: process.env,
-      }))
-      expectAuthorizationHttpError(getFirstRuntimeOptions(initializeHoloAdapterProject))
-    } finally {
-      vi.unstubAllEnvs()
-      cwd.mockRestore()
-    }
-  })
-
-  it('preserves non-testing runtime env names when resolving holo.getApp()', async () => {
-    vi.resetModules()
-    vi.unstubAllGlobals()
-
-    const runtimeConfig = {
-      holo: {
-        appEnv: 'development',
-        projectRoot: '/tmp/nuxt-project',
-      },
-    }
-    const runWithAuthRequestAccessors = vi.fn((_accessors: unknown, callback: () => unknown) => callback())
-    const initializeHoloAdapterProject = vi.fn(async () => ({
-      projectRoot: '/tmp/nuxt-project',
-      config: {
-        app: {
-          env: 'development',
-        },
-      },
-      runtime: { runWithAuthRequestAccessors },
-    }))
-
-    vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
-    vi.doMock('#app', () => ({
-      useRuntimeConfig: () => runtimeConfig,
-    }))
-    vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal<typeof HoloCoreModule>()
-
-      return {
-        ...actual,
-        initializeHoloAdapterProject,
-      }
-    })
-
+    vi.stubEnv('NODE_ENV', appEnv)
+    const root = await createProject()
+    await writeFile(join(root, 'config/app.mjs'), `export default { name: 'Native Nuxt App', env: '${appEnv}', key: 'base64:key', url: 'http://localhost' }`)
+    await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
     const runtime = await import('../src/runtime/composables')
-    await expect(runtime.runWithNuxtRequest({}, () => 'first')).resolves.toBe('first')
-    await expect(runtime.runWithNuxtRequest({}, () => 'second')).resolves.toBe('second')
-    expect(initializeHoloAdapterProject).toHaveBeenCalledTimes(2)
-    expect(runWithAuthRequestAccessors).toHaveBeenCalledTimes(2)
-    expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
-      envName: 'development',
-    }))
+    runtime.configureHoloRuntimeConfig({ holo: { appEnv, appDebug: false, projectRoot: root } })
+
+    const project = await runtime.holo.getApp()
+    expect(project.projectRoot).toBe(root)
+    expect(project.config.app.name).toBe('Native Nuxt App')
+    expect(project.config.app.env).toBe(appEnv)
+    expect(runtime.useHoloEnv()).toBe(appEnv)
+    expect(await project.runtime.manager.connection('main').queryCompiled<{ value: number }>({
+      sql: 'SELECT 42 AS value',
+      source: 'test:native-nuxt:connection',
+    })).toMatchObject({ rows: [{ value: 42 }] })
+
+    const synchronousResult = runtime.runWithNuxtRequest({}, () => ({ mode: 'sync' as const }))
+    const asynchronousResult = runtime.runWithNuxtRequest({}, async () => ({ mode: 'async' as const }))
+    expectTypeOf(synchronousResult).toEqualTypeOf<Promise<{ mode: 'sync' }>>()
+    expectTypeOf(asynchronousResult).toEqualTypeOf<Promise<{ mode: 'async' }>>()
+    await expect(synchronousResult).resolves.toEqual({ mode: 'sync' })
+    await expect(asynchronousResult).resolves.toEqual({ mode: 'async' })
   })
 
-  it('falls back to process.cwd() when holo.projectRoot is absent at runtime', async () => {
+  it('boots the working directory when no runtime projectRoot is configured', async () => {
     vi.resetModules()
-    vi.unstubAllGlobals()
-
-    const runtimeConfig = {
-      holo: {
-        appEnv: 'development',
-      },
-    }
-    const initializeHoloAdapterProject = vi.fn(async () => ({
-      projectRoot: '/tmp/runtime-cwd',
-      config: {
-        app: {
-          env: 'development',
-        },
-      },
-      runtime: {},
-    }))
-    const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/runtime-cwd')
-
-    vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
-    vi.doMock('#app', () => ({
-      useRuntimeConfig: () => runtimeConfig,
-    }))
-    vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal<typeof HoloCoreModule>()
-
-      return {
-        ...actual,
-        initializeHoloAdapterProject,
-      }
-    })
-
+    const root = await createProject()
+    await writeFile(join(root, 'config/app.mjs'), "export default { name: 'Working Directory App' }")
+    await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
+    const previousCwd = process.cwd()
+    const runtime = await import('../src/runtime/composables')
+    runtime.configureHoloRuntimeConfig({ holo: { appEnv: 'development', appDebug: false } })
     try {
-      const runtime = await import('../src/runtime/composables')
-      await runtime.holo.getApp()
-      expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/runtime-cwd', expect.objectContaining({
-        envName: 'development',
-      }))
+      process.chdir(root)
+      const project = await runtime.holo.getApp()
+      expect(project.projectRoot).toBe(await realpath(root))
+      expect(project.config.app.name).toBe('Working Directory App')
     } finally {
-      cwd.mockRestore()
+      process.chdir(previousCwd)
     }
   })
-})
 
-describe('runtime plugin', () => {
-  it('holds requests until initialization completes and propagates initialization failures', async () => {
-    const { plugin, initializeHoloAdapterProject, shutdown } = await loadRuntimeExports({
-      holo: { appEnv: 'production', appDebug: false, projectRoot: '/tmp/nuxt-project' },
-    })
-    let completeInitialization: (() => void) | undefined
-    const initialization = new Promise<void>((resolve) => {
-      completeInitialization = resolve
-    })
-    initializeHoloAdapterProject.mockImplementationOnce(async () => {
-      await initialization
-      return {
-        runtime: {
-          manager: { connection: () => ({ getDriver: () => 'sqlite' }) },
-          shutdown,
-        },
-      }
-    })
-    const hooks = new Map<string, () => Promise<void>>()
-    plugin({ hooks: { hook: (name, handler) => hooks.set(name, handler) } })
-    const requestHandler = hooks.get('request')
-    expect(requestHandler).toBeDefined()
-    let handled = false
-    const request = requestHandler?.().then(() => handled = true)
-    await Promise.resolve()
-    expect(handled).toBe(false)
-    completeInitialization?.()
-    await request
-    expect(handled).toBe(true)
-
-    let failInitialization: ((error: Error) => void) | undefined
-    const failure = new Promise<Awaited<ReturnType<typeof initializeHoloAdapterProject>>>((_resolve, reject) => {
-      failInitialization = reject
-    })
-    initializeHoloAdapterProject.mockReturnValueOnce(failure)
-    plugin({ hooks: { hook: (name, handler) => hooks.set(name, handler) } })
-    const rejectedRequest = expect(hooks.get('request')?.()).rejects.toThrow('Initialization failed')
-    failInitialization?.(new Error('Initialization failed'))
-    await rejectedRequest
-  })
-
-  it('initializes the adapter runtime and shuts it down on close', async () => {
-    const hook = vi.fn()
-    const { runtime, plugin, configureHoloRuntimeConfig, initializeHoloAdapterProject, shutdown } = await loadRuntimeExports({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-        projectRoot: '/tmp/nuxt-project',
-      },
-      db: {
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './data/database.sqlite',
-          },
-        },
-      },
-    })
-
-    expect(typeof runtime.useHoloDb).toBe('function')
-    const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/nuxt-runtime-cwd')
-
-    try {
-      await plugin({
-        hooks: { hook },
-      })
-    } finally {
-      cwd.mockRestore()
-    }
-
-    expect(configureHoloRuntimeConfig).toHaveBeenCalledWith({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-        projectRoot: '/tmp/nuxt-project',
-      },
-      db: {
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './data/database.sqlite',
-          },
-        },
-      },
-    })
-    expect(initializeHoloAdapterProject).toHaveBeenCalledTimes(1)
-    expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
-      envName: 'development',
-      preferCache: false,
-      processEnv: process.env,
-    }))
-    expectAuthorizationHttpError(getFirstRuntimeOptions(initializeHoloAdapterProject))
-
-    const closeHandler = hook.mock.calls.find(([name]) => name === 'close')?.[1]
-    await closeHandler?.()
-    expect(shutdown).toHaveBeenCalledTimes(1)
-  })
-
-  it('swallows adapter runtime shutdown errors on close', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const hook = vi.fn()
-    const { plugin, shutdown } = await loadRuntimeExports({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './data/database.sqlite',
-          },
-        },
-      },
-    })
-
-    shutdown.mockRejectedValueOnce(new Error('already closed'))
-
-    await plugin({
-      hooks: { hook },
-    })
-
-    const closeHandler = hook.mock.calls.find(([name]) => name === 'close')?.[1]
-    await expect(closeHandler?.()).resolves.toBeUndefined()
-
-    log.mockRestore()
-  })
 })

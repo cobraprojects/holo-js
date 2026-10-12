@@ -15,6 +15,7 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { normalizeDialectReadValue } from '../schema/normalization'
 import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity } from './Entity'
 import { PivotMutation } from './PivotMutation'
@@ -1766,7 +1767,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       await this.dispatchCancelableEvent('saving', entity)
       await this.dispatchCancelableEvent('updating', entity)
       await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
-      const updated = this.hydrate(entity.toAttributes())
+      const updated = new Entity<TTable>(this, { ...entity.toAttributes(), ...this.normalizeFromStorage(dirty) }, true)
       updated.syncOriginal()
       await this.dispatchEvent('updated', updated)
       await this.dispatchEvent('saved', updated)
@@ -3505,10 +3506,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       ...relation.pivotColumns,
     ])
 
+    const connection = this.getConnection()
+    const table = typeof relation.pivotTable === 'string'
+      ? connection.getSchemaRegistry().get(relation.pivotTable)
+      : relation.pivotTable
+    const dialect = connection.getDriver() as SchemaDialectName
     return Object.fromEntries(
       [...selectedColumns]
         .filter(column => Object.prototype.hasOwnProperty.call(row, column))
-        .map(column => [column, row[column]]),
+        .map(column => {
+          const definition = table?.columns[column]
+          return [column, definition ? normalizeDialectReadValue(dialect, definition, row[column]) : row[column]]
+        }),
     )
   }
 

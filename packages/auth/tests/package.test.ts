@@ -1,11 +1,14 @@
+import { createServer } from 'node:http'
 import { spawnSync } from 'node:child_process'
-import { createHash, createHmac, randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
-import type { SessionRecord, SessionStore } from '../../session/src'
+import { createNativeSessionStore } from './support/native-session'
+import { createNativeAuthPersistence } from './support/native-persistence'
+import { createFileRateLimitStore, createMemoryRateLimitStore, configureSecurityRuntime, resetSecurityRuntime } from '../../security/src'
 import auth, {
   AuthError,
   authRuntimeInternals,
@@ -41,7 +44,6 @@ import auth, {
   verifyPassword,
 } from '../src'
 import clientAuth, {
-  authClientInternals,
   check as clientCheck,
   configureAuthClient,
   provider as clientProvider,
@@ -56,58 +58,19 @@ import {
   pickInputField,
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
-import type { OptionalSecurityModule } from '../src/runtime/optionalSecurity'
 import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure } from '../src/runtime/sessionFailures'
 import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
-
-function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
-  const canonicalEmail = email.trim().toLowerCase()
-
-  if (csrfSigningKey) {
-    return createHmac('sha256', csrfSigningKey).update(canonicalEmail).digest('hex')
-  }
-
-  return createHash('sha256').update(canonicalEmail).digest('hex')
-}
 
 function importSpecifier(fromDirectory: string, targetPath: string): string {
   const specifier = relative(fromDirectory, targetPath).replaceAll('\\', '/')
   return specifier.startsWith('.') ? specifier : `./${specifier}`
 }
 
-function mockOptionalSecurityModule(module: OptionalSecurityModule): void {
-  vi.resetModules()
-  vi.doMock('@holo-js/security', () => module)
-}
-
-function createMultiFactorSecurityModule(): OptionalSecurityModule {
-  const attempts = new Map<string, number>()
-  return {
-    getSecurityRuntimeBindings: () => ({
-      csrfSigningKey: 'test-security-signing-key',
-      rateLimitStore: {
-        async hit(key, options) {
-          const nextAttempts = (attempts.get(key) ?? 0) + 1
-          attempts.set(key, nextAttempts)
-          return {
-            limited: nextAttempts > options.maxAttempts,
-            snapshot: { attempts: nextAttempts },
-          }
-        },
-        async clear(key) {
-          return attempts.delete(key)
-        },
-      },
-    }),
-  }
-}
 import type {
   AuthenticatedAuthUser,
   AuthCredentials,
   AuthErrorCode,
   AuthDeliveryHook,
-  AuthMultiFactorCredentialRecord,
-  AuthMultiFactorStore,
   AuthProviderAdapter,
   AuthRegistrationInput,
   AuthResult,
@@ -186,475 +149,71 @@ type UserRecord = {
   email_verified_at?: Date | null
 }
 
-class InMemorySessionStore implements SessionStore {
-  readonly records = new Map<string, SessionRecord>()
-  readonly flashEntries = new Map<string, Map<string, unknown>>()
+const resetBrokerConfig = { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 60 } } } as const
 
-  async read(sessionId: string): Promise<SessionRecord | null> {
-    return this.records.get(sessionId) ?? null
-  }
-
-  async write(record: SessionRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-
-  async delete(sessionId: string): Promise<void> {
-    this.records.delete(sessionId)
-    this.flashEntries.delete(sessionId)
-  }
-
-  async rotate(previousSessionId: string, record: SessionRecord): Promise<void> {
-    if (!this.records.has(previousSessionId)) throw new Error(`Session "${previousSessionId}" was not found.`)
-    const entries = this.flashEntries.get(previousSessionId)
-    this.records.delete(previousSessionId)
-    this.flashEntries.delete(previousSessionId)
-    this.records.set(record.id, record)
-    if (entries) this.flashEntries.set(record.id, entries)
-  }
-
-  async flash(sessionId: string, key: string, value: unknown): Promise<void> {
-    if (!this.records.has(sessionId)) throw new Error(`Session "${sessionId}" was not found.`)
-    const entries = this.flashEntries.get(sessionId) ?? new Map<string, unknown>()
-    entries.set(key, value)
-    this.flashEntries.set(sessionId, entries)
-  }
-
-  async take(sessionId: string, key: string): Promise<{ readonly found: boolean, readonly value?: unknown }> {
-    const entries = this.flashEntries.get(sessionId)
-    if (!this.records.has(sessionId) || !entries?.has(key)) return { found: false }
-    const value = entries.get(key)
-    entries.delete(key)
-    if (entries.size === 0) this.flashEntries.delete(sessionId)
-    return { found: true, value }
-  }
+async function createNativeAuthRateLimitStore(signingKey?: string) {
+  const root = await mkdtemp(join(tmpdir(), 'holo-auth-rate-limit-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+  const store = createFileRateLimitStore(root)
+  configureSecurityRuntime({ config: {}, csrfSigningKey: signingKey, rateLimitStore: store })
+  return store
 }
 
-class InMemoryMultiFactorStore implements AuthMultiFactorStore {
-  readonly records = new Map<string, AuthMultiFactorCredentialRecord>()
-
-  key(provider: string, userId: string | number): string {
-    return `${provider}:${String(userId)}`
-  }
-
-  async find(provider: string, userId: string | number): Promise<AuthMultiFactorCredentialRecord | null> {
-    return this.records.get(this.key(provider, userId)) ?? null
-  }
-
-  async save(record: AuthMultiFactorCredentialRecord): Promise<void> {
-    this.records.set(this.key(record.provider, record.userId), record)
-  }
-
-  async delete(provider: string, userId: string | number): Promise<void> {
-    this.records.delete(this.key(provider, userId))
-  }
-
-  async advanceCounter(provider: string, userId: string | number, counter: number): ReturnType<AuthMultiFactorStore['advanceCounter']> {
-    const key = this.key(provider, userId)
-    const record = this.records.get(key)
-    if (!record || record.lastUsedCounter !== null && counter <= record.lastUsedCounter) return null
-    this.records.set(key, Object.freeze({ ...record, lastUsedCounter: counter, updatedAt: new Date() }))
-    return Object.freeze({ lastUsedCounter: counter, recoveryCodeHashes: record.recoveryCodeHashes })
-  }
-
-  async consumeRecoveryCode(provider: string, userId: string | number, recoveryCodeHash: string): ReturnType<AuthMultiFactorStore['consumeRecoveryCode']> {
-    const key = this.key(provider, userId)
-    const record = this.records.get(key)
-    if (!record || !record.recoveryCodeHashes.includes(recoveryCodeHash)) return null
-    const recoveryCodeHashes = Object.freeze(record.recoveryCodeHashes.filter(hash => hash !== recoveryCodeHash))
-    this.records.set(key, Object.freeze({
-      ...record,
-      recoveryCodeHashes,
-      updatedAt: new Date(),
-    }))
-    return Object.freeze({ lastUsedCounter: record.lastUsedCounter, recoveryCodeHashes })
-  }
-
-  async replaceRecoveryCodes(provider: string, userId: string | number, recoveryCodeHashes: readonly string[], updatedAt: Date, verification: Parameters<AuthMultiFactorStore['replaceRecoveryCodes']>[4]): Promise<boolean> {
-    const key = this.key(provider, userId)
-    const record = this.records.get(key)
-    if (!record) return false
-    if (record.lastUsedCounter !== verification.lastUsedCounter) return false
-    if (JSON.stringify(record.recoveryCodeHashes) !== JSON.stringify(verification.recoveryCodeHashes)) return false
-    this.records.set(key, Object.freeze({ ...record, recoveryCodeHashes: Object.freeze([...recoveryCodeHashes]), updatedAt }))
-    return true
-  }
+async function configurePasswordResetRuntime() {
+  const runtime = await configureRuntime({ authConfig: resetBrokerConfig })
+  await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: await hashPassword('secret-secret') })
+  return runtime
 }
 
-class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
-  readonly users = new Map<number, UserRecord>()
-  readonly usersByEmail = new Map<string, number>()
-  readonly usersByPhone = new Map<string, number>()
-  nextId = 1
-
-  async findById(id: string | number): Promise<UserRecord | null> {
-    const numericId = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
-    return this.users.get(numericId) ?? null
-  }
-
-  async findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<UserRecord | null> {
-    const email = typeof credentials.email === 'string' ? credentials.email : undefined
-    const phone = typeof credentials.phone === 'string' ? credentials.phone : undefined
-
-    if (email) {
-      const id = this.usersByEmail.get(email)
-      return typeof id === 'number' ? this.users.get(id) ?? null : null
-    }
-
-    if (phone) {
-      const id = this.usersByPhone.get(phone)
-      return typeof id === 'number' ? this.users.get(id) ?? null : null
-    }
-
-    return null
-  }
-
-  async create(input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
-    const record: UserRecord = {
-      id: this.nextId,
-      name: typeof input.name === 'string' ? input.name : '',
-      email: typeof input.email === 'string' ? input.email : '',
-      role: input.role === 'admin' || input.role === 'member' ? input.role : 'member',
-      password: typeof input.password === 'string' || input.password === null ? input.password as string | null : undefined,
-      avatar: typeof input.avatar === 'string' || input.avatar === null ? input.avatar as string | null : undefined,
-      email_verified_at: input.email_verified_at instanceof Date || input.email_verified_at === null
-        ? input.email_verified_at as Date | null
-        : undefined,
-    }
-    if (typeof input.phone === 'string') {
-      record.phone = input.phone
-    }
-    if (typeof input.country === 'string') {
-      record.country = input.country
-    }
-    if (typeof input.dob === 'string') {
-      record.dob = input.dob
-    }
-    this.nextId += 1
-    this.users.set(record.id, record)
-    if (record.email) {
-      this.usersByEmail.set(record.email, record.id)
-    }
-    if (typeof input.phone === 'string') {
-      this.usersByPhone.set(input.phone, record.id)
-    }
-    return record
-  }
-
-  async delete(id: string | number): Promise<void> {
-    const numericId = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
-    const existing = this.users.get(numericId)
-    if (!existing) {
-      return
-    }
-
-    this.users.delete(numericId)
-    this.usersByEmail.delete(existing.email)
-    if (existing.phone) {
-      this.usersByPhone.delete(existing.phone)
-    }
-  }
-
-  async update(user: UserRecord, input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
-    const currentEmail = user.email
-    if (typeof input.name === 'string') {
-      user.name = input.name
-    }
-    if (typeof input.email === 'string') {
-      user.email = input.email
-    }
-    if (input.role === 'admin' || input.role === 'member') {
-      user.role = input.role
-    }
-    if (typeof input.avatar === 'string' || input.avatar === null) {
-      user.avatar = input.avatar
-    }
-    if (input.email_verified_at instanceof Date || input.email_verified_at === null) {
-      user.email_verified_at = input.email_verified_at
-    }
-    if (typeof input.password === 'string' || input.password === null) {
-      user.password = input.password
-    }
-    if (currentEmail !== user.email) {
-      this.usersByEmail.delete(currentEmail)
-      this.usersByEmail.set(user.email, user.id)
-    }
-
-    return user
-  }
-
-  matchesUser(user: unknown): boolean {
-    if (!user || typeof user !== 'object') {
-      return false
-    }
-
-    const candidateId = (user as { id?: unknown }).id
-    return (typeof candidateId === 'number' || typeof candidateId === 'string')
-      && this.users.get(Number(candidateId)) === user
-  }
-
-  getId(user: UserRecord): string | number {
-    return user.id
-  }
-
-  getPasswordHash(user: UserRecord): string | null | undefined {
-    return user.password
-  }
-
-  getEmailVerifiedAt(user: UserRecord): Date | string | null | undefined {
-    return user.email_verified_at
-  }
-
-  serialize(user: UserRecord): AuthUser {
-    const serialized = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      phone: user.phone,
-      country: user.country,
-      dob: user.dob,
-      avatarUrl: user.avatar ?? null,
-      email_verified_at: user.email_verified_at ?? null,
-    }
-    return serialized
-  }
+async function createNativeAuthHttpServer(runtime: Awaited<ReturnType<typeof configureRuntime>>) {
+  const context = authRuntimeInternals.createAsyncAuthContext()
+  configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context })
+  const requests: { url: string, authorization?: string }[] = []
+  const { GET } = await import('../../../apps/blog-next/app/api/auth/user/route')
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://localhost')
+    requests.push({ url: `${url.pathname}${url.search}`, authorization: request.headers.authorization })
+    if (url.pathname === '/failure') { response.writeHead(500); response.end('failure'); return }
+    if (url.pathname === '/invalid-json') { response.end('broken'); return }
+    void context.run(async () => {
+      const guard = url.searchParams.get('guard') ?? 'web'
+      const sessionId = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('holo_session='))?.slice('holo_session='.length)
+      context.setSessionId(guard, sessionId)
+      context.setAccessToken?.(guard, request.headers.authorization?.replace(/^Bearer /, ''))
+      const result = await GET(new Request(url))
+      response.writeHead(result.status, Object.fromEntries(result.headers))
+      response.end(await result.text())
+    }).catch(error => { response.writeHead(500); response.end(String(error)) })
+  })
+  await new Promise<void>(resolveListening => server.listen(0, '127.0.0.1', resolveListening))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Expected an HTTP fixture port')
+  onTestFinished(() => new Promise<void>((resolveClosed, reject) => {
+    server.close(error => error ? reject(error) : resolveClosed())
+    server.closeAllConnections()
+  }))
+  const origin = `http://127.0.0.1:${address.port}`
+  return { requests, origin, endpoint: `${origin}/api/auth/user` }
 }
 
-class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
-  readonly users = new Map<number, UserRecord>()
-  readonly usersByEmail = new Map<string, number>()
-  nextId = 1
-
-  async findById(id: string | number): Promise<UserRecord | null> {
-    const numericId = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
-    const record = this.users.get(numericId)
-    return record ? { ...record } : null
-  }
-
-  async findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<UserRecord | null> {
-    const email = typeof credentials.email === 'string' ? credentials.email : undefined
-    if (!email) {
-      return null
-    }
-
-    const id = this.usersByEmail.get(email)
-    const record = typeof id === 'number' ? this.users.get(id) : undefined
-    return record ? { ...record } : null
-  }
-
-  async create(input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
-    const record: UserRecord = {
-      id: this.nextId,
-      name: typeof input.name === 'string' ? input.name : '',
-      email: typeof input.email === 'string' ? input.email : '',
-      role: input.role === 'admin' || input.role === 'member' ? input.role : 'member',
-      password: typeof input.password === 'string' || input.password === null ? input.password as string | null : undefined,
-      avatar: typeof input.avatar === 'string' || input.avatar === null ? input.avatar as string | null : undefined,
-      email_verified_at: input.email_verified_at instanceof Date || input.email_verified_at === null
-        ? input.email_verified_at as Date | null
-        : undefined,
-    }
-    this.nextId += 1
-    this.users.set(record.id, record)
-    if (record.email) {
-      this.usersByEmail.set(record.email, record.id)
-    }
-    return { ...record }
-  }
-
-  getId(user: UserRecord): string | number {
-    return user.id
-  }
-
-  getPasswordHash(user: UserRecord): string | null | undefined {
-    return user.password
-  }
-
-  getEmailVerifiedAt(user: UserRecord): Date | string | null | undefined {
-    return user.email_verified_at
-  }
-
-  serialize(user: UserRecord): AuthUser {
-    const serialized = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatarUrl: user.avatar ?? null,
-      email_verified_at: user.email_verified_at ?? null,
-    }
-    return serialized
-  }
-}
-
-class InMemoryTokenStore implements AuthTokenStore {
-  readonly records = new Map<string, PersonalAccessTokenRecord>()
-
-  async create(record: PersonalAccessTokenRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-
-  async findById(id: string): Promise<PersonalAccessTokenRecord | null> {
-    return this.records.get(id) ?? null
-  }
-
-  async listByUserId(provider: string, userId: string | number): Promise<readonly PersonalAccessTokenRecord[]> {
-    return [...this.records.values()].filter(record => record.provider === provider && record.userId === userId)
-  }
-
-  async update(record: PersonalAccessTokenRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-
-  async delete(id: string): Promise<void> {
-    this.records.delete(id)
-  }
-
-  async deleteByUserId(provider: string, userId: string | number, options: { readonly exceptId?: string } = {}): Promise<number> {
-    let deleted = 0
-    for (const [id, record] of this.records.entries()) {
-      if (record.provider === provider && record.userId === userId && id !== options.exceptId) {
-        this.records.delete(id)
-        deleted += 1
-      }
-    }
-
-    return deleted
-  }
-}
-
-class InMemoryEmailVerificationTokenStore implements EmailVerificationTokenStore {
-  async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
-    const stored = this.records.get(record.id)
-    if (!stored
-      || stored.provider !== record.provider
-      || stored.userId !== record.userId
-      || stored.email !== record.email
-      || stored.tokenHash !== record.tokenHash
-      || stored.createdAt.getTime() !== record.createdAt.getTime()
-      || stored.expiresAt.getTime() !== record.expiresAt.getTime()
-      || stored.expiresAt.getTime() <= Date.now()) return null
-    this.records.delete(record.id)
-    return operation()
-  }
-
-  readonly records = new Map<string, EmailVerificationTokenRecord>()
-
-  async create(record: EmailVerificationTokenRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-
-  async findById(id: string): Promise<EmailVerificationTokenRecord | null> {
-    return this.records.get(id) ?? null
-  }
-
-  async delete(id: string): Promise<void> {
-    this.records.delete(id)
-  }
-
-  async deleteByUserId(provider: string, userId: string | number): Promise<number> {
-    let deleted = 0
-    for (const [id, record] of this.records.entries()) {
-      if (record.provider === provider && record.userId === userId) {
-        this.records.delete(id)
-        deleted += 1
-      }
-    }
-
-    return deleted
-  }
-}
-
-class InMemoryPasswordResetTokenStore implements PasswordResetTokenStore {
-  async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
-    const stored = this.records.get(record.id)
-    if (!stored
-      || stored.provider !== record.provider
-      || stored.email !== record.email
-      || stored.table !== record.table
-      || stored.tokenHash !== record.tokenHash
-      || stored.createdAt.getTime() !== record.createdAt.getTime()
-      || stored.expiresAt.getTime() !== record.expiresAt.getTime()
-      || stored.expiresAt.getTime() <= Date.now()) return null
-    this.records.delete(record.id)
-    return operation()
-  }
-
-  readonly records = new Map<string, PasswordResetTokenRecord>()
-
-  async create(record: PasswordResetTokenRecord): Promise<void> {
-    this.records.set(record.id, record)
-  }
-
-  async findById(id: string): Promise<PasswordResetTokenRecord | null> {
-    return this.records.get(id) ?? null
-  }
-
-  async findLatestByEmail(provider: string, email: string, options?: { readonly table?: string }): Promise<PasswordResetTokenRecord | null> {
-    let latest: PasswordResetTokenRecord | null = null
-    for (const record of this.records.values()) {
-      if (
-        record.provider !== provider
-        || record.email !== email
-        || (options?.table && record.table !== options.table)
-      ) {
-        continue
-      }
-      if (!latest || record.createdAt.getTime() > latest.createdAt.getTime()) {
-        latest = record
-      }
-    }
-
-    return latest
-  }
-
-  async delete(id: string, options?: { readonly table?: string }): Promise<void> {
-    const existing = this.records.get(id)
-    if (existing && options?.table && existing.table !== options.table) {
-      return
-    }
-    this.records.delete(id)
-  }
-
-  async deleteByEmail(provider: string, email: string, options?: { readonly table?: string }): Promise<number> {
-    let deleted = 0
-    for (const [id, record] of this.records.entries()) {
-      if (
-        record.provider === provider
-        && record.email === email
-        && (!options?.table || record.table === options.table)
-      ) {
-        this.records.delete(id)
-        deleted += 1
-      }
-    }
-
-    return deleted
-  }
-}
-
-function configureRuntime(options: {
+async function configureRuntime(options: {
   emailVerificationRequired?: boolean
-  adminProvider?: InMemoryProviderAdapter
   authConfig?: HoloAuthConfig
   delivery?: Partial<AuthDeliveryHook>
   passwordHasher?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['passwordHasher']
   authorization?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['authorization']
   multiFactor?: boolean
   multiFactorSecurity?: boolean
-  multiFactorSecurityModule?: OptionalSecurityModule
 } = {}) {
-  if (options.multiFactor === true) {
-    mockOptionalSecurityModule(options.multiFactorSecurityModule
-      ?? (options.multiFactorSecurity === false
-        ? { getSecurityRuntimeBindings: () => undefined }
-        : createMultiFactorSecurityModule()))
+  if (options.multiFactor === true && options.multiFactorSecurity !== false) {
+    configureSecurityRuntime({ config: {}, csrfSigningKey: 'test-security-signing-key', rateLimitStore: createMemoryRateLimitStore() })
   }
-  const sessionStore = new InMemorySessionStore()
-  const tokenStore = new InMemoryTokenStore()
-  const emailVerificationTokenStore = new InMemoryEmailVerificationTokenStore()
-  const passwordResetTokenStore = new InMemoryPasswordResetTokenStore()
-  const multiFactorStore = new InMemoryMultiFactorStore()
+  const sessionStore = createNativeSessionStore()
+  const persistence = await createNativeAuthPersistence(options.authConfig)
+  const emailVerificationTokenStore = persistence.emailVerificationTokens
+  const passwordResetTokenStore = persistence.passwordResetTokens
+  const tokenStore = persistence.tokens
+  const multiFactorStore = persistence.multiFactor
   const deliveries: Array<{ type: 'verification' | 'password-reset', email: string, tokenId: string, tokenValue: string }> = []
   const delivery: AuthDeliveryHook = {
     async sendEmailVerification(input) {
@@ -677,13 +236,12 @@ function configureRuntime(options: {
   }
   configureSessionRuntime({
     config: {
-      driver: 'database',
+      driver: 'file',
       stores: {
-        database: {
-          name: 'database',
-          driver: 'database',
-          connection: 'main',
-          table: 'sessions',
+        file: {
+          name: 'file',
+          driver: 'file',
+          path: sessionStore.path,
         },
       },
       cookie: {
@@ -700,12 +258,12 @@ function configureRuntime(options: {
       rememberMeLifetime: 43200,
     },
     stores: {
-      database: sessionStore,
+      file: sessionStore,
     },
   })
 
-  const usersProvider = new InMemoryProviderAdapter()
-  const adminsProvider = options.adminProvider ?? new InMemoryProviderAdapter()
+  const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
+  const adminsProvider = persistence.providers.admins as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
   const context = authRuntimeInternals.createMemoryAuthContext()
 
   const baseConfig = defineAuthConfig({
@@ -781,6 +339,7 @@ function configureRuntime(options: {
   })
 
   return {
+    persistence,
     sessionStore,
     tokenStore,
     emailVerificationTokenStore,
@@ -794,7 +353,7 @@ function configureRuntime(options: {
 }
 
 function reconfigureAuthRuntimeWithSession(
-  runtime: ReturnType<typeof configureRuntime>,
+  runtime: Awaited<ReturnType<typeof configureRuntime>>,
   session: unknown,
 ) {
   configureAuthRuntime({
@@ -842,9 +401,9 @@ afterEach(() => {
   validationInternals.setValidationExceptionThrower(undefined)
   resetAuthRuntime()
   resetSessionRuntime()
+  resetSecurityRuntime()
   resetAuthClient()
   vi.restoreAllMocks()
-  vi.doUnmock('@holo-js/security')
   vi.resetModules()
   vi.unstubAllGlobals()
 })
@@ -885,7 +444,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('supports default and named exports for default-guard operations', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     expect(auth.check).toBe(check)
     expect(auth.hashPassword).toBe(hashPassword)
@@ -916,11 +475,11 @@ describe('@holo-js/auth package runtime', () => {
       name: 'Ava',
       email: 'ava@example.com',
     })
-    expect(runtime.usersProvider.users.get(1)?.password).toMatch(/^scrypt\$/)
+    expect((await runtime.usersProvider.findById(1))?.password).toMatch(/^scrypt\$/)
   })
 
   it('registers users, logs them in, resolves current user state, and logs them out', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     const created = unwrapAuthResult(await auth.register({
       name: 'Ava',
@@ -967,7 +526,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(established.cookies?.[1]).toContain('holo_session_remember=')
     expect(runtime.context.getSessionId('web')).toBeTypeOf('string')
     expect(runtime.context.getRememberToken?.('web')).toMatch(/\./)
-    expect(runtime.sessionStore.records.size).toBe(1)
+    expect((await runtime.sessionStore.countRecords())).toBe(1)
 
     const loggedOut = await logout()
 
@@ -975,7 +534,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(await id()).toBeNull()
     expect(await user()).toBeNull()
     expect(runtime.context.getSessionId('web')).toBeUndefined()
-    expect(runtime.sessionStore.records.size).toBe(0)
+    expect((await runtime.sessionStore.countRecords())).toBe(0)
     expect(loggedOut).toMatchObject({
       guard: 'web',
     })
@@ -985,7 +544,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('appends session and logout cookies to the active response context', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const appendedCookies: string[] = []
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
 
@@ -1018,7 +577,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it.each(['remember', 'cookie'])('fails closed for all shared guards after a persisted transition fails in %s', async (failurePoint) => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
     const admin = await runtime.adminsProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
     const first = await auth.guard('web').loginUsing(created)
@@ -1044,7 +603,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('reports transition and invalidation failures together while clearing request authentication', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
     const initial = await auth.loginUsing(created)
     const delivery = new Error('remember unavailable')
@@ -1061,7 +620,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('does not restore an impersonation actor after cookie delivery fails following rotation', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
     const target = await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
     const initial = await auth.loginUsing(actor)
@@ -1074,7 +633,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rotates a valid anonymous session during credential login', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1094,7 +653,7 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     expect(established.sessionId).not.toBe(anonymousSession.id)
-    expect(runtime.sessionStore.records.has(anonymousSession.id)).toBe(false)
+    expect(((await runtime.sessionStore.read(anonymousSession.id)) !== null)).toBe(false)
     expect(runtime.context.getSessionId('web')).toBe(established.sessionId)
     await expect(getSessionRuntime().read(established.sessionId)).resolves.toMatchObject({
       data: {
@@ -1106,7 +665,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rotates trusted login sessions and keeps logout isolated between guards', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const createdUser = await runtime.usersProvider.create({
       name: 'User Ava',
       email: 'ava@example.com',
@@ -1125,7 +684,7 @@ describe('@holo-js/auth package runtime', () => {
     const adminSession = await auth.guard('admin').loginUsing(createdAdmin)
 
     expect(adminSession.sessionId).not.toBe(webSession.sessionId)
-    expect(runtime.sessionStore.records.has(webSession.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(webSession.sessionId)) !== null)).toBe(false)
     expect(runtime.context.getSessionId('web')).toBe(adminSession.sessionId)
     expect(runtime.context.getSessionId('admin')).toBe(adminSession.sessionId)
     await expect(auth.guard('admin').logout()).resolves.toMatchObject({
@@ -1140,7 +699,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('enrolls, challenges, rejects TOTP replay, and consumes recovery codes atomically', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1197,7 +756,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('requires recent authentication before beginning multi-factor enrollment', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1206,9 +765,9 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date(),
     })
     const established = await login({ email: 'ava@example.com', password: 'secret-secret' })
-    const record = runtime.sessionStore.records.get(established.sessionId)!
+    const record = (await runtime.sessionStore.read(established.sessionId))!
     const payload = record.data.auth as Readonly<Record<string, unknown>>
-    runtime.sessionStore.records.set(established.sessionId, Object.freeze({
+    await runtime.sessionStore.write(Object.freeze({
       ...record,
       data: Object.freeze({
         ...record.data,
@@ -1225,7 +784,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects impersonation while the actor has a pending multi-factor challenge', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const actor = await runtime.usersProvider.create({
       name: 'Ava',
@@ -1258,42 +817,8 @@ describe('@holo-js/auth package runtime', () => {
     await expect(user()).resolves.toBeNull()
   })
 
-  it('returns recovery codes when enrollment session cleanup fails after persistence', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
-    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
-    const created = await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password: await hasher.hash('secret-secret'),
-      email_verified_at: new Date(),
-    })
-    await login({ email: 'ava@example.com', password: 'secret-secret' })
-
-    const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
-    const enrollmentCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter)
-    const cleanupFailure = new Error('session cleanup failed')
-    const writeSession = runtime.sessionStore.write.bind(runtime.sessionStore)
-    const write = vi.spyOn(runtime.sessionStore, 'write')
-      .mockImplementationOnce(writeSession)
-      .mockRejectedValueOnce(cleanupFailure)
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-
-    const recovery = await auth.multiFactor.confirmEnrollment({ code: enrollmentCode })
-
-    expect(recovery.recoveryCodes).toHaveLength(8)
-    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.toMatchObject({
-      recoveryCodeHashes: expect.arrayContaining([expect.any(String)]),
-    })
-    expect(write).toHaveBeenCalledTimes(2)
-    expect(warning).toHaveBeenCalledWith(
-      '[@holo-js/auth] Failed to clear a completed multi-factor enrollment from the session.',
-      cleanupFailure,
-    )
-  })
-
   it('invalidates a pending multi-factor challenge after five invalid attempts', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1316,7 +841,7 @@ describe('@holo-js/auth package runtime', () => {
       })
     }
 
-    expect(runtime.sessionStore.records.has(pending.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(pending.sessionId)) !== null)).toBe(false)
     await expect(auth.multiFactor.challenge({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1),
     })).rejects.toMatchObject({
@@ -1325,7 +850,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('applies the multi-factor attempt limit across newly created login challenges', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1354,11 +879,11 @@ describe('@holo-js/auth package runtime', () => {
     })).rejects.toMatchObject({
       code: 'multi_factor_code_invalid',
     })
-    expect(runtime.sessionStore.records.has(pending.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(pending.sessionId)) !== null)).toBe(false)
   })
 
   it('rate limits multi-factor disable and recovery-code regeneration verification', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1389,7 +914,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('does not return recovery codes when the verified credential changes before replacement', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -1403,10 +928,7 @@ describe('@holo-js/auth package runtime', () => {
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
-    vi.spyOn(runtime.multiFactorStore, 'replaceRecoveryCodes').mockImplementation(async (provider, userId) => {
-      await runtime.multiFactorStore.delete(provider, userId)
-      return undefined as never
-    })
+    await runtime.persistence.adapter.execute('CREATE TRIGGER remove_verified_credential BEFORE UPDATE OF recovery_code_hashes ON auth_multi_factor_credentials BEGIN DELETE FROM auth_multi_factor_credentials WHERE id = OLD.id; SELECT RAISE(IGNORE); END')
 
     await expect(auth.multiFactor.regenerateRecoveryCodes({
       method: 'totp',
@@ -1416,7 +938,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('replaces every previous recovery code after successful regeneration', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1446,7 +968,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('requires a configured security rate-limit store before creating a multi-factor challenge', async () => {
-    const runtime = configureRuntime({ multiFactor: true, multiFactorSecurity: false })
+    const runtime = await configureRuntime({ multiFactor: true, multiFactorSecurity: false })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1464,11 +986,11 @@ describe('@holo-js/auth package runtime', () => {
     await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).rejects.toMatchObject({
       code: 'multi_factor_runtime_unconfigured',
     })
-    expect(runtime.sessionStore.records.size).toBe(0)
+    expect((await runtime.sessionStore.countRecords())).toBe(0)
   })
 
   it('requires atomic session operations before creating a multi-factor challenge', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1495,11 +1017,11 @@ describe('@holo-js/auth package runtime', () => {
     await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).rejects.toMatchObject({
       code: 'multi_factor_runtime_unconfigured',
     })
-    expect(runtime.sessionStore.records.size).toBe(0)
+    expect((await runtime.sessionStore.countRecords())).toBe(0)
   })
 
   it('removes an incomplete challenge session when attempt initialization fails', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1523,12 +1045,12 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).rejects.toThrow('flash unavailable')
-    expect(runtime.sessionStore.records.size).toBe(0)
+    expect((await runtime.sessionStore.countRecords())).toBe(0)
     expect(runtime.context.getSessionId('web')).toBeUndefined()
   })
 
   it('restores a multi-factor attempt after a transient credential-store failure', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1544,35 +1066,17 @@ describe('@holo-js/auth package runtime', () => {
     })
     await logout()
     await login({ email: 'ava@example.com', password: 'secret-secret' })
-    const advanceCounter = vi.spyOn(runtime.multiFactorStore, 'advanceCounter')
-    advanceCounter.mockRejectedValueOnce(new Error('credential store unavailable'))
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_counter_write BEFORE UPDATE OF last_used_counter ON auth_multi_factor_credentials BEGIN SELECT RAISE(ABORT, 'credential store unavailable'); END")
     const challengeCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1)
 
     await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toThrow('credential store unavailable')
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_counter_write')
     const established = await auth.multiFactor.challenge({ code: challengeCode })
     expect(established.multiFactorChallenge).toBeUndefined()
   })
 
   it('restores a multi-factor attempt after a transient rate-limit-store failure', async () => {
-    let hitAttempts = 0
-    const runtime = configureRuntime({
-      multiFactor: true,
-      multiFactorSecurityModule: {
-        getSecurityRuntimeBindings: () => ({
-          csrfSigningKey: 'test-security-signing-key',
-          rateLimitStore: {
-            async hit() {
-              hitAttempts += 1
-              if (hitAttempts === 1) throw new Error('rate-limit store unavailable')
-              return { limited: false, snapshot: { attempts: 1 } }
-            },
-            async clear() {
-              return true
-            },
-          },
-        }),
-      },
-    })
+    const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -1590,39 +1094,21 @@ describe('@holo-js/auth package runtime', () => {
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const challengeCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter + 1)
 
-    await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toThrow('rate-limit store unavailable')
+    const root = await mkdtemp(join(tmpdir(), 'holo-auth-rate-failure-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    configureSecurityRuntime({ config: {}, csrfSigningKey: 'test-security-signing-key', rateLimitStore: createFileRateLimitStore(root) })
+    await chmod(root, 0o500)
+    try {
+      await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toThrow('EACCES')
+    } finally {
+      await chmod(root, 0o700)
+    }
     const established = await auth.multiFactor.challenge({ code: challengeCode })
     expect(established.multiFactorChallenge).toBeUndefined()
   })
 
-  it('restores a multi-factor challenge after session establishment fails', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
-    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password: await hasher.hash('secret-secret'),
-      email_verified_at: new Date(),
-    })
-    await login({ email: 'ava@example.com', password: 'secret-secret' })
-    const enrollment = await auth.multiFactor.beginEnrollment()
-    const enrolled = await auth.multiFactor.confirmEnrollment({
-      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
-    })
-    await logout()
-    await login({ email: 'ava@example.com', password: 'secret-secret' })
-    const rotate = vi.spyOn(runtime.sessionStore, 'rotate')
-    rotate.mockRejectedValueOnce(new Error('session rotation unavailable'))
-
-    await expect(auth.multiFactor.recover({ code: enrolled.recoveryCodes[0]! }))
-      .rejects.toThrow('session rotation unavailable')
-    const established = await auth.multiFactor.recover({ code: enrolled.recoveryCodes[1]! })
-
-    expect(established.multiFactorChallenge).toBeUndefined()
-  })
-
   it('does not restore an MFA challenge after cookie delivery fails following rotation', async () => {
-    const runtime = configureRuntime({ multiFactor: true })
+    const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
     await auth.loginUsing(created)
     const enrollment = await auth.multiFactor.beginEnrollment()
@@ -1637,8 +1123,8 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.context.getSessionId('web')).toBeUndefined()
   })
 
-  it('activates request-scoped contexts before exposing runtime bindings', () => {
-    const runtime = configureRuntime()
+  it('activates request-scoped contexts before exposing runtime bindings', async () => {
+    const runtime = await configureRuntime()
     const activate = vi.fn()
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
     const activatableContext = {
@@ -1668,7 +1154,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('waits for async response cookie appends during session login and logout', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const appendedCookies: string[] = []
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
 
@@ -1702,7 +1188,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('hydrates the request session cookie before logout and invalidates the stored session', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -1726,7 +1212,7 @@ describe('@holo-js/auth package runtime', () => {
     const loggedOut = await logout()
 
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
-    expect(runtime.sessionStore.records.has(established.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(established.sessionId)) !== null)).toBe(false)
     expect(await check()).toBe(false)
     expect(await user()).toBeNull()
 
@@ -1740,7 +1226,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('does not auto-start email verification during registration', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     expect(unwrapAuthResult(await register({
       name: 'Ava',
@@ -1753,11 +1239,11 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     expect(runtime.deliveries).toEqual([])
-    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
+    expect(await runtime.persistence.db.table('email_verification_tokens').count()).toBe(0)
   })
 
   it('auto-starts email verification during registration when verification is required', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       emailVerificationRequired: true,
     })
 
@@ -1776,11 +1262,11 @@ describe('@holo-js/auth package runtime', () => {
       type: 'verification',
       email: 'ava@example.com',
     })
-    expect(runtime.emailVerificationTokenStore.records.size).toBe(1)
+    expect(await runtime.persistence.db.table('email_verification_tokens').count()).toBe(1)
   })
 
   it('supports trusted session login with a user object or user id', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -1806,7 +1292,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(await check()).toBe(true)
     expect(await id()).toBe(created.id)
     expect(runtime.context.getSessionId('web')).toBe(establishedByUser.sessionId)
-    expect(runtime.sessionStore.records.size).toBe(1)
+    expect((await runtime.sessionStore.countRecords())).toBe(1)
 
     await logout()
 
@@ -1827,7 +1313,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects trusted login for provider-matched users that no longer exist', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -1842,8 +1328,7 @@ describe('@holo-js/auth package runtime', () => {
       },
     })
 
-    runtime.usersProvider.users.delete(created.id)
-    runtime.usersProvider.usersByEmail.delete(created.email)
+    await runtime.usersProvider.delete!(created.id)
 
     await expect(loginUsing(created)).rejects.toThrow(
       `Auth user "users:${created.id}" was not found for trusted login.`,
@@ -1852,7 +1337,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('supports trusted login on named guards and rejects provider mismatches', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const admin = await runtime.adminsProvider.create({
       name: 'Admin Ava',
       email: 'admin@example.com',
@@ -1882,7 +1367,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('accepts serialized trusted users in multi-provider apps', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -1918,11 +1403,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects ambiguous trusted user objects when multiple providers are configured', async () => {
-    const runtime = configureRuntime()
-    Object.assign(runtime.adminsProvider, {
-      matchesUser: undefined,
-    })
-
+    const runtime = await configureRuntime()
     await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -1936,14 +1417,14 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date(),
     })
 
-    await expect(auth.guard('web').loginUsing(admin)).rejects.toThrow(
+    await expect(auth.guard('web').loginUsing({ id: admin.id, name: admin.name, email: admin.email })).rejects.toThrow(
       'Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.',
     )
     await expect(auth.guard('web').check()).resolves.toBe(false)
   })
 
   it('exposes public password hashing helpers', async () => {
-    configureRuntime()
+    await configureRuntime()
 
     const digest = await hashPassword('secret-secret')
 
@@ -2062,7 +1543,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('supports impersonation within the same guard and restores the original user', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -2123,7 +1604,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('preserves remember-me session state when impersonation stops', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -2143,13 +1624,13 @@ describe('@holo-js/auth package runtime', () => {
 
     const originalSessionId = runtime.context.getSessionId('web')
     const originalRecord = originalSessionId
-      ? runtime.sessionStore.records.get(originalSessionId)
+      ? (await runtime.sessionStore.read(originalSessionId))
       : null
     expect(originalRecord?.rememberTokenHash).toBeTypeOf('string')
 
     const impersonated = await impersonate(target)
 
-    const duringImpersonation = runtime.sessionStore.records.get(impersonated.sessionId)
+    const duringImpersonation = (await runtime.sessionStore.read(impersonated.sessionId))
     expect(duringImpersonation).toMatchObject({
       id: impersonated.sessionId,
     })
@@ -2161,7 +1642,7 @@ describe('@holo-js/auth package runtime', () => {
 
     await stopImpersonating()
 
-    const afterStop = runtime.sessionStore.records.get(impersonated.sessionId)
+    const afterStop = (await runtime.sessionStore.read(impersonated.sessionId))
     expect(afterStop).toMatchObject({
       id: impersonated.sessionId,
     })
@@ -2171,7 +1652,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('does not keep remember-me state when a normal login opts out of remember', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -2186,7 +1667,7 @@ describe('@holo-js/auth package runtime', () => {
       remember: true,
     }))
 
-    const rememberedRecord = runtime.sessionStore.records.get(remembered.sessionId)
+    const rememberedRecord = (await runtime.sessionStore.read(remembered.sessionId))
     expect(rememberedRecord?.rememberTokenHash).toBeTypeOf('string')
 
     const loggedInAgain = unwrapAuthResult(await login({
@@ -2194,7 +1675,7 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     }))
 
-    const nextRecord = runtime.sessionStore.records.get(loggedInAgain.sessionId)
+    const nextRecord = (await runtime.sessionStore.read(loggedInAgain.sessionId))
     expect(loggedInAgain.cookies).toHaveLength(2)
     expect(loggedInAgain.rememberToken).toBeUndefined()
     expect(loggedInAgain.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
@@ -2203,7 +1684,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('hydrates remember-me cookies before normal login and clears remembered state when opting out', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -2235,14 +1716,14 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     }))
 
-    expect(runtime.sessionStore.records.has(remembered.sessionId)).toBe(false)
-    expect(runtime.sessionStore.records.get(loggedInAgain.sessionId)?.rememberTokenHash).toBeUndefined()
+    expect(((await runtime.sessionStore.read(remembered.sessionId)) !== null)).toBe(false)
+    expect((await runtime.sessionStore.read(loggedInAgain.sessionId))?.rememberTokenHash).toBeUndefined()
     expect(loggedInAgain.rememberToken).toBeUndefined()
     expect(loggedInAgain.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
   })
 
   it('supports impersonation across guards and removes the impersonated guard on stop', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const admin = await runtime.adminsProvider.create({
       name: 'Admin Ava',
       email: 'admin@example.com',
@@ -2306,7 +1787,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects duplicate registration and mismatched password confirmation', async () => {
-    configureRuntime()
+    await configureRuntime()
 
     await register({
       name: 'Ava',
@@ -2331,7 +1812,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rolls back registration when email verification creation fails', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       emailVerificationRequired: true,
       delivery: {
         async sendEmailVerification() {
@@ -2347,49 +1828,12 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     })).rejects.toThrow('delivery failed')
 
-    expect(runtime.usersProvider.users.size).toBe(0)
-    expect(runtime.usersProvider.usersByEmail.size).toBe(0)
-    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
-  })
-
-  it('falls back to adapter deletion when model deletion throws during registration rollback', async () => {
-    const runtime = configureRuntime({
-      emailVerificationRequired: true,
-      delivery: {
-        async sendEmailVerification() {
-          throw new Error('delivery failed')
-        },
-      },
-    })
-    const adapterDelete = vi.spyOn(runtime.usersProvider, 'delete')
-    const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
-
-    runtime.usersProvider.create = vi.fn(async (input) => {
-      const created = await originalCreate(input)
-
-      return {
-        ...created,
-        async delete() {
-          throw new Error('model delete failed')
-        },
-      }
-    })
-
-    await expect(register({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password: 'secret-secret',
-      passwordConfirmation: 'secret-secret',
-    })).rejects.toThrow('delivery failed')
-
-    expect(adapterDelete).toHaveBeenCalledWith(1)
-    expect(runtime.usersProvider.users.size).toBe(0)
-    expect(runtime.usersProvider.usersByEmail.size).toBe(0)
-    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
+    expect(await runtime.persistence.db.table('users').count()).toBe(0)
+    expect(await runtime.persistence.db.table('email_verification_tokens').count()).toBe(0)
   })
 
   it('accepts non-email credentials when the application passes validated input', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: defineAuthConfig({
         providers: {
           users: {
@@ -2417,11 +1861,11 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     expect(await check()).toBe(true)
-    expect(runtime.usersProvider.usersByPhone.get('45545454')).toBe(1)
+    expect((await runtime.usersProvider.findByCredentials({ phone: '45545454' }))?.id).toBe(1)
   })
 
   it('uses configured provider identifiers instead of arbitrary profile fields', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: defineAuthConfig({
         providers: {
           users: {
@@ -2493,12 +1937,12 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     })
     expect(await check()).toBe(true)
-    expect(runtime.usersProvider.usersByEmail.get('ava@example.com')).toBe(1)
-    expect(runtime.usersProvider.usersByPhone.get('45545454')).toBe(1)
+    expect((await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' }))?.id).toBe(1)
+    expect((await runtime.usersProvider.findByCredentials({ phone: '45545454' }))?.id).toBe(1)
   })
 
   it('rejects registration and login when none of the configured identifiers are present', async () => {
-    configureRuntime({
+    await configureRuntime({
       authConfig: defineAuthConfig({
         providers: {
           users: {
@@ -2526,7 +1970,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects missing users, bad passwords, and allows unverified logins with verification routing when verification is required', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       emailVerificationRequired: true,
     })
 
@@ -2569,7 +2013,7 @@ describe('@holo-js/auth package runtime', () => {
       emailVerificationRoute: '/verify-email?email=ava%40example.com',
     })
 
-    runtime.usersProvider.users.get(1)!.email_verified_at = new Date('2026-04-08T00:00:00.000Z')
+    await runtime.usersProvider.update!((await runtime.usersProvider.findById(1))!, { email_verified_at: new Date('2026-04-08T00:00:00.000Z') })
     expect(unwrapAuthResult(await login({
       email: 'ava@example.com',
       password: 'secret-secret',
@@ -2581,7 +2025,7 @@ describe('@holo-js/auth package runtime', () => {
 
   it('invokes password verification when credential lookup misses a user', async () => {
     const verify = vi.fn(async () => false)
-    configureRuntime({
+    await configureRuntime({
       passwordHasher: {
         hash: vi.fn(async () => 'real-hash'),
         verify,
@@ -2597,7 +2041,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('creates, expires, rejects, and consumes email verification tokens', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = unwrapAuthResult(await register({
       name: 'Ava',
       email: 'ava@example.com',
@@ -2631,8 +2075,8 @@ describe('@holo-js/auth package runtime', () => {
       id: 1,
       email: 'ava@example.com',
     })
-    expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeInstanceOf(Date)
-    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
+    expect((await runtime.usersProvider.findById(1))?.email_verified_at).toBeInstanceOf(Date)
+    expect(await runtime.persistence.db.table('email_verification_tokens').count()).toBe(0)
 
     await expectAuthValidationError(() => verifyEmail(token.plainTextToken), 'email_verification_token_expired')
 
@@ -2643,7 +2087,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('allows exactly one concurrent email verification redemption', async () => {
-    configureRuntime()
+    await configureRuntime()
     const created = unwrapAuthResult(await register({
       name: 'Ava',
       email: 'concurrent@example.com',
@@ -2660,7 +2104,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('resends verification tokens by email without requiring an active session', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       emailVerificationRequired: true,
     })
 
@@ -2697,125 +2141,27 @@ describe('@holo-js/auth package runtime', () => {
     await expectAuthValidationError(() => resendEmailVerification('ava@example.com'), 'email_already_verified', 409)
   })
 
-  it('fails verification and password reset flows when a provider cannot persist user changes', async () => {
-    const sessionStore = new InMemorySessionStore()
-    const emailVerificationTokenStore = new InMemoryEmailVerificationTokenStore()
-    const passwordResetTokenStore = new InMemoryPasswordResetTokenStore()
-    const usersProvider = new SnapshotProviderAdapter()
-    const deliveries: Array<{ readonly type: 'verification' | 'password-reset', readonly tokenValue: string }> = []
-
-    configureSessionRuntime({
-      config: {
-        driver: 'database',
-        stores: {
-          database: {
-            name: 'database',
-            driver: 'database',
-            connection: 'main',
-            table: 'sessions',
-          },
-        },
-        cookie: {
-          name: 'holo_session',
-          path: '/',
-          secure: false,
-          httpOnly: true,
-          sameSite: 'lax',
-          partitioned: false,
-          maxAge: 120,
-        },
-        idleTimeout: 120,
-        absoluteLifetime: 120,
-        rememberMeLifetime: 43200,
-      },
-      stores: {
-        database: sessionStore,
-      },
-    })
-
-    configureAuthRuntime({
-      config: defineAuthConfig({
-        defaults: {
-          guard: 'web',
-          passwords: 'users',
-        },
-        guards: {
-          web: {
-            driver: 'session',
-            provider: 'users',
-          },
-        },
-        providers: {
-          users: {
-            model: 'User',
-          },
-        },
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 0,
-          },
-        },
-      }),
-      session: getSessionRuntime(),
-      providers: {
-        users: usersProvider,
-      },
-      emailVerificationTokens: emailVerificationTokenStore,
-      passwordResetTokens: passwordResetTokenStore,
-      delivery: {
-        async sendEmailVerification(input) {
-          deliveries.push({
-            type: 'verification',
-            tokenValue: input.token.plainTextToken,
-          })
-        },
-        async sendPasswordReset(input) {
-          deliveries.push({
-            type: 'password-reset',
-            tokenValue: input.token.plainTextToken,
-          })
-        },
-      },
-      context: authRuntimeInternals.createMemoryAuthContext(),
-    })
-
-    const initialPassword = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    const created = await usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password: initialPassword,
-      email_verified_at: null,
-    })
-
+  it('preserves verification and password reset tokens when native user updates fail', async () => {
+    const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    const initialPassword = await hashPassword('secret-secret')
+    const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: initialPassword, email_verified_at: null })
     const verificationToken = await verification.create(created)
-    await expectAuthValidationError(
-      () => verification.consume(verificationToken.plainTextToken),
-      'provider_update_unsupported',
-      500,
-    )
-    expect(usersProvider.users.get(1)?.email_verified_at).toBeNull()
-
     await requestPasswordReset({ email: 'ava@example.com' })
-    const resetDelivery = deliveries.find(delivery => delivery.type === 'password-reset')
-    expect(resetDelivery).toBeDefined()
-    await expectAuthValidationError(() => resetPassword({
-      token: resetDelivery!.tokenValue,
-      password: 'new-secret',
-      passwordConfirmation: 'new-secret',
-    }), 'provider_update_unsupported', 500)
-    await expect(
-      authRuntimeInternals.createDefaultPasswordHasher().verify(
-        'secret-secret',
-        usersProvider.users.get(1)?.password ?? '',
-      ),
-    ).resolves.toBe(true)
+    const resetToken = runtime.deliveries.find(delivery => delivery.type === 'password-reset')!
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_auth_user_update BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'user persistence failed'); END")
+    await expect(verifyEmail(verificationToken.plainTextToken)).rejects.toThrow('user persistence failed')
+    await expect(resetPassword({ token: resetToken.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('user persistence failed')
+    expect((await runtime.usersProvider.findById(created.id))?.email_verified_at).toBeNull()
+    expect(await verifyPassword('secret-secret', (await runtime.usersProvider.findById(created.id))?.password ?? '')).toBe(true)
+    expect(await runtime.emailVerificationTokenStore.findById(verificationToken.id)).not.toBeNull()
+    expect(await runtime.passwordResetTokenStore.findById(resetToken.tokenId)).not.toBeNull()
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_auth_user_update')
+    await expect(verifyEmail(verificationToken.plainTextToken)).resolves.toMatchObject({ email: 'ava@example.com' })
+    await expect(resetPassword({ token: resetToken.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
   })
 
   it('does not verify email when verification token claiming fails', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = unwrapAuthResult(await register({
       name: 'Ava',
       email: 'ava@example.com',
@@ -2823,23 +2169,16 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     }))
     const token = await verification.create(created)
-    const redeemToken = runtime.emailVerificationTokenStore.redeem
-    runtime.emailVerificationTokenStore.redeem = async () => {
-      throw new Error('verification token claim failed')
-    }
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_claim BEFORE DELETE ON email_verification_tokens BEGIN SELECT RAISE(ABORT, 'verification token claim failed'); END")
+    await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token claim failed')
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_token_claim')
 
-    try {
-      await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token claim failed')
-    } finally {
-      runtime.emailVerificationTokenStore.redeem = redeemToken
-    }
-
-    expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeNull()
-    expect(runtime.emailVerificationTokenStore.records.has(token.id)).toBe(true)
+    expect((await runtime.usersProvider.findById(1))?.email_verified_at).toBeNull()
+    expect(Boolean(await runtime.emailVerificationTokenStore.findById(token.id))).toBe(true)
   })
 
   it('does not reset the password when reset token claiming fails', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         passwords: {
           users: {
@@ -2860,38 +2199,27 @@ describe('@holo-js/auth package runtime', () => {
     })
     await requestPasswordReset({ email: 'ava@example.com' })
     const resetDelivery = runtime.deliveries[0]!
-    const redeemToken = runtime.passwordResetTokenStore.redeem
-    runtime.passwordResetTokenStore.redeem = async () => {
-      throw new Error('password reset token claim failed')
-    }
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_claim BEFORE DELETE ON password_reset_tokens BEGIN SELECT RAISE(ABORT, 'password reset token claim failed'); END")
+    await expect(resetPassword({ token: resetDelivery.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('password reset token claim failed')
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_token_claim')
 
-    try {
-      await expect(resetPassword({
-        token: resetDelivery.tokenValue,
-        password: 'new-secret',
-        passwordConfirmation: 'new-secret',
-      })).rejects.toThrow('password reset token claim failed')
-    } finally {
-      runtime.passwordResetTokenStore.redeem = redeemToken
-    }
-
-    expect(runtime.passwordResetTokenStore.records.has(resetDelivery.tokenId)).toBe(true)
+    expect(Boolean(await runtime.passwordResetTokenStore.findById(resetDelivery.tokenId))).toBe(true)
     await expect(
       authRuntimeInternals.createDefaultPasswordHasher().verify(
         'secret-secret',
-        runtime.usersProvider.users.get(1)?.password ?? '',
+        (await runtime.usersProvider.findById(1))?.password ?? '',
       ),
     ).resolves.toBe(true)
     await expect(
       authRuntimeInternals.createDefaultPasswordHasher().verify(
         'new-secret',
-        runtime.usersProvider.users.get(1)?.password ?? '',
+        (await runtime.usersProvider.findById(1))?.password ?? '',
       ),
     ).resolves.toBe(false)
   })
 
   it('allows exactly one concurrent password reset', async () => {
-    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
     await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
     await requestPasswordReset({ email: 'ava@example.com' })
     const input = { token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' }
@@ -2900,57 +2228,43 @@ describe('@holo-js/auth package runtime', () => {
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
   })
 
-  it.each(['provider failure', 'sibling deletion failure'] as const)('consumes a reset claim and stops password changes after %s', async (failure) => {
-    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+  it.each(['provider failure', 'sibling deletion failure'] as const)('rolls back the native reset claim and password changes after %s', async (failure) => {
+    const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
     await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
     await requestPasswordReset({ email: 'ava@example.com' })
     const delivery = runtime.deliveries[0]!
-    const record = runtime.passwordResetTokenStore.records.get(delivery.tokenId)!
+    const record = (await runtime.passwordResetTokenStore.findById(delivery.tokenId))!
     await runtime.passwordResetTokenStore.create({ ...record, id: 'sibling' })
-    if (failure === 'provider failure') runtime.usersProvider.update = async () => { throw new Error('provider save failed') }
-    else runtime.passwordResetTokenStore.deleteByEmail = async () => { throw new Error('sibling delete failed') }
+    await runtime.persistence.adapter.execute(failure === 'provider failure' ? "CREATE TRIGGER reject_reset_operation BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'provider save failed'); END" : "CREATE TRIGGER reject_reset_operation BEFORE DELETE ON password_reset_tokens WHEN OLD.id = 'sibling' BEGIN SELECT RAISE(ABORT, 'sibling delete failed'); END")
     const input = { token: delivery.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' }
     await expect(resetPassword(input)).rejects.toThrow(failure === 'provider failure' ? 'provider save failed' : 'sibling delete failed')
-    expect(runtime.usersProvider.users.get(1)?.password).toBe('old-secret')
-    expect(runtime.passwordResetTokenStore.records.has(delivery.tokenId)).toBe(false)
-    expect(runtime.passwordResetTokenStore.records.has('sibling')).toBe(failure === 'sibling deletion failure')
-    await expectAuthValidationError(() => resetPassword(input), 'password_reset_token_expired')
+    expect((await runtime.usersProvider.findById(1))?.password).toBe('old-secret')
+    expect(await runtime.passwordResetTokenStore.findById(delivery.tokenId)).not.toBeNull()
+    expect(await runtime.passwordResetTokenStore.findById('sibling')).not.toBeNull()
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_reset_operation')
+    await expect(resetPassword(input)).resolves.toMatchObject({ email: 'ava@example.com' })
+    expect(await runtime.passwordResetTokenStore.findById(delivery.tokenId)).toBeNull()
+    expect(await runtime.passwordResetTokenStore.findById('sibling')).toBeNull()
   })
 
-  it('does not serialize different reset tokens across external provider updates', async () => {
-    const runtime = configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
-    await runtime.usersProvider.create({ email: 'ava@example.com', password: 'old-secret' })
-    await requestPasswordReset({ email: 'ava@example.com' })
-    const delivery = runtime.deliveries[0]!
-    const record = runtime.passwordResetTokenStore.records.get(delivery.tokenId)!
-    let release: () => void = () => {}
-    const pending = new Promise<void>(resolve => { release = resolve })
-    let entered: () => void = () => {}
-    const entry = new Promise<void>(resolve => { entered = resolve })
-    const update = runtime.usersProvider.update.bind(runtime.usersProvider)
-    let updates = 0
-    runtime.usersProvider.update = async (id, values) => {
-      updates += 1
-      if (updates === 1) {
-        entered()
-        await pending
-      }
-      return update(id, values)
+  it('resets different native users concurrently without exchanging passwords or tokens', async () => {
+    const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
+    for (const email of ['ava@example.com', 'mina@example.com']) {
+      await runtime.usersProvider.create({ email, password: await hashPassword('old-secret') })
+      await requestPasswordReset({ email })
     }
-    const first = resetPassword({ token: delivery.tokenValue, password: 'first-secret', passwordConfirmation: 'first-secret' })
-    await entry
-    await runtime.passwordResetTokenStore.create({ ...record, id: 'independent-token' })
-    try {
-      await expect(resetPassword({ token: `independent-token.${delivery.tokenValue.split('.')[1]}`, password: 'second-secret', passwordConfirmation: 'second-secret' }))
-        .resolves.toMatchObject({ email: 'ava@example.com' })
-    } finally {
-      release()
-      await first
+    const passwords = ['first-secret', 'second-secret']
+    await Promise.all(runtime.deliveries.map((delivery, index) => resetPassword({ token: delivery.tokenValue, password: passwords[index]!, passwordConfirmation: passwords[index]! })))
+    for (const [index, delivery] of runtime.deliveries.entries()) {
+      const persisted = await runtime.usersProvider.findByCredentials({ email: delivery.email })
+      expect(await verifyPassword(passwords[index]!, persisted?.password ?? '')).toBe(true)
+      expect(await verifyPassword(passwords[1 - index]!, persisted?.password ?? '')).toBe(false)
+      expect(await runtime.passwordResetTokenStore.findById(delivery.tokenId)).toBeNull()
     }
   })
 
   it('creates, invalidates, and consumes password reset tokens', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         passwords: {
           users: {
@@ -3009,7 +2323,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(resetUser).toMatchObject({
       email: 'ava@example.com',
     })
-    expect(runtime.passwordResetTokenStore.records.size).toBe(0)
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(0)
     expect(unwrapAuthResult(await login({
       email: 'ava@example.com',
       password: 'new-secret',
@@ -3030,7 +2344,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('refreshes the session idle timeout when resolving a session-backed user', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -3071,13 +2385,13 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       password: 'secret-secret',
     }))
-    const initialRecord = runtime.sessionStore.records.get(established.sessionId)
+    const initialRecord = (await runtime.sessionStore.read(established.sessionId))
     expect(initialRecord).toBeDefined()
 
     await new Promise(resolve => setTimeout(resolve, 20))
 
     const resolvedUser = await user()
-    const refreshedRecord = runtime.sessionStore.records.get(established.sessionId)
+    const refreshedRecord = (await runtime.sessionStore.read(established.sessionId))
 
     expect(resolvedUser).toMatchObject({
       email: 'ava@example.com',
@@ -3088,7 +2402,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects registration when password confirmation is omitted', async () => {
-    configureRuntime()
+    await configureRuntime()
 
     await expectAuthValidationError(() => register({
       email: 'ava@example.com',
@@ -3097,7 +2411,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('keeps password reset tokens scoped to their configured broker table', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         defaults: {
           passwords: 'admins',
@@ -3133,7 +2447,7 @@ describe('@holo-js/auth package runtime', () => {
       broker: 'admins',
     })
 
-    const records = Array.from(runtime.passwordResetTokenStore.records.values())
+    const records = (await Promise.all(runtime.deliveries.filter(delivery => delivery.type === 'password-reset').map(delivery => runtime.passwordResetTokenStore.findById(delivery.tokenId)))).filter(record => record !== null)
     expect(records).toHaveLength(2)
     expect(records.map(record => record.table).sort()).toEqual([
       'admin_password_reset_tokens',
@@ -3149,13 +2463,13 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
     })
 
-    const remainingRecords = Array.from(runtime.passwordResetTokenStore.records.values())
+    const remainingRecords = (await Promise.all(runtime.deliveries.filter(delivery => delivery.type === 'password-reset').map(delivery => runtime.passwordResetTokenStore.findById(delivery.tokenId)))).filter(record => record !== null)
     expect(remainingRecords).toHaveLength(1)
     expect(remainingRecords[0]?.table).toBe('admin_password_reset_tokens')
   })
 
   it('honors password reset throttle windows without rotating the active token', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         passwords: {
           users: {
@@ -3178,818 +2492,83 @@ describe('@holo-js/auth package runtime', () => {
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
     const firstDelivery = runtime.deliveries[0]!
-    const firstRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
+    const firstRecord = (await runtime.passwordResetTokenStore.findById(firstDelivery.tokenId))
 
     await requestPasswordReset({ email: 'ava@example.com' })
 
     expect(runtime.deliveries).toHaveLength(1)
-    expect(runtime.passwordResetTokenStore.records.size).toBe(1)
-    expect(runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)).toBe(firstRecord)
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
+    expect(await runtime.passwordResetTokenStore.findById(firstDelivery.tokenId)).toEqual(firstRecord)
   })
 
-  it('prefers the shared security rate-limit store for password reset throttling when available', async () => {
-    const attempts = new Map<string, number>()
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async (key: string) => {
-              attempts.delete(key)
-              return true
-            }),
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
+  it('keeps native shared throttling active after an existing token is removed', async () => {
+    await createNativeAuthRateLimitStore()
+    const runtime = await configurePasswordResetRuntime()
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await runtime.passwordResetTokenStore.delete(runtime.deliveries[0]!.tokenId)
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
-
-    const firstDelivery = runtime.deliveries[0]
-    if (!firstDelivery) {
-      throw new Error('Expected first password reset delivery.')
-    }
-
-    const activeRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
-    if (!activeRecord) {
-      throw new Error('Expected active password reset token record.')
-    }
-
-    runtime.passwordResetTokenStore.records.set(firstDelivery.tokenId, Object.freeze({
-      ...activeRecord,
-      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
-    }))
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(hit).toHaveBeenCalledTimes(2)
-    expect(hit).toHaveBeenNthCalledWith(1, `auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('ava@example.com')}`, {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(runtime.deliveries).toHaveLength(1)
-    expect(runtime.passwordResetTokenStore.records.size).toBe(1)
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(0)
   })
 
-  it('keys shared password reset throttles with the CSRF signing key when available', async () => {
-    const hit = vi.fn(async (_key: string, _options: { readonly maxAttempts: number, readonly decaySeconds: number }) => ({
-      limited: false,
-    }))
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async () => true),
-          },
-          csrfSigningKey: 'signing-key',
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(hit).toHaveBeenCalledWith(
-      `auth:password-reset:${createHash('sha256').update('signing-key').digest('hex').slice(0, 16)}:users:users:password_reset_tokens:${hashPasswordResetEmail('ava@example.com', 'signing-key')}`,
-      {
-        maxAttempts: 1,
-        decaySeconds: 3600,
-      },
-    )
-  })
-
-  it('releases shared password reset reservations when token persistence fails', async () => {
-    const attempts = new Map<string, number>()
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async (key: string) => {
-              attempts.delete(key)
-              return true
-            }),
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
-    const create = vi.spyOn(runtime.passwordResetTokenStore, 'create')
-    create.mockRejectedValueOnce(new Error('token persistence failed'))
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
+  it('releases native throttle reservations after a database insert fails', async () => {
+    await createNativeAuthRateLimitStore()
+    const runtime = await configurePasswordResetRuntime()
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_reset_insert BEFORE INSERT ON password_reset_tokens BEGIN SELECT RAISE(ABORT, 'token persistence failed'); END")
     await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('token persistence failed')
-
-    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
-
-    expect(findByCredentials).toHaveBeenCalledTimes(2)
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_reset_insert')
+    await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
   })
 
-  it('deletes freshly created password reset tokens when delivery fails', async () => {
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    const bindings = authRuntimeInternals.getRuntimeBindings()
-    const originalSendPasswordReset = bindings.delivery.sendPasswordReset
-    bindings.delivery.sendPasswordReset = vi.fn(async () => {
-      throw new Error('delivery failed')
-    })
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('delivery failed')
-    expect(runtime.passwordResetTokenStore.records.size).toBe(0)
-
-    bindings.delivery.sendPasswordReset = originalSendPasswordReset
-
-    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
-    expect(runtime.deliveries).toHaveLength(1)
-    expect(runtime.passwordResetTokenStore.records.size).toBe(1)
-  })
-
-  it('preserves the original delivery error when password reset cleanup fails', async () => {
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    const bindings = authRuntimeInternals.getRuntimeBindings()
-    const originalSendPasswordReset = bindings.delivery.sendPasswordReset
-    const deleteSpy = vi.spyOn(runtime.passwordResetTokenStore, 'delete').mockRejectedValueOnce(new Error('cleanup failed'))
-    bindings.delivery.sendPasswordReset = vi.fn(async () => {
-      throw new Error('delivery failed')
-    })
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('delivery failed')
-    expect(deleteSpy).toHaveBeenCalledTimes(1)
-
-    bindings.delivery.sendPasswordReset = originalSendPasswordReset
-    deleteSpy.mockRestore()
-  })
-
-  it('keeps a failed password reset reserved when clearing the throttle entry throws', async () => {
-    const attempts = new Map<string, number>()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async () => {
-              throw new Error('reservation cleanup failed')
-            }),
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
-    findByCredentials.mockRejectedValueOnce(new Error('provider lookup failed'))
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('provider lookup failed')
-    expect(hit).toHaveBeenCalledTimes(1)
-    expect((globalThis as typeof globalThis & {
-      __holoAuthRuntime__?: { sharedPasswordResetThrottleFailures?: Set<string> }
-    }).__holoAuthRuntime__?.sharedPasswordResetThrottleFailures?.size).toBe(0)
-
-    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
-
-    expect(hit).toHaveBeenCalledTimes(2)
-    expect(findByCredentials).toHaveBeenCalledTimes(1)
-    expect((globalThis as typeof globalThis & {
-      __holoAuthRuntime__?: { sharedPasswordResetThrottleFailures?: Set<string> }
-    }).__holoAuthRuntime__?.sharedPasswordResetThrottleFailures?.size).toBe(0)
+  it('allows a newly registered user to request a reset after unknown-email probes', async () => {
+    await createNativeAuthRateLimitStore()
+    const runtime = await configureRuntime({ authConfig: resetBrokerConfig })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(0)
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith(
-      '[@holo-js/auth] Failed to clear a password reset reservation after use.',
-      expect.objectContaining({ message: 'reservation cleanup failed' }),
-    )
-  })
-
-  it('does not let unknown-email probes consume the shared password reset limiter', async () => {
-    const attempts = new Map<string, number>()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async () => {
-              throw new Error('reservation cleanup failed')
-            }),
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    await requestPasswordReset({ email: 'missing@example.com' })
-    expect(runtime.deliveries).toHaveLength(0)
-
+    await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: await hashPassword('secret-secret') })
     await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(runtime.deliveries).toHaveLength(1)
-    expect(hit).toHaveBeenCalledTimes(2)
-    expect(hit).toHaveBeenNthCalledWith(1, `auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('missing@example.com')}`, {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(hit).toHaveBeenNthCalledWith(2, `auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('ava@example.com')}`, {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenNthCalledWith(
-      1,
-      '[@holo-js/auth] Failed to clear a password reset reservation after use.',
-      expect.objectContaining({ message: 'reservation cleanup failed' }),
-    )
-  })
-
-  it('keeps the shared password reset bypass for stores without clear support', async () => {
-    const hit = vi.fn(async () => ({
-      limited: false,
-    }))
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
-    findByCredentials.mockRejectedValueOnce(new Error('provider lookup failed'))
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('provider lookup failed')
-    expect(hit).toHaveBeenCalledTimes(1)
-
-    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
-
-    expect(hit).toHaveBeenCalledTimes(1)
-    expect(findByCredentials).toHaveBeenCalledTimes(2)
-    expect((globalThis as typeof globalThis & {
-      __holoAuthRuntime__?: { sharedPasswordResetThrottleFailures?: Set<string> }
-    }).__holoAuthRuntime__?.sharedPasswordResetThrottleFailures?.size).toBe(0)
     expect(runtime.deliveries).toHaveLength(1)
   })
 
-  it('does not bypass the shared limiter for unknown-email probes when clear support is unavailable', async () => {
-    const attempts = new Map<string, number>()
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-
-    await requestPasswordReset({ email: 'missing@example.com' })
-    expect(runtime.deliveries).toHaveLength(0)
-
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Missing User',
-      email: 'missing@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    await requestPasswordReset({ email: 'missing@example.com' })
-
-    expect(hit).toHaveBeenCalledTimes(2)
-    expect(hit).toHaveBeenNthCalledWith(1, `auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('missing@example.com')}`, {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(hit).toHaveBeenNthCalledWith(2, `auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('missing@example.com')}`, {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(runtime.deliveries).toHaveLength(0)
-  })
-
-  it('stops password reset delivery when the shared limiter is already active for a known user without a local token', async () => {
-    const attempts = new Map<string, number>([
-      [`auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('ava@example.com')}`, 1],
-    ])
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async () => true),
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
+  it('uses persisted token throttling when no security store is configured', async () => {
+    resetSecurityRuntime()
+    const runtime = await configurePasswordResetRuntime()
     await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(runtime.deliveries).toHaveLength(0)
-    expect(runtime.passwordResetTokenStore.records.size).toBe(0)
-    expect(hit).toHaveBeenCalledTimes(1)
-    expect(hit).toHaveBeenCalledWith(`auth:password-reset:users:users:password_reset_tokens:${hashPasswordResetEmail('ava@example.com')}`, {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-  })
-
-  it('namespaces shared password reset limiter buckets across apps using the same store', async () => {
-    const hit = vi.fn(async (_key: string, _options: { readonly maxAttempts: number, readonly decaySeconds: number }) => ({
-      limited: false,
-    }))
-
-    const sharedBindings = new Map<string, {
-      readonly rateLimitStore: {
-        hit: typeof hit
-        clear: () => Promise<boolean>
-      }
-      readonly csrfSigningKey: string
-    }>([
-      ['app-a', { rateLimitStore: { hit, clear: vi.fn(async () => true) }, csrfSigningKey: 'app-a' }],
-      ['app-b', { rateLimitStore: { hit, clear: vi.fn(async () => true) }, csrfSigningKey: 'app-b' }],
-    ])
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return sharedBindings.get((globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ ?? 'app-a')
-      },
-    })
-
-    ;(globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ = 'app-a'
-    const firstRuntime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await firstRuntime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
     await requestPasswordReset({ email: 'ava@example.com' })
-
-    resetAuthRuntime()
-    resetSessionRuntime()
-
-    ;(globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ = 'app-b'
-    const secondRuntime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    await secondRuntime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(hit).toHaveBeenCalledTimes(2)
-    expect(hit).toHaveBeenNthCalledWith(1, expect.stringMatching(/^auth:password-reset:[0-9a-f]{16}:users:users:password_reset_tokens:[0-9a-f]{64}$/), {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(hit).toHaveBeenNthCalledWith(2, expect.stringMatching(/^auth:password-reset:[0-9a-f]{16}:users:users:password_reset_tokens:[0-9a-f]{64}$/), {
-      maxAttempts: 1,
-      decaySeconds: 3600,
-    })
-    expect(hit.mock.calls[0]?.[0]).not.toBe(hit.mock.calls[1]?.[0])
-  })
-
-  it('skips provider lookups once password reset throttling is active in the shared security store', async () => {
-    const attempts = new Map<string, number>()
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async () => true),
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-    expect(findByCredentials).toHaveBeenCalledTimes(1)
-
-    const firstDelivery = runtime.deliveries[0]
-    if (!firstDelivery) {
-      throw new Error('Expected first password reset delivery.')
-    }
-
-    const activeRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
-    if (!activeRecord) {
-      throw new Error('Expected active password reset token record.')
-    }
-
-    runtime.passwordResetTokenStore.records.set(firstDelivery.tokenId, Object.freeze({
-      ...activeRecord,
-      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
-    }))
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(hit).toHaveBeenCalledTimes(2)
-    expect(findByCredentials).toHaveBeenCalledTimes(1)
     expect(runtime.deliveries).toHaveLength(1)
-  })
-
-  it('falls back to the provider lookup path when no shared rate-limit store is configured', async () => {
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return undefined
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
+    await runtime.passwordResetTokenStore.delete(runtime.deliveries[0]!.tokenId)
     await requestPasswordReset({ email: 'ava@example.com' })
-
-    expect(findByCredentials).toHaveBeenCalledTimes(1)
-    expect(runtime.deliveries).toHaveLength(1)
-  })
-
-  it('skips shared limiter checks when an existing password reset token has no shared store available', async () => {
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: undefined,
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-    const firstDelivery = runtime.deliveries[0]
-    if (!firstDelivery) {
-      throw new Error('Expected first password reset delivery.')
-    }
-
-    const activeRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
-    if (!activeRecord) {
-      throw new Error('Expected active password reset token record.')
-    }
-
-    runtime.passwordResetTokenStore.records.set(firstDelivery.tokenId, Object.freeze({
-      ...activeRecord,
-      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
-    }))
-
-    await requestPasswordReset({ email: 'ava@example.com' })
-
     expect(runtime.deliveries).toHaveLength(2)
   })
 
-  it('skips provider lookups when the shared password reset limiter is already active without a token row', async () => {
-    const hit = vi.fn(async () => ({
-      limited: true,
-    }))
+  it('isolates real throttle buckets for apps sharing a native store', async () => {
+    const store = await createNativeAuthRateLimitStore('app-a')
+    const runtime = await configurePasswordResetRuntime()
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await runtime.passwordResetTokenStore.delete(runtime.deliveries[0]!.tokenId)
+    await requestPasswordReset({ email: 'ava@example.com' })
+    expect(runtime.deliveries).toHaveLength(1)
+    configureSecurityRuntime({ config: {}, csrfSigningKey: 'app-b', rateLimitStore: store })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    expect(runtime.deliveries).toHaveLength(2)
+  })
 
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear: vi.fn(async () => true),
-          },
-        }
-      },
-    })
+  it('keeps a native throttle active without querying an unavailable provider table', async () => {
+    await createNativeAuthRateLimitStore()
+    const runtime = await configurePasswordResetRuntime()
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await runtime.passwordResetTokenStore.delete(runtime.deliveries[0]!.tokenId)
+    await runtime.persistence.adapter.execute('ALTER TABLE users RENAME TO unavailable_users')
+    await requestPasswordReset({ email: 'ava@example.com' })
+    expect(runtime.deliveries).toHaveLength(1)
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(0)
+  })
 
-    const runtime = configureRuntime({
+  it('deletes freshly created password reset tokens when delivery fails', async () => {
+    const runtime = await configureRuntime({
       authConfig: {
         passwords: {
           users: {
@@ -4001,7 +2580,6 @@ describe('@holo-js/auth package runtime', () => {
         },
       },
     })
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -4010,15 +2588,58 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
     })
 
-    await requestPasswordReset({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const originalSendPasswordReset = bindings.delivery.sendPasswordReset
+    bindings.delivery.sendPasswordReset = vi.fn(async () => {
+      throw new Error('delivery failed')
+    })
 
-    expect(hit).toHaveBeenCalledTimes(1)
-    expect(findByCredentials).not.toHaveBeenCalled()
-    expect(runtime.deliveries).toHaveLength(0)
+    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('delivery failed')
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(0)
+
+    bindings.delivery.sendPasswordReset = originalSendPasswordReset
+
+    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
+    expect(runtime.deliveries).toHaveLength(1)
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
+  })
+  it('preserves the original delivery error when password reset cleanup fails', async () => {
+    const runtime = await configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const originalSendPasswordReset = bindings.delivery.sendPasswordReset
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_reset_cleanup BEFORE DELETE ON password_reset_tokens BEGIN SELECT RAISE(ABORT, 'cleanup failed'); END")
+    bindings.delivery.sendPasswordReset = vi.fn(async () => {
+      throw new Error('delivery failed')
+    })
+
+    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('delivery failed')
+    expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
+
+    bindings.delivery.sendPasswordReset = originalSendPasswordReset
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_reset_cleanup')
   })
 
   it('returns cached users from user() and refetches with refreshUser()', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     await runtime.usersProvider.create({
       name: 'Ava',
@@ -4036,7 +2657,7 @@ describe('@holo-js/auth package runtime', () => {
       name: 'Ava',
     })
 
-    runtime.usersProvider.users.get(1)!.name = 'Ava Updated'
+    await runtime.usersProvider.update!((await runtime.usersProvider.findById(1))!, { name: 'Ava Updated' })
 
     expect(await user()).toMatchObject({
       name: 'Ava',
@@ -4047,7 +2668,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('loads a fresh user through the selected guard provider without a session', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -4065,75 +2686,8 @@ describe('@holo-js/auth package runtime', () => {
     await expect(auth.guard('web').findUserById(999)).resolves.toBeNull()
   })
 
-  it('releases shared password reset probes when an expired-token retry fails', async () => {
-    const attempts = new Map<string, number>()
-    const clear = vi.fn(async (key: string) => {
-      attempts.delete(key)
-      return true
-    })
-    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
-      const next = (attempts.get(key) ?? 0) + 1
-      attempts.set(key, next)
-
-      return {
-        limited: next > options.maxAttempts,
-      }
-    })
-
-    mockOptionalSecurityModule({
-      getSecurityRuntimeBindings() {
-        return {
-          rateLimitStore: {
-            hit,
-            clear,
-          },
-        }
-      },
-    })
-
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-    runtime.passwordResetTokenStore.records.set('reset-1', Object.freeze({
-      id: 'reset-1',
-      provider: 'users',
-      email: 'ava@example.com',
-      table: 'password_reset_tokens',
-      tokenHash: 'expired-token-hash',
-      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
-      expiresAt: new Date(Date.now() - (60 * 1000)),
-    }))
-
-    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
-    findByCredentials.mockRejectedValueOnce(new Error('provider lookup failed'))
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('provider lookup failed')
-    expect(clear).toHaveBeenCalledTimes(1)
-    expect(attempts.size).toBe(0)
-    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
-
-    expect(findByCredentials).toHaveBeenCalledTimes(2)
-    expect(runtime.deliveries).toHaveLength(1)
-  })
-
   it('supports multiple guards and distinct providers safely', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4178,7 +2732,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('clears configured hosted provider cookies through the same logout api', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         clerk: {
           app: {
@@ -4215,7 +2769,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('ignores malformed hosted provider cookie configs during logout', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       config: {
@@ -4244,7 +2798,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('supports logout with legacy session bindings that only expose named cookie helpers', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const session = getSessionRuntime()
     const legacySession = {
       create: session.create,
@@ -4274,7 +2828,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('restores a session from the remember cookie when no session cookie is present', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -4344,7 +2898,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('clears hosted provider cookies without inheriting custom app session scope', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         clerk: {
           app: {
@@ -4414,7 +2968,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rotates a shared browser session while keeping multiple session guards authenticated', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4434,14 +2988,14 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     }))
 
-    const originalRecord = runtime.sessionStore.records.get(webSession.sessionId)
+    const originalRecord = (await runtime.sessionStore.read(webSession.sessionId))
     expect(originalRecord).toBeTruthy()
     const agedCreatedAt = new Date(Date.now() - (110 * 60 * 1000))
     const agedLastActivityAt = new Date(Date.now() - (109 * 60 * 1000))
     const agedExpiresAt = new Date(Date.now() + (60 * 1000))
 
     if (originalRecord) {
-      runtime.sessionStore.records.set(webSession.sessionId, Object.freeze({
+      await runtime.sessionStore.write(Object.freeze({
         ...originalRecord,
         createdAt: agedCreatedAt,
         lastActivityAt: agedLastActivityAt,
@@ -4457,11 +3011,11 @@ describe('@holo-js/auth package runtime', () => {
     }))
 
     expect(adminSession.sessionId).not.toBe(webSession.sessionId)
-    expect(runtime.sessionStore.records.has(webSession.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(webSession.sessionId)) !== null)).toBe(false)
     expect(runtime.context.getSessionId('web')).toBe(adminSession.sessionId)
     expect(runtime.context.getSessionId('admin')).toBe(adminSession.sessionId)
-    expect(runtime.sessionStore.records).toHaveLength(1)
-    const renewedRecord = runtime.sessionStore.records.get(adminSession.sessionId)
+    expect(await runtime.sessionStore.countRecords()).toBe(1)
+    const renewedRecord = (await runtime.sessionStore.read(adminSession.sessionId))
     expect(renewedRecord).toBeTruthy()
     expect(renewedRecord?.createdAt.getTime()).not.toBe(agedCreatedAt.getTime())
     expect(renewedRecord?.lastActivityAt.getTime()).not.toBe(agedLastActivityAt.getTime())
@@ -4527,7 +3081,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('logs every configured guard out when logoutAll is called without a guard name', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4575,7 +3129,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('removes shared-session auth payloads when logoutAll logs out every guard', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4603,11 +3157,11 @@ describe('@holo-js/auth package runtime', () => {
     }))
 
     expect(adminSession.sessionId).not.toBe(webSession.sessionId)
-    expect(runtime.sessionStore.records.has(webSession.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(webSession.sessionId)) !== null)).toBe(false)
 
     await getAuthRuntime().logoutAll()
 
-    expect(runtime.sessionStore.records.size).toBe(0)
+    expect((await runtime.sessionStore.countRecords())).toBe(0)
 
     resetAuthRuntime()
     const restartedContext = authRuntimeInternals.createMemoryAuthContext()
@@ -4662,7 +3216,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('supports shared-session logout with session bindings that do not expose write()', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const session = getSessionRuntime()
     const sessionWithoutWrite = {
       create: session.create,
@@ -4718,7 +3272,7 @@ describe('@holo-js/auth package runtime', () => {
       },
     }
 
-    configureRuntime({
+    await configureRuntime({
       passwordHasher,
     })
 
@@ -4727,7 +3281,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('returns hosted-provider cookie clears from logoutAll for a named guard', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         clerk: {
           app: {
@@ -4770,7 +3324,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('returns hosted-provider cookie clears from logoutAll when logging out every guard', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         clerk: {
           app: {
@@ -4821,7 +3375,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('preserves the auth provider marker when a user is rehydrated from session storage', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4893,11 +3447,11 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     expect(created.provider).toBe('users')
-    expect(runtime.tokenStore.records.get(created.id)?.provider).toBe('users')
+    expect((await runtime.tokenStore.findById(created.id))?.provider).toBe('users')
   })
 
   it('replaces the previous session when logging in again and can clear all sessions through the runtime facade', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     await register({
       name: 'Ava',
@@ -4912,7 +3466,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     const firstSessionId = runtime.context.getSessionId('web')
     const firstRecord = firstSessionId
-      ? runtime.sessionStore.records.get(firstSessionId)
+      ? (await runtime.sessionStore.read(firstSessionId))
       : null
 
     expect(firstRecord).toBeTruthy()
@@ -4921,7 +3475,7 @@ describe('@holo-js/auth package runtime', () => {
     const agedExpiresAt = new Date(Date.now() + (60 * 1000))
 
     if (firstRecord && firstSessionId) {
-      runtime.sessionStore.records.set(firstSessionId, Object.freeze({
+      await runtime.sessionStore.write(Object.freeze({
         ...firstRecord,
         createdAt: agedCreatedAt,
         lastActivityAt: agedLastActivityAt,
@@ -4935,13 +3489,13 @@ describe('@holo-js/auth package runtime', () => {
     })
     const secondSessionId = runtime.context.getSessionId('web')
     const secondRecord = secondSessionId
-      ? runtime.sessionStore.records.get(secondSessionId)
+      ? (await runtime.sessionStore.read(secondSessionId))
       : null
 
     expect(secondSessionId).toBeTypeOf('string')
     expect(secondSessionId).not.toBe(firstSessionId)
-    expect(firstSessionId ? runtime.sessionStore.records.has(firstSessionId) : false).toBe(false)
-    expect(secondSessionId ? runtime.sessionStore.records.has(secondSessionId) : false).toBe(true)
+    expect(firstSessionId ? ((await runtime.sessionStore.read(firstSessionId)) !== null) : false).toBe(false)
+    expect(secondSessionId ? ((await runtime.sessionStore.read(secondSessionId)) !== null) : false).toBe(true)
     expect(secondRecord).toBeTruthy()
     expect(secondRecord?.createdAt.getTime()).not.toBe(agedCreatedAt.getTime())
     expect(secondRecord?.lastActivityAt.getTime()).not.toBe(agedLastActivityAt.getTime())
@@ -4955,7 +3509,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('creates personal access tokens, authenticates them, updates last-used metadata, and enforces abilities', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     const userRecord = await runtime.usersProvider.create({
       name: 'Ava',
@@ -4973,7 +3527,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(created.plainTextToken).toContain('.')
     expect(created.abilities).toEqual(['orders.read'])
 
-    const stored = runtime.tokenStore.records.get(created.id)
+    const stored = (await runtime.tokenStore.findById(created.id))
     expect(stored?.tokenHash).toMatch(/^sha256\$/)
     expect(stored?.tokenHash).not.toContain(created.plainTextToken.split('.')[1]!)
 
@@ -4981,13 +3535,13 @@ describe('@holo-js/auth package runtime', () => {
       id: userRecord.id,
       email: 'ava@example.com',
     })
-    expect(runtime.tokenStore.records.get(created.id)?.lastUsedAt).toBeInstanceOf(Date)
+    expect((await runtime.tokenStore.findById(created.id))?.lastUsedAt).toBeInstanceOf(Date)
     await expect(tokens.can(created.plainTextToken, 'orders.read')).resolves.toBe(true)
     await expect(tokens.can(created.plainTextToken, 'orders.write')).resolves.toBe(false)
   })
 
   it('returns a configured default-scope personal access token when logging into a token guard with credentials', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     const userRecord = await runtime.usersProvider.create({
       name: 'Ava',
@@ -5019,7 +3573,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('registers users through a token guard and returns a configured default-scope personal access token', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
 
     const token = unwrapAuthResult(await auth.guard('api').register({
       name: 'Mina',
@@ -5048,8 +3602,8 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rolls back token guard registration when token creation fails', async () => {
-    const runtime = configureRuntime()
-    vi.spyOn(runtime.tokenStore, 'create').mockRejectedValueOnce(new Error('Token persistence failed.'))
+    const runtime = await configureRuntime()
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_insert BEFORE INSERT ON personal_access_tokens BEGIN SELECT RAISE(ABORT, 'Token persistence failed.'); END")
 
     await expect(auth.guard('api').register({
       name: 'Rollback User',
@@ -5064,10 +3618,10 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rolls back token guard registration with the created model when adapter deletion is unavailable', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
     const originalDelete = runtime.usersProvider.delete.bind(runtime.usersProvider)
-    vi.spyOn(runtime.tokenStore, 'create').mockRejectedValueOnce(new Error('Token persistence failed.'))
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_insert BEFORE INSERT ON personal_access_tokens BEGIN SELECT RAISE(ABORT, 'Token persistence failed.'); END")
     Object.defineProperty(runtime.usersProvider, 'delete', {
       value: undefined,
       configurable: true,
@@ -5094,8 +3648,8 @@ describe('@holo-js/auth package runtime', () => {
     })).resolves.toBeNull()
   })
 
-  it('rejects token guards as the default top-level auth guard', () => {
-    const runtime = configureRuntime()
+  it('rejects token guards as the default top-level auth guard', async () => {
+    const runtime = await configureRuntime()
 
     expect(() => configureAuthRuntime({
       config: defineAuthConfig({
@@ -5124,7 +3678,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('uses configured default token abilities when none are provided explicitly', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         personalAccessTokens: {
           defaultAbilities: ['projects.read'],
@@ -5144,11 +3698,11 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     expect(created.abilities).toEqual(['projects.read'])
-    expect(runtime.tokenStore.records.get(created.id)?.abilities).toEqual(['projects.read'])
+    expect((await runtime.tokenStore.findById(created.id))?.abilities).toEqual(['projects.read'])
   })
 
   it('allows exact, prefix wildcard, and global wildcard token abilities', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     const userRecord = await runtime.usersProvider.create({
       name: 'Ava',
@@ -5180,7 +3734,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('logs out only the current bearer credential and leaves browser and sibling tokens usable', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const user = await runtime.usersProvider.create({ name: 'Ava', email: 'logout@example.com' })
     await auth.loginUsingId(user.id)
     const current = await tokens.create(user, { name: 'current' })
@@ -5194,7 +3748,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects missing, forged and incorrectly selected credentials without revoking tokens', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const user = await runtime.usersProvider.create({ name: 'Ava', email: 'invalid@example.com' })
     const current = await tokens.create(user, { name: 'current' })
     await expect(tokens.revokeOthers()).rejects.toThrow('valid current token guard')
@@ -5215,7 +3769,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects expired tokens and tokens whose user no longer exists', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const user = await runtime.usersProvider.create({ name: 'Ava', email: 'deleted@example.com' })
     const expired = await tokens.create(user, { name: 'expired', expiresAt: new Date(0) })
     runtime.context.setAccessToken('api', expired.plainTextToken)
@@ -5227,20 +3781,22 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('preserves request authentication when current-token deletion or other-token revocation fails', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const user = await runtime.usersProvider.create({ name: 'Ava', email: 'failure@example.com' })
     const current = await tokens.create(user, { name: 'current' })
     runtime.context.setAccessToken('api', current.plainTextToken)
-    vi.spyOn(runtime.tokenStore, 'delete').mockRejectedValueOnce(new Error('Token deletion failed.'))
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_delete BEFORE DELETE ON personal_access_tokens BEGIN SELECT RAISE(ABORT, 'Token deletion failed.'); END")
     await expect(auth.guard('api').logout()).rejects.toThrow('Token deletion failed.')
     await expect(auth.guard('api').check()).resolves.toBe(true)
-    vi.spyOn(runtime.tokenStore, 'deleteByUserId').mockRejectedValueOnce(new Error('Revocation failed.'))
+    await runtime.persistence.adapter.execute('DROP TRIGGER reject_token_delete')
+    await tokens.create(user, { name: 'other device' })
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_revocation BEFORE DELETE ON personal_access_tokens BEGIN SELECT RAISE(ABORT, 'Revocation failed.'); END")
     await expect(tokens.revokeOthers({ guard: 'api' })).rejects.toThrow('Revocation failed.')
     await expect(auth.guard('api').check()).resolves.toBe(true)
   })
 
   it('revokes other device tokens while retaining the current token and browser access', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const user = await runtime.usersProvider.create({ name: 'Ava', email: 'devices@example.com' })
     await auth.loginUsingId(user.id)
     const first = await tokens.create(user, { name: 'first' })
@@ -5263,7 +3819,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('lists tokens, revokes the current token, revokes all tokens for a user, and isolates revocation by user', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const ava = await runtime.usersProvider.create({
       name: 'Ava',
@@ -5305,7 +3861,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('requires an explicit guard when multiple providers are configured and a user did not come from auth', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const storedAdmin = {
       id: 44,
@@ -5316,8 +3872,7 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
     }
 
-    runtime.adminsProvider.users.set(storedAdmin.id, storedAdmin)
-    runtime.adminsProvider.usersByEmail.set(storedAdmin.email, storedAdmin.id)
+    await runtime.persistence.db.table('admins').insert(storedAdmin)
     const externalUser = {
       ...storedAdmin,
     }
@@ -5332,11 +3887,11 @@ describe('@holo-js/auth package runtime', () => {
       abilities: ['*'],
       guard: 'admin',
     })
-    expect(runtime.tokenStore.records.get(created.id)?.provider).toBe('admins')
+    expect((await runtime.tokenStore.findById(created.id))?.provider).toBe('admins')
   })
 
   it('returns the current access token for token guards and lets it delete itself', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const ava = await runtime.usersProvider.create({
       name: 'Ava',
@@ -5373,7 +3928,7 @@ describe('@holo-js/auth package runtime', () => {
     class Project {}
 
     const authorization = vi.fn(async (_user, action: string, target) => action === 'viewAny' && target === Project)
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authorization: {
         can: authorization,
       },
@@ -5405,14 +3960,14 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('ignores current-token revocation when the selected guard has no active token', async () => {
-    configureRuntime()
+    await configureRuntime()
 
     await expect(tokens.revoke()).resolves.toBeUndefined()
     await expect(tokens.revoke({ guard: 'api' })).resolves.toBeUndefined()
   })
 
   it('rejects malformed, unknown, partial, and expired tokens and supports token guards alongside session guards', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const ava = await runtime.usersProvider.create({
       name: 'Ava',
@@ -5472,174 +4027,57 @@ describe('@holo-js/auth package runtime', () => {
     expect(clientAuth.refreshUser).toBe(clientRefreshUser)
   })
 
-  it('uses the current-auth endpoint in the client helpers, caches user state, supports refresh, guard selection, and surfaces fetch errors', async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = typeof input === 'string'
-        ? new URL(input, 'https://example.com')
-        : input instanceof URL
-          ? input
-          : new URL(input.url)
-
-      const guard = url.searchParams.get('guard') ?? 'web'
-      const name = guard === 'admin' ? 'Admin Mina' : 'Ava'
-      return new Response(JSON.stringify({
-        authenticated: true,
-        guard,
-        provider: guard === 'admin' ? 'admins' : 'users',
-        user: {
-          id: guard === 'admin' ? 2 : 1,
-          email: guard === 'admin' ? 'admin@example.com' : 'ava@example.com',
-          name,
-          hit: fetchMock.mock.calls.length,
-        },
-      }), {
-        status: 200,
-        headers: {
-          'content-type': 'application/json',
-        },
-      })
-    })
-
-    configureAuthClient({
-      endpoint: '/api/auth/user',
-      fetch: fetchMock as typeof fetch,
-      headers: {
-        'x-auth-test': 'yes',
-      },
-    })
-
-    const first = await clientUser()
-    const second = await clientUser()
-    const authState = await clientUseAuth()
-    expect(first).toMatchObject({
-      name: 'Ava',
-      hit: 1,
-    })
-    expect(second).toMatchObject({
-      name: 'Ava',
-      hit: 1,
-    })
-    expect(authState).toMatchObject({
-      authenticated: true,
-      guard: 'web',
-      provider: 'users',
-      user: {
-        name: 'Ava',
-        hit: 1,
-      },
-    })
-    expect(authState.check()).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-
-    const refreshed = await authState.refreshUser()
-    expect(refreshed).toMatchObject({
-      name: 'Ava',
-      hit: 2,
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+  it('loads real app auth responses over HTTP, caches users, refreshes revoked sessions and selects guards', async () => {
+    const runtime = await configureRuntime()
+    await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: await hashPassword('secret-secret') })
+    await runtime.adminsProvider.create({ name: 'Admin Mina', email: 'admin@example.com', password: await hashPassword('admin-secret') })
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+    await auth.guard('admin').login({ email: 'admin@example.com', password: 'admin-secret' })
+    const adminSessionId = runtime.context.getSessionId('admin')!
+    const sessionId = runtime.context.getSessionId('web')!
+    const server = await createNativeAuthHttpServer(runtime)
+    configureAuthClient({ endpoint: server.endpoint, headers: { cookie: `holo_session=${sessionId}` } })
+    expect(await clientUser()).toMatchObject({ name: 'Ava' })
+    expect(await clientUser()).toMatchObject({ name: 'Ava' })
+    const state = await clientUseAuth()
+    expect(state.check()).toBe(true)
+    expect(server.requests).toHaveLength(1)
     expect(await clientCheck()).toBe(true)
     expect(await clientProvider()).toBe('users')
-
-    const adminUser = await clientUser({ guard: 'admin' })
-    expect(adminUser).toMatchObject({
-      name: 'Admin Mina',
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/auth/user?guard=admin')
-
-    const failureFetch = vi.fn(async () => new Response('nope', { status: 500 }))
-    configureAuthClient({
-      endpoint: '/api/auth/user',
-      fetch: failureFetch as typeof fetch,
-    })
+    expect(await clientUser({ guard: 'admin', headers: { cookie: `holo_session=${adminSessionId}` } })).toMatchObject({ name: 'Admin Mina' })
+    expect(server.requests).toHaveLength(2)
+    expect(server.requests[1]?.url).toBe('/api/auth/user?guard=admin')
+    await runtime.sessionStore.delete(sessionId)
+    expect(await clientUser()).toMatchObject({ name: 'Ava' })
+    expect(await state.refreshUser()).toBeNull()
+    expect(await clientCheck()).toBe(false)
+    expect(server.requests).toHaveLength(3)
+    configureAuthClient({ endpoint: `${server.origin}/failure` })
     await expect(clientUser()).rejects.toThrow('Current-auth request failed with status 500')
-
-    const invalidJsonFetch = vi.fn(async () => new Response('broken', {
-      status: 200,
-      headers: {
-        'content-type': 'application/json',
-      },
-    }))
-    configureAuthClient({
-      endpoint: '/api/auth/user',
-      fetch: invalidJsonFetch as typeof fetch,
-    })
+    configureAuthClient({ endpoint: `${server.origin}/invalid-json` })
     await expect(clientRefreshUser()).rejects.toThrow('Current-auth response body was not valid JSON')
   })
 
-  it('separates current-auth client cache entries by request headers', async () => {
-    const fetchMock = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
-      const request = typeof input === 'string' || input instanceof URL
-        ? new Request(
-            typeof input === 'string' && input.startsWith('/')
-              ? new URL(input, 'https://holo.local')
-              : input,
-            init,
-          )
-        : input
-      const authorization = request.headers.get('authorization') ?? ''
-
-      return new Response(JSON.stringify({
-        authenticated: true,
-        guard: 'web',
-        provider: 'users',
-        user: {
-          id: authorization === 'Bearer token-b' ? 2 : 1,
-          email: authorization === 'Bearer token-b' ? 'b@example.com' : 'a@example.com',
-          token: authorization,
-          hit: fetchMock.mock.calls.length,
-        },
-      }), {
-        status: 200,
-        headers: {
-          'content-type': 'application/json',
-        },
-      })
-    })
-
-    configureAuthClient({
-      endpoint: '/api/auth/user',
-      fetch: fetchMock as typeof fetch,
-    })
-
-    const first = await clientUser({
-      headers: {
-        authorization: 'Bearer token-a',
-      },
-    })
-    const second = await clientUser({
-      headers: {
-        authorization: 'Bearer token-b',
-      },
-    })
-    const firstAgain = await clientUser({
-      headers: {
-        authorization: 'Bearer token-a',
-      },
-    })
-
-    expect(first).toMatchObject({
-      email: 'a@example.com',
-      token: 'Bearer token-a',
-      hit: 1,
-    })
-    expect(second).toMatchObject({
-      email: 'b@example.com',
-      token: 'Bearer token-b',
-      hit: 2,
-    })
-    expect(firstAgain).toMatchObject({
-      email: 'a@example.com',
-      token: 'Bearer token-a',
-      hit: 1,
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+  it('isolates client cache entries for real persisted bearer credentials', async () => {
+    const runtime = await configureRuntime()
+    const first = await runtime.usersProvider.create({ name: 'Ava', email: 'a@example.com', password: null })
+    const second = await runtime.usersProvider.create({ name: 'Mina', email: 'b@example.com', password: null })
+    const firstToken = await tokens.create(first, { guard: 'api', name: 'a' })
+    const secondToken = await tokens.create(second, { guard: 'api', name: 'b' })
+    const server = await createNativeAuthHttpServer(runtime)
+    configureAuthClient({ endpoint: server.endpoint })
+    const firstOptions = { guard: 'api', headers: { authorization: `Bearer ${firstToken.plainTextToken}` } }
+    const secondOptions = { guard: 'api', headers: { authorization: `Bearer ${secondToken.plainTextToken}` } }
+    expect(await clientUser(firstOptions)).toMatchObject({ email: 'a@example.com' })
+    expect(await clientUser(secondOptions)).toMatchObject({ email: 'b@example.com' })
+    expect(await clientUser(firstOptions)).toMatchObject({ email: 'a@example.com' })
+    expect(server.requests).toHaveLength(2)
   })
 
   it('throws when the runtime is missing, guards are unknown, or providers are not wired', async () => {
     await expect(check()).rejects.toThrow('Auth runtime is not configured yet')
 
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     expect(() => auth.guard('missing')).toThrow('Auth guard "missing" is not configured')
 
     configureAuthRuntime({
@@ -5677,10 +4115,11 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('uses the default delivery stub without leaking raw lifecycle tokens', async () => {
-    const sessionStore = new InMemorySessionStore()
-    const usersProvider = new InMemoryProviderAdapter()
-    const emailVerificationTokenStore = new InMemoryEmailVerificationTokenStore()
-    const passwordResetTokenStore = new InMemoryPasswordResetTokenStore()
+    const sessionStore = createNativeSessionStore()
+    const persistence = await createNativeAuthPersistence()
+    const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
+    const emailVerificationTokenStore = persistence.emailVerificationTokens
+    const passwordResetTokenStore = persistence.passwordResetTokens
 
     configureSessionRuntime({
       config: {
@@ -5739,7 +4178,7 @@ describe('@holo-js/auth package runtime', () => {
     const verifyToken = await verification.create(created)
     await requestPasswordReset({ email: 'ava@example.com' })
 
-    const resetRecord = [...passwordResetTokenStore.records.values()][0]
+    const resetRecord = await passwordResetTokenStore.findLatestByEmail('users', 'ava@example.com')
     expect(warn).toHaveBeenCalledTimes(2)
     expect(warn.mock.calls[0]?.[0]).toContain(verifyToken.id)
     expect(warn.mock.calls[0]?.[0]).not.toContain(verifyToken.plainTextToken)
@@ -5794,7 +4233,7 @@ describe('@holo-js/auth package runtime', () => {
       lastUsedAt: new Date('2024-01-02T00:00:00.000Z'),
       expiresAt: null,
     }, 'token-2.secret').lastUsedAt).toEqual(new Date('2024-01-02T00:00:00.000Z'))
-    await expect(configureRuntime({
+    await expect(await configureRuntime({
       passwordHasher: {
         hash: hasher.hash,
         verify: hasher.verify,
@@ -5957,97 +4396,8 @@ describe('@holo-js/auth package runtime', () => {
     expect(context.getSessionId('web')).toBe('session-1')
   })
 
-  it('covers client internal fallback and tuple-header branches', async () => {
-    vi.stubGlobal('fetch', undefined)
-    expect(() => authClientInternals.resolveClientConfig()).toThrow('Fetch is not available')
-
-    const fetchMock = vi.fn(async (_input: Request | string | URL, init?: RequestInit) => {
-      return {
-        ok: true,
-        status: 200,
-        async json() {
-          return {
-            authenticated: true,
-            guard: 'admin',
-            provider: 'admins',
-            user: {
-              id: 2,
-              email: 'admin@example.com',
-              header: init?.headers instanceof Headers ? init.headers.get('x-auth') : null,
-            },
-          }
-        },
-      } satisfies Partial<Response> as Response
-    })
-
-    vi.stubGlobal('fetch', fetchMock)
-    resetAuthClient()
-    expect(authClientInternals.resolveClientConfig().fetchImpl).toBe(fetchMock)
-    expect(authClientInternals.resolveClientConfig({
-      guard: 'admin',
-    }).fetchImpl).toBe(fetchMock)
-
-    configureAuthClient({
-      fetch: fetchMock as typeof fetch,
-    })
-
-    expect(authClientInternals.createRequestUrl({
-      endpoint: 'https://example.com/api/auth/user#hash',
-      guard: 'admin',
-      headers: undefined,
-      fetchImpl: fetchMock as typeof fetch,
-    })).toBe('https://example.com/api/auth/user?guard=admin#hash')
-
-    await expect(authClientInternals.fetchCurrentUser({
-      endpoint: 'https://example.com/api/auth/user',
-      guard: 'admin',
-      headers: [['x-auth', 'token-a']],
-    })).resolves.toMatchObject({
-      authenticated: true,
-      guard: 'admin',
-      provider: 'admins',
-      user: {
-        id: 2,
-        header: 'token-a',
-      },
-    })
-
-    const globalFetch = vi.fn(async function (this: typeof globalThis) {
-      if (this !== globalThis) {
-        throw new TypeError('Illegal invocation')
-      }
-
-      return new Response(JSON.stringify({
-        authenticated: true,
-        guard: 'web',
-        provider: 'users',
-        user: {
-          id: 1,
-          email: 'bound@example.com',
-        },
-      }), {
-        status: 200,
-        headers: {
-          'content-type': 'application/json',
-        },
-      })
-    })
-
-    resetAuthClient()
-    vi.stubGlobal('fetch', globalFetch)
-    await expect(authClientInternals.fetchCurrentUser({
-      endpoint: 'https://example.com/api/auth/bound-user',
-    })).resolves.toMatchObject({
-      authenticated: true,
-      provider: 'users',
-      user: {
-        email: 'bound@example.com',
-      },
-    })
-  })
-
   it('covers missing store, provider config, and non-session guard failures', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6110,8 +4460,9 @@ describe('@holo-js/auth package runtime', () => {
       context: runtime.context,
     })
 
-    runtime.tokenStore.records.set('orphan-token', {
-      id: 'orphan-token',
+    const orphanId = randomUUID()
+    await runtime.tokenStore.create({
+      id: orphanId,
       provider: 'missing',
       userId: created.id,
       name: 'orphan',
@@ -6121,13 +4472,13 @@ describe('@holo-js/auth package runtime', () => {
       expiresAt: null,
     })
 
-    await expect(tokens.authenticate('orphan-token.secret')).rejects.toThrow(
+    await expect(tokens.authenticate(`${orphanId}.secret`)).rejects.toThrow(
       'Auth provider "missing" is not configured',
     )
   })
 
   it('covers trusted-login compatibility and provider marker edge cases', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const userRecord = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6205,7 +4556,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('covers refresh, impersonation, wrapper, and reset edge cases', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6241,8 +4592,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(impersonateById(actor.id)).rejects.toThrow('Nested impersonation is not supported')
 
     await stopImpersonating()
-    runtime.usersProvider.users.delete(actor.id)
-    runtime.usersProvider.usersByEmail.delete(actor.email)
+    await runtime.usersProvider.delete!(actor.id)
     await expect(refreshUser()).resolves.toBeNull()
     expect(runtime.context.getSessionId('web')).toBeUndefined()
 
@@ -6250,11 +4600,11 @@ describe('@holo-js/auth package runtime', () => {
     const impersonated = await auth.guard('web').impersonateById(target.id, {
       actorGuard: 'admin',
     })
-    const sessionRecord = runtime.sessionStore.records.get(impersonated.sessionId)
+    const sessionRecord = (await runtime.sessionStore.read(impersonated.sessionId))
     expect(sessionRecord).toBeTruthy()
     if (sessionRecord) {
       const webPayload = (sessionRecord.data.auth as Record<string, unknown>).web
-      runtime.sessionStore.records.set(sessionRecord.id, {
+      await runtime.sessionStore.write({
         ...sessionRecord,
         data: {
           ...sessionRecord.data,
@@ -6265,12 +4615,12 @@ describe('@holo-js/auth package runtime', () => {
       })
     }
     await expect(auth.guard('web').stopImpersonating()).resolves.toBeNull()
-    expect(runtime.sessionStore.records.has(impersonated.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(impersonated.sessionId)) !== null)).toBe(false)
 
     const adminSession = await auth.guard('admin').loginUsing(admin)
     runtime.context.setSessionId('web', adminSession.sessionId)
     await auth.guard('web').logout()
-    expect(runtime.sessionStore.records.has(adminSession.sessionId)).toBe(false)
+    expect(((await runtime.sessionStore.read(adminSession.sessionId)) !== null)).toBe(false)
 
     await auth.guard('admin').loginUsing(admin)
     await getAuthRuntime().impersonateById(target.id, {
@@ -6282,7 +4632,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('covers provider fallbacks and password or verification edge cases', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6312,8 +4662,7 @@ describe('@holo-js/auth package runtime', () => {
 
     await requestPasswordReset({ email: 'ava@example.com' })
     const resetDelivery = runtime.deliveries.find(entry => entry.type === 'password-reset')
-    runtime.usersProvider.users.delete(created.id)
-    runtime.usersProvider.usersByEmail.delete(created.email)
+    await runtime.usersProvider.delete!(created.id)
     await expectAuthValidationError(() => resetPassword({
       token: resetDelivery!.tokenValue,
       password: 'new-secret',
@@ -6396,7 +4745,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('supports explicit provider serialization without credential helper hooks', async () => {
-    const sessionStore = new InMemorySessionStore()
+    const sessionStore = createNativeSessionStore()
     const users = new Map<number, UserRecord>()
 
     configureSessionRuntime({
@@ -6502,7 +4851,7 @@ describe('@holo-js/auth package runtime', () => {
 
 
   it('covers remaining token and shared-session edge branches', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const ava = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6520,8 +4869,7 @@ describe('@holo-js/auth package runtime', () => {
       guard: 'api',
       name: 'edge-token',
     })
-    runtime.usersProvider.users.delete(ava.id)
-    runtime.usersProvider.usersByEmail.delete(ava.email)
+    await runtime.usersProvider.delete!(ava.id)
     await expect(tokens.authenticate(token.plainTextToken)).resolves.toBeNull()
 
     runtime.context.setAccessToken('api', 'malformed-token')
@@ -6534,14 +4882,14 @@ describe('@holo-js/auth package runtime', () => {
 
     const adminSession = await auth.guard('admin').loginUsing(admin)
     runtime.context.setSessionId('web', adminSession.sessionId)
-    runtime.sessionStore.records.delete(adminSession.sessionId)
+    await runtime.sessionStore.delete(adminSession.sessionId)
     await expect(auth.guard('web').impersonation()).resolves.toBeNull()
 
     const restoredAdminSession = await auth.guard('admin').loginUsing(admin)
-    const restoredAdminRecord = runtime.sessionStore.records.get(restoredAdminSession.sessionId)
+    const restoredAdminRecord = (await runtime.sessionStore.read(restoredAdminSession.sessionId))
     expect(restoredAdminRecord).toBeTruthy()
     if (restoredAdminRecord) {
-      runtime.sessionStore.records.set(restoredAdminRecord.id, {
+      await runtime.sessionStore.write({
         ...restoredAdminRecord,
         data: {
           ...restoredAdminRecord.data,
@@ -6554,7 +4902,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('writes remaining shared-session payloads when a fresh user disappears', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const ava = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6571,12 +4919,11 @@ describe('@holo-js/auth package runtime', () => {
     await auth.guard('admin').loginUsing(admin)
     const webSession = await loginUsing(ava)
 
-    runtime.usersProvider.users.delete(ava.id)
-    runtime.usersProvider.usersByEmail.delete(ava.email)
+    await runtime.usersProvider.delete!(ava.id)
 
     await expect(auth.guard('web').refreshUser()).resolves.toBeNull()
 
-    const record = runtime.sessionStore.records.get(webSession.sessionId)
+    const record = (await runtime.sessionStore.read(webSession.sessionId))
     expect(record).toBeTruthy()
     expect(record?.data.auth).toEqual({
       authenticatedAt: expect.any(String),
@@ -6591,7 +4938,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('covers remaining trusted-login compatibility branches', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const userRecord = await runtime.usersProvider.create({
       name: 'Ava',
       email: 'ava@example.com',
@@ -6617,7 +4964,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('clears stale remember state when rotating a shared session', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const context = authRuntimeInternals.createMemoryAuthContext()
     const existingRecord = Object.freeze({
       id: 'shared-session',
@@ -6720,7 +5067,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('covers remaining branch-only auth paths', async () => {
-    const runtime = configureRuntime({
+    const runtime = await configureRuntime({
       authConfig: {
         clerk: {
           app: {
@@ -6758,7 +5105,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('covers identifier selection and missing-auth logout branches', async () => {
-    const defaultRuntime = configureRuntime()
+    const defaultRuntime = await configureRuntime()
     expect(authRuntimeInternals.getProviderIdentifiers('users')).toEqual(['email'])
     expect(authRuntimeInternals.getProviderIdentifiers('missing')).toEqual(['email'])
 
@@ -6769,18 +5116,18 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date(),
     })
     const established = await loginUsing(created)
-    const sessionRecord = defaultRuntime.sessionStore.records.get(established.sessionId)
+    const sessionRecord = (await defaultRuntime.sessionStore.read(established.sessionId))
     expect(sessionRecord).toBeTruthy()
     if (sessionRecord) {
-      defaultRuntime.sessionStore.records.set(sessionRecord.id, {
+      await defaultRuntime.sessionStore.write({
         ...sessionRecord,
         data: {},
       })
     }
     await logout()
-    expect(defaultRuntime.sessionStore.records.has(established.sessionId)).toBe(false)
+    expect(((await defaultRuntime.sessionStore.read(established.sessionId)) !== null)).toBe(false)
 
-    const phoneRuntime = configureRuntime({
+    const phoneRuntime = await configureRuntime({
       authConfig: defineAuthConfig({
         providers: {
           users: {
@@ -6799,8 +5146,9 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('creates a default auth context when one is not provided', async () => {
-    const sessionStore = new InMemorySessionStore()
-    const usersProvider = new InMemoryProviderAdapter()
+    const sessionStore = createNativeSessionStore()
+    const persistence = await createNativeAuthPersistence()
+    const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
 
     configureSessionRuntime({
       config: {
@@ -6871,7 +5219,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('defaults authorization checks to false', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const bindings = authRuntimeInternals.getRuntimeBindings()
     authRuntimeInternals.configureRuntime({
       ...bindings,
@@ -6889,7 +5237,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('fails closed for malformed provider users and missing password brokers', async () => {
-    configureRuntime()
+    await configureRuntime()
     expect(() => authRuntimeInternals.getPasswordHash({ getId: () => 1 } as never, null)).toThrow('must be objects')
 
     const bindings = authRuntimeInternals.getRuntimeBindings()
@@ -6904,14 +5252,14 @@ describe('@holo-js/auth package runtime', () => {
     })
     await expect(login({ email: 'malformed@app.test', password: 'password' })).rejects.toThrow('Auth provider lookup')
 
-    configureRuntime()
+    await configureRuntime()
     await expect(requestPasswordReset({
       email: 'missing@app.test',
     }, { broker: 'missing' })).rejects.toMatchObject({ code: 'password_broker_not_configured' })
   })
 
   it('maps token-guard credential and registration failures', async () => {
-    configureRuntime()
+    await configureRuntime()
     const tokenGuard = getAuthRuntime().guard('api')
     await expectAuthValidationError(
       () => tokenGuard.login({ email: 'missing@app.test', password: 'wrong' }),
@@ -6926,7 +5274,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('resends verification for the current session and returns no provider without a session id', async () => {
-    const runtime = configureRuntime({ emailVerificationRequired: true })
+    const runtime = await configureRuntime({ emailVerificationRequired: true })
     const hashed = await hashPassword('password')
     const created = await runtime.usersProvider.create({
       email: 'resend-current@app.test',
@@ -6944,7 +5292,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('hydrates token and remember-me guard context from request accessors', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       email: 'hydrate@app.test',
       name: 'Hydrate',
@@ -7010,7 +5358,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects trusted token-guard login, invalid user ids, and unverified users without email', async () => {
-    const runtime = configureRuntime({ emailVerificationRequired: true })
+    const runtime = await configureRuntime({ emailVerificationRequired: true })
     const created = await runtime.usersProvider.create({ email: '', name: 'No Email', password: null })
     await expect(loginUsing(created)).resolves.toMatchObject({ user: { id: created.id } })
 
@@ -7033,7 +5381,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rehydrates session authorization methods after clearing the request cache', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       email: 'rehydrate@app.test',
       name: 'Rehydrate',
@@ -7060,7 +5408,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('covers trusted unmarked user ids and existing-session remember hydration', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({
       email: 'trusted-id@app.test', name: 'Trusted Id', password: null,
     })
@@ -7088,75 +5436,16 @@ describe('@holo-js/auth package runtime', () => {
     await expect(user()).resolves.toMatchObject({ id: created.id })
   })
 
-  it('builds the default verification route for a non-string email', async () => {
-    const runtime = configureRuntime({
-      emailVerificationRequired: true,
-      authConfig: defineAuthConfig({
-        providers: {
-          users: { model: 'User', identifiers: ['phone'] },
-          admins: { model: 'Admin' },
-        },
-      }),
-    })
-    const password = await hashPassword('password')
-    const created = await runtime.usersProvider.create({
-      email: 'temporary@app.test', name: 'No Email', phone: '+201000000000', password,
-    })
-    vi.spyOn(runtime.usersProvider, 'findByCredentials').mockResolvedValue(created)
-    created.email = null as never
-    await expect(login({ phone: '+201000000000', password: 'password' })).resolves.toMatchObject({
-      emailVerificationRequired: true,
-      emailVerificationRoute: '/verify-email',
-    })
-  })
-
   it('maps named session guard login failures', async () => {
-    configureRuntime()
+    await configureRuntime()
     await expectAuthValidationError(
       () => getAuthRuntime().guard('web').login({ email: 'missing@app.test', password: 'wrong' }),
       'invalid_credentials',
     )
   })
 
-  it('covers rollback paths without adapter deletion', async () => {
-    const modelFailure = configureRuntime({
-      emailVerificationRequired: true,
-      delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
-    })
-    const createModel = modelFailure.usersProvider.create.bind(modelFailure.usersProvider)
-    Object.defineProperty(modelFailure.usersProvider, 'delete', { value: undefined, configurable: true })
-    modelFailure.usersProvider.create = vi.fn(async (input) => {
-      const created = await createModel(input)
-      return Object.assign(created, { delete: async () => { throw new Error('model cleanup failed') } })
-    })
-    await expect(register({
-      name: 'No Adapter Model', email: 'no-adapter-model@app.test', password: 'password', passwordConfirmation: 'password',
-    })).rejects.toThrow('delivery failed')
-
-    resetAuthRuntime()
-    resetSessionRuntime()
-    const noCleanup = configureRuntime({
-      emailVerificationRequired: true,
-      delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
-    })
-    Object.defineProperty(noCleanup.usersProvider, 'delete', { value: undefined, configurable: true })
-    await expect(register({
-      name: 'No Cleanup', email: 'no-cleanup@app.test', password: 'password', passwordConfirmation: 'password',
-    })).rejects.toThrow('delivery failed')
-
-    resetAuthRuntime()
-    resetSessionRuntime()
-    const tokenRollback = configureRuntime()
-    vi.spyOn(tokenRollback.tokenStore, 'create').mockRejectedValueOnce(new Error('token failed'))
-    Object.defineProperty(tokenRollback.usersProvider, 'delete', { value: undefined, configurable: true })
-    tokenRollback.usersProvider.findById = vi.fn(async () => null)
-    await expect(auth.guard('api').register({
-      name: 'No Token Cleanup', email: 'no-token-cleanup@app.test', password: 'password', passwordConfirmation: 'password',
-    })).rejects.toThrow('token failed')
-  })
-
   it('rejects provider updates when only a name mutation is requested', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     const created = await runtime.usersProvider.create({ email: 'name-update@app.test', name: 'Old', password: null })
     const bindings = authRuntimeInternals.getRuntimeBindings()
     configureAuthRuntime({
@@ -7179,7 +5468,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('registers through an explicitly selected session guard', async () => {
-    configureRuntime()
+    await configureRuntime()
     await expect(auth.guard('web').register({
       name: 'Named Session',
       email: 'named-session@app.test',
@@ -7188,16 +5477,10 @@ describe('@holo-js/auth package runtime', () => {
     })).resolves.toMatchObject({ email: 'named-session@app.test' })
   })
 
-  it('covers registration rollback model success and nested failures', async () => {
-    const successfulModel = configureRuntime({
+  it('rolls back registration through native models and preserves the delivery error when cleanup fails', async () => {
+    const successfulModel = await configureRuntime({
       emailVerificationRequired: true,
       delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
-    })
-    const originalCreate = successfulModel.usersProvider.create.bind(successfulModel.usersProvider)
-    const originalDelete = successfulModel.usersProvider.delete.bind(successfulModel.usersProvider)
-    successfulModel.usersProvider.create = vi.fn(async (input) => {
-      const created = await originalCreate(input)
-      return Object.assign(created, { delete: async () => originalDelete(created.id) })
     })
     await expect(register({
       name: 'Model Success',
@@ -7205,33 +5488,31 @@ describe('@holo-js/auth package runtime', () => {
       password: 'password',
       passwordConfirmation: 'password',
     })).rejects.toThrow('delivery failed')
-    expect(successfulModel.usersProvider.users.size).toBe(0)
+    expect(await successfulModel.persistence.db.table('users').count()).toBe(0)
 
     resetAuthRuntime()
     resetSessionRuntime()
-    const nestedFailure = configureRuntime({
+    const nestedFailure = await configureRuntime({
       emailVerificationRequired: true,
       delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
     })
-    nestedFailure.emailVerificationTokenStore.deleteByUserId = vi.fn(async () => { throw new Error('token cleanup failed') })
-    nestedFailure.usersProvider.delete = vi.fn(async () => { throw new Error('adapter cleanup failed') })
-    const nestedCreate = nestedFailure.usersProvider.create.bind(nestedFailure.usersProvider)
-    nestedFailure.usersProvider.create = vi.fn(async (input) => {
-      const created = await nestedCreate(input)
-      return Object.assign(created, { delete: async () => { throw new Error('model cleanup failed') } })
-    })
+    await nestedFailure.persistence.adapter.execute("CREATE TRIGGER reject_verification_cleanup BEFORE DELETE ON email_verification_tokens BEGIN SELECT RAISE(ABORT, 'token cleanup failed'); END")
+    await nestedFailure.persistence.adapter.execute("CREATE TRIGGER reject_user_cleanup BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'user cleanup failed'); END")
     await expect(register({
       name: 'Nested Failure',
       email: 'nested-failure@app.test',
       password: 'password',
       passwordConfirmation: 'password',
-    })).rejects.toThrow('token cleanup failed')
+    })).rejects.toThrow('delivery failed')
+    expect(await nestedFailure.persistence.db.table('users').count()).toBe(1)
+    expect(await nestedFailure.persistence.db.table('email_verification_tokens').count()).toBe(1)
+    expect(await check()).toBe(false)
   })
 
   it('covers failed token-registration rollback cleanup', async () => {
-    const runtime = configureRuntime()
-    vi.spyOn(runtime.tokenStore, 'create').mockRejectedValueOnce(new Error('token failed'))
-    runtime.usersProvider.delete = vi.fn(async () => { throw new Error('adapter cleanup failed') })
+    const runtime = await configureRuntime()
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_token_insert BEFORE INSERT ON personal_access_tokens BEGIN SELECT RAISE(ABORT, 'token failed'); END")
+    await runtime.persistence.adapter.execute("CREATE TRIGGER reject_user_cleanup BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'adapter cleanup failed'); END")
     await expect(auth.guard('api').register({
       name: 'Rollback Failure',
       email: 'rollback-failure@app.test',
@@ -7241,7 +5522,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects primitive users returned while consuming verification tokens', async () => {
-    const runtime = configureRuntime()
+    const runtime = await configureRuntime()
     await runtime.usersProvider.create({
       name: 'Primitive Verification',
       email: 'primitive-verification@app.test',

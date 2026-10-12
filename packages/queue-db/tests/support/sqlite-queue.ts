@@ -31,6 +31,7 @@ type SQLiteQueueHarnessOptions = {
 }
 
 export type SQLiteQueueHarness = {
+  readonly schema: ReturnType<typeof createSchemaService>
   readonly connection: DatabaseContext
   readonly driver: QueueAsyncDriver
   readonly failedTableName: string
@@ -126,6 +127,7 @@ export async function createSQLiteQueueHarness(
   }
 
   return {
+    schema,
     connection,
     driver,
     failedTableName,

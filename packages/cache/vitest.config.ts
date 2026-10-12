@@ -14,7 +14,6 @@ export default defineConfig({
       '@holo-js/media/config': fileURLToPath(new URL('../media/src/projectConfig.ts', import.meta.url)),
       '@holo-js/media': fileURLToPath(new URL('../media/src/index.ts', import.meta.url)),
       '@holo-js/cache-redis': fileURLToPath(new URL('../cache-redis/src/index.ts', import.meta.url)),
-      ioredis: fileURLToPath(new URL('./tests/support/ioredis-stub.ts', import.meta.url)),
     },
   },
   test: {

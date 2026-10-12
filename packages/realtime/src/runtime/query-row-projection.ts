@@ -113,6 +113,14 @@ export function mergeProjectedPatchRowWithContext(
     }
   }
 
+  for (const key of context.relationKeys ?? []) {
+    if (!hasRecordKey(row, key)) return undefined
+    if (current[key] !== row[key]) {
+      next ??= copyRecord(current)
+      next[key] = row[key]
+    }
+  }
+
   return next ? Object.freeze(next) : current
 }
 
@@ -190,6 +198,14 @@ export function mergeProjectedPatchRowAndMutationValuesWithContext(
 
     if (!hasRecordKey(current, resultKey)) {
       return undefined
+    }
+  }
+
+  for (const key of context.relationKeys ?? []) {
+    if (!hasRecordKey(row, key)) return undefined
+    if (current[key] !== row[key]) {
+      next ??= copyRecord(current)
+      next[key] = row[key]
     }
   }
 

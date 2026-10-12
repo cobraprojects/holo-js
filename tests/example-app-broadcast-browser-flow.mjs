@@ -92,7 +92,7 @@ async function openSubscribedDashboard(page, failures) {
     formatBroadcastFailure('Expected the browser broadcast subscription to be authorized.', sockets, failures),
   )
 
-  return activity
+  return { activity, sockets }
 }
 
 async function createPostThroughBrowser(page, title) {
@@ -132,7 +132,66 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
     const dashboardFailures = observeExampleAppPage(dashboardPage).failures
     const createFailures = observeExampleAppPage(createPage).failures
 
-    const activity = await openSubscribedDashboard(dashboardPage, dashboardFailures)
+    const { activity, sockets } = await openSubscribedDashboard(dashboardPage, dashboardFailures)
+    const authentication = await context.request.get('/api/auth/user')
+    assert.equal(authentication.status(), 200)
+    const { user, authenticated } = await authentication.json()
+    assert.equal(authenticated, true)
+    assert.ok(user?.email)
+    const configuration = await context.request.get('/broadcasting/config')
+    assert.equal(configuration.status(), 200)
+    assert.equal(configuration.headers()['cache-control'], 'no-store')
+    const clientConfiguration = await configuration.json()
+    assert.equal(clientConfiguration.authEndpoint, '/broadcasting/auth')
+    assert.equal(Object.hasOwn(clientConfiguration, 'secret'), false)
+    const csrfCookie = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')
+    assert.ok(csrfCookie)
+    const headers = { Origin: baseUrl, 'X-CSRF-TOKEN': decodeURIComponent(csrfCookie.value) }
+    const authorize = channel => context.request.post('/broadcasting/auth', { headers, form: { channel_name: channel, socket_id: 'native.http' } })
+    const privateAuthorization = await authorize('private-blog.admin')
+    assert.equal(privateAuthorization.status(), 200)
+    const privatePayload = await privateAuthorization.json()
+    assert.deepEqual({ ok: privatePayload.ok, channel: privatePayload.channel, type: privatePayload.type, params: privatePayload.params, whispers: privatePayload.whispers }, {
+      ok: true, channel: 'private-blog.admin', type: 'private', params: {}, whispers: [],
+    })
+    assert.equal(privatePayload.auth.split(':')[0], clientConfiguration.key)
+    assert.match(privatePayload.auth.split(':')[1], /^[a-f0-9]{64}$/)
+    const presenceAuthorization = await authorize('presence-blog.admin.presence')
+    assert.equal(presenceAuthorization.status(), 200)
+    const presencePayload = await presenceAuthorization.json()
+    assert.deepEqual(presencePayload.member, { id: String(user.id), email: user.email })
+    assert.deepEqual(JSON.parse(presencePayload.channel_data), { member: presencePayload.member, whispers: [] })
+    const unknown = await authorize('private-unregistered.channel')
+    assert.equal(unknown.status(), 404)
+    assert.equal((await unknown.json()).error, 'not-found')
+    const malformed = await context.request.post('/broadcasting/auth', { headers, form: { socket_id: 'native.http' } })
+    assert.equal(malformed.status(), 400)
+    const visitor = await browser.newContext({ baseURL: baseUrl })
+    try {
+      assert.equal((await visitor.request.get('/login')).status(), 200)
+      const cookie = (await visitor.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')
+      assert.ok(cookie)
+      const rejected = await visitor.request.post('/broadcasting/auth', {
+        headers: { Origin: baseUrl, 'X-CSRF-TOKEN': decodeURIComponent(cookie.value) },
+        form: { channel_name: 'private-blog.admin', socket_id: 'native.http' },
+      })
+      assert.equal(rejected.status(), 401)
+      assert.equal((await rejected.json()).error, 'unauthenticated')
+    } finally {
+      await visitor.close()
+    }
+    const members = async page => JSON.parse(await page.getByTestId('broadcast-presence').textContent())
+    await waitFor(async () => (await members(dashboardPage)).some(member => member.email === user.email && member.id === String(user.id)), 'Expected the authenticated user to appear in native presence.').catch(async error => {
+      throw new Error(formatBroadcastFailure(`${error.message} Expected ${JSON.stringify(user)}; rendered ${JSON.stringify(await members(dashboardPage))}.`, sockets, dashboardFailures))
+    })
+    assert.equal((await members(dashboardPage)).length, 1)
+    const secondDashboard = await context.newPage()
+    const secondFailures = observeExampleAppPage(secondDashboard).failures
+    await openSubscribedDashboard(secondDashboard, secondFailures)
+    await waitFor(async () => (await members(secondDashboard)).some(member => member.email === user.email && member.id === String(user.id)), 'Expected a second tab to join native presence.')
+    assert.equal((await members(secondDashboard)).length, 1)
+    await secondDashboard.close()
+    assert.equal((await members(dashboardPage)).length, 1)
     const title = `Browser broadcast ${appName} ${Date.now()}`
 
     await createPostThroughBrowser(createPage, title)
@@ -141,7 +200,19 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
       `Expected the dashboard broadcast activity to show created: ${title}.`,
     )
 
-    assert.deepEqual([...dashboardFailures, ...createFailures], [])
+    const channels = ['private-blog.admin', 'presence-blog.admin.presence']
+    const unsubscribes = channel => sockets.sentFrames.filter(frame => frame.includes('pusher:unsubscribe') && frame.includes(channel)).length
+    const previousUnsubscribes = new Map(channels.map(channel => [channel, unsubscribes(channel)]))
+    await dashboardPage.getByRole('link', { name: 'Manage posts', exact: true }).click()
+    await dashboardPage.waitForURL(url => url.pathname === '/admin/posts')
+    for (const channel of channels) {
+      await waitFor(
+        () => unsubscribes(channel) > previousUnsubscribes.get(channel),
+        formatBroadcastFailure(`Expected leaving the dashboard to unsubscribe ${channel}.`, sockets, dashboardFailures),
+      )
+    }
+
+    assert.deepEqual([...dashboardFailures, ...createFailures, ...secondFailures], [])
   } finally {
     await context.close()
   }

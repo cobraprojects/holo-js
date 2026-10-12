@@ -1,7 +1,9 @@
 import {
+  clearNotifications,
   deleteNotifications,
   listNotifications,
   markNotificationsAsRead,
+  markAllNotificationsAsRead,
   markNotificationsAsUnread,
   notify,
   notifyMany,
@@ -78,11 +80,13 @@ export {
 } from './registry'
 export {
   configureNotificationsRuntime,
+  clearNotifications,
   deleteNotifications,
   getNotificationsRuntimeBindings,
   getNotificationsRuntime,
   listNotifications,
   markNotificationsAsRead,
+  markAllNotificationsAsRead,
   markNotificationsAsUnread,
   notificationsRuntimeInternals,
   notify,
@@ -97,9 +101,11 @@ export {
 } from './plugins'
 
 const notifications = Object.freeze({
+  clearNotifications,
   deleteNotifications,
   listNotifications,
   markNotificationsAsRead,
+  markAllNotificationsAsRead,
   markNotificationsAsUnread,
   notify,
   notifyMany,

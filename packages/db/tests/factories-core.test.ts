@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   type Entity,
   belongsTo,
@@ -7,6 +8,7 @@ import {
   configureDB,
   createConnectionManager,
   createDatabase,
+  createDialect,
   defineFactory,
   defineModel,
   hasMany,
@@ -19,130 +21,16 @@ import {
   resetDB,
   HydrationError,
   SecurityError,
-  type Dialect,
-  type DriverAdapter,
-  type DriverExecutionResult,
-  type DriverQueryResult,
   type TableDefinition } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
+import { createTestTable } from './support/schema'
 
-type Row = Record<string, unknown>
-type TableStore = Record<string, Row[]>
-type CounterStore = Record<string, number>
 type TestEntity = Entity<TableDefinition>
 
-function cloneRow(row: Row): Row {
-  return { ...row }
-}
-
-class InMemoryFactoryAdapter implements DriverAdapter {
-  connected = false
-
-  constructor(
-    readonly tables: TableStore,
-    readonly counters: CounterStore,
-  ) {}
-
-  async initialize(): Promise<void> {
-    this.connected = true
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false
-  }
-
-  isConnected(): boolean {
-    return this.connected
-  }
-
-  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverQueryResult<TRow>> {
-    const tableMatch = sql.match(/ FROM "([^"]+)"/)
-    const tableName = tableMatch?.[1]
-    let rows = tableName ? (this.tables[tableName] ?? []).map(cloneRow) : []
-
-    const whereMatch = sql.match(/ WHERE "([^"]+)" = \?(\d+)/)
-    if (whereMatch) {
-      const [, column, index] = whereMatch
-      rows = rows.filter(row => row[column!] === bindings[Number(index) - 1])
-    }
-
-    const orderMatch = sql.match(/ ORDER BY "([^"]+)" (ASC|DESC)/)
-    if (orderMatch) {
-      const [, column, direction] = orderMatch
-      rows.sort((left, right) => {
-        const a = left[column!]
-        const b = right[column!]
-        if (a === b) return 0
-        if (direction === 'DESC') return a! > b! ? -1 : 1
-        return a! < b! ? -1 : 1
-      })
-    }
-
-    return {
-      rows: rows as TRow[],
-      rowCount: rows.length }
-  }
-
-  async execute(
-    sql: string,
-    bindings: readonly unknown[] = [],
-  ): Promise<DriverExecutionResult> {
-    const insertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+)$/)
-    if (!insertMatch) {
-      return { affectedRows: 0 }
-    }
-
-    const [, tableName, rawColumns] = insertMatch
-    const columns = rawColumns!.split(', ').map(column => column.replaceAll('"', ''))
-    const rowCount = (sql.match(/\(/g) ?? []).length - 1
-    const rows = this.tables[tableName!] ?? (this.tables[tableName!] = [])
-    let bindingIndex = 0
-    let lastInsertId: number | undefined
-
-    for (let index = 0; index < rowCount; index += 1) {
-      const row = Object.fromEntries(columns.map(column => [column, bindings[bindingIndex++]]))
-      if (!('id' in row)) {
-        this.counters[tableName!] = (this.counters[tableName!] ?? 0) + 1
-        row.id = this.counters[tableName!]
-        lastInsertId = row.id as number
-      }
-      rows.push(row)
-    }
-
-    return { affectedRows: rowCount, lastInsertId }
-  }
-
-  async beginTransaction(): Promise<void> {}
-  async commit(): Promise<void> {}
-  async rollback(): Promise<void> {}
-}
-
-function createDialect(): Dialect {
-  return {
-    name: 'sqlite',
-    capabilities: {
-      returning: false,
-      savepoints: false,
-      concurrentQueries: true,
-      workerThreadExecution: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      jsonValueQuery: true,
-      jsonContains: false,
-      jsonLength: false,
-      schemaQualifiedIdentifiers: false,
-      nativeUpsert: false,
-      ddlAlterSupport: false,
-      introspection: false },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return `?${index}`
-    } }
+function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  onTestFinished(() => adapter.disconnect())
+  return adapter
 }
 
 describe('factory slice', () => {
@@ -151,11 +39,11 @@ describe('factory slice', () => {
   })
 
   it('supports make/create, states, sequences, counts, and raw attributes', async () => {
-    const adapter = new InMemoryFactoryAdapter({ users: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -165,6 +53,7 @@ describe('factory slice', () => {
       id: column.id(),
       name: column.string(),
       status: column.string() })
+    await createTestTable(db, users)
     const User = defineModelFromTable(users, {
       fillable: ['name', 'status'] })
 
@@ -220,7 +109,7 @@ describe('factory slice', () => {
     expect(created[0]!.exists()).toBe(true)
     expect(created[0]!.get('id')).toBe(2)
     expect(created[1]!.get('id')).toBe(3)
-    expect(adapter.tables.users).toEqual([
+    expect(await db.table('users').orderBy('id').get()).toEqual([
       { id: 1, name: 'Amina', status: 'active' },
       { id: 2, name: 'Amina', status: 'active' },
       { id: 3, name: 'Layla 2', status: 'active' },
@@ -228,11 +117,11 @@ describe('factory slice', () => {
   })
 
   it('supports afterMaking and afterCreating hooks in order', async () => {
-    const adapter = new InMemoryFactoryAdapter({ users: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -241,6 +130,7 @@ describe('factory slice', () => {
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
     const User = defineModelFromTable(users, {
       fillable: ['name'] })
 
@@ -267,11 +157,11 @@ describe('factory slice', () => {
   })
 
   it('propagates callback failures', async () => {
-    const adapter = new InMemoryFactoryAdapter({ users: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -280,6 +170,7 @@ describe('factory slice', () => {
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
     const User = defineModelFromTable(users, {
       fillable: ['name'] })
 
@@ -299,22 +190,17 @@ describe('factory slice', () => {
         .createOne(),
     ).rejects.toThrow('after creating failed')
 
-    expect(adapter.tables.users).toEqual([
+    expect(await db.table('users').orderBy('id').get()).toEqual([
       { id: 1, name: 'Broken create' },
     ])
   })
 
   it('supports belongsTo, hasMany, and belongsToMany relation-aware factories', async () => {
-    const adapter = new InMemoryFactoryAdapter({
-      users: [],
-      teams: [],
-      posts: [],
-      roles: [],
-      roleUser: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -323,21 +209,26 @@ describe('factory slice', () => {
     const teams = defineTable('teams', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, teams)
     const users = defineTable('users', {
       id: column.id(),
       teamId: column.integer().nullable(),
       name: column.string() })
+    await createTestTable(db, users)
     const posts = defineTable('posts', {
       id: column.id(),
       userId: column.integer().nullable(),
       title: column.string() })
+    await createTestTable(db, posts)
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
     const roleUser = defineTable('roleUser', {
       userId: column.integer(),
       roleId: column.integer(),
       active: column.boolean().default(true) })
+    await createTestTable(db, roleUser)
 
     const Team = defineModelFromTable(teams, {
       fillable: ['name'] })
@@ -380,23 +271,23 @@ describe('factory slice', () => {
       roleId: 1,
       active: true })
 
-    expect(adapter.tables.teams).toEqual([
+    expect(await db.table('teams').orderBy('id').get()).toEqual([
       { id: 1, name: 'Core' },
     ])
-    expect(adapter.tables.users).toEqual([
+    expect(await db.table('users').orderBy('id').get()).toEqual([
       { id: 1, name: 'Amina', teamId: 1 },
     ])
-    expect(adapter.tables.posts).toEqual([
+    expect(await db.table('posts').orderBy('id').get()).toEqual([
       { id: 1, title: 'Post 1', userId: 1 },
       { id: 2, title: 'Post 2', userId: 1 },
     ])
-    expect(adapter.tables.roles).toEqual([
+    expect(await db.table('roles').orderBy('id').get()).toEqual([
       { id: 1, name: 'Role 1' },
       { id: 2, name: 'Role 2' },
     ])
-    expect(adapter.tables.roleUser).toEqual([
-      { id: 1, userId: 1, roleId: 1, active: 1 },
-      { id: 2, userId: 1, roleId: 2, active: 1 },
+    expect(await db.table('roleUser').orderBy('userId').orderBy('roleId').get()).toEqual([
+      { userId: 1, roleId: 1, active: 1 },
+      { userId: 1, roleId: 2, active: 1 },
     ])
 
     const directTeam = await Team.create({ name: 'Direct Team' })
@@ -431,21 +322,16 @@ describe('factory slice', () => {
     expect(recycledUser.getRelation<Entity<TableDefinition>[]>('roles').map(role => role.get('id'))).toEqual(
       recycledRoles.map(role => role.get('id')),
     )
-    expect(adapter.tables.teams).toHaveLength(3)
-    expect(adapter.tables.roles).toHaveLength(7)
+    expect(await db.table('teams').orderBy('id').get()).toHaveLength(3)
+    expect(await db.table('roles').orderBy('id').get()).toHaveLength(7)
   })
 
   it('supports morphTo, morphMany, morphToMany, and morphedByMany relation-aware factories', async () => {
-    const adapter = new InMemoryFactoryAdapter({
-      posts: [],
-      images: [],
-      tags: [],
-      taggables: [],
-      comments: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -454,25 +340,30 @@ describe('factory slice', () => {
     const posts = defineTable('posts', {
       id: column.id(),
       title: column.string() })
+    await createTestTable(db, posts)
     const images = defineTable('images', {
       id: column.id(),
       imageableType: column.string().nullable(),
       imageableId: column.integer().nullable(),
       url: column.string() })
+    await createTestTable(db, images)
     const tags = defineTable('tags', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, tags)
     const taggables = defineTable('taggables', {
       id: column.id(),
       tagId: column.integer(),
       taggableType: column.string(),
       taggableId: column.integer(),
       active: column.boolean().default(true) })
+    await createTestTable(db, taggables)
     const comments = defineTable('comments', {
       id: column.id(),
       commentableType: column.string().nullable(),
       commentableId: column.integer().nullable(),
       body: column.string() })
+    await createTestTable(db, comments)
 
     const Image = defineModelFromTable(images, {
       fillable: ['imageableType', 'imageableId', 'url'],
@@ -540,11 +431,11 @@ describe('factory slice', () => {
       taggableId: 3,
       active: false })
 
-    expect(adapter.tables.images).toEqual([
+    expect(await db.table('images').orderBy('id').get()).toEqual([
       { id: 1, url: '/img-1.png', imageableType: 'Post', imageableId: 2 },
       { id: 2, url: '/img-2.png', imageableType: 'Post', imageableId: 2 },
     ])
-    expect(adapter.tables.taggables).toEqual([
+    expect(await db.table('taggables').orderBy('id').get()).toEqual([
       { id: 1, tagId: 1, taggableType: 'Post', taggableId: 2, active: 1 },
       { id: 2, tagId: 2, taggableType: 'Post', taggableId: 2, active: 1 },
       { id: 3, tagId: 3, taggableType: 'Post', taggableId: 3, active: 0 },
@@ -552,15 +443,11 @@ describe('factory slice', () => {
   })
 
   it('fails fast for unsaved recycled and directly attached related models during create paths', async () => {
-    const adapter = new InMemoryFactoryAdapter({
-      teams: [],
-      users: [],
-      roles: [],
-      roleUser: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -569,17 +456,21 @@ describe('factory slice', () => {
     const teams = defineTable('teams', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, teams)
     const users = defineTable('users', {
       id: column.id(),
       teamId: column.integer().nullable(),
       name: column.string() })
+    await createTestTable(db, users)
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
     const roleUser = defineTable('roleUser', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUser)
 
     let Team!: ReturnType<typeof defineModelFromTable<typeof teams>>
     let User!: ReturnType<typeof defineModelFromTable<typeof users>>
@@ -638,15 +529,11 @@ describe('factory slice', () => {
   })
 
   it('fails closed for unsupported relations and unsaved persisted relation sources', async () => {
-    const adapter = new InMemoryFactoryAdapter({
-      teams: [],
-      users: [],
-      roles: [],
-      roleUser: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -655,17 +542,21 @@ describe('factory slice', () => {
     const teams = defineTable('teams', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, teams)
     const users = defineTable('users', {
       id: column.id(),
       teamId: column.integer().nullable(),
       name: column.string() })
+    await createTestTable(db, users)
     const roles = defineTable('roles', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, roles)
     const roleUser = defineTable('roleUser', {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer() })
+    await createTestTable(db, roleUser)
 
     const Team = defineModelFromTable(teams, { fillable: ['name'] })
     const Role = defineModelFromTable(roles, { fillable: ['name'] })
@@ -693,14 +584,11 @@ describe('factory slice', () => {
   })
 
   it('supports hasOne and morphOne relation-aware factories', async () => {
-    const adapter = new InMemoryFactoryAdapter({
-      users: [],
-      profiles: [],
-      avatars: [] }, {})
+    const adapter = createTestAdapter()
     const db = createDatabase({
       connectionName: 'default',
       adapter,
-      dialect: createDialect() })
+      dialect: createDialect('sqlite') })
 
     configureDB(createConnectionManager({
       defaultConnection: 'default',
@@ -709,15 +597,18 @@ describe('factory slice', () => {
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
+    await createTestTable(db, users)
     const profiles = defineTable('profiles', {
       id: column.id(),
       userId: column.integer().nullable(),
       bio: column.string() })
+    await createTestTable(db, profiles)
     const avatars = defineTable('avatars', {
       id: column.id(),
       imageableType: column.string().nullable(),
       imageableId: column.integer().nullable(),
       url: column.string() })
+    await createTestTable(db, avatars)
 
     const Profile = defineModelFromTable(profiles, {
       fillable: ['userId', 'bio'] })

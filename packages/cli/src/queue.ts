@@ -68,6 +68,7 @@ export const QUEUE_LISTEN_IGNORED_DIRECTORY_NAMES = new Set([
 
 export const QUEUE_LISTEN_IGNORED_PATH_PREFIXES = [
   HOLO_RUNTIME_ROOT,
+  '.holo-js/project-prepare.lock',
 ].map(toPosixSlashes)
 
 const BUILT_IN_QUEUE_DRIVER_NAMES = new Set(['database', 'redis', 'sync'])
@@ -352,13 +353,19 @@ export async function runQueueWorkCommand(
 ): Promise<void> {
   const startedAt = Date.now()
   const environment = await (dependencies.getEnvironment ?? getQueueRuntimeEnvironment)(projectRoot)
+  let stopping = false
+  const onSignal = () => {
+    stopping = true
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
 
   try {
     const queueModule = dependencies.runWorker ? undefined : await loadQueueCliModule(projectRoot)
     const result = await (dependencies.runWorker ?? queueModule!.runQueueWorker)({
       ...options,
       shouldStop: async () => {
-        if (await options.shouldStop?.()) {
+        if (stopping || await options.shouldStop?.()) {
           return true
         }
 
@@ -375,6 +382,8 @@ export async function runQueueWorkCommand(
       `[queue] Stopped (${result.stoppedBecause}). processed=${result.processed} released=${result.released} failed=${result.failed}`,
     )
   } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
     await environment.cleanup()
   }
 }

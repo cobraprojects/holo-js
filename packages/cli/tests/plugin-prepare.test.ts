@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises'
+import { installPreparers, installPreparation } from './support/native-preparers'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HoloProjectPrepareError, normalizeHoloProjectConfig, type HoloProjectPreparer } from '@holo-js/kernel'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { type LoadedProjectPreparer, loadProjectPluginPreparation } from '../src/project/plugins'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import type { LoadedProjectPreparer } from '../src/project/plugins'
 import { runPluginProjectPreparers } from '../src/project/plugin-prepare/coordinator'
 import { assertManagedPathAllowed, normalizeArtifactPath } from '../src/project/plugin-prepare/paths'
 import {
@@ -16,25 +17,10 @@ import {
   renderManagedHostedAuthRouteFiles,
 } from '../src/project/scaffold/framework-renderers'
 
-vi.mock('../src/project/plugins', () => ({
-  loadProjectPluginPreparation: vi.fn(),
-}))
-
-const mockedLoadPreparation = vi.mocked(loadProjectPluginPreparation)
-const mockedLoadPreparers = {
-  mockReset() {
-    mockedLoadPreparation.mockReset()
-  },
-  mockResolvedValue(preparers: readonly LoadedProjectPreparer[]) {
-    mockedLoadPreparation.mockResolvedValue({
-      activePlugins: preparers.map(preparer => preparer.plugin),
-      preparers,
-    })
-  },
-}
 
 async function createProject(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'holo-plugin-prepare-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'holo-plugin-prepare-')))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture' }))
   return root
 }
@@ -43,12 +29,13 @@ function loadedPreparer(
   root: string,
   id: string,
   preparer: HoloProjectPreparer,
+  packageName = `holo-${id}`,
 ): LoadedProjectPreparer {
   return {
     plugin: {
-      packageName: `holo-${id}`,
-      packageRoot: join(root, 'node_modules', `holo-${id}`),
-      entryPath: join(root, 'node_modules', `holo-${id}`, 'plugin.mjs'),
+      packageName,
+      packageRoot: join(root, 'node_modules', packageName),
+      entryPath: join(root, 'node_modules', packageName, 'plugin.mjs'),
       definition: {
         id,
         name: `Plugin ${id}`,
@@ -61,10 +48,6 @@ function loadedPreparer(
 }
 
 describe('plugin project preparation', () => {
-  beforeEach(() => {
-    mockedLoadPreparers.mockReset()
-  })
-
   it('serializes concurrent preparation for the same project', async () => {
     const root = await createProject()
     let activePreparers = 0
@@ -78,7 +61,7 @@ describe('plugin project preparation', () => {
       firstEntered = resolve
     })
     let calls = 0
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       async prepare() {
         calls += 1
@@ -120,7 +103,7 @@ describe('plugin project preparation', () => {
       pid: 999_999,
       token: 'terminated-owner',
     }))
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
 
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'explicit' },
@@ -141,7 +124,7 @@ describe('plugin project preparation', () => {
     }))
     const staleTime = new Date(Date.now() - 60_000)
     await utimes(ownerPath, staleTime, staleTime)
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
     const controller = new AbortController()
     const abortTimer = setTimeout(() => controller.abort(), 50)
 
@@ -169,7 +152,7 @@ describe('plugin project preparation', () => {
     const staleTime = new Date(Date.now() - 60_000)
     await utimes(lockPath, staleTime, staleTime)
     await utimes(join(lockPath, 'owner.json'), staleTime, staleTime)
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
     const controller = new AbortController()
     const abortTimer = setTimeout(() => controller.abort(), 50)
 
@@ -197,7 +180,7 @@ describe('plugin project preparation', () => {
         watch: { roots: ['server/demo'] },
       }),
     })
-    mockedLoadPreparers.mockResolvedValue([preparer])
+    await installPreparers(root, [preparer])
 
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'explicit' },
@@ -213,7 +196,7 @@ describe('plugin project preparation', () => {
     await expect(readFile(join(root, 'app/demo-route.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await readFile(join(root, '.holo-js/generated/.plugins/demo.json'), 'utf8')).toContain('server/demo')
 
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'configuration-changed' },
     })
@@ -223,7 +206,7 @@ describe('plugin project preparation', () => {
 
   it('removes unchanged generated and managed ownership after plugin deactivation', async () => {
     const root = await createProject()
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -238,7 +221,7 @@ describe('plugin project preparation', () => {
     expect(await readFile(join(root, '.holo-js/generated/demo/registry.json'), 'utf8')).toBe('generated')
     expect(await readFile(join(root, 'app/demo-route.ts'), 'utf8')).toBe('managed')
 
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'configuration-changed' },
     })
@@ -251,7 +234,7 @@ describe('plugin project preparation', () => {
   it('preserves modified managed ownership after plugin deactivation', async () => {
     const root = await createProject()
     const warnings: string[] = []
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -265,7 +248,7 @@ describe('plugin project preparation', () => {
     })
     await writeFile(join(root, 'app/demo-route.ts'), 'application change')
 
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'configuration-changed' },
       writeWarning: message => warnings.push(message),
@@ -284,7 +267,7 @@ describe('plugin project preparation', () => {
     const root = await createProject()
     await mkdir(join(root, 'app'), { recursive: true })
     await writeFile(join(root, 'app/existing.ts'), 'user')
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -302,7 +285,7 @@ describe('plugin project preparation', () => {
     const root = await createProject()
     await mkdir(join(root, 'app'), { recursive: true })
     await writeFile(join(root, 'app/existing.ts'), 'plugin')
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -324,7 +307,7 @@ describe('plugin project preparation', () => {
   it('rejects modified ownership, protected files, and duplicate artifacts without leaking contents', async () => {
     const root = await createProject()
     let mode: 'create' | 'update' | 'protected' | 'duplicate' = 'create'
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -381,12 +364,12 @@ describe('plugin project preparation', () => {
         throw new Error('broken snapshot')
       },
     })
-    mockedLoadPreparers.mockResolvedValue([first])
+    await installPreparers(root, [first])
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'dev', reason: 'initial' },
     })
     calls.length = 0
-    mockedLoadPreparers.mockResolvedValue([first, second])
+    await installPreparers(root, [first, second])
     firstContents = 'changed-before-failure'
 
     const failure = runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
@@ -404,7 +387,7 @@ describe('plugin project preparation', () => {
       apiVersion: 1,
       prepare: () => ({ kind: 'prepared' }),
     })
-    mockedLoadPreparers.mockResolvedValue([preparer])
+    await installPreparers(root, [preparer])
     const manifestRoot = join(root, '.holo-js/generated/.plugins')
     await mkdir(manifestRoot, { recursive: true })
     await writeFile(join(manifestRoot, 'demo.json'), JSON.stringify({
@@ -433,7 +416,7 @@ describe('plugin project preparation', () => {
       { kind: 'retry-full', reason: '' },
     ]
     for (const result of invalidResults) {
-      mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+      await installPreparers(root, [loadedPreparer(root, 'demo', {
         apiVersion: 1,
         prepare: () => result as never,
       })])
@@ -447,7 +430,7 @@ describe('plugin project preparation', () => {
     const root = await createProject()
     const warnings: string[] = []
     let fails = true
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => {
         if (fails) {
@@ -480,7 +463,7 @@ describe('plugin project preparation', () => {
 
   it('redacts arbitrary preparer error messages while retaining plugin attribution', async () => {
     const root = await createProject()
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => {
         throw new Error('database-password=secret-value')
@@ -507,7 +490,7 @@ describe('plugin project preparation', () => {
         generatedArtifacts: includeGenerated ? [{ path: 'stale.ts', contents: 'generated' }] : [],
       }),
     })
-    mockedLoadPreparers.mockResolvedValue([preparer])
+    await installPreparers(root, [preparer])
     await runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'explicit' },
     })
@@ -530,7 +513,7 @@ describe('plugin project preparation', () => {
       apiVersion: 1,
       prepare: () => ({ kind: 'prepared', managedArtifacts: [{ path: 'packages/demo-plugin/route.ts', contents: 'route' }] }),
     }), plugin: { ...loadedPreparer(root, 'protected', { apiVersion: 1, prepare: () => ({ kind: 'prepared' }) }).plugin, packageRoot: nestedPackageRoot } }
-    mockedLoadPreparers.mockResolvedValue([protectedPreparer])
+    await installPreparers(root, [protectedPreparer])
     await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'explicit' },
     })).rejects.toMatchObject({ failure: { code: 'HOLO_PLUGIN_PREPARE_PROTECTED_PATH' } })
@@ -539,7 +522,7 @@ describe('plugin project preparation', () => {
   it('cleans abandoned staged files and reconciles an interrupted managed update', async () => {
     const root = await createProject()
     let contents = 'v1'
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({ kind: 'prepared', managedArtifacts: [{ path: 'app/route.ts', contents }] }),
     })])
@@ -568,7 +551,7 @@ describe('plugin project preparation', () => {
         managedArtifacts: [{ path: 'same.ts', contents: 'managed' }],
       }),
     })
-    mockedLoadPreparers.mockResolvedValue([duplicatePath])
+    await installPreparers(root, [duplicatePath])
     await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'explicit' },
     })).rejects.toMatchObject({ failure: { code: 'HOLO_PLUGIN_PREPARE_DUPLICATE_ARTIFACT' } })
@@ -581,8 +564,8 @@ describe('plugin project preparation', () => {
     const second = loadedPreparer(root, 'duplicate', {
       apiVersion: 1,
       prepare: () => ({ kind: 'prepared', generatedArtifacts: [{ path: 'second.ts', contents: 'second' }] }),
-    })
-    mockedLoadPreparers.mockResolvedValue([first, second])
+    }, 'holo-duplicate-second')
+    await installPreparers(root, [first, second])
     await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), {
       run: { kind: 'full', command: 'prepare', reason: 'explicit' },
     })).rejects.toMatchObject({ failure: { code: 'HOLO_PLUGIN_PREPARE_OWNERSHIP_CONFLICT' } })
@@ -600,7 +583,7 @@ describe('plugin project preparation', () => {
         managedArtifacts: [{ path: 'packages/passive-plugin/runtime.mjs', contents: 'replaced' }],
       }),
     })
-    mockedLoadPreparation.mockResolvedValue({
+    await installPreparation(root, {
       activePlugins: [
         attacker.plugin,
         {

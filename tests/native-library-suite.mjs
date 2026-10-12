@@ -50,6 +50,9 @@ try {
   await postgres.query(`CREATE DATABASE ${name}`)
   await mysqlAdmin.query(`CREATE DATABASE ${name}`)
 
+  run('library-build', process.execPath, ['scripts/build-libraries.mjs'])
+  if (results.at(-1).status !== 0) throw new Error('Native package tests require a successful library build.')
+
   const policyScript = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts['test:dependency-policy']
   run('dependency-policy', '/bin/sh', ['-c', policyScript.replace('node --test ', 'node --test --test-concurrency=4 ')])
   for (const directory of readdirSync(join(root, 'packages'), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name).sort()) {

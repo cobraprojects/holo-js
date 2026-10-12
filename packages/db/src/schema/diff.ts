@@ -4,7 +4,7 @@ import type {
   TableDefinition,
   TableIndexDefinition,
 } from './types'
-import type { IntrospectedForeignKey, SchemaService } from './SchemaService'
+import type { IntrospectedForeignKey, IntrospectedIndex, SchemaService } from './SchemaService'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 
 export interface SchemaColumnMismatch {
@@ -151,11 +151,18 @@ async function diffTable(
 
   const expectedIndexes = table.indexes.map(index => normalizeExpectedIndex(table, index))
   const expectedIndexByName = new Map(expectedIndexes.map(index => [index.name, index]))
-  const actualIndexByName = new Map(actualIndexes.map(index => [index.name, index]))
+  const comparableIndexes = actualIndexes.filter(index => !isConstraintIndex(table, index))
+  const actualIndexByName = new Map(comparableIndexes.map(index => [index.name, index]))
   const missingIndexes = expectedIndexes
     .map(index => index.name)
     .filter(name => !actualIndexByName.has(name))
-  const extraIndexes = actualIndexes
+  for (const column of expectedColumns.filter(column => column.unique && !column.primaryKey)) {
+    if (!actualIndexes.some(index => index.unique && index.columns.length === 1 && index.columns[0] === column.name)) {
+      const name = `${table.tableName}_${column.name}_unique`
+      if (!missingIndexes.includes(name)) missingIndexes.push(name)
+    }
+  }
+  const extraIndexes = comparableIndexes
     .map(index => index.name)
     .filter(name => !expectedIndexByName.has(name))
   const mismatchedIndexes = expectedIndexes
@@ -261,13 +268,22 @@ function lowerLogicalColumnType(column: AnyColumnDefinition, dialectName: string
   return resolveDialectComparisonColumnType(normalizedDialectName, column)
 }
 
+function isConstraintIndex(table: TableDefinition, index: IntrospectedIndex): boolean {
+  if (!index.unique || table.indexes.some(expected => normalizeExpectedIndex(table, expected).name === index.name)) return false
+  const primaryKeys = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
+  const matchesPrimaryKey = index.columns.length === primaryKeys.length && index.columns.every((column, position) => column === primaryKeys[position])
+  if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${table.tableName}_pkey` || index.name.startsWith(`sqlite_autoindex_${table.tableName}_`))) return true
+  const column = index.columns.length === 1 ? table.columns[index.columns[0]!] : undefined
+  return Boolean(column?.unique && (index.name === column.name || index.name === `${table.tableName}_${column.name}_key` || index.name.startsWith(`sqlite_autoindex_${table.tableName}_`)))
+}
+
 function normalizeExpectedIndex(
   table: TableDefinition,
   index: TableIndexDefinition,
 ): { name: string, unique: boolean, columns: readonly string[] } {
   return {
     name: index.name ?? `${table.tableName}_${index.columns.join('_')}_${index.unique ? 'unique' : 'index'}`,
-    unique: index.unique,
+    unique: Boolean(index.unique),
     columns: index.columns,
   }
 }

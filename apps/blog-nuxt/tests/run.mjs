@@ -1,3 +1,4 @@
+import { assertExampleAppDevelopmentReload } from '../../../tests/example-app-development-reload.mjs'
 import { stopExampleAppProcess as stopProcessTree } from '../../../tests/example-app-process.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -15,6 +16,7 @@ import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app
 import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
 import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate-limit.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
+import { assertExampleAppFormsBrowserFlow } from '../../../tests/example-app-forms-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
@@ -87,7 +89,6 @@ let capturedOutput = ''
 function createChildEnv(overrides = {}) {
   const env = {
     ...process.env,
-    APP_NAME: '',
     HOLO_SECURITY_TRUST_PROXY: 'true',
     BROADCAST_HOST: '127.0.0.1',
     BROADCAST_PORT: broadcastPort,
@@ -496,7 +497,7 @@ try {
   await startBroadcastWorker(`http://localhost:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'], 60000)
   database = await openExampleAppDatabase(cwd)
-  await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService)
+  await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService, cwd)
 
   child = spawn('bun', ['run', 'dev'], {
     cwd,
@@ -515,6 +516,8 @@ try {
   pipeOutput(child.stderr, process.stderr)
 
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  await assertExampleAppDevelopmentReload({ cwd, baseUrl: `http://localhost:${port}` })
+  await assertExampleAppFormsBrowserFlow({ baseUrl: `http://localhost:${port}`, framework: 'nuxt' })
   await assertSuperAdminLoginUsesVerificationRedirect(`http://localhost:${port}`)
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
@@ -533,7 +536,7 @@ try {
     expectedTitle: 'Shipping a Real Holo Blog on Nuxt',
   })
 
-  await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: env('APP_NAME', 'blog-nuxt-updated')"))
+  await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: 'blog-nuxt-updated'"))
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
 
   await stopProcessTree(child)

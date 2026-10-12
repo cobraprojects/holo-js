@@ -101,10 +101,6 @@ export interface FluxClient<TManifest extends GeneratedBroadcastManifest = Gener
   presence<TChannel extends FluxManifestTypes<TManifest>['channelPattern'] | (string & {})>(name: TChannel): FluxPresenceSubscription<TManifest, TChannel>
 }
 
-type PusherConnectorOptions = {
-  readonly transport?: 'mock'
-}
-
 type HoloWebSocketConnectorOptions = {
   readonly key?: string
   readonly host?: string
@@ -113,17 +109,6 @@ type HoloWebSocketConnectorOptions = {
   readonly scheme?: 'http' | 'https' | 'ws' | 'wss'
   readonly authEndpoint?: string
   readonly configEndpoint?: string
-}
-
-type PusherConnectorDebug = {
-  emitEvent(channel: string, event: string, payload: BroadcastJsonObject): void
-  emitNotification(channel: string, payload: BroadcastJsonObject): void
-  updatePresenceMembers(channel: string, members: readonly BroadcastJsonObject[]): void
-  getJoinedChannels(): readonly string[]
-}
-
-type ConnectorDebugCarrier = {
-  readonly __debug?: PusherConnectorDebug
 }
 
 type CallbackMap = Map<string, Set<(payload: BroadcastJsonObject) => void>>
@@ -308,132 +293,6 @@ function createUnavailableConnector(): FluxConnector {
     },
     subscribe() {
       return throwUnavailable()
-    },
-  })
-}
-
-function createPusherConnector(options: PusherConnectorOptions = {}): FluxConnector & ConnectorDebugCarrier {
-  const channels = new Map<string, PusherChannelState>()
-  const statusListeners = new Set<(status: FluxConnectionStatus) => void>()
-  let status: FluxConnectionStatus = 'idle'
-  void options
-
-  const ensureChannel = (name: string, kind: FluxChannelKind): PusherChannelState => {
-    const key = `${kind}:${name}`
-    const existing = channels.get(key)
-    if (existing) {
-      return existing
-    }
-
-    const state: PusherChannelState = {
-      name,
-      kind,
-      eventListeners: new Map(),
-      whisperListeners: new Map(),
-      notificationListeners: new Set(),
-      memberListeners: new Set(),
-      members: Object.freeze([]),
-    }
-    channels.set(key, state)
-    return state
-  }
-
-  const debug: PusherConnectorDebug = Object.freeze({
-    emitEvent(channel, event, payload) {
-      for (const state of channels.values()) {
-        if (state.name !== channel) {
-          continue
-        }
-        for (const callback of state.eventListeners.get(event) ?? []) {
-          callback(payload)
-        }
-      }
-    },
-    emitNotification(channel, payload) {
-      for (const state of channels.values()) {
-        if (state.name !== channel) {
-          continue
-        }
-        for (const callback of state.notificationListeners) {
-          callback(payload)
-        }
-      }
-    },
-    updatePresenceMembers(channel, members) {
-      for (const state of channels.values()) {
-        if (state.name === channel && state.kind === 'presence') {
-          state.members = Object.freeze([...members])
-          for (const callback of state.memberListeners) {
-            callback(state.members)
-          }
-        }
-      }
-    },
-    getJoinedChannels() {
-      return Object.freeze([...channels.values()].map(state => `${state.kind}:${state.name}`))
-    },
-  })
-
-  return Object.freeze({
-    __debug: debug,
-    async connect() {
-      if (status === 'connected') {
-        return
-      }
-      status = 'connecting'
-      notifyStatusListeners(statusListeners, status)
-      status = 'connected'
-      notifyStatusListeners(statusListeners, status)
-    },
-    async disconnect() {
-      status = 'disconnected'
-      notifyStatusListeners(statusListeners, status)
-      channels.clear()
-    },
-    getStatus() {
-      return status
-    },
-    onStatusChange(callback: (status: FluxConnectionStatus) => void) {
-      statusListeners.add(callback)
-      return () => {
-        statusListeners.delete(callback)
-      }
-    },
-    subscribe(channel: string, kind: FluxChannelKind) {
-      const state = ensureChannel(channel, kind)
-      return Object.freeze({
-        name: state.name,
-        kind: state.kind,
-        get members() {
-          return state.members
-        },
-        onEvent(event: string, callback: (payload: BroadcastJsonObject) => void) {
-          return addCallback(state.eventListeners, event, callback)
-        },
-        onMembersChange(callback: (members: readonly BroadcastJsonObject[]) => void) {
-          state.memberListeners.add(callback)
-          return () => {
-            state.memberListeners.delete(callback)
-          }
-        },
-        onNotification(callback: (payload: BroadcastJsonObject) => void) {
-          state.notificationListeners.add(callback)
-          return () => {
-            state.notificationListeners.delete(callback)
-          }
-        },
-        onWhisper(name: string, callback: (payload: BroadcastJsonObject) => void) {
-          return addCallback(state.whisperListeners, name, callback)
-        },
-        async sendWhisper(name: string, payload: BroadcastJsonObject) {
-          for (const callback of state.whisperListeners.get(name) ?? []) {
-            callback(payload)
-          }
-        },
-        leave() {
-          channels.delete(`${state.kind}:${state.name}`)
-        },
-      })
     },
   })
 }
@@ -715,8 +574,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
     }
 
     if (eventName === 'pusher_internal:member_added') {
-      const member = parseWireData(payload.member)
-      state.members = appendPresenceMember(state.members, member)
+      state.members = appendPresenceMember(state.members, payload)
       for (const callback of state.memberListeners) {
         callback(state.members)
       }
@@ -724,9 +582,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
     }
 
     if (eventName === 'pusher_internal:member_removed') {
-      const member = parseWireData(payload.member)
-      const key = presenceMemberKey(member)
-      state.members = Object.freeze(state.members.filter(candidate => presenceMemberKey(candidate) !== key))
+      state.members = Object.freeze(state.members.filter(candidate => String(candidate.id) !== String(payload.user_id)))
       for (const callback of state.memberListeners) {
         callback(state.members)
       }
@@ -739,6 +595,12 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
         callback(payload)
       }
       return
+    }
+
+    if (eventName === 'notifications.message') {
+      for (const callback of state.notificationListeners) {
+        callback(payload)
+      }
     }
 
     for (const callback of state.eventListeners.get(eventName) ?? []) {
@@ -1142,7 +1004,7 @@ function createPresenceSubscription<
 
 export function createFluxClient<const TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   options: FluxClientOptions<TManifest> = {},
-): FluxClient<TManifest> & ConnectorDebugCarrier {
+): FluxClient<TManifest> {
   const connector = options.connector
     ?? options.connectorFactory?.(options)
     ?? createUnavailableConnector()
@@ -1174,10 +1036,9 @@ export function createFluxClient<const TManifest extends GeneratedBroadcastManif
     presence<TChannel extends FluxManifestTypes<TManifest>['channelPattern'] | (string & {})>(name: TChannel) {
       return createPresenceSubscription(name, connector, subscriptionRegistry)
     },
-    ...('__debug' in connector ? { __debug: (connector as ConnectorDebugCarrier).__debug } : {}),
-  } satisfies FluxClient<TManifest> & ConnectorDebugCarrier
+  } satisfies FluxClient<TManifest>
 
-  return Object.freeze(client) as FluxClient<TManifest> & ConnectorDebugCarrier
+  return Object.freeze(client) as FluxClient<TManifest>
 }
 
 function createDefaultFluxClient(): FluxClient {
@@ -1218,7 +1079,6 @@ export const fluxInternals = {
   removePresenceMember,
   createHoloWebSocketConnector,
   createUnavailableConnector,
-  createPusherConnector,
   createPresenceSubscription,
   createSubscription,
 }

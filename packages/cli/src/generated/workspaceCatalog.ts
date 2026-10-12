@@ -67,7 +67,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "better-sqlite3": "^13.0.3",
   "bullmq": "^5.71.0",
   "create-holo-js": "^0.3.23",
-  "esbuild": "^0.27.4",
+  "esbuild": "^0.27.7",
   "eslint": "^9.17.0",
   "fast-check": "^4.5.3",
   "globals": "^15.14.0",
@@ -103,5 +103,6 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "vue-router": "^5.0.4",
   "vue-tsc": "^2.2.0",
   "ws": "^8.18.3",
-  "yaml": "^2.8.3"
+  "yaml": "^2.8.3",
+  "@nuxt/nitro-server": "^4.4.4"
 } as const)

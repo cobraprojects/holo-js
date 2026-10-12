@@ -276,8 +276,9 @@ function createFileStorageBackend(root: string): StorageBackend {
       if (!targetPath) return null
       try {
         return await readFile(targetPath)
-      } catch {
-        return null
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
       }
     },
 
@@ -449,19 +450,25 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
     routePrefix: loadedConfig.storage.routePrefix,
     disks: loadedConfig.storage.disks,
   })
+  const runtimeStorage = {
+    ...normalizedStorage,
+    disks: Object.fromEntries(Object.entries(normalizedStorage.disks).map(([name, disk]) => [name,
+      disk.driver === 's3' ? disk : { ...disk, root: resolve(projectRoot, disk.root as string) },
+    ])),
+  }
   const backends = new Map<string, StorageBackend>()
   const factories = new Map<string, () => StorageBackend>()
 
-  for (const [diskName, disk] of Object.entries(normalizedStorage.disks)) {
+  for (const [diskName, disk] of Object.entries(runtimeStorage.disks)) {
     const factory = disk.driver === 's3'
       ? await createS3StorageBackendFactory(projectRoot, disk)
-      : () => createFileStorageBackend(resolve(projectRoot, disk.root as string))
+      : () => createFileStorageBackend(disk.root as string)
     factories.set(diskName, factory)
   }
 
   storageRuntime.configureStorageRuntime({
     getRuntimeConfig: () => ({
-      holoStorage: normalizedStorage,
+      holoStorage: runtimeStorage,
       holo: { appUrl: loadedConfig.app.url, appKey: loadedConfig.app.key },
     }),
     getStorage: (base: string) => {

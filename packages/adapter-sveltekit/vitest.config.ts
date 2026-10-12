@@ -51,7 +51,6 @@ export default defineConfig({
       '@holo-js/session': resolve(__dirname, '../session/src/index.ts'),
       '@holo-js/validation/internal/compiled': resolve(__dirname, '../validation/src/internal/compiled.ts'),
       '@holo-js/validation': resolve(__dirname, '../validation/src/index.ts'),
-      '$app/stores': resolve(__dirname, 'tests/stubs/app-stores.ts'),
     },
   },
   test: {

@@ -1,1241 +1,224 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type {
-  QueueDriverFactory,
-  QueueFailedJobStore,
-  QueueJobEnvelope,
-  QueueJsonValue,
-  QueueReserveInput,
-  QueueReservedJob,
-  RegisterableQueueJobDefinition,
-} from '../src'
+import { randomUUID } from 'node:crypto'
+import { setTimeout } from 'node:timers/promises'
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   clearQueueConnection,
   configureQueueRuntime,
-  queueRuntimeInternals,
-  queueWorkerInternals,
-  QueueWorkerTimeoutError,
-  QueueWorkerUnsupportedDriverError,
+  listFailedQueueJobs,
   registerQueueJob,
-  resetQueueRuntime,
+  resetQueueRegistry,
   runQueueWorker,
+  type QueueJobEnvelope,
+  type QueueWorkerJobEvent,
 } from '../src'
+import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
 
-const sharedRedisConfig = {
-  default: 'default',
-  connections: {
-    default: {
-      name: 'default',
-      host: '127.0.0.1',
-      port: 6379,
-      password: undefined,
-      username: undefined,
-      db: 0,
-    },
-  },
-} as const
-
-type FakeAsyncDriverState = {
-  reserveQueue: Array<QueueReservedJob<QueueJsonValue> | null>
-  reserveInputs: Array<{ readonly queueNames: readonly string[], readonly workerId: string }>
-  acknowledged: QueueReservedJob<QueueJsonValue>[]
-  released: Array<{ job: QueueReservedJob<QueueJsonValue>, delaySeconds?: number }>
-  deleted: QueueReservedJob<QueueJsonValue>[]
-  clearCalls: Array<readonly string[] | undefined>
-  failure?: { readonly operation: 'acknowledge' | 'release' | 'delete', readonly error: Error }
-}
-
-function createReservedJob(
-  name: string,
-  options: {
-    id?: string
-    attempts?: number
-    connection?: string
-    queue?: string
-    payload?: QueueJsonValue
-    maxAttempts?: number
-  } = {},
-): QueueReservedJob<QueueJsonValue> {
-  const envelope: QueueJobEnvelope<QueueJsonValue> = {
-    id: options.id ?? `${name}-id`,
-    name,
-    connection: options.connection ?? 'redis',
-    queue: options.queue ?? 'default',
-    payload: options.payload ?? { ok: true },
-    attempts: options.attempts ?? 0,
-    maxAttempts: options.maxAttempts ?? 3,
-    createdAt: 100,
-  }
-
-  return {
-    reservationId: `${envelope.id}-reservation`,
-    envelope,
-    reservedAt: 200,
-  }
-}
-
-function createFakeAsyncDriverFactory(
-  driverName: 'redis' | 'database',
-  state: FakeAsyncDriverState,
-): QueueDriverFactory {
-  return {
-    driver: driverName,
-    create(connection, _context) {
-      return {
-        name: connection.name,
-        driver: connection.driver,
-        mode: 'async' as const,
-        async dispatch(job) {
-          return {
-            jobId: job.id,
-            synchronous: false,
-          }
-        },
-        async clear(input) {
-          state.clearCalls.push(input?.queueNames)
-          return 7
-        },
-        async close() {},
-        async reserve<TPayload extends QueueJsonValue = QueueJsonValue>(input: QueueReserveInput) {
-          state.reserveInputs.push({
-            queueNames: input.queueNames ?? [],
-            workerId: input.workerId ?? '',
-          })
-          return (state.reserveQueue.shift() ?? null) as QueueReservedJob<TPayload> | null
-        },
-        async acknowledge(job) {
-          state.acknowledged.push(job as QueueReservedJob<QueueJsonValue>)
-          if (state.failure?.operation === 'acknowledge') {
-            throw state.failure.error
-          }
-        },
-        async release(job, options) {
-          state.released.push({
-            job: job as QueueReservedJob<QueueJsonValue>,
-            ...(typeof options?.delaySeconds === 'number' ? { delaySeconds: options.delaySeconds } : {}),
-          })
-          if (state.failure?.operation === 'release') {
-            throw state.failure.error
-          }
-        },
-        async delete(job) {
-          state.deleted.push(job as QueueReservedJob<QueueJsonValue>)
-          if (state.failure?.operation === 'delete') {
-            throw state.failure.error
-          }
-        },
-      }
-    },
-  }
-}
-
-afterEach(() => {
-  resetQueueRuntime()
-  vi.useRealTimers()
-})
-
-function registerNamedJob<TPayload extends QueueJsonValue, TResult>(
-  name: string,
-  definition: RegisterableQueueJobDefinition<TPayload, TResult>,
-) {
-  return registerQueueJob(definition, { name })
-}
-
-describe('@holo-js/queue worker runtime', () => {
-  it.each(['acknowledge', 'release', 'persist', 'delete'] as const)(
-    'stops on %s failure without reclassifying or repeating finalization',
-    async (operation) => {
-      const adapterError = new Error(`${operation} unavailable`)
-      const state: FakeAsyncDriverState = {
-        reserveQueue: [createReservedJob(`jobs.adapter-failure-${operation}`)],
-        reserveInputs: [],
-        acknowledged: [],
-        released: [],
-        deleted: [],
-        clearCalls: [],
-        ...(operation === 'persist' ? {} : { failure: { operation, error: adapterError } }),
-      }
-      const persisted: Error[] = []
-      const events: string[] = []
-      const failedJobStore: QueueFailedJobStore = {
-        async persistFailedJob(_reserved, error) {
-          persisted.push(error)
-          if (operation === 'persist') {
-            throw adapterError
-          }
-          return null
-        },
-        async listFailedJobs() { return [] },
-        async retryFailedJobs() { return 0 },
-        async forgetFailedJob() { return false },
-        async flushFailedJobs() { return 0 },
-      }
-      configureQueueRuntime({
-        config: {
-          default: 'redis',
-          failed: false,
-          connections: { redis: { driver: 'redis' } },
-        },
-        redisConfig: sharedRedisConfig,
-        driverFactories: [createFakeAsyncDriverFactory('redis', state)],
-        failedJobStore,
-      })
-      const handlerError = new Error('explicit terminal failure')
-      registerNamedJob(`jobs.adapter-failure-${operation}`, {
-        async handle(_payload, context) {
-          if (operation === 'release') {
-            await context.release(4)
-          } else if (operation === 'persist' || operation === 'delete') {
-            try {
-              await context.fail(handlerError)
-            } catch {
-              return
-            }
-          }
-        },
-        async onCompleted() { events.push('completed') },
-        async onFailed() { events.push('failed') },
-      })
-
-      await expect(runQueueWorker({
-        once: true,
-        async onJobProcessed() { events.push('processed') },
-        async onJobReleased() { events.push('released') },
-        async onJobFailed() { events.push('worker-failed') },
-      })).rejects.toBe(adapterError)
-      expect(state.reserveInputs).toHaveLength(1)
-      expect(state.acknowledged).toHaveLength(operation === 'acknowledge' ? 1 : 0)
-      expect(state.released).toHaveLength(operation === 'release' ? 1 : 0)
-      expect(persisted).toEqual(operation === 'persist' || operation === 'delete' ? [handlerError] : [])
-      expect(state.deleted).toHaveLength(operation === 'delete' ? 1 : 0)
-      expect(events).toEqual(operation === 'acknowledge' ? ['completed'] : [])
-    },
-  )
-
-  it('processes async jobs, emits hooks, and clears named queues', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [
-        createReservedJob('jobs.process', {
-          queue: 'critical',
-          payload: { ok: true },
-        }),
-        null,
-      ],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
+async function openWorker() {
+  const harness = await createSQLiteQueueHarness({ createFailedTable: true })
+  onTestFinished(() => harness.cleanup())
+  const enqueue = async (name: string, options: Partial<QueueJobEnvelope<{ ok: boolean }>> = {}) => {
+    const envelope: QueueJobEnvelope<{ ok: boolean }> = {
+      id: randomUUID(), name, connection: 'database', queue: 'default', payload: { ok: true },
+      attempts: 0, maxAttempts: 3, createdAt: Date.now(), ...options,
     }
-    const onJobProcessed = vi.fn(() => {
-      expect(state.acknowledged).toHaveLength(1)
-    })
-    const onIdle = vi.fn()
+    await harness.driver.dispatch(envelope)
+    return envelope
+  }
+  return { ...harness, enqueue }
+}
 
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-            queue: 'default',
-          },
-        },
+afterEach(() => resetQueueRegistry())
+
+describe('@holo-js/queue native worker behavior', () => {
+  it.each(['acknowledge', 'release', 'persist', 'delete'] as const)('stops on a native %s failure without running finalization observers', async operation => {
+    const harness = await openWorker()
+    const events: string[] = []
+    const name = `failure-${operation}`
+    registerQueueJob({
+      async handle(_payload, context) {
+        if (operation === 'release') await context.release(4)
+        if (operation === 'persist' || operation === 'delete') {
+          try { await context.fail(new Error('terminal failure')) } catch { return }
+        }
       },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
+      async onCompleted() { events.push('completed') },
+      async onFailed() { events.push('failed') },
+    }, { name })
+    await harness.enqueue(name)
+    const trigger = operation === 'persist'
+      ? "BEFORE INSERT ON failed_jobs"
+      : operation === 'release'
+        ? 'BEFORE UPDATE ON jobs WHEN OLD.reservation_id IS NOT NULL AND NEW.reservation_id IS NULL'
+        : 'BEFORE DELETE ON jobs'
+    await harness.connection.getAdapter().execute(`CREATE TRIGGER reject_finalization ${trigger} BEGIN SELECT RAISE(ABORT, '${operation} unavailable'); END`)
+    await expect(runQueueWorker({ once: true,
+      async onJobProcessed() { events.push('processed') },
+      async onJobReleased() { events.push('released') },
+      async onJobFailed() { events.push('worker-failed') },
+    })).rejects.toThrow(`${operation} unavailable`)
+    const rows = await harness.readJobRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.reservation_id).toBeTypeOf('string')
+    expect(await listFailedQueueJobs()).toHaveLength(operation === 'delete' ? 1 : 0)
+    expect(events).toEqual(operation === 'acknowledge' ? ['completed'] : [])
+  })
 
-    registerNamedJob('jobs.process', {
+  it('processes real jobs in selected queues and delivers hooks in order', async () => {
+    const harness = await openWorker()
+    const events: string[] = []
+    const observed: QueueWorkerJobEvent[] = []
+    registerQueueJob({
       async handle(payload, context) {
         expect(payload).toEqual({ ok: true })
-        expect(context.connection).toBe('redis')
-        expect(context.queue).toBe('critical')
-        expect(context.attempt).toBe(1)
-        expect(context.maxAttempts).toBe(3)
+        expect(context).toMatchObject({ connection: 'database', queue: 'critical', attempt: 1, maxAttempts: 3 })
+        events.push('handle')
       },
       async onCompleted() {
-        expect(state.acknowledged).toEqual([])
+        expect(await harness.readJobRows()).toHaveLength(2)
+        events.push('completed')
       },
+    }, { name: 'process' })
+    await harness.enqueue('process', { queue: 'critical' })
+    await harness.enqueue('process', { queue: 'mail' })
+    const result = await runQueueWorker({ queueNames: [' critical ', 'critical'], workerId: 'native-worker', stopWhenEmpty: true,
+      onJobProcessed: event => { observed.push(event); events.push('processed') },
+      onIdle: () => { events.push('idle') },
     })
-
-    await expect(clearQueueConnection('redis', {
-      queueNames: ['critical'],
-    })).resolves.toBe(7)
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      stopWhenEmpty: true,
-      onIdle,
-      onJobProcessed,
-    })).resolves.toEqual({
-      processed: 1,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'empty',
-    })
-
-    expect(state.clearCalls).toEqual([['critical']])
-    expect(state.acknowledged).toHaveLength(1)
-    expect(state.released).toEqual([])
-    expect(state.deleted).toEqual([])
-    expect(onJobProcessed).toHaveBeenCalledWith(expect.objectContaining({
-      jobName: 'jobs.process',
-      queue: 'critical',
-    }))
-    expect(onIdle).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ processed: 1, released: 0, failed: 0, stoppedBecause: 'empty' })
+    expect(events).toEqual(['handle', 'completed', 'processed', 'idle'])
+    expect(observed).toEqual([expect.objectContaining({ jobName: 'process', queue: 'critical', attempt: 1 })])
+    expect((await harness.readJobRows()).map(row => row.queue)).toEqual(['mail'])
+    expect(await clearQueueConnection('database', { queueNames: ['critical'] })).toBe(0)
+    expect(await clearQueueConnection('database', { queueNames: ['mail'] })).toBe(1)
+    expect(await harness.readJobRows()).toEqual([])
   })
 
-  it('releases jobs for explicit release requests and retryable failures', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [
-        createReservedJob('jobs.release', {
-          id: 'release-job',
-          payload: { manual: true },
-        }),
-        createReservedJob('jobs.retry', {
-          id: 'retry-job',
-          attempts: 0,
-          payload: { manual: false },
-          maxAttempts: 4,
-        }),
-        createReservedJob('jobs.retry-no-backoff', {
-          id: 'retry-no-backoff-job',
-          attempts: 0,
-          payload: { manual: 'no-backoff' },
-          maxAttempts: 3,
-        }),
-      ],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const onJobReleased = vi.fn()
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
-
-    registerNamedJob('jobs.release', {
+  it.each(['release', 'throw'] as const)('retries a native job after %s without running completion hooks prematurely', async action => {
+    const harness = await openWorker()
+    const attempts: number[] = []
+    const events: string[] = []
+    registerQueueJob({
+      backoff: [1, 2],
       async handle(_payload, context) {
-        await context.release(9)
+        attempts.push(context.attempt)
+        if (context.attempt !== 1) return
+        if (action === 'release') await context.release(1)
+        else throw new Error('retry me')
       },
-    })
-    registerNamedJob('jobs.retry', {
-      backoff: [5, 10, 15],
-      async handle() {
-        throw new Error('retry me')
-      },
-    })
-    registerNamedJob('jobs.retry-no-backoff', {
-      async handle() {
-        throw new Error('retry me without backoff')
-      },
-    })
-    registerNamedJob('jobs.release-then-throw', {
-      async handle(_payload, context) {
-        await context.release(4)
-        throw new Error('released anyway')
-      },
-    })
-    registerNamedJob('jobs.release-string', {
-      async handle(_payload, context) {
-        await context.release()
-        throw 'string failure'
-      },
-    })
-    registerNamedJob('jobs.release-no-delay', {
-      async handle(_payload, context) {
-        await context.release()
-      },
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-      onJobReleased,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 1,
-      failed: 0,
-      stoppedBecause: 'once',
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-      onJobReleased,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 1,
-      failed: 0,
-      stoppedBecause: 'once',
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-      onJobReleased,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 1,
-      failed: 0,
-      stoppedBecause: 'once',
-    })
-
-    expect(state.released).toEqual([
-      { job: expect.objectContaining({ envelope: expect.objectContaining({ id: 'release-job' }) }), delaySeconds: 9 },
-      { job: expect.objectContaining({ envelope: expect.objectContaining({ id: 'retry-job' }) }), delaySeconds: 5 },
-      { job: expect.objectContaining({ envelope: expect.objectContaining({ id: 'retry-no-backoff-job' }) }) },
-    ])
-    expect(onJobReleased).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      jobName: 'jobs.release',
-      delaySeconds: 9,
-    }))
-    expect(onJobReleased).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      jobName: 'jobs.retry',
-      delaySeconds: 5,
-      error: expect.any(Error),
-    }))
-    expect(onJobReleased).toHaveBeenNthCalledWith(3, expect.objectContaining({
-      jobName: 'jobs.retry-no-backoff',
-      error: expect.any(Error),
-    }))
-
-    const directDriver = queueWorkerInternals.requireAsyncDriver(
-      createFakeAsyncDriverFactory('redis', state).create({
-        name: 'redis',
-        driver: 'redis',
-        connection: 'default',
-        queue: 'default',
-        retryAfter: 90,
-        blockFor: 5,
-        redis: {
-          host: '127.0.0.1',
-          port: 6379,
-          db: 0,
-        },
-      }, queueRuntimeInternals.createQueueDriverFactoryContext()),
-      'redis',
-    )
-    const releaseThenThrow = await queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.release-then-throw'),
-      {
-        onJobReleased,
-      },
-    )
-    expect(releaseThenThrow).toEqual({
-      kind: 'released',
-      delaySeconds: 4,
-      error: expect.any(Error),
-    })
-    expect(await queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.release-string'),
-      {
-        onJobReleased,
-      },
-    )).toEqual({
-      kind: 'released',
-      error: new Error('string failure'),
-    })
-    expect(await queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.release-no-delay'),
-      {
-        onJobReleased,
-      },
-    )).toEqual({
-      kind: 'released',
-    })
+      onCompleted: () => { events.push('completed') },
+    }, { name: 'retry' })
+    await harness.enqueue('retry')
+    expect(await runQueueWorker({ once: true, onJobReleased: () => { events.push('released') } })).toMatchObject({ released: 1, failed: 0 })
+    expect(events).toEqual(['released'])
+    expect(await harness.driver.reserve({})).toBeNull()
+    expect((await harness.readJobRows())[0]?.attempts).toBe(1)
+    await setTimeout(1_050)
+    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1 })
+    expect(attempts).toEqual([1, 2])
+    expect(events).toEqual(['released', 'completed'])
+    expect(await harness.readJobRows()).toEqual([])
+    expect(await listFailedQueueJobs()).toEqual([])
   })
 
-  it('does not run completion hooks for jobs that request release', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [
-        createReservedJob('jobs.release-with-completion', {
-          id: 'release-with-completion-job',
-        }),
-      ],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const onCompleted = vi.fn()
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
-
-    registerNamedJob('jobs.release-with-completion', {
-      onCompleted,
+  it.each(['exhausted', 'explicit', 'caught'] as const)('persists a terminal %s failure and removes its native reservation', async failure => {
+    const harness = await openWorker()
+    const events: string[] = []
+    registerQueueJob({
       async handle(_payload, context) {
-        await context.release(3)
-        return 'released'
+        const error = new Error('terminal failure')
+        if (failure === 'caught') { try { await context.fail(error) } catch { return } }
+        if (failure === 'explicit') await context.fail(error)
+        throw error
       },
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 1,
-      failed: 0,
-      stoppedBecause: 'once',
-    })
-
-    expect(state.released).toEqual([
-      {
-        job: expect.objectContaining({
-          envelope: expect.objectContaining({ id: 'release-with-completion-job' }),
-        }),
-        delaySeconds: 3,
-      },
-    ])
-    expect(state.acknowledged).toEqual([])
-    expect(onCompleted).not.toHaveBeenCalled()
+      onCompleted: () => { events.push('completed') },
+      onFailed: (_payload, error) => { expect(error.message).toBe('terminal failure'); events.push('failed') },
+    }, { name: 'terminal' })
+    const job = await harness.enqueue('terminal', { attempts: failure === 'exhausted' ? 2 : 0 })
+    expect(await runQueueWorker({ once: true, onJobFailed: () => { events.push('worker-failed') } })).toMatchObject({ failed: 1, released: 0 })
+    expect(await harness.readJobRows()).toEqual([])
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: job.id, exception: expect.stringContaining('terminal failure') })])
+    expect(events).toEqual(['failed', 'worker-failed'])
   })
 
-  it('fails jobs permanently when attempts are exhausted or fail() is requested', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [
-        createReservedJob('jobs.fail-now', {
-          id: 'fail-now',
-        }),
-        createReservedJob('jobs.exhausted', {
-          id: 'exhausted',
-          attempts: 1,
-          maxAttempts: 2,
-        }),
-      ],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const onJobFailed = vi.fn()
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
-
-    registerNamedJob('jobs.fail-now', {
-      async handle(_payload, context) {
-        await context.fail(new Error('manual failure'))
-      },
-    })
-    registerNamedJob('jobs.exhausted', {
-      async handle() {
-        throw new Error('out of attempts')
-      },
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-      onJobFailed,
-    })).resolves.toMatchObject({
-      failed: 1,
-      stoppedBecause: 'once',
-    })
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-      onJobFailed,
-    })).resolves.toMatchObject({
-      failed: 1,
-      stoppedBecause: 'once',
-    })
-
-    expect(state.deleted).toHaveLength(2)
-    expect(onJobFailed).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      jobName: 'jobs.fail-now',
-      error: expect.any(Error),
-    }))
-    expect(onJobFailed).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      jobName: 'jobs.exhausted',
-      attempt: 2,
-      maxAttempts: 2,
-    }))
+  it.each(['processed', 'released', 'failed'] as const)('keeps the native %s result settled when its observer throws', async outcome => {
+    const harness = await openWorker()
+    let handles = 0
+    registerQueueJob({ async handle(_payload, context) {
+      handles += 1
+      if (outcome === 'released') await context.release(5)
+      if (outcome === 'failed') await context.fail(new Error('terminal failure'))
+    } }, { name: 'observer' })
+    await harness.enqueue('observer')
+    const failObserver = () => { throw new Error('observer failure') }
+    expect(await runQueueWorker({ once: true, onJobProcessed: failObserver, onJobReleased: failObserver, onJobFailed: failObserver })).toMatchObject({ [outcome]: 1 })
+    expect(handles).toBe(1)
+    expect(await harness.readJobRows()).toHaveLength(outcome === 'released' ? 1 : 0)
+    expect(await listFailedQueueJobs()).toHaveLength(outcome === 'failed' ? 1 : 0)
   })
 
-  it('runs terminal job failure hooks and successful completion hooks in workers', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [
-        createReservedJob('jobs.complete-hook', {
-          id: 'complete-hook',
-          payload: { ok: true },
-        }),
-        createReservedJob('jobs.fail-hook', {
-          id: 'fail-hook',
-          attempts: 1,
-          maxAttempts: 2,
-          payload: { ok: false },
-        }),
-      ],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const onCompleted = vi.fn()
-    const onFailed = vi.fn()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
-
-    registerNamedJob('jobs.complete-hook', {
-      async handle() {
-        return 'done'
-      },
-      async onCompleted(payload, result, context) {
-        onCompleted({ payload, result, attempt: context.attempt, connection: context.connection })
-        throw new Error('completion hook failed')
-      },
-    })
-
-    registerNamedJob('jobs.fail-hook', {
-      async handle() {
-        throw new Error('worker failed')
-      },
-      async onFailed(payload, error, context) {
-        onFailed({ payload, error: error.message, attempt: context.attempt, maxAttempts: context.maxAttempts })
-        throw new Error('failure hook failed')
-      },
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-    })).resolves.toMatchObject({
-      processed: 1,
-      failed: 0,
-      stoppedBecause: 'once',
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-    })).resolves.toMatchObject({
-      processed: 0,
-      failed: 1,
-      stoppedBecause: 'once',
-    })
-
-    expect(onCompleted).toHaveBeenCalledWith({
-      payload: { ok: true },
-      result: 'done',
-      attempt: 1,
-      connection: 'redis',
-    })
-    expect(onFailed).toHaveBeenCalledWith({
-      payload: { ok: false },
-      error: 'worker failed',
-      attempt: 2,
-      maxAttempts: 2,
-    })
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onCompleted hook failed for job "jobs.complete-hook": completion hook failed')
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onFailed hook failed for job "jobs.fail-hook": failure hook failed')
+  it('stops at max jobs and leaves the next real job queued', async () => {
+    const harness = await openWorker()
+    let handled = 0
+    registerQueueJob({ handle: () => { handled += 1 } }, { name: 'bounded' })
+    await harness.enqueue('bounded')
+    await harness.enqueue('bounded')
+    expect(await runQueueWorker({ maxJobs: 1 })).toMatchObject({ processed: 1, stoppedBecause: 'max-jobs' })
+    expect(handled).toBe(1)
+    expect(await harness.readJobRows()).toHaveLength(1)
   })
 
-  it('keeps finalized driver mutations stable when worker observer hooks fail', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
-
-    registerNamedJob('jobs.process-observer-fails', {
-      async handle() {},
-    })
-    registerNamedJob('jobs.release-observer-fails', {
-      async handle(_payload, context) {
-        await context.release(6)
-      },
-    })
-    registerNamedJob('jobs.fail-observer-fails', {
-      async handle() {
-        throw new Error('terminal failure')
-      },
-    })
-    registerNamedJob('jobs.release-then-fail-observerless', {
-      async handle(_payload, context) {
-        await context.release(3)
-        await context.fail(new Error('release keeps ownership'))
-      },
-    })
-    registerNamedJob('jobs.release-twice-observerless', {
-      async handle(_payload, context) {
-        await context.release(2)
-        await context.release(8)
-      },
-    })
-    registerNamedJob('jobs.fail-twice-observerless', {
-      async handle(_payload, context) {
-        try {
-          await context.fail(new Error('first terminal failure'))
-        } catch {
-          // context.fail records the terminal failure by throwing.
-        }
-
-        await context.fail(new Error('ignored terminal failure'))
-      },
-    })
-    registerNamedJob('jobs.fail-caught-observerless', {
-      async handle(_payload, context) {
-        try {
-          await context.fail(new Error('caught terminal failure'))
-        } catch {
-          return undefined
-        }
-      },
-    })
-    registerNamedJob('jobs.retry-observerless', {
-      async handle() {
-        throw new Error('retryable failure')
-      },
-    })
-
-    const directDriver = queueWorkerInternals.requireAsyncDriver(
-      createFakeAsyncDriverFactory('redis', state).create({
-        name: 'redis',
-        driver: 'redis',
-        connection: 'default',
-        queue: 'default',
-        retryAfter: 90,
-        blockFor: 5,
-        redis: {
-          host: '127.0.0.1',
-          port: 6379,
-          db: 0,
-        },
-      }, queueRuntimeInternals.createQueueDriverFactoryContext()),
-      'redis',
-    )
-
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.process-observer-fails', { id: 'processed-once' }),
-      {
-        async onJobProcessed() {
-          throw new Error('processed observer failed')
-        },
-      },
-    )).resolves.toEqual({ kind: 'processed' })
-
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.release-observer-fails', { id: 'released-once' }),
-      {
-        async onJobReleased() {
-          throw new Error('released observer failed')
-        },
-      },
-    )).resolves.toEqual({
-      kind: 'released',
-      delaySeconds: 6,
-    })
-
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.fail-observer-fails', {
-        id: 'failed-once',
-        maxAttempts: 1,
-      }),
-      {
-        async onJobFailed() {
-          throw new Error('failed observer failed')
-        },
-      },
-    )).resolves.toEqual({
-      kind: 'failed',
-      error: expect.objectContaining({
-        message: 'terminal failure',
-      }),
-    })
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.release-then-fail-observerless', { id: 'released-after-fail' }),
-      {},
-    )).resolves.toEqual({
-      kind: 'released',
-      delaySeconds: 3,
-      error: expect.objectContaining({
-        message: 'release keeps ownership',
-      }),
-    })
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.release-twice-observerless', { id: 'released-twice' }),
-      {},
-    )).resolves.toEqual({
-      kind: 'released',
-      delaySeconds: 2,
-    })
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.fail-twice-observerless', { id: 'failed-without-hook' }),
-      {},
-    )).resolves.toEqual({
-      kind: 'failed',
-      error: expect.objectContaining({
-        message: 'first terminal failure',
-      }),
-    })
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.fail-caught-observerless', { id: 'failed-caught-without-hook' }),
-      {},
-    )).resolves.toEqual({
-      kind: 'failed',
-      error: expect.objectContaining({
-        message: 'caught terminal failure',
-      }),
-    })
-    await expect(queueWorkerInternals.processReservedJob(
-      directDriver,
-      createReservedJob('jobs.retry-observerless', { id: 'released-without-hook' }),
-      {},
-    )).resolves.toEqual({
-      kind: 'released',
-      error: expect.objectContaining({
-        message: 'retryable failure',
-      }),
-    })
-    await queueWorkerInternals.runWorkerHook('jobs.string-observer', 'onJobProcessed', () => {
-      throw 'string observer failed'
-    })
-
-    expect(state.acknowledged.map(job => job.envelope.id)).toEqual(['processed-once'])
-    expect(state.released.map(entry => ({
-      id: entry.job.envelope.id,
-      delaySeconds: entry.delaySeconds,
-    }))).toEqual([
-      {
-        id: 'released-once',
-        delaySeconds: 6,
-      },
-      {
-        id: 'released-after-fail',
-        delaySeconds: 3,
-      },
-      {
-        id: 'released-twice',
-        delaySeconds: 2,
-      },
-      {
-        id: 'released-without-hook',
-        delaySeconds: undefined,
-      },
-    ])
-    expect(state.deleted.map(job => job.envelope.id)).toEqual(['failed-once', 'failed-without-hook', 'failed-caught-without-hook'])
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobProcessed hook failed for job "jobs.process-observer-fails": processed observer failed')
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobReleased hook failed for job "jobs.release-observer-fails": released observer failed')
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobFailed hook failed for job "jobs.fail-observer-fails": failed observer failed')
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobProcessed hook failed for job "jobs.string-observer": string observer failed')
+  it.each([0, 1])('polls a real database with sleep %s until a producer dispatches a job', async sleep => {
+    const harness = await openWorker()
+    registerQueueJob({ handle: () => 'ok' }, { name: 'delayed-producer' })
+    const producer = setTimeout(50).then(() => harness.enqueue('delayed-producer'))
+    expect(await runQueueWorker({ sleep, maxJobs: 1 })).toMatchObject({ processed: 1, stoppedBecause: 'max-jobs' })
+    await producer
+    expect(await harness.readJobRows()).toEqual([])
   })
 
-  it('supports sleep, stop signals, max jobs, max time, and timeout overrides', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [null, null, createReservedJob('jobs.timeout', {
-        id: 'timeout-job',
-        payload: { ok: true },
-      })],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const sleepFn = vi.fn(async (_milliseconds: number) => {})
-    const onIdle = vi.fn()
-    let stopRequested = false
-
-    configureQueueRuntime({
-      config: {
-        default: 'database',
-        failed: false,
-        connections: {
-          database: {
-            driver: 'database',
-            sleep: 3,
-          },
-        },
-      },
-      driverFactories: [
-        createFakeAsyncDriverFactory('database', state),
-      ],
-    })
-
-    registerNamedJob('jobs.timeout', {
-      timeout: 5,
-      async handle() {
-        await new Promise(() => {})
-      },
-    })
-
-    stopRequested = true
-    await expect(runQueueWorker({
-      connection: 'database',
-      shouldStop: () => stopRequested,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'signal',
-    })
-
-    stopRequested = false
-    await expect(runQueueWorker({
-      connection: 'database',
-      stopWhenEmpty: true,
-      sleepFn,
-      onIdle,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'empty',
-    })
-
-    expect(onIdle).toHaveBeenCalledTimes(1)
-    expect(sleepFn).not.toHaveBeenCalled()
-
-    state.reserveQueue = [null]
-    let stopAfterSleep = false
-    await expect(runQueueWorker({
-      connection: 'database',
-      sleepFn: async (milliseconds) => {
-        sleepFn(milliseconds)
-        stopAfterSleep = true
-      },
-      shouldStop: () => stopAfterSleep,
-      onIdle,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'signal',
-    })
-    expect(sleepFn).toHaveBeenCalledWith(3_000)
-
-    state.reserveQueue = [null]
-    await expect(runQueueWorker({
-      connection: 'database',
-      once: true,
-    })).resolves.toEqual({
-      processed: 0,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'once',
-    })
-
-    state.reserveQueue = [createReservedJob('jobs.timeout-max-jobs', { id: 'timeout-max-jobs' })]
-    registerNamedJob('jobs.timeout-max-jobs', {
-      async handle() {},
-    })
-    await expect(runQueueWorker({
-      connection: 'database',
-      maxJobs: 1,
-      workerId: ' custom-worker ',
-      sleepFn,
-      shouldStop: () => false,
-      stopWhenEmpty: false,
-      once: false,
-    })).resolves.toEqual({
-      processed: 1,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'max-jobs',
-    })
-    expect(state.reserveInputs.at(-1)).toEqual({
-      queueNames: ['default'],
-      workerId: 'custom-worker',
-    })
-
-    state.reserveQueue = [createReservedJob('jobs.timeout')]
-    await expect(runQueueWorker({
-      connection: 'database',
-      once: true,
-      timeout: 0,
-      onJobFailed: vi.fn(),
-    })).resolves.toMatchObject({
-      failed: 1,
-      stoppedBecause: 'once',
-    })
-    expect(state.released).toEqual([])
-    expect(state.deleted.at(-1)?.envelope.id).toBe('jobs.timeout-id')
-
-    vi.useFakeTimers()
-    let resolveTimedOutJob!: () => void
-    const onCompleted = vi.fn()
-    state.reserveQueue = [createReservedJob('jobs.timeout-late-complete', { id: 'jobs.timeout-late-complete-id' })]
-    registerNamedJob('jobs.timeout-late-complete', {
-      async handle() {
-        await new Promise<void>((resolve) => {
-          resolveTimedOutJob = resolve
-        })
-      },
-      async onCompleted() {
-        onCompleted()
-      },
-    })
-
-    const timedOutWorker = runQueueWorker({
-      connection: 'database',
-      once: true,
-      timeout: 0,
-    })
-    await vi.advanceTimersByTimeAsync(1)
-    await expect(timedOutWorker).resolves.toMatchObject({
-      failed: 1,
-      stoppedBecause: 'once',
-    })
-    expect(state.deleted.at(-1)?.envelope.id).toBe('jobs.timeout-late-complete-id')
-    expect(onCompleted).not.toHaveBeenCalled()
-
-    resolveTimedOutJob()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(onCompleted).not.toHaveBeenCalled()
-    vi.useRealTimers()
-
-    expect(() => queueWorkerInternals.normalizeQueueNames(['  '], 'default')).toThrow('Queue worker queue names must be non-empty strings.')
-    expect(queueWorkerInternals.normalizeQueueNames(undefined, undefined)).toEqual(['default'])
-    expect(queueWorkerInternals.normalizeQueueNames([' default ', 'emails', 'default'], 'fallback')).toEqual(['default', 'emails'])
-    expect(() => queueWorkerInternals.normalizeNonNegativeInteger(-1, 'Worker sleep')).toThrow('Worker sleep must be a non-negative integer.')
-    expect(queueWorkerInternals.normalizeNonNegativeInteger(2, 'Worker sleep')).toBe(2)
-    expect(() => queueWorkerInternals.normalizePositiveInteger(0, 'Worker maxJobs')).toThrow('Worker maxJobs must be a positive integer.')
-    expect(queueWorkerInternals.resolveRetryDelaySeconds({ async handle() {} }, 1)).toBeUndefined()
-    expect(queueWorkerInternals.resolveRetryDelaySeconds({ backoff: 7, async handle() {} }, 2)).toBe(7)
-    expect(queueWorkerInternals.resolveRetryDelaySeconds({ backoff: [2, 4], async handle() {} }, 5)).toBe(4)
-    expect(queueWorkerInternals.resolveWorkerStopReason({ maxJobs: 1 }, {
-      processed: 1,
-      startedAt: Date.now(),
-    })).toBe('max-jobs')
-    expect(queueWorkerInternals.resolveWorkerStopReason({ maxTime: 1 }, {
-      processed: 0,
-      startedAt: Date.now() - 1_500,
-    })).toBe('max-time')
-    await expect(queueWorkerInternals.runWithTimeout(Promise.resolve('ok'), 'jobs.ok', undefined)).resolves.toBe('ok')
-    await expect(queueWorkerInternals.runWithTimeout(Promise.resolve('ok'), 'jobs.ok', 1)).resolves.toBe('ok')
-    await expect(queueWorkerInternals.runWithTimeout(Promise.reject(new Error('rejected job')), 'jobs.rejected', 1)).rejects.toThrow('rejected job')
-    await expect(queueWorkerInternals.runWithTimeout(new Promise(resolve => setTimeout(() => resolve('ok'), 20)), 'jobs.ok', 0)).rejects.toBeInstanceOf(QueueWorkerTimeoutError)
+  it('honors a real elapsed max-time and a requested stop signal', async () => {
+    await openWorker()
+    expect(await runQueueWorker({ shouldStop: () => true })).toMatchObject({ processed: 0, stoppedBecause: 'signal' })
+    const started = Date.now()
+    expect(await runQueueWorker({ maxTime: 1, sleep: 1 })).toMatchObject({ processed: 0, stoppedBecause: 'max-time' })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_000)
+    expect(await runQueueWorker({ once: true })).toMatchObject({ stoppedBecause: 'once' })
   })
 
-  it('can poll without sleeping when worker sleep is zero', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [null],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    let shouldStop = false
-
-    configureQueueRuntime({
-      config: {
-        default: 'database',
-        failed: false,
-        connections: {
-          database: {
-            driver: 'database',
-            sleep: 0,
-          },
-        },
-      },
-      driverFactories: [
-        createFakeAsyncDriverFactory('database', state),
-      ],
-    })
-
-    await expect(runQueueWorker({
-      connection: 'database',
-      sleepFn: async () => {
-        throw new Error('sleep should not run')
-      },
-      shouldStop: () => {
-        if (shouldStop) {
-          return true
-        }
-
-        shouldStop = true
-        return false
-      },
-    })).resolves.toEqual({
-      processed: 0,
-      released: 0,
-      failed: 0,
-      stoppedBecause: 'signal',
-    })
+  it('uses the timeout override, persists the timeout, and ignores late completion', async () => {
+    const harness = await openWorker()
+    let complete = 0
+    let release: () => void = () => {}
+    const pending = new Promise<void>(resolve => { release = resolve })
+    registerQueueJob({ timeout: 5, handle: () => pending, onCompleted: () => { complete += 1 } }, { name: 'timeout' })
+    await harness.enqueue('timeout')
+    expect(await runQueueWorker({ once: true, timeout: 0 })).toMatchObject({ failed: 1 })
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ exception: expect.stringContaining('exceeded timeout') })])
+    expect(await harness.readJobRows()).toEqual([])
+    release()
+    await setTimeout(20)
+    expect(complete).toBe(0)
   })
 
-  it('rejects sync drivers and missing registered definitions clearly', async () => {
-    configureQueueRuntime({
-      config: {
-        default: 'sync',
-        connections: {
-          sync: {
-            driver: 'sync',
-          },
-        },
-      },
-    })
-
-    await expect(runQueueWorker()).rejects.toBeInstanceOf(QueueWorkerUnsupportedDriverError)
-    expect(() => queueWorkerInternals.requireRegisteredDefinition('missing.job')).toThrow('Queue job "missing.job" is not registered.')
-    expect(() => queueWorkerInternals.requireAsyncDriver({
-      name: 'sync',
-      driver: 'sync',
-      mode: 'sync',
-      dispatch: async () => ({ jobId: 'job', synchronous: true }),
-      clear: async () => 0,
-      close: async () => {},
-    }, 'sync')).toThrow('requires an async-capable driver')
-    await expect(queueWorkerInternals.sleep(0)).resolves.toBeUndefined()
+  it('rejects an unregistered job while keeping its native reservation recoverable', async () => {
+    const harness = await openWorker()
+    await harness.enqueue('missing')
+    await expect(runQueueWorker({ once: true })).rejects.toThrow('is not registered')
+    expect(await harness.readJobRows()).toHaveLength(1)
+    expect(await listFailedQueueJobs()).toEqual([])
   })
 
-  it('treats context.fail() as terminal even when the job catches the thrown error', async () => {
-    const state: FakeAsyncDriverState = {
-      reserveQueue: [
-        createReservedJob('jobs.fail-caught', {
-          id: 'fail-caught',
-        }),
-      ],
-      reserveInputs: [],
-      acknowledged: [],
-      released: [],
-      deleted: [],
-      clearCalls: [],
-    }
-    const onJobFailed = vi.fn()
+  it.each([{ queueNames: [' '] }, { sleep: -1 }, { maxJobs: 0 }, { maxTime: 0 }])('rejects invalid worker options %j before reserving a real job', async options => {
+    const harness = await openWorker()
+    await harness.enqueue('unreserved')
+    await expect(runQueueWorker(options)).rejects.toThrow()
+    expect((await harness.readJobRows())[0]?.reservation_id).toBeNull()
+  })
 
-    configureQueueRuntime({
-      config: {
-        default: 'redis',
-        failed: false,
-        connections: {
-          redis: {
-            driver: 'redis',
-          },
-        },
-      },
-      redisConfig: sharedRedisConfig,
-      driverFactories: [
-        createFakeAsyncDriverFactory('redis', state),
-      ],
-    })
-
-    registerNamedJob('jobs.fail-caught', {
-      async handle(_payload, context) {
-        try {
-          await context.fail(new Error('manual failure'))
-        } catch {
-          return undefined
-        }
-      },
-    })
-
-    await expect(runQueueWorker({
-      connection: 'redis',
-      once: true,
-      onJobFailed,
-    })).resolves.toMatchObject({
-      processed: 0,
-      released: 0,
-      failed: 1,
-      stoppedBecause: 'once',
-    })
-
-    expect(state.acknowledged).toEqual([])
-    expect(state.deleted).toHaveLength(1)
-    expect(state.deleted[0]?.envelope.id).toBe('fail-caught')
-    expect(onJobFailed).toHaveBeenCalledWith(expect.objectContaining({
-      jobName: 'jobs.fail-caught',
-      error: expect.objectContaining({
-        message: 'manual failure',
-      }),
-    }))
+  it('rejects the actual synchronous driver', async () => {
+    const harness = await openWorker()
+    configureQueueRuntime({ config: { default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } } })
+    await expect(runQueueWorker({ once: true })).rejects.toThrow('requires an async-capable driver')
+    expect(await harness.readJobRows()).toEqual([])
   })
 })

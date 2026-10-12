@@ -1,358 +1,58 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import {
-  createMutationIndexKey,
-  type DatabaseMutationEvent,
-} from '../src/runtime/dependencies'
-import {
-  configureRealtimeRuntime,
-  resetRealtimeRuntime,
-} from '../src/runtime/lifecycle'
-import {
-  hydrateBelongsToMutationRows,
-  hydrateBelongsToRow,
-  readBelongsToHydratedValue,
-} from '../src/runtime/query-belongs-to-hydration'
-import type {
-  BackfillCache,
-  BackfillRows,
-  DatabaseQueryBelongsToHydrationObservation,
-  RowGroupedBackfillCache,
-} from '../src/runtime/query-state'
-import { createFakeDatabase } from './helpers/fake-database'
+import { belongsTo, column, defineGeneratedTable, defineModel } from '@holo-js/db'
+import { describe, expect, it } from 'vitest'
+import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
+import { executeRealtimeMutation, subscribeRealtimeQuery } from '../src/server'
+import { openRealtimeDatabase } from './helpers/native-database'
 
-function createAuthorHydration(
-  overrides: Partial<DatabaseQueryBelongsToHydrationObservation> = {},
-): DatabaseQueryBelongsToHydrationObservation {
-  return {
-    foreignKey: 'author_id',
-    ownerKey: 'id',
-    relatedConnectionName: 'main',
-    relatedTableName: 'users',
-    relationKey: 'author',
-    ...overrides,
-  }
-}
-
-function createMutation(
-  tableName: string,
-  kind: DatabaseMutationEvent['kind'],
-  rows: readonly Readonly<Record<string, unknown>>[] | undefined,
-): DatabaseMutationEvent {
-  return {
-    connectionName: 'main',
-    kind,
-    predicates: [],
-    rows,
-    tableName,
-  }
-}
-
-function createBackfills(
-  mutations: readonly DatabaseMutationEvent[] = [],
-  rowGroups?: RowGroupedBackfillCache,
-  rows: readonly (readonly [string, Promise<BackfillRows | undefined>])[] = [],
-): BackfillCache {
-  const mutationIndex = new Map<string, DatabaseMutationEvent[]>()
-  for (const mutation of mutations) {
-    const key = createMutationIndexKey(mutation.connectionName, mutation.tableName)
-    const indexed = mutationIndex.get(key)
-    if (indexed) {
-      indexed.push(mutation)
-      continue
+describe('native belongs-to subscription hydration', () => {
+  it.each([false, true])('keeps related rows current with projection %s and batches shared parents', async (projected) => {
+    const { adapter, db, queries } = await openRealtimeDatabase()
+    await adapter.execute('CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
+    await adapter.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INTEGER)')
+    await adapter.execute("INSERT INTO authors VALUES (1, 'Ada'), (2, 'Grace')")
+    await adapter.execute("INSERT INTO posts VALUES (1, 'Initial', 1)")
+    const Author = defineModel(defineGeneratedTable('authors', { id: column.id(), name: column.string() }), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable('posts', { id: column.id(), title: column.string(), author_id: column.integer().nullable() }), {
+      timestamps: false, relations: { author: belongsTo(() => Author, 'author_id') },
+    })
+    let reads = 0
+    const handler = () => {
+      reads += 1
+      const builder = db.model(Post).query().with('author').orderBy('id')
+      return (projected ? builder.select('id', 'title', 'author_id') : builder).getJson()
     }
-
-    mutationIndex.set(key, [mutation])
-  }
-
-  return {
-    aggregateSql: new Map(),
-    aggregates: new Map(),
-    entries: [],
-    mutationMetadata: new WeakMap(),
-    mutations: mutationIndex,
-    paginationCounts: new Map(),
-    rowGroups,
-    rows: new Map(rows),
-  }
-}
-
-describe('@holo-js/realtime belongs-to hydration', () => {
-  afterEach(() => {
-    resetRealtimeRuntime()
-  })
-
-  it('keeps mutations unchanged when belongs-to hydration is not applicable', async () => {
-    const mutation = createMutation('posts', 'insert', [
-      { author_id: 1, id: 1, title: 'Post' },
-    ])
-
-    await expect(hydrateBelongsToMutationRows(mutation, undefined, createBackfills())).resolves.toBe(mutation)
-    await expect(hydrateBelongsToMutationRows(mutation, [], createBackfills())).resolves.toBe(mutation)
-    await expect(hydrateBelongsToMutationRows({
-      ...mutation,
-      rows: undefined,
-    }, [createAuthorHydration()], createBackfills())).resolves.toEqual({
-      ...mutation,
-      rows: undefined,
+    const snapshots: Awaited<ReturnType<typeof handler>>[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) }, onError: error => { throw error },
     })
-    await expect(hydrateBelongsToMutationRows({
-      ...mutation,
-      kind: 'delete',
-    }, [createAuthorHydration()], createBackfills())).resolves.toEqual({
-      ...mutation,
-      kind: 'delete',
-    })
-  })
-
-  it('keeps unchanged mutation rows and rejects sparse mutation rows', async () => {
-    const unchangedMutation = createMutation('posts', 'insert', [
-      { author: null, author_id: null, id: 1 },
-    ])
-    const sparseRows: Readonly<Record<string, unknown>>[] = [
-      { author_id: 1, id: 1 },
-    ]
-    sparseRows.length = 2
-
-    await expect(hydrateBelongsToMutationRows(
-      unchangedMutation,
-      [createAuthorHydration()],
-      createBackfills(),
-    )).resolves.toBe(unchangedMutation)
-    await expect(hydrateBelongsToMutationRows(
-      createMutation('posts', 'insert', sparseRows),
-      [createAuthorHydration()],
-      createBackfills(),
-    )).resolves.toBeUndefined()
-  })
-
-  it('hydrates belongs-to rows from related mutation rows and deletes', async () => {
-    const hydration = createAuthorHydration()
-    const row = Object.freeze({ author_id: 1, id: 10, title: 'Post' })
-    const deletedRow = Object.freeze({ author_id: 2, id: 11, title: 'Deleted author post' })
-
-    await expect(hydrateBelongsToRow(row, [hydration], createBackfills([
-      createMutation('users', 'insert', [
-        { id: 1, name: 'Ada' },
-      ]),
-    ]))).resolves.toEqual({
-      author: { id: 1, name: 'Ada' },
-      author_id: 1,
-      id: 10,
-      title: 'Post',
-    })
-
-    await expect(hydrateBelongsToRow(deletedRow, [hydration], createBackfills([
-      createMutation('users', 'delete', [
-        { id: 2, name: 'Grace' },
-      ]),
-    ]))).resolves.toEqual({
-      author: null,
-      author_id: 2,
-      id: 11,
-      title: 'Deleted author post',
-    })
-  })
-
-  it('hydrates null and missing belongs-to keys without backfilling', async () => {
-    await expect(hydrateBelongsToRow(
-      Object.freeze({ author_id: null, id: 1 }),
-      [createAuthorHydration()],
-      createBackfills(),
-    )).resolves.toEqual({
-      author: null,
-      author_id: null,
-      id: 1,
-    })
-    await expect(hydrateBelongsToRow(
-      Object.freeze({ id: 2 }),
-      [createAuthorHydration()],
-      createBackfills(),
-    )).resolves.toEqual({
-      author: null,
-      id: 2,
-    })
-  })
-
-  it('preserves unchanged rows when the belongs-to relation value is already current', async () => {
-    const author = Object.freeze({ id: 1, name: 'Ada' })
-    const row = Object.freeze({
-      author,
-      author_id: 1,
-      id: 1,
-    })
-
-    await expect(hydrateBelongsToRow(row, [createAuthorHydration()], createBackfills([
-      createMutation('users', 'insert', [author]),
-    ]))).resolves.toBe(row)
-  })
-
-  it('hydrates grouped belongs-to rows with one related backfill', async () => {
-    const database = createFakeDatabase(() => [
-      { id: 1, name: 'Ada' },
-    ])
-    configureRealtimeRuntime({
-      db: () => database.connection,
-    })
-    const mutation = createMutation('posts', 'insert', [
-      { author_id: 1, id: 10, title: 'First' },
-      { author_id: 2, id: 11, title: 'Second' },
-      { author_id: 1, id: 12, title: 'Duplicate author' },
-      { author_id: null, id: 13, title: 'No author' },
-    ])
-
-    await expect(hydrateBelongsToMutationRows(
-      mutation,
-      [createAuthorHydration()],
-      createBackfills([mutation], new Map()),
-    )).resolves.toEqual({
-      ...mutation,
-      rows: [
-        {
-          author: { id: 1, name: 'Ada' },
-          author_id: 1,
-          id: 10,
-          title: 'First',
-        },
-        {
-          author: null,
-          author_id: 2,
-          id: 11,
-          title: 'Second',
-        },
-        {
-          author: { id: 1, name: 'Ada' },
-          author_id: 1,
-          id: 12,
-          title: 'Duplicate author',
-        },
-        {
-          author: null,
-          author_id: null,
-          id: 13,
-          title: 'No author',
-        },
-      ],
-    })
-    expect(database.queries).toHaveLength(1)
-    expect(database.queries[0]?.bindings).toEqual([1, 2])
-  })
-
-  it('falls back to single belongs-to backfills when grouped rows cannot be keyed', async () => {
-    const database = createFakeDatabase(() => [
-      { name: 'Missing id' },
-    ])
-    configureRealtimeRuntime({
-      db: () => database.connection,
-    })
-    const mutation = createMutation('posts', 'insert', [
-      { author_id: 1, id: 10, title: 'First' },
-      { author_id: 2, id: 11, title: 'Second' },
-    ])
-
-    await expect(hydrateBelongsToMutationRows(
-      mutation,
-      [createAuthorHydration()],
-      createBackfills([mutation], new Map()),
-    )).resolves.toEqual({
-      ...mutation,
-      rows: [
-        {
-          author: { name: 'Missing id' },
-          author_id: 1,
-          id: 10,
-          title: 'First',
-        },
-        {
-          author: { name: 'Missing id' },
-          author_id: 2,
-          id: 11,
-          title: 'Second',
-        },
-      ],
-    })
-    expect(database.queries).toHaveLength(3)
-  })
-
-  it('uses cached single belongs-to backfills and exposes direct value lookup', async () => {
-    const hydration = createAuthorHydration()
-    const author = Object.freeze({ id: 1, name: 'Ada' })
-
-    await expect(hydrateBelongsToRow(
-      Object.freeze({ author_id: 1, id: 1 }),
-      [hydration],
-      createBackfills([], undefined, [
-        ['belongs-to:main:users:id:1', Promise.resolve([author])],
-      ]),
-    )).resolves.toEqual({
-      author,
-      author_id: 1,
-      id: 1,
-    })
-
-    await expect(readBelongsToHydratedValue(
-      hydration,
-      1,
-      createBackfills([], undefined, [
-        ['belongs-to:main:users:id:1', Promise.resolve([])],
-      ]),
-    )).resolves.toBeNull()
-  })
-
-  it('continues past related mutations without rows and falls back when none match', async () => {
-    const hydration = createAuthorHydration()
-
-    await expect(readBelongsToHydratedValue(
-      hydration,
-      1,
-      createBackfills([
-        createMutation('users', 'update', undefined),
-        createMutation('users', 'insert', [
-          { id: 2, name: 'Grace' },
-        ]),
-      ]),
-    )).resolves.toBeNull()
-  })
-
-  it('falls back from grouped belongs-to backfills when grouping is not useful', async () => {
-    const hydration = createAuthorHydration()
-    const mutation = createMutation('posts', 'insert', [
-      { author_id: 1, id: 10 },
-    ])
-
-    await expect(readBelongsToHydratedValue(
-      hydration,
-      1,
-      createBackfills([
-        mutation,
-      ], new Map()),
-      mutation,
-    )).resolves.toBeNull()
-    await expect(readBelongsToHydratedValue(
-      hydration,
-      1,
-      createBackfills([], new Map()),
-      mutation,
-    )).resolves.toBeNull()
-  })
-
-  it('falls back from grouped belongs-to backfills when source rows are ignored or unavailable', async () => {
-    const hydration = createAuthorHydration()
-    const mutation = createMutation('posts', 'insert', [
-      { author_id: 1, id: 10 },
-      { author_id: 2, id: 11 },
-    ])
-
-    await expect(readBelongsToHydratedValue(
-      hydration,
-      1,
-      createBackfills([
-        createMutation('posts', 'delete', [
-          { author_id: 1, id: 10 },
-        ]),
-        createMutation('posts', 'insert', undefined),
-        mutation,
-      ], new Map()),
-      mutation,
-    )).resolves.toBeNull()
+    const verify = async () => {
+      const rows = await adapter.query<{ id: number, title: string, author_id: number | null, related_id: number | null, name: string | null }>(
+        'SELECT posts.id, posts.title, posts.author_id, authors.id AS related_id, authors.name FROM posts LEFT JOIN authors ON posts.author_id = authors.id ORDER BY posts.id',
+      )
+      expect(snapshots.at(-1)).toEqual(rows.rows.map(row => ({
+        id: row.id, title: row.title, author_id: row.author_id,
+        author: row.related_id === null ? null : { id: row.related_id, name: row.name },
+      })))
+    }
+    await verify()
+    const beforeInsert = queries.length
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('posts').insert([
+      { id: 2, title: 'Shared', author_id: 1 }, { id: 3, title: 'Other', author_id: 2 },
+      { id: 4, title: 'Missing', author_id: 99 }, { id: 5, title: 'Nullable', author_id: null },
+    ]) }))
+    await verify()
+    expect(queries.slice(beforeInsert).filter(query => query.sql.includes('FROM "authors"'))).toHaveLength(1)
+    for (const change of [
+      () => db.table('authors').where('id', 1).update({ name: 'Updated Ada' }),
+      () => db.table('posts').where('id', 2).update({ author_id: 2 }),
+      () => db.table('authors').where('id', 2).delete(),
+      () => db.table('authors').insert({ id: 99, name: 'New Parent' }),
+      () => db.table('posts').where('id', 1).update({ title: 'Changed' }),
+      () => db.table('posts').where('id', 3).update({ author_id: null }),
+    ]) {
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
+      await verify()
+    }
+    expect(reads).toBe(1)
   })
 })

@@ -1,4 +1,4 @@
-export async function stopExampleAppProcess(child) {
+export async function stopExampleAppProcess(child, signal = 'SIGTERM') {
   if (!child || child.exitCode !== null || child.signalCode !== null) return
   const closed = new Promise(resolve => child.once('close', resolve))
   const kill = signal => {
@@ -8,13 +8,13 @@ export async function stopExampleAppProcess(child) {
       child.kill(signal)
     }
   }
-  kill('SIGTERM')
+  kill(signal)
   let deadline
   try {
     await Promise.race([
       closed,
       new Promise((resolve, reject) => {
-        deadline = setTimeout(() => reject(new Error(`Process ${child.spawnargs.join(' ')} did not stop after SIGTERM`)), 10000)
+        deadline = setTimeout(() => reject(new Error(`Process ${child.spawnargs.join(' ')} did not stop after ${signal}`)), 10000)
       }),
     ])
   } catch (error) {

@@ -42,6 +42,11 @@ function createRequestBody(body: Uint8Array | undefined): RequestInit['body'] {
 }
 
 async function createRequest(event: H3Event): Promise<Request> {
+  if (event.web?.request) {
+    const request = event.web.request.clone()
+    event._requestBody = event.web.request.body ?? undefined
+    return request
+  }
   const method = getMethod(event)
   const headers = createHeaders(event)
   const body = isSafeMethod(method)

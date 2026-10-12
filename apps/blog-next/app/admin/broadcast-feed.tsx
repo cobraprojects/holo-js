@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { useFlux } from '@holo-js/flux-react'
+import { useFlux, useFluxPresence } from '@holo-js/flux-react'
 
 export function BroadcastFeed() {
   const [latestPostChange, setLatestPostChange] = useState('Waiting for post activity')
+  const { members } = useFluxPresence('blog.admin.presence')
 
   useFlux('blog.admin', 'blog.post.changed', (payload) => {
     setLatestPostChange(`${payload.action}: ${payload.title}`)
@@ -14,6 +15,7 @@ export function BroadcastFeed() {
     <article style={{ padding: '1rem', borderRadius: '1rem', background: '#111827', border: '1px solid rgba(125, 211, 252, 0.3)' }}>
       <strong>Live post activity</strong>
       <div data-testid="broadcast-post-activity" style={{ marginTop: '0.35rem', color: '#cbd5e1' }}>{latestPostChange}</div>
+      <div data-testid="broadcast-presence">{JSON.stringify(members)}</div>
     </article>
   )
 }

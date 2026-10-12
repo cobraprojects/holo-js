@@ -262,6 +262,10 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       : undefined
   }
 
+  private getQueuePrefix(queueName: string): string {
+    return this.bullConnection instanceof Redis.Cluster ? `{${queueName}}` : 'bull'
+  }
+
   private getQueue(queueName: string): BullQueueInstance {
     const cached = this.queues.get(queueName)
     if (cached) {
@@ -270,6 +274,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
     const queue = new BullQueue<RedisQueuedEnvelope, unknown, string>(queueName, {
       connection: this.bullConnection,
+      prefix: this.getQueuePrefix(queueName),
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
@@ -319,6 +324,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
         autorun: false,
         concurrency: 1,
         connection: this.bullConnection,
+        prefix: this.getQueuePrefix(queueName),
         drainDelay: this.resolveWorkerDrainDelay(blockFor),
         lockDuration: this.connection.retryAfter * 1000,
         removeOnComplete: { count: 0 },
@@ -499,7 +505,8 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
       const token = `${workerId}:${randomUUID()}`
       const worker = await this.getWorker(blockingQueue, blockFor)
-      const job = await worker.getNextJob(token, { block: true })
+      const queued = await worker.getNextJob(token, { block: false })
+      const job = queued ?? await worker.getNextJob(token, { block: true })
       if (!job) {
         return null
       }
@@ -541,7 +548,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
       for (const queueName of queueNames) {
         const queue = this.getQueue(queueName)
-        cleared += await queue.getJobCountByTypes('wait', 'waiting', 'paused', 'prioritized', 'delayed')
+        cleared += await queue.getJobCountByTypes('wait', 'paused', 'prioritized', 'delayed')
         await queue.drain(true)
       }
 

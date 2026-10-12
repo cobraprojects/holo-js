@@ -589,12 +589,12 @@ async function resolveLinkedUserForProviderConfig(
   let localUser = await findUserByEmail(adapter, trustedEmail)
   if (!localUser) {
     localUser = requireUserRecord(await adapter.create({
-      name: profile.name,
+      name: profile.name ?? '',
       email: resolveEmailForCreation(provider, profile, {
         trustEmail: hasVerifiedEmail,
       }),
       password: null,
-      avatar: profile.avatar,
+      avatar: profile.avatar ?? null,
       email_verified_at: hasVerifiedEmail ? new Date() : null,
     }), '[@holo-js/auth-social] Auth provider create() must return an object user.')
   }

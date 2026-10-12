@@ -1,14 +1,11 @@
 import { stat } from 'node:fs/promises'
 import { extname, join, relative, resolve } from 'node:path'
-import type { BuildOptions, BuildResult } from 'esbuild'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type { HoloAppCommand } from '../types'
 import {
   SUPPORTED_FRAMEWORK_IDS,
   type SupportedFrameworkId,
 } from './frameworks'
-
-export type ProjectModuleBundler = (options: BuildOptions) => Promise<BuildResult>
 
 export type CliModelReference = {
   readonly definition: {

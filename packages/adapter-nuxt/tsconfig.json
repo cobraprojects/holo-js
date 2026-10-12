@@ -4,9 +4,6 @@
     "outDir": "./dist",
     "baseUrl": ".",
     "paths": {
-      "@nuxt/kit": [
-        "./src/nuxt-kit-shim.d.ts"
-      ],
       "#app": [
         "./src/runtime/shims.d.ts"
       ],

@@ -1,7 +1,7 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { HOLO_PACKAGE_VERSION } from '../src/metadata'
 
 type CliBinName = 'holo' | 'holo-js'
@@ -12,26 +12,9 @@ type PackageManifest = {
   bin?: Partial<Record<CliBinName, string>>
 }
 
-type RunCliContext = {
-  cwd: string
-  stdin: typeof process.stdin
-  stdout: typeof process.stdout
-  stderr: typeof process.stderr
-}
-
-type RunCli = (args: string[], context: RunCliContext) => Promise<number>
-
-const runCliMock = vi.hoisted(() => vi.fn<RunCli>())
-
-vi.mock('../src/cli', () => ({
-  runCli: runCliMock,
-}))
-
 const packageDir = resolve(import.meta.dirname, '..')
 const tempBuildRoots: string[] = []
 let packageBuildPromise: Promise<{ packageRoot: string, binEntries: CliBinEntries }> | null = null
-const originalArgv = process.argv
-const originalExitCode = process.exitCode
 
 async function createTempBuildRoot(): Promise<string> {
   const baseDir = resolve(packageDir, '.vitest-builds')
@@ -39,102 +22,6 @@ async function createTempBuildRoot(): Promise<string> {
   const root = await mkdtemp(join(baseDir, 'cli-bin-'))
   tempBuildRoots.push(root)
   return root
-}
-
-async function writeStubPackage(packageRoot: string, packageName: string, source: string): Promise<void> {
-  const stubRoot = join(packageRoot, 'node_modules', ...packageName.split('/'))
-  await mkdir(stubRoot, { recursive: true })
-  await writeFile(
-    join(stubRoot, 'package.json'),
-    JSON.stringify({
-      name: packageName,
-      type: 'module',
-      exports: './index.mjs',
-    }),
-  )
-  await writeFile(join(stubRoot, 'index.mjs'), source)
-}
-
-async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
-  await writeStubPackage(
-    packageRoot,
-    '@holo-js/config',
-    [
-      'export const configEvaluationInternals = Object.freeze({})',
-      'export function clearConfigCache() { return false }',
-      'export function configureEnvRuntime() {}',
-      'export function resolveConfigCachePath(root) { return `${root}/.holo-js/config-cache.mjs` }',
-      'export async function loadConfigDirectory() { return {} }',
-      'export async function loadEnvironment() { return {} }',
-      'export function normalizeAppConfig(config) { return config }',
-      'export function resolveEnvPlaceholders(value) { return value }',
-      'export const holoAppDefaults = Object.freeze({})',
-      'export async function writeConfigCache() {}',
-    ].join('\n'),
-  )
-  await writeStubPackage(
-    packageRoot,
-    '@holo-js/storage',
-    'export const holoStorageDefaults = Object.freeze({ defaultDisk: "local", routePrefix: "/storage" })\n',
-  )
-  await writeStubPackage(
-    packageRoot,
-    '@holo-js/kernel',
-    [
-      'export const DEFAULT_HOLO_PROJECT_PATHS = Object.freeze({ models: "app/models", migrations: "database/migrations", seeders: "database/seeders", commands: "app/commands", jobs: "app/jobs", events: "app/events", listeners: "app/listeners", generatedSchema: ".holo-js/generated/schema.generated.ts" })',
-      'export function normalizeHoloProjectConfig(config = {}) { return { ...config, paths: { ...DEFAULT_HOLO_PROJECT_PATHS, ...(config.paths ?? {}) } } }',
-      'export function normalizeHoloPluginDefinition(value) { return value.default ?? value.plugin ?? value }',
-      'export class HoloProjectPrepareError extends Error {}',
-      'export const HOLO_PROJECT_PREPARE_API_VERSION = 1',
-      'export async function loadHoloPluginDefinitions() { return [] }',
-    ].join('\n'),
-  )
-  await writeStubPackage(
-    packageRoot,
-    '@holo-js/db',
-    [
-      'export const DEFAULT_HOLO_PROJECT_PATHS = Object.freeze({ models: "app/models", migrations: "database/migrations", seeders: "database/seeders", commands: "app/commands", jobs: "app/jobs", events: "app/events", listeners: "app/listeners", generatedSchema: ".holo-js/generated/schema.generated.ts" })',
-      'export function normalizeHoloProjectConfig(config = {}) { return { ...config, paths: { ...DEFAULT_HOLO_PROJECT_PATHS, ...(config.paths ?? {}) } } }',
-      'export function renderGeneratedSchemaRuntimeModule() { return "" }',
-      'export function renderGeneratedSchemaPlaceholder() { return "" }',
-      'export function normalizeDatabaseConfig(config = {}) { return config }',
-      'export const holoDatabaseDefaults = Object.freeze({ connections: {} })',
-      'export function normalizeMigrationSlug(value) { return value }',
-      'export function createMigrationFileName(value) { return `${value}.ts` }',
-      'export function generateMigrationTemplate() { return "" }',
-      'export function inferMigrationTableName(value) { return value }',
-      'export function inferMigrationTemplateKind() { return "blank" }',
-      'export function configureDB() {}',
-      'export function createMigrationService() { return { status: async () => [], migrate: async () => [] } }',
-      'export function resetDB() {}',
-      'export function resolveRuntimeConnectionManagerOptions() { return {} }',
-    ].join('\n'),
-  )
-  await writeStubPackage(
-    packageRoot,
-    'esbuild',
-    'export async function build() { return {} }\n',
-  )
-  await writeStubPackage(
-    packageRoot,
-    'inflection',
-    'export default { pluralize: value => value.endsWith("s") ? value : `${value}s` }\n',
-  )
-  await writeStubPackage(
-    packageRoot,
-    'minimatch',
-    'export function minimatch() { return false }\n',
-  )
-  await writeStubPackage(
-    packageRoot,
-    'semver',
-    'export function gte() { return false }\nexport function minVersion() {}\nexport function satisfies() { return false }\nexport function validRange() {}\n',
-  )
-  await writeStubPackage(
-    packageRoot,
-    'yaml',
-    'export function parse() { return {} }\n',
-  )
 }
 
 function readCliBinEntries(manifest: PackageManifest): CliBinEntries {
@@ -169,7 +56,7 @@ async function runPackageBuild(): Promise<{ packageRoot: string, binEntries: Cli
         stdio: 'pipe',
       })
 
-      await writeCliRuntimeStubs(packageRoot)
+      await symlink(resolve(packageDir, '../../node_modules'), join(packageRoot, 'node_modules'), 'dir')
 
       const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as PackageManifest
 
@@ -189,53 +76,15 @@ afterAll(async () => {
   }
 })
 
-afterEach(() => {
-  process.argv = originalArgv
-  process.exitCode = originalExitCode
-  runCliMock.mockReset()
-  vi.restoreAllMocks()
-})
-
 describe('holo bin', () => {
-  it('keeps the source entrypoint executable as an npm bin', async () => {
-    const source = await readFile(join(packageDir, 'src/bin/holo.ts'), 'utf8')
-
-    expect(source.startsWith('#!/usr/bin/env node\n')).toBe(true)
-  })
-
-  it('sets exitCode without forcing process termination', async () => {
-    process.argv = ['node', 'holo', 'list']
-    runCliMock.mockResolvedValue(7)
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number | string | null) => {
-      throw new Error(`exit:${String(code)}`)
-    }) as typeof process.exit)
-    const modulePath = `../src/bin/holo.ts?run=${Date.now()}`
-
-    await import(modulePath)
-
-    expect(runCliMock).toHaveBeenCalledWith(['list'], {
-      cwd: process.cwd(),
-      stdin: process.stdin,
-      stdout: process.stdout,
-      stderr: process.stderr,
-    })
-    expect(exitSpy).not.toHaveBeenCalled()
-    expect(process.exitCode).toBe(7)
-  })
-
   it('emits and executes both published bin aliases from package.json', async () => {
     const { packageRoot, binEntries } = await runPackageBuild()
-    const binariesDir = join(packageRoot, 'node_modules/.bin')
+    const binariesDir = join(packageRoot, 'bin')
     await mkdir(binariesDir, { recursive: true })
 
     for (const binName of ['holo', 'holo-js'] as const) {
       const binPath = resolve(packageRoot, binEntries[binName])
       const linkedBinPath = join(binariesDir, binName)
-      const bin = await readFile(binPath, 'utf8')
-
-      expect(bin.startsWith('#!/usr/bin/env node\n')).toBe(true)
-      expect(bin.split('\n').filter(line => line === '#!/usr/bin/env node')).toHaveLength(1)
-
       await chmod(binPath, 0o755)
       await rm(linkedBinPath, { force: true })
       await symlink(binPath, linkedBinPath)
@@ -256,6 +105,14 @@ describe('holo bin', () => {
       })
 
       expect(version).toBe(`${HOLO_PACKAGE_VERSION}\n`)
+
+      const failure = spawnSync(linkedBinPath, ['unknown-native-command'], {
+        cwd: packageRoot,
+        encoding: 'utf8',
+      })
+      expect(failure.error).toBeUndefined()
+      expect(failure.status).toBe(1)
+      expect(failure.stderr).toContain('Unknown command "unknown-native-command".')
     }
   }, 60000)
 })

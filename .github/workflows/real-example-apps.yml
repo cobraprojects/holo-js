@@ -21,7 +21,7 @@ jobs:
           - sveltekit
     services:
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -65,7 +65,9 @@ jobs:
       - run: node scripts/build-libraries.mjs
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun x playwright install --with-deps chromium
-        if: matrix.framework != 'libraries'
+      - name: Install Redis for isolated socket and cluster behavior tests
+        if: matrix.framework == 'libraries'
+        run: sudo apt-get update && sudo apt-get install -y redis-server
       - name: Test libraries against native services
         if: matrix.framework == 'libraries'
         run: bun run test:libraries

@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { installPreparers } from './support/native-preparers'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -6,30 +7,14 @@ import {
   type HoloProjectPrepareContext,
   type HoloProjectPreparer,
 } from '@holo-js/kernel'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { runPluginProjectPreparers } from '../src/project/plugin-prepare/coordinator'
-import { type LoadedProjectPreparer, loadProjectPluginPreparation } from '../src/project/plugins'
+import type { LoadedProjectPreparer } from '../src/project/plugins'
 
-vi.mock('../src/project/plugins', () => ({
-  loadProjectPluginPreparation: vi.fn(),
-}))
-
-const mockedLoadPreparation = vi.mocked(loadProjectPluginPreparation)
-const mockedLoadPreparers = {
-  mockReset() {
-    mockedLoadPreparation.mockReset()
-  },
-  mockResolvedValue(preparers: readonly LoadedProjectPreparer[]) {
-    mockedLoadPreparation.mockResolvedValue({
-      activePlugins: preparers.map(preparer => preparer.plugin),
-      preparers,
-    })
-  },
-}
 const projectRoots: string[] = []
 
 async function createProject(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'holo-plugin-prepare-contract-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'holo-plugin-prepare-contract-')))
   projectRoots.push(root)
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture' }))
   return root
@@ -68,10 +53,6 @@ async function expectMissing(path: string): Promise<void> {
 }
 
 describe('plugin project preparation contract', () => {
-  beforeEach(() => {
-    mockedLoadPreparers.mockReset()
-  })
-
   afterEach(async () => {
     await Promise.all(projectRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
   })
@@ -80,7 +61,7 @@ describe('plugin project preparation contract', () => {
     const root = await createProject()
     const contexts: HoloProjectPrepareContext[] = []
     const config = normalizeHoloProjectConfig()
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: (context) => {
         contexts.push(context)
@@ -124,7 +105,7 @@ describe('plugin project preparation contract', () => {
 
   it('rejects retry-full from a full run and a second retry-full response', async () => {
     const fullRoot = await createProject()
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(fullRoot, 'full-retry', {
+    await installPreparers(fullRoot, [loadedPreparer(fullRoot, 'full-retry', {
       apiVersion: 1,
       prepare: () => ({ kind: 'retry-full', reason: 'unexpected' }),
     })])
@@ -136,7 +117,7 @@ describe('plugin project preparation contract', () => {
     const repeatedRoot = await createProject()
     let calls = 0
     let retry = false
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(repeatedRoot, 'repeated-retry', {
+    await installPreparers(repeatedRoot, [loadedPreparer(repeatedRoot, 'repeated-retry', {
       apiVersion: 1,
       prepare: () => {
         calls += 1
@@ -163,7 +144,7 @@ describe('plugin project preparation contract', () => {
   it('renders diagnostics in deterministic code order with source and hint details', async () => {
     const root = await createProject()
     const output: string[] = []
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -197,7 +178,7 @@ describe('plugin project preparation contract', () => {
   it('enforces diagnostic and artifact count ceilings at their boundaries', async () => {
     const root = await createProject()
     let mode: 'diagnostics-exact' | 'diagnostics-over' | 'artifacts-exact' | 'artifacts-over' = 'diagnostics-exact'
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'limits', {
+    await installPreparers(root, [loadedPreparer(root, 'limits', {
       apiVersion: 1,
       prepare: () => {
         const diagnosticCount = mode === 'diagnostics-exact' ? 200 : mode === 'diagnostics-over' ? 201 : 0
@@ -237,7 +218,7 @@ describe('plugin project preparation contract', () => {
     const root = await createProject()
     const eightMegabytes = new Uint8Array(8 * 1024 * 1024)
     let mode: 'exact' | 'individual-over' | 'total-over' = 'exact'
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'byte-limits', {
+    await installPreparers(root, [loadedPreparer(root, 'byte-limits', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -269,7 +250,7 @@ describe('plugin project preparation contract', () => {
 
   it('rejects generated-managed overlap within one snapshot', async () => {
     const overlapRoot = await createProject()
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(overlapRoot, 'overlap', {
+    await installPreparers(overlapRoot, [loadedPreparer(overlapRoot, 'overlap', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -283,10 +264,9 @@ describe('plugin project preparation contract', () => {
     })
   })
 
-  it('rejects artifact aliases on case-insensitive platforms', async () => {
+  it('honors the native platform when artifact names differ only by case', async () => {
     const root = await createProject()
-    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'aliases', {
+    await installPreparers(root, [loadedPreparer(root, 'aliases', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -297,20 +277,22 @@ describe('plugin project preparation contract', () => {
       }),
     })])
 
-    try {
+    if (process.platform === 'darwin' || process.platform === 'win32') {
       await expect(runFull(root)).rejects.toMatchObject({
         failure: { code: 'HOLO_PLUGIN_PREPARE_DUPLICATE_ARTIFACT' },
       })
       await expectMissing(join(root, '.holo-js/generated/aliases/Reports.ts'))
       await expectMissing(join(root, '.holo-js/generated/aliases/reports.ts'))
-    } finally {
-      platform.mockRestore()
+    } else {
+      await runFull(root)
+      expect(await readFile(join(root, '.holo-js/generated/aliases/Reports.ts'), 'utf8')).toBe('first')
+      expect(await readFile(join(root, '.holo-js/generated/aliases/reports.ts'), 'utf8')).toBe('second')
     }
   })
 
   it('rejects cross-plugin generated namespace collisions', async () => {
     const collisionRoot = await createProject()
-    mockedLoadPreparers.mockResolvedValue([
+    await installPreparers(collisionRoot, [
       loadedPreparer(collisionRoot, 'shared', {
         apiVersion: 1,
         prepare: () => ({
@@ -335,7 +317,7 @@ describe('plugin project preparation contract', () => {
 
   it('rejects cross-plugin managed claims before writing either snapshot', async () => {
     const root = await createProject()
-    mockedLoadPreparers.mockResolvedValue([
+    await installPreparers(root, [
       loadedPreparer(root, 'first', {
         apiVersion: 1,
         prepare: () => ({
@@ -363,7 +345,7 @@ describe('plugin project preparation contract', () => {
   it('uses write-if-changed behavior and updates unchanged owned artifacts', async () => {
     const root = await createProject()
     let contents = 'version-one'
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -394,7 +376,7 @@ describe('plugin project preparation contract', () => {
   it('preserves modified stale managed files and their manifest', async () => {
     const staleRoot = await createProject()
     let includeManaged = true
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(staleRoot, 'demo', {
+    await installPreparers(staleRoot, [loadedPreparer(staleRoot, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -425,7 +407,7 @@ describe('plugin project preparation contract', () => {
         ],
       }),
     })
-    mockedLoadPreparers.mockResolvedValue([inactive])
+    await installPreparers(root, [inactive])
     await runFull(root)
     await writeFile(join(root, 'app/modified.ts'), 'application-owned')
     await rm(join(root, 'app/shared.ts'))
@@ -437,7 +419,7 @@ describe('plugin project preparation contract', () => {
         managedArtifacts: [{ path: 'app/shared.ts', contents: 'active' }],
       }),
     })
-    mockedLoadPreparers.mockResolvedValue([active])
+    await installPreparers(root, [active])
 
     await runFull(root)
 
@@ -467,7 +449,7 @@ describe('plugin project preparation contract', () => {
         return { kind: 'prepared', generatedArtifacts: [{ path: 'stable.ts', contents: 'second' }] }
       },
     })
-    mockedLoadPreparers.mockResolvedValue([first, second])
+    await installPreparers(root, [first, second])
     await runFull(root)
     const manifestPath = join(root, '.holo-js/generated/.plugins/first.json')
     const manifestBefore = await readFile(manifestPath, 'utf8')
@@ -499,7 +481,7 @@ describe('plugin project preparation contract', () => {
         return { kind: 'prepared' }
       },
     })
-    mockedLoadPreparers.mockResolvedValue([first, second])
+    await installPreparers(root, [first, second])
 
     await runFull(root)
 
@@ -518,7 +500,7 @@ describe('plugin project preparation contract', () => {
     const controller = new AbortController()
     controller.abort()
     let preparationStarted = false
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => {
         preparationStarted = true
@@ -545,7 +527,7 @@ describe('plugin project preparation contract', () => {
   it('redacts unstructured preparer failures during cancellation', async () => {
     const root = await createProject()
     const controller = new AbortController()
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => {
         controller.abort()
@@ -567,7 +549,7 @@ describe('plugin project preparation contract', () => {
   it('rolls back installed artifacts when preparation is aborted during commit', async () => {
     const root = await createProject()
     let version = 'one'
-    mockedLoadPreparers.mockResolvedValue([loadedPreparer(root, 'demo', {
+    await installPreparers(root, [loadedPreparer(root, 'demo', {
       apiVersion: 1,
       prepare: () => ({
         kind: 'prepared',
@@ -600,7 +582,7 @@ describe('plugin project preparation contract', () => {
 
   it('leaves a clean project unchanged when no preparers are active', async () => {
     const root = await createProject()
-    mockedLoadPreparers.mockResolvedValue([])
+    await installPreparers(root, [])
 
     await expect(runFull(root)).resolves.toBeUndefined()
     await expectMissing(join(root, '.holo-js/generated/.plugins'))

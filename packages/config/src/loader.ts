@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -30,8 +29,6 @@ const HOLO_CONFIG_CACHE_VERSION = 3
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
-/* v8 ignore next -- This is a test-runtime toggle evaluated at module load time. */
-const USE_TRANSIENT_IMPORTS = process.env.VITEST === 'true' || process.env.VITEST === '1'
 
 type RawConfigMap = Record<string, unknown>
 
@@ -80,18 +77,6 @@ let configImportNonce = 0
 
 async function importConfigModule(filePath: string): Promise<unknown> {
   configImportNonce += 1
-  if (USE_TRANSIENT_IMPORTS) {
-    const extension = extname(filePath)
-    const transientPath = `${filePath.slice(0, filePath.length - extension.length)}${TRANSIENT_CONFIG_IMPORT_MARKER}${randomUUID()}${extension}`
-    const source = await readFile(filePath, 'utf8')
-    await writeFile(transientPath, source, 'utf8')
-
-    try {
-      return await import(/* webpackIgnore: true */ pathToFileURL(transientPath).href)
-    } finally {
-      await rm(transientPath, { force: true })
-    }
-  }
 
   return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${configImportNonce}`)
 }
@@ -122,9 +107,7 @@ async function collectConfigEntries(configDir: string): Promise<Array<{ configNa
     }
 
     if (LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS.some(marker => entry.name.includes(marker))) {
-      if (!USE_TRANSIENT_IMPORTS) {
-        await rm(join(configDir, entry.name), { force: true })
-      }
+      await rm(join(configDir, entry.name), { force: true })
       continue
     }
 

@@ -903,14 +903,13 @@ export class ModelQueryBuilder<
     rows: readonly ModelRecord<TTable>[],
   ): Promise<ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     const hasQueryCasts = Object.keys(this.queryCasts).length > 0
-    let entities = await Promise.all(
+    const entities = await Promise.all(
       rows.map(row => (
         hasQueryCasts
           ? this.repository.retrieveWithCasts(row, this.queryCasts)
           : this.repository.retrieve(row)
       )),
     ) as unknown as Entity<TTable, TRelations>[]
-    entities = await this.repository.filterByRelations(entities, this.relationFilters) as unknown as Entity<TTable, TRelations>[]
     this.repository.attachCollection(entities)
     await this.repository.loadRelations(entities, this.eagerLoads)
     await this.repository.loadRelationAggregates(entities, this.aggregateLoads)
@@ -1212,7 +1211,11 @@ export class ModelQueryBuilder<
   }
 
   async pluck<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<Array<ModelRecord<TTable>[TColumn]>> {
-    const { collection, rows } = await this.getRowsAndEntities()
+    const plan = this.tableQuery.getPlan()
+    const query = plan.distinct && plan.selections.length === 0
+      ? this.clone(this.tableQuery.select(column))
+      : this
+    const { collection, rows } = await query.getRowsAndEntities()
     const result = collection.map(entity => entity.get(column)) as Array<ModelRecord<TTable>[TColumn]>
     rebindDatabaseQueryObservationScalarList(rows, result, column)
     return result
@@ -1278,7 +1281,7 @@ export class ModelQueryBuilder<
 
     const values = this.extractNumericValues(entities, column, 'avg')
     const sum = values.reduce((total, value) => total + value, 0)
-    const result = sum / values.length
+    const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
     }
@@ -1295,7 +1298,7 @@ export class ModelQueryBuilder<
     }
 
     const values = this.extractNumericValues(entities, column, 'min')
-    const result = Math.min(...values)
+    const result = values.length > 0 ? Math.min(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
         column,
@@ -1317,7 +1320,7 @@ export class ModelQueryBuilder<
     }
 
     const values = this.extractNumericValues(entities, column, 'max')
-    const result = Math.max(...values)
+    const result = values.length > 0 ? Math.max(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
         column,
@@ -1820,13 +1823,14 @@ export class ModelQueryBuilder<
     column: string,
     kind: 'sum' | 'avg' | 'min' | 'max',
   ): number[] {
-    return entities.map((entity) => {
+    return entities.flatMap((entity) => {
       const value = entity.get(column as never)
+      if (value === null) return []
       if (typeof value !== 'number' || Number.isNaN(value)) {
         throw new HydrationError(`Model aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return value
+      return [value]
     })
   }
 

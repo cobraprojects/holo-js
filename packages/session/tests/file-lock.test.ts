@@ -1,326 +1,142 @@
-import { mkdir, mkdtemp, type rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { execFileSync, fork, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-
-const staleRemoval = vi.hoisted(() => ({
-  enabled: false,
-  replacementAcquisitionPending: false,
-  removedReplacement: false,
-  replacementAcquired: false,
-  removals: 0,
-  lockPath: undefined as string | undefined,
-}))
-
-const staleReplacement = vi.hoisted(() => ({
-  enabled: false,
-  firstReclaimWaiting: false,
-  lockPath: undefined as string | undefined,
-  replacementAcquired: false,
-  secondReclaimWaiting: false,
-  staleMoved: false,
-}))
-
-const activeOwner = vi.hoisted(() => ({
-  enabled: false,
-  flashWrites: 0,
-  firstWriteStarted: false,
-  secondWriteStarted: false,
-  releaseFirst: false,
-  releaseSecond: false,
-}))
-
-vi.mock('node:fs/promises', async importOriginal => {
-  const filesystem = await importOriginal<Record<string, unknown> & { rename: typeof rename, rm: typeof rm, writeFile: typeof writeFile }>()
-  return {
-    ...filesystem,
-    async rename(oldPath: Parameters<typeof filesystem.rename>[0], newPath: Parameters<typeof filesystem.rename>[1]) {
-      if (
-        staleReplacement.enabled
-        && String(oldPath) === staleReplacement.lockPath
-        && String(newPath).endsWith('.stale')
-      ) {
-        if (!staleReplacement.firstReclaimWaiting) {
-          staleReplacement.firstReclaimWaiting = true
-          while (!staleReplacement.secondReclaimWaiting) await new Promise(resolve => setTimeout(resolve, 0))
-          await filesystem.rename(oldPath, newPath)
-          staleReplacement.staleMoved = true
-          return
-        }
-
-        staleReplacement.secondReclaimWaiting = true
-        while (!staleReplacement.staleMoved || !staleReplacement.replacementAcquired) {
-          await new Promise(resolve => setTimeout(resolve, 0))
-        }
-      }
-      return filesystem.rename(oldPath, newPath)
-    },
-    async rm(path: Parameters<typeof filesystem.rm>[0], options?: Parameters<typeof filesystem.rm>[1]) {
-      if (staleRemoval.enabled && String(path) === staleRemoval.lockPath) {
-        staleRemoval.removals += 1
-        if (staleRemoval.removals === 2) {
-          while (!staleRemoval.replacementAcquired) await new Promise(resolve => setTimeout(resolve, 0))
-          if (staleRemoval.replacementAcquisitionPending) staleRemoval.removedReplacement = true
-        }
-      }
-      return filesystem.rm(path, options)
-    },
-    async writeFile(path: Parameters<typeof filesystem.writeFile>[0], data: Parameters<typeof filesystem.writeFile>[1], options?: Parameters<typeof filesystem.writeFile>[2]) {
-      if (activeOwner.enabled && String(path).includes('.json.flash.') && String(path).endsWith('.tmp')) {
-        activeOwner.flashWrites += 1
-        if (activeOwner.flashWrites === 1) {
-          activeOwner.firstWriteStarted = true
-          while (!activeOwner.releaseFirst) await new Promise(resolve => setTimeout(resolve, 0))
-        } else if (activeOwner.flashWrites === 2) {
-          activeOwner.secondWriteStarted = true
-          while (!activeOwner.releaseSecond) await new Promise(resolve => setTimeout(resolve, 0))
-        }
-      }
-      return filesystem.writeFile(path, data, options)
-    },
-  }
-})
-
+import { join, resolve } from 'node:path'
+import { setTimeout } from 'node:timers/promises'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 import { createFileSessionStore, fileSessionDriverInternals, type SessionRecord } from '../src'
 
-const temporaryDirectories: string[] = []
+let packageBuildRoot: string | undefined
 
-afterEach(async () => {
-  staleRemoval.enabled = false
-  staleRemoval.replacementAcquisitionPending = false
-  staleRemoval.removedReplacement = false
-  staleRemoval.replacementAcquired = false
-  staleRemoval.removals = 0
-  staleRemoval.lockPath = undefined
-  staleReplacement.enabled = false
-  staleReplacement.firstReclaimWaiting = false
-  staleReplacement.lockPath = undefined
-  staleReplacement.replacementAcquired = false
-  staleReplacement.secondReclaimWaiting = false
-  staleReplacement.staleMoved = false
-  activeOwner.enabled = false
-  activeOwner.flashWrites = 0
-  activeOwner.firstWriteStarted = false
-  activeOwner.secondWriteStarted = false
-  activeOwner.releaseFirst = false
-  activeOwner.releaseSecond = false
-  await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { force: true, recursive: true })))
-})
+async function createSession() {
+  const root = await mkdtemp(join(tmpdir(), 'holo-file-lock-'))
+  onTestFinished(() => rm(root, { force: true, recursive: true }))
+  const driver = createFileSessionStore(root)
+  const { flash, take } = driver
+  if (!flash || !take) throw new Error('File sessions must support atomic flash and take')
+  const store = { ...driver, flash, take }
+  const now = new Date()
+  const record: SessionRecord = { id: randomUUID(), store: 'file', data: { userId: 42 }, createdAt: now, lastActivityAt: now, expiresAt: new Date(Date.now() + 60_000) }
+  await store.write(record)
+  const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
+  return { root, store, record, lockPath }
+}
 
-describe('file session locking', () => {
-  it('does not reclaim a lock held by a live owner', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-active-owner-'))
-    temporaryDirectories.push(root)
-    const store = createFileSessionStore(root)
-    const now = new Date()
-    const record: SessionRecord = Object.freeze({
-      createdAt: now,
-      data: Object.freeze({}),
-      expiresAt: new Date(now.getTime() + 60_000),
-      id: 'session',
-      lastActivityAt: now,
-      store: 'file',
+async function startWorker(mode: 'hold' | 'flash', root: string, sessionId: string, parameter: string): Promise<ChildProcess> {
+  if (!packageBuildRoot) throw new Error('Expected the current session package build')
+  const child = fork(new URL('./support/file-session-worker.mjs', import.meta.url), [mode, root, sessionId, parameter, join(packageBuildRoot, 'index.mjs')], { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+  let stderr = ''
+  child.stderr?.on('data', (value: Buffer) => { stderr += value.toString() })
+  onTestFinished(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+    child.kill('SIGKILL')
+    await exited
+  })
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', code => reject(new Error(`File session worker exited (${code}): ${stderr}`)))
+    child.once('message', message => {
+      if (typeof message === 'object' && message !== null && 'event' in message && message.event === 'ready') resolve()
+      else reject(new Error('Expected worker readiness'))
     })
-    await store.write(record)
-    const flash = store.flash
-    if (!flash) throw new Error('File session stores must support flash values.')
-    const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
-    activeOwner.enabled = true
+  })
+  return child
+}
 
-    const first = flash(record.id, 'first', true)
-    while (!activeOwner.firstWriteStarted) await new Promise(resolve => setTimeout(resolve, 0))
-    const staleTime = new Date(Date.now() - 20_000)
-    await utimes(join(lockPath, 'owner.json'), staleTime, staleTime)
-    const second = flash(record.id, 'second', true)
-    await new Promise(resolve => setTimeout(resolve, 20))
-    const liveOwnerWasReclaimed = activeOwner.secondWriteStarted
+async function stopWorker(child: ChildProcess): Promise<void> {
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+  child.kill('SIGKILL')
+  await exited
+}
 
-    activeOwner.releaseFirst = true
-    await first
-    while (!activeOwner.secondWriteStarted) await new Promise(resolve => setTimeout(resolve, 0))
-    activeOwner.releaseSecond = true
-    await second
+async function writeStaleOwner(lockPath: string, owner: { host: string; pid: number; token: string; processToken?: string }): Promise<void> {
+  await mkdir(lockPath)
+  await writeFile(join(lockPath, `owner.${owner.token}.json`), JSON.stringify(owner))
+  const stale = new Date(Date.now() - 20_000)
+  await utimes(join(lockPath, `owner.${owner.token}.json`), stale, stale)
+}
 
-    expect(liveOwnerWasReclaimed).toBe(false)
+describe('file session locking with real processes', () => {
+  beforeAll(async () => {
+    packageBuildRoot = await mkdtemp(resolve(import.meta.dirname, '../.tmp-file-session-build-'))
+    execFileSync('bun', ['run', 'build'], { cwd: resolve(import.meta.dirname, '..'), env: { ...process.env, HOLO_BUILD_OUT_DIR: packageBuildRoot }, stdio: 'pipe' })
+  }, 60_000)
+  afterAll(async () => {
+    if (packageBuildRoot) await rm(packageBuildRoot, { force: true, recursive: true })
   })
 
-  it('reclaims a lock held by a terminated local process', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-terminated-owner-'))
-    temporaryDirectories.push(root)
-    const store = createFileSessionStore(root)
-    const now = new Date()
-    const record: SessionRecord = Object.freeze({
-      createdAt: now,
-      data: Object.freeze({}),
-      expiresAt: new Date(now.getTime() + 60_000),
-      id: 'session',
-      lastActivityAt: now,
-      store: 'file',
-    })
-    await store.write(record)
-    const flash = store.flash
-    const take = store.take
-    if (!flash || !take) throw new Error('File session stores must support flash values.')
-    const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
-    await mkdir(lockPath)
-    await writeFile(join(lockPath, 'owner.json'), JSON.stringify({
-      host: hostname(),
-      pid: 999_999,
-      token: 'terminated-owner',
-    }))
-
-    await flash(record.id, 'message', 'ready')
-
-    await expect(take(record.id, 'message')).resolves.toEqual({ found: true, value: 'ready' })
+  it('preserves a live owner lease even when its directory timestamp is old', async () => {
+    const { root, store, record, lockPath } = await createSession()
+    const owner = await startWorker('hold', root, record.id, lockPath)
+    let completed = false
+    const flash = store.flash(record.id, 'notice', 'Saved').then(() => { completed = true })
+    await setTimeout(100)
+    expect(completed).toBe(false)
+    const exited = new Promise<void>(resolve => owner.once('exit', () => resolve()))
+    owner.send('release')
+    await exited
+    await flash
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
   })
 
-  it('reclaims a stale local lock after its owner PID is reused', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-reused-owner-'))
-    temporaryDirectories.push(root)
-    const store = createFileSessionStore(root)
-    const now = new Date()
-    const record: SessionRecord = Object.freeze({
-      createdAt: now,
-      data: Object.freeze({}),
-      expiresAt: new Date(now.getTime() + 60_000),
-      id: 'session',
-      lastActivityAt: now,
-      store: 'file',
-    })
-    await store.write(record)
-    const flash = store.flash
-    if (!flash) throw new Error('File session stores must support flash values.')
-    const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
-    const ownerPath = join(lockPath, 'owner.json')
-    await mkdir(lockPath)
-    await writeFile(ownerPath, JSON.stringify({
-      host: hostname(),
-      pid: process.pid,
-      token: 'reused-owner',
+  it('reclaims a lock after its actual owner process terminates', async () => {
+    const { root, store, record, lockPath } = await createSession()
+    const owner = await startWorker('hold', root, record.id, lockPath)
+    await stopWorker(owner)
+    await store.flash(record.id, 'notice', 'Saved')
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
+  })
+
+  it('times out on a live native lock and writes successfully after release', async () => {
+    const { root, store, record, lockPath } = await createSession()
+    const owner = await startWorker('hold', root, record.id, lockPath)
+    await expect(store.flash(record.id, 'notice', 'Blocked')).rejects.toThrow('Timed out acquiring file session lock')
+    const exited = new Promise<void>(resolve => owner.once('exit', () => resolve()))
+    owner.send('release')
+    await exited
+    await store.flash(record.id, 'notice', 'Saved')
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
+  }, 15_000)
+
+  it.each(['reused-pid', 'previous-host'])('reclaims stale persisted leases from %s', async scenario => {
+    const { store, record, lockPath } = await createSession()
+    await writeStaleOwner(lockPath, { host: scenario === 'previous-host' ? 'previous-host' : hostname(), pid: process.pid, token: randomUUID(), processToken: 'previous-process-instance' })
+    await store.flash(record.id, 'notice', 'Saved')
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
+  })
+
+  it.each([false, true])('preserves every concurrent writer while replacing an orphaned lease=%s', async orphaned => {
+    const { root, store, record, lockPath } = await createSession()
+    await store.flash(record.id, 'existing', 'preserved')
+    if (orphaned) {
+      const owner = await startWorker('hold', root, record.id, lockPath)
+      await stopWorker(owner)
+    }
+    const workers: ChildProcess[] = []
+    for (let index = 0; index < 8; index += 1) workers.push(await startWorker('flash', root, record.id, `writer${index}`))
+    const results = workers.map(child => new Promise<void>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', code => code === 0 ? resolve() : reject(new Error(`File session writer exited (${code})`)))
+      child.on('message', message => {
+        if (typeof message === 'object' && message !== null && 'event' in message && message.event === 'failed') reject(new Error(JSON.stringify(message)))
+      })
     }))
-    const staleTime = new Date(Date.now() - 20_000)
-    await utimes(ownerPath, staleTime, staleTime)
-
-    await expect(flash(record.id, 'message', 'ready')).resolves.toBeUndefined()
-  }, 7_000)
-
-  it('reclaims a stale lock created on a previous host', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-previous-host-'))
-    temporaryDirectories.push(root)
-    const store = createFileSessionStore(root)
-    const now = new Date()
-    const record: SessionRecord = Object.freeze({
-      createdAt: now,
-      data: Object.freeze({}),
-      expiresAt: new Date(now.getTime() + 60_000),
-      id: 'session',
-      lastActivityAt: now,
-      store: 'file',
-    })
-    await store.write(record)
-    const flash = store.flash
-    if (!flash) throw new Error('File session stores must support flash values.')
-    const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
-    const ownerPath = join(lockPath, 'owner.json')
-    await mkdir(lockPath)
-    await writeFile(ownerPath, JSON.stringify({
-      host: `${hostname()}-previous`,
-      pid: 1,
-      token: 'previous-host-owner',
-    }))
-    const staleTime = new Date(Date.now() - 20_000)
-    await utimes(lockPath, staleTime, staleTime)
-    await utimes(ownerPath, staleTime, staleTime)
-
-    await expect(flash(record.id, 'message', 'ready')).resolves.toBeUndefined()
-  }, 7_000)
-
-  it('does not let a stale contender remove a replacement lock', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-stale-lock-'))
-    temporaryDirectories.push(root)
-    const setupStore = createFileSessionStore(root)
-    const now = new Date()
-    const record: SessionRecord = Object.freeze({
-      createdAt: now,
-      data: Object.freeze({}),
-      expiresAt: new Date(now.getTime() + 60_000),
-      id: 'session',
-      lastActivityAt: now,
-      store: 'file',
-    })
-    await setupStore.write(record)
-    const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
-    staleRemoval.lockPath = lockPath
-    await mkdir(lockPath)
-    const staleTime = new Date(Date.now() - 20_000)
-    await utimes(lockPath, staleTime, staleTime)
-    const store = fileSessionDriverInternals.createStore(root, (async (path, options) => {
-      const result = await mkdir(path, options)
-      if (!options && staleRemoval.enabled && !staleRemoval.replacementAcquired) {
-        staleRemoval.replacementAcquired = true
-        staleRemoval.replacementAcquisitionPending = true
-        for (let attempt = 0; attempt < 20 && !staleRemoval.removedReplacement; attempt += 1) {
-          await new Promise(resolve => setTimeout(resolve, 1))
-        }
-        staleRemoval.replacementAcquisitionPending = false
+    workers.forEach(child => child.send('start'))
+    await Promise.all(results)
+    expect(await store.read(record.id)).toEqual(record)
+    expect(await store.take(record.id, 'existing')).toEqual({ found: true, value: 'preserved' })
+    for (let writer = 0; writer < workers.length; writer += 1) {
+      for (let index = 0; index < 5; index += 1) {
+        const key = `writer${writer}.${index}`
+        expect(await store.take(record.id, key)).toEqual({ found: true, value: { writer: `writer${writer}`, index } })
+        expect(await store.take(record.id, key)).toEqual({ found: false })
       }
-      return result
-    }) as typeof mkdir)
-    staleRemoval.enabled = true
-    const flash = store.flash
-    if (!flash) throw new Error('File session stores must support flash values.')
-
-    await Promise.all([
-      flash(record.id, 'first', true),
-      flash(record.id, 'second', true),
-    ])
-
-    expect(staleRemoval.removedReplacement).toBe(false)
-    await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
-  })
-
-  it('does not let a delayed stale contender enter beside a replacement owner', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-stale-replacement-'))
-    temporaryDirectories.push(root)
-    const setupStore = createFileSessionStore(root)
-    const now = new Date()
-    const record: SessionRecord = Object.freeze({
-      createdAt: now,
-      data: Object.freeze({}),
-      expiresAt: new Date(now.getTime() + 60_000),
-      id: 'session',
-      lastActivityAt: now,
-      store: 'file',
-    })
-    await setupStore.write(record)
-    const lockPath = `${fileSessionDriverInternals.getRecordPath(root, record.id)}.lock`
-    await mkdir(lockPath)
-    const staleTime = new Date(Date.now() - 20_000)
-    await utimes(lockPath, staleTime, staleTime)
-    staleReplacement.lockPath = lockPath
-    staleReplacement.enabled = true
-    activeOwner.enabled = true
-    const store = fileSessionDriverInternals.createStore(root, (async (path, options) => {
-      const result = await mkdir(path, options)
-      if (String(path) === lockPath && staleReplacement.staleMoved) {
-        staleReplacement.replacementAcquired = true
-      }
-      return result
-    }) as typeof mkdir)
-    const flash = store.flash
-    if (!flash) throw new Error('File session stores must support flash values.')
-
-    const first = flash(record.id, 'first', true)
-    const second = flash(record.id, 'second', true)
-    while (!activeOwner.firstWriteStarted) await new Promise(resolve => setTimeout(resolve, 0))
-    await new Promise(resolve => setTimeout(resolve, 20))
-    const replacementWasEnteredConcurrently = activeOwner.secondWriteStarted
-
-    activeOwner.releaseFirst = true
-    while (!activeOwner.secondWriteStarted) await new Promise(resolve => setTimeout(resolve, 0))
-    activeOwner.releaseSecond = true
-    await Promise.all([first, second])
-
-    expect(replacementWasEnteredConcurrently).toBe(false)
-  })
+    }
+  }, 30_000)
 })

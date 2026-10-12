@@ -98,6 +98,7 @@ export {
 export {
   configureMailRuntime,
   getMailRuntimeBindings,
+  mailRuntimeInternals,
   listFakeSentMails,
   listPreviewMailArtifacts,
   getMailRuntime,

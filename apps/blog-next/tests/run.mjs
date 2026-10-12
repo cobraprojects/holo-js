@@ -1,3 +1,4 @@
+import { assertExampleAppDevelopmentReload } from '../../../tests/example-app-development-reload.mjs'
 import { stopExampleAppProcess as stopProcessTree } from '../../../tests/example-app-process.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -88,7 +89,6 @@ let capturedOutput = ''
 function createChildEnv(overrides = {}) {
   const env = {
     ...process.env,
-    APP_NAME: '',
     HOLO_SECURITY_TRUST_PROXY: 'true',
     BROADCAST_HOST: '127.0.0.1',
     BROADCAST_PORT: broadcastPort,
@@ -547,6 +547,7 @@ async function assertAuthenticatedAdminPostFlows(context) {
   await stopProcessTree(broadcastChild)
   broadcastChild = null
   await assertExampleAppRealtimeUnavailableBrowserFlow({
+    appName: 'blog-next',
     baseUrl: context.baseUrl,
     cookieHeader: context.jar.header(),
   })
@@ -607,7 +608,7 @@ try {
   await startBroadcastWorker(`http://localhost:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'], 60000)
   database = await openExampleAppDatabase(cwd)
-  await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService)
+  await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService, cwd)
 
   child = spawn('bun', ['run', 'dev'], {
     cwd,
@@ -625,6 +626,7 @@ try {
   pipeOutput(child.stderr, process.stderr)
 
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
+  await assertExampleAppDevelopmentReload({ cwd, baseUrl: `http://localhost:${port}` })
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin`, '/login')
@@ -642,7 +644,7 @@ try {
     expectedTitle: 'Shipping a Real Holo Blog on Next',
   })
 
-  await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-next')", "name: env('APP_NAME', 'blog-next-updated')"))
+  await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-next')", "name: 'blog-next-updated'"))
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
 
   await stopProcessTree(child)

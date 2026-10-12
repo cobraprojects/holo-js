@@ -24,6 +24,7 @@ import {
   type NotificationPage,
   type NotificationPagination,
   type NotificationQuery,
+  type NotificationRecord,
   type NotificationRouteFor,
   type NotificationRuntimeBindings,
   type NotificationSendContext,
@@ -405,7 +406,7 @@ function createQueuedDeliveryPayload(
   return Object.freeze({
     channel: context.channel,
     anonymous: context.anonymous,
-    notifiable: context.notifiable,
+    notifiable: JSON.parse(JSON.stringify(context.notifiable ?? null)) as unknown,
     ...(typeof context.route === 'undefined' ? {} : { route: context.route }),
     ...(typeof context.notificationType === 'undefined' ? {} : { notificationType: context.notificationType }),
     payload: context.payload,
@@ -642,9 +643,8 @@ class AnonymousNotificationBuilder<
     } as Readonly<Omit<TRoutes, TChannel> & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> }>)
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must accept any NotificationDefinition variant
-  notify<TNotification extends NotificationDefinition<any, any>>(
-    notification: TNotification,
+  notify<TBuild extends NotificationBuildFactories<unknown>>(
+    notification: NotificationDefinition<unknown, TBuild>,
   ): PendingNotificationDispatch<NotificationDispatchResult> {
     return new PendingDispatch({
       kind: 'anonymous',
@@ -668,8 +668,10 @@ export interface NotificationRuntimeFacade {
   listNotifications(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
   unreadNotifications(query: NotificationQuery, pagination: NotificationPagination): Promise<NotificationPage>
   markNotificationsAsRead(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  markAllNotificationsAsRead(query: NotificationQuery): Promise<number>
   markNotificationsAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number>
   deleteNotifications(query: NotificationQuery, ids: readonly string[]): Promise<number>
+  clearNotifications(query: NotificationQuery): Promise<number>
 }
 
 export function configureNotificationsRuntime(bindings?: RuntimeBindingsWithProjectRoot): void {
@@ -759,6 +761,10 @@ export async function listNotifications(
   return requireStore(getRuntimeBindings()).list(normalizeNotificationQuery(query), normalizeNotificationPagination(pagination))
 }
 
+async function findNotifications(query: NotificationQuery, ids: readonly string[]): Promise<readonly NotificationRecord[]> {
+  return requireStore(getRuntimeBindings()).find(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
+}
+
 export async function unreadNotifications(
   query: NotificationQuery,
   pagination: NotificationPagination,
@@ -770,12 +776,20 @@ export async function markNotificationsAsRead(query: NotificationQuery, ids: rea
   return requireStore(getRuntimeBindings()).markAsRead(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
 }
 
+export async function markAllNotificationsAsRead(query: NotificationQuery): Promise<number> {
+  return requireStore(getRuntimeBindings()).markAllAsRead(normalizeNotificationQuery(query))
+}
+
 export async function markNotificationsAsUnread(query: NotificationQuery, ids: readonly string[]): Promise<number> {
   return requireStore(getRuntimeBindings()).markAsUnread(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
 }
 
 export async function deleteNotifications(query: NotificationQuery, ids: readonly string[]): Promise<number> {
   return requireStore(getRuntimeBindings()).delete(normalizeNotificationQuery(query), normalizeNotificationRecordIds(ids))
+}
+
+export async function clearNotifications(query: NotificationQuery): Promise<number> {
+  return requireStore(getRuntimeBindings()).clear(normalizeNotificationQuery(query))
 }
 
 export function getNotificationsRuntime(): NotificationRuntimeFacade {
@@ -786,12 +800,15 @@ export function getNotificationsRuntime(): NotificationRuntimeFacade {
     listNotifications,
     unreadNotifications,
     markNotificationsAsRead,
+    markAllNotificationsAsRead,
     markNotificationsAsUnread,
     deleteNotifications,
+    clearNotifications,
   })
 }
 
 export const notificationsRuntimeInternals = {
+  findNotifications,
   HOLO_NOTIFICATIONS_DELIVER_JOB,
   AnonymousNotificationBuilder,
   PendingDispatch,

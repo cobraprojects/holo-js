@@ -114,7 +114,14 @@ export async function resolveFlexibleCachedValue<TValue>(
   const refreshLock = options.createLock(normalizedTtl)
   const refreshed = await refreshLock.block(
     options.blockSeconds?.(normalizedTtl) ?? 1,
-    async () => options.refresh(normalizedTtl),
+    async () => {
+      const current = await options.read()
+      if (isFlexibleEnvelope<TValue>(current)
+        && resolveFlexibleEnvelopeState(current, options.now?.() ?? Date.now()) !== 'expired') {
+        return current.value
+      }
+      return options.refresh(normalizedTtl)
+    },
   )
 
   if (refreshed !== false) {
@@ -124,7 +131,7 @@ export async function resolveFlexibleCachedValue<TValue>(
   const retried = await options.read()
   if (
     isFlexibleEnvelope<TValue>(retried)
-    && resolveFlexibleEnvelopeState(retried, now) !== 'expired'
+    && resolveFlexibleEnvelopeState(retried, options.now?.() ?? Date.now()) !== 'expired'
   ) {
     return retried.value
   }

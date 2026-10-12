@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { realtimeClientInternals } from '../src/client'
 import {
-  isPatchedRealtimeSnapshot,
   isStaleRealtimeSnapshot,
   shouldNotifyPatchedRealtimeSnapshot,
 } from '../src/client/patching'
@@ -128,7 +127,6 @@ describe('@holo-js/realtime client patching', () => {
 
     const patched = realtimeClientInternals.applyWireSnapshotPatch(snapshot, parsed)
 
-    expect(isPatchedRealtimeSnapshot(patched)).toBe(true)
     expect(patched.dependencies).toEqual(['table:posts', 'query:posts.list'])
     expect(patched.version).toBe(3)
     expect(patched.data).toEqual({

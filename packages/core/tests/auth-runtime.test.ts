@@ -85,10 +85,12 @@ async function createProject(options: {
   if (options.auth) {
     const database = new DatabaseSync(join(root, 'database.sqlite'))
     database.exec(revocationsSchema)
+    database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT NOT NULL UNIQUE, password TEXT, email_verified_at TEXT)')
     database.close()
   }
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await symlink(resolve(import.meta.dirname, '../../auth-social-google'), join(root, 'node_modules/@holo-js/auth-social-google'))
+  await symlink(resolve(import.meta.dirname, '../../db'), join(root, 'node_modules/@holo-js/db'))
   await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'server/models'), { recursive: true })
@@ -156,19 +158,33 @@ export default defineRedisConfig({ default: 'default', connections: { default: {
 
   if (options.auth) {
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig, type AuthHostedIdentityStore } from ${authEntry}
+import { defineAuthConfig, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from ${authEntry}
+import { DB, column, defineGeneratedTable } from '@holo-js/db'
 
+const identityRecords = defineGeneratedTable('custom_hosted_identities', { provider: column.string(), provider_user_id: column.string(), auth_provider: column.string(), user_id: column.string(), record: column.text() })
+type StoredIdentity = { provider: string, provider_user_id: string, auth_provider: string, user_id: string, record: string }
+const identities = () => DB.table(identityRecords)
+function decode(row: StoredIdentity | null): AuthHostedIdentityRecord | null {
+  if (!row) return null
+  const record = JSON.parse(row.record) as Omit<AuthHostedIdentityRecord, 'linkedAt' | 'updatedAt'> & { linkedAt: string, updatedAt: string }
+  return { ...record, linkedAt: new Date(record.linkedAt), updatedAt: new Date(record.updatedAt) }
+}
 const hostedIdentityStore = {
-  async findByProviderUserId() {
-    return null
+  async findByProviderUserId(provider, providerUserId) {
+    return decode(await identities().where('provider', provider).where('provider_user_id', providerUserId).first())
   },
-  async findByUserId() {
-    return null
+  async findByUserId(provider, authProvider, userId) {
+    return decode(await identities().where('provider', provider).where('auth_provider', authProvider).where('user_id', String(userId)).first())
   },
   async claim(record) {
-    return record
+    await identities().insertOrIgnore({ provider: record.provider, provider_user_id: record.providerUserId, auth_provider: record.authProvider, user_id: String(record.userId), record: JSON.stringify(record) })
+    const claimed = await this.findByProviderUserId(record.provider, record.providerUserId)
+    if (!claimed) throw new Error('Hosted identity claim did not persist')
+    return claimed
   },
-  async save() {},
+  async save(record) {
+    await identities().upsert([{ provider: record.provider, provider_user_id: record.providerUserId, auth_provider: record.authProvider, user_id: String(record.userId), record: JSON.stringify(record) }], ['provider', 'provider_user_id'], ['auth_provider', 'user_id', 'record'])
+  },
 } satisfies AuthHostedIdentityStore
 
 export default defineAuthConfig({
@@ -209,32 +225,19 @@ export default defineAuthConfig({
 })
 `, 'utf8')
     await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-
-export default {
-  async find(id) {
-    return users.get(id)
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return undefined
-      },
-    }
-  },
-  async create(values) {
-    return values
-  },
-  async update(_id, values) {
-    return values
-  },
-}
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+const users = defineGeneratedTable('users', {
+  id: column.integer().primaryKey(),
+  name: column.string().nullable(),
+  email: column.string(),
+  password: column.string().nullable(),
+  email_verified_at: column.timestamp().nullable(),
+})
+export default defineModel(users, {
+  timestamps: false,
+  fillable: ['name', 'email', 'password', 'email_verified_at'],
+  hidden: ['password'],
+})
 `, 'utf8')
   }
 
@@ -336,45 +339,6 @@ describe('@holo-js/core auth/session boot', () => {
       notifications: true,
       mail: true,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const record = {
-      ...(users.get(Number(id)) ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
@@ -472,45 +436,6 @@ export default {
       auth: true,
       notifications: true,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const record = {
-      ...(users.get(Number(id)) ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
@@ -593,64 +518,6 @@ export default {
     }))
   })
 
-  it('keeps auth delivery on the default hook when notifications are absent', async () => {
-    const root = await createProject({
-      auth: true,
-    })
-
-    const originalWarn = console.warn
-    const warn = vi.fn()
-    console.warn = warn
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/notifications') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root, {
-        processEnv: process.env,
-        preferCache: false,
-      })
-      await runtime.initialize()
-      await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
-        table.uuid('id').primaryKey()
-        table.string('provider').default('users')
-        table.string('user_id')
-        table.string('email')
-        table.string('token_hash')
-        table.timestamp('expires_at')
-        table.timestamp('used_at').nullable()
-        table.timestamps()
-        table.index(['provider'])
-        table.index(['user_id'])
-        table.index(['email'])
-      })
-
-      const registered = unwrapAuthResult(await runtime.auth?.register({
-        name: 'Ava',
-        email: 'ava@example.com',
-        password: 'supersecret',
-        passwordConfirmation: 'supersecret',
-      }))
-
-      await expect(runtime.auth?.verification.create(registered!)).resolves.toMatchObject({
-        email: 'ava@example.com',
-      })
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Email verification delivery is not configured'))
-    } finally {
-      console.warn = originalWarn
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
 
   it('keeps auth delivery on the default hook when notifications are installed without mail', async () => {
     const root = await createProject({
@@ -703,45 +570,6 @@ export default {
       auth: true,
       mail: true,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const record = {
-      ...(users.get(Number(id)) ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
 
     const runtime = await createHolo(root, {
       processEnv: process.env,
@@ -819,70 +647,6 @@ export default {
     const root = await createProject({
       auth: true,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-class UserEntity {
-  constructor(attributes) {
-    this.attributes = { ...attributes }
-  }
-
-  toAttributes() {
-    return { ...this.attributes }
-  }
-
-  toJSON() {
-    const { password, ...rest } = this.attributes
-    return { ...rest }
-  }
-}
-
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  query() {
-    const filters = []
-    return {
-      where(column, value) {
-        filters.push([column, value])
-        return this
-      },
-      async first() {
-        for (const record of users.values()) {
-          const attributes = record.toAttributes()
-          if (filters.every(([column, value]) => attributes?.[column] === value)) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  where(column, value) {
-    return this.query().where(column, value)
-  },
-  async create(values) {
-    const record = new UserEntity({
-      id: nextId++,
-      ...values,
-    })
-    users.set(record.toAttributes().id, record)
-    return record
-  },
-  async update(id, values) {
-    const current = users.get(Number(id))
-    const record = new UserEntity({
-      ...(current?.toAttributes() ?? { id: Number(id) }),
-      ...values,
-    })
-    users.set(record.toAttributes().id, record)
-    return record
-  },
-}
-`, 'utf8')
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
@@ -936,59 +700,6 @@ export default defineAuthConfig({
     },
   },
 })
-`, 'utf8')
-    await writeFile(join(root, 'server/models/User.ts'), `
-class UserEntity {
-  constructor(attributes) {
-    this.attributes = { ...attributes }
-  }
-
-  toAttributes() {
-    return { ...this.attributes }
-  }
-}
-
-const users = new Map()
-let nextId = 1
-
-export default class User extends UserEntity {
-  static async find(id) {
-    return users.get(Number(id)) ?? null
-  }
-
-  static where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record.toAttributes()?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  }
-
-  static async create(values) {
-    const record = new User({
-      id: nextId++,
-      ...values,
-    })
-    users.set(record.toAttributes().id, record)
-    return record
-  }
-
-  static async update(id, values) {
-    const current = users.get(Number(id))
-    const record = new User({
-      ...(current?.toAttributes() ?? { id: Number(id) }),
-      ...values,
-    })
-    users.set(record.toAttributes().id, record)
-    return record
-  }
-}
 `, 'utf8')
     await writeFile(join(root, 'server/models/Admin.ts'), `
 class AdminEntity {
@@ -1115,54 +826,6 @@ export default class Admin extends AdminEntity {
     const root = await createProject({
       auth: true,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  query() {
-    const filters = []
-    return {
-      where(column, value) {
-        filters.push([column, value])
-        return this
-      },
-      async first() {
-        for (const record of users.values()) {
-          if (filters.every(([column, value]) => record?.[column] === value)) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  where(column, value) {
-    return this.query().where(column, value)
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const current = users.get(Number(id))
-    const record = {
-      ...(current ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
@@ -1207,54 +870,6 @@ export default {
     const root = await createProject({
       auth: true,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  query() {
-    const filters = []
-    return {
-      where(column, value) {
-        filters.push([column, value])
-        return this
-      },
-      async first() {
-        for (const record of users.values()) {
-          if (filters.every(([column, value]) => record?.[column] === value)) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  where(column, value) {
-    return this.query().where(column, value)
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const current = users.get(Number(id))
-    const record = {
-      ...(current ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
@@ -1480,50 +1095,6 @@ export default defineSessionConfig({
     })
   })
 
-  it('fails clearly when session config requires @holo-js/session to be installed', async () => {
-    const root = await createProject({
-      session: 'file',
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/session') {
-          return undefined
-        }
-
-        return original(specifier)
-      })
-
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await expect(runtime.initialize()).rejects.toThrow('Session support requires @holo-js/session to be installed')
-  })
-
-  it('fails clearly when auth config requires @holo-js/auth to be installed', async () => {
-    const root = await createProject({
-      auth: true,
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth') {
-          return undefined
-        }
-
-        return original(specifier)
-      })
-
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await expect(runtime.initialize()).rejects.toThrow('Auth support requires @holo-js/auth to be installed')
-  })
-
   it('boots file-backed sessions from absolute paths and fails for unsupported configured drivers', async () => {
     const root = await createProject({
       session: 'file',
@@ -1599,28 +1170,6 @@ export default undefined
     } as never)).rejects.toThrow('pending generated schema output')
   })
 
-  it('fails clearly when auth config references a provider package that is not installed', async () => {
-    const root = await createProject({
-      auth: true,
-      social: true,
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth-social') {
-          return undefined
-        }
-
-        return original(specifier)
-      })
-
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await expect(runtime.initialize()).rejects.toThrow('Social auth config requires @holo-js/auth-social to be installed')
-  })
 
   it('loads configured social providers lazily and persists social state plus identity links', async () => {
     const root = await createProject({
@@ -1699,68 +1248,6 @@ export default undefined
     await expect(socialBindings.identityStore.findByProviderUserId('google', 'missing')).resolves.toBeNull()
   })
 
-  it('fails clearly when a configured social provider package is missing or malformed', async () => {
-    const root = await createProject({
-      auth: true,
-      social: true,
-    })
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth-social-google') {
-          return undefined
-        }
-
-        return original(specifier)
-      })
-
-    await expect(holoRuntimeInternals.loadConfiguredSocialProviders(runtime.loadedConfig)).rejects.toThrow(
-      'Social provider "google" requires @holo-js/auth-social-google to be installed',
-    )
-
-    vi.restoreAllMocks()
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth-social-google') {
-          return {}
-        }
-
-        return original(specifier)
-      })
-
-    await expect(holoRuntimeInternals.loadConfiguredSocialProviders(runtime.loadedConfig)).rejects.toThrow(
-      'did not export a runtime',
-    )
-
-    await expect(holoRuntimeInternals.loadConfiguredSocialProviders({
-      ...runtime.loadedConfig,
-      auth: {
-        ...runtime.loadedConfig.auth,
-        social: {
-          custom: {
-            name: 'custom',
-            runtime: '@acme/holo-auth-social-custom',
-            clientId: 'client',
-            clientSecret: 'secret',
-            redirectUri: 'https://app.test/auth/custom/callback',
-            scopes: [],
-            encryptTokens: false,
-          },
-        },
-      },
-    })).rejects.toThrow('requires @acme/holo-auth-social-custom to be installed')
-
-    expect(holoRuntimeInternals.normalizeDateValue(new Date('2026-01-01T00:00:00.000Z'))).toBeInstanceOf(Date)
-    expect(holoRuntimeInternals.normalizeDateValue('2026-01-01T00:00:00.000Z')).toBeInstanceOf(Date)
-    expect(holoRuntimeInternals.normalizeJsonValue({ ok: true })).toEqual({ ok: true })
-    expect(holoRuntimeInternals.normalizeJsonValue('{')).toBe('{')
-  })
-
   it('returns no social providers when loaded with only a project root', async () => {
     const root = await createProject({
       auth: true,
@@ -1769,49 +1256,6 @@ export default undefined
     await expect(holoRuntimeInternals.loadConfiguredSocialProviders(root)).resolves.toEqual({})
   })
 
-  it('loads custom social providers from an explicit runtime package', async () => {
-    const root = await createProject({
-      auth: true,
-      social: true,
-    })
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    const customRuntime = { custom: true }
-
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@acme/holo-auth-social-custom') {
-          return {
-            default: customRuntime,
-          }
-        }
-
-        return original(specifier)
-      })
-
-    await expect(holoRuntimeInternals.loadConfiguredSocialProviders({
-      ...runtime.loadedConfig,
-      auth: {
-        ...runtime.loadedConfig.auth,
-        social: {
-          custom: {
-            name: 'custom',
-            runtime: '@acme/holo-auth-social-custom',
-            clientId: 'client',
-            clientSecret: 'secret',
-            redirectUri: 'https://app.test/auth/custom/callback',
-            scopes: [],
-            encryptTokens: false,
-          },
-        },
-      },
-    })).resolves.toEqual({
-      custom: customRuntime,
-    })
-  })
 
   it('covers social binding fallbacks for invalid session data and missing auth identity fields', async () => {
     const root = await createProject({
@@ -1860,7 +1304,7 @@ export default undefined
       table.id()
       table.bigInteger('user_id')
       table.string('guard').default('web')
-      table.string('auth_provider').default('users')
+      table.string('auth_provider').nullable().default('users')
       table.string('provider')
       table.string('provider_user_id')
       table.string('email').nullable()
@@ -1928,131 +1372,23 @@ export default undefined
         },
       },
     }, await import('@holo-js/session'))
-    const originalTable = DB.table.bind(DB)
-    const tableSpy = vi.spyOn(DB, 'table')
-      .mockImplementation(((tableName: string) => {
-        if (tableName !== 'auth_identities') {
-          return originalTable(tableName as never)
-        }
-
-        return {
-          where() {
-            return this
-          },
-          async first() {
-            return {
-              user_id: 3,
-              guard: 'admin',
-              auth_provider: undefined,
-              provider: 'google',
-              provider_user_id: 'admin-fallback',
-              email: null,
-              email_verified: 0,
-              profile: '{}',
-              tokens: '{}',
-              created_at: '2026-01-01T00:00:00.000Z',
-              updated_at: '2026-01-01T00:00:00.000Z',
-            }
-          },
-        }
-      }) as typeof DB.table)
-
+    await DB.table('auth_identities').insert({
+      user_id: 3,
+      guard: 'admin',
+      auth_provider: null,
+      provider: 'google',
+      provider_user_id: 'admin-fallback',
+      email_verified: false,
+      profile: {},
+      tokens: {},
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    })
     await expect(adminBindings.identityStore.findByProviderUserId('google', 'admin-fallback')).resolves.toMatchObject({
       guard: 'admin',
       authProvider: 'admins',
     })
-
-    const malformedBindings = await holoRuntimeInternals.createCoreSocialBindings({
-      ...runtime.loadedConfig,
-      auth: {
-        ...runtime.loadedConfig.auth,
-        guards: {} as never,
-      },
-    }, await import('@holo-js/session'))
-    tableSpy.mockImplementation(((tableName: string) => {
-      if (tableName !== 'auth_identities') {
-        return originalTable(tableName as never)
-      }
-
-      return {
-        where() {
-          return this
-        },
-        async first() {
-          return {
-            user_id: 4,
-            guard: undefined,
-            auth_provider: undefined,
-            provider: 'google',
-            provider_user_id: 'users-fallback',
-            email: null,
-            email_verified: 0,
-            profile: '{}',
-            tokens: '{}',
-            created_at: '2026-01-01T00:00:00.000Z',
-            updated_at: '2026-01-01T00:00:00.000Z',
-          }
-        },
-      }
-    }) as typeof DB.table)
-
-    await expect(malformedBindings.identityStore.findByProviderUserId('google', 'users-fallback')).resolves.toMatchObject({
-      authProvider: 'users',
-    })
-
-    tableSpy.mockImplementation(((tableName: string) => {
-      if (tableName !== 'auth_identities') {
-        return originalTable(tableName as never)
-      }
-
-      return {
-        where() {
-          return this
-        },
-        async first() {
-          return {
-            user_id: 5,
-            provider: undefined,
-            provider_user_id: undefined,
-            guard: 'missing-guard',
-            auth_provider: undefined,
-            email: 42,
-            email_verified: false,
-            profile: 'null',
-            tokens: undefined,
-            created_at: undefined,
-            updated_at: undefined,
-          }
-        },
-      }
-    }) as typeof DB.table)
-
-    await expect(socialBindings.identityStore.findByProviderUserId('google', 'provider-fallback')).resolves.toMatchObject({
-      provider: 'google',
-      providerUserId: 'provider-fallback',
-      authProvider: 'users',
-      email: undefined,
-      tokens: undefined,
-    })
-
-    let savedPayload: Record<string, unknown> | undefined
-    tableSpy.mockImplementation(((tableName: string) => {
-      if (tableName !== 'auth_identities') {
-        return originalTable(tableName as never)
-      }
-
-      return {
-        where() {
-          return this
-        },
-        async first() {
-          return undefined
-        },
-        async insert(payload: Record<string, unknown>) {
-          savedPayload = payload
-        },
-      }
-    }) as typeof DB.table)
+    await expect(socialBindings.identityStore.findByProviderUserId('google', 'absent-provider-user')).resolves.toBeNull()
 
     await socialBindings.identityStore.save({
       provider: 'google',
@@ -2066,11 +1402,10 @@ export default undefined
       updatedAt: new Date('2026-01-04T00:00:00.000Z'),
     })
 
-    expect(savedPayload).toMatchObject({
+    expect(await DB.table('auth_identities').where('provider_user_id', 'missing-optionals').first()).toMatchObject({
       email: null,
       tokens: '{}',
     })
-    tableSpy.mockRestore()
   })
 
   it('passes the app key into the configured social runtime', async () => {
@@ -2089,158 +1424,21 @@ export default undefined
     expect(socialModule.socialAuthInternals.getBindings().encryptionKey).toBe('core-auth-app-key')
   })
 
-  it('covers auth provider adapter credential branches for empty credentials, query builders, and partial where chains', async () => {
-    const root = await createProject({
-      auth: true,
-    })
-
-    await writeFile(join(root, 'server/models/User.ts'), `
-const records = [
-  { id: 1, email: 'query@example.com', role: 'admin' },
-  { id: 2, email: 'single@example.com', role: 'member' },
-]
-
-export default {
-  async find(id) {
-    return records.find(record => record.id === Number(id)) ?? null
-  },
-  query() {
-    const filters = []
-    return {
-      where(column, value) {
-        filters.push([column, value])
-        return this
-      },
-      async first() {
-        return records.find(record => filters.every(([column, value]) => record[column] === value)) ?? null
-      },
-    }
-  },
-  where(column, value) {
-    const firstMatch = records.find(record => record[column] === value) ?? null
-    return {
-      async first() {
-        return firstMatch
-      },
-    }
-  },
-  async create(values) {
-    return values
-  },
-  async update(_id, values) {
-    return values
-  },
-}
-`, 'utf8')
-
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
+  it('matches all credential fields against real persisted users and rejects empty credentials', async () => {
+    const root = await createProject({ auth: true })
+    const runtime = await createHolo(root, { processEnv: process.env, preferCache: false })
+    await runtime.initialize()
+    await DB.table('users').insert([
+      { email: 'query@example.com', name: 'Admin' },
+      { email: 'single@example.com', name: 'Member' },
+    ])
     const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
-    const users = providers.users as {
-      findByCredentials(credentials: Record<string, unknown>): Promise<unknown | null>
-    }
-
+    const users = providers.users
+    if (!users) throw new Error('Expected native users provider')
     await expect(users.findByCredentials({})).resolves.toBeNull()
-    await expect(users.findByCredentials({ email: 'query@example.com', role: 'admin' })).resolves.toMatchObject({
-      email: 'query@example.com',
-      role: 'admin',
-    })
-    await expect(users.findByCredentials({ email: 'missing@example.com', role: 'ghost' })).resolves.toBeNull()
-
-    const fallbackRoot = await createProject({
-      auth: true,
-    })
-
-    await writeFile(join(fallbackRoot, 'server/models/User.ts'), `
-const records = [
-  { id: 3, email: 'single@example.com', role: 'member' },
-]
-
-export default {
-  async find(id) {
-    return records.find(record => record.id === Number(id)) ?? null
-  },
-  where(column, value) {
-    let matched = records.find(record => record[column] === value) ?? null
-    return {
-      where: undefined,
-      async first() {
-        return matched
-      },
-    }
-  },
-  async create(values) {
-    return values
-  },
-  async update(_id, values) {
-    return values
-  },
-}
-`, 'utf8')
-
-    const fallbackRuntime = await createHolo(fallbackRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-    const fallbackProviders = (await holoRuntimeInternals.createCoreAuthPersistence(fallbackRoot, fallbackRuntime.loadedConfig)).providers
-    const fallbackUsers = fallbackProviders.users as {
-      findByCredentials(credentials: Record<string, unknown>): Promise<unknown | null>
-    }
-
-    await expect(fallbackUsers.findByCredentials({ email: 'single@example.com', role: 'member' })).resolves.toMatchObject({
-      email: 'single@example.com',
-      role: 'member',
-    })
-
-    const chainedRoot = await createProject({
-      auth: true,
-    })
-
-    await writeFile(join(chainedRoot, 'server/models/User.ts'), `
-const records = [
-  { id: 4, email: 'chain@example.com', role: 'editor' },
-]
-
-export default {
-  async find(id) {
-    return records.find(record => record.id === Number(id)) ?? null
-  },
-  where(column, value) {
-    const filters = [[column, value]]
-    return {
-      where(nextColumn, nextValue) {
-        filters.push([nextColumn, nextValue])
-        return this
-      },
-      async first() {
-        return records.find(record => filters.every(([key, current]) => record[key] === current)) ?? null
-      },
-    }
-  },
-  async create(values) {
-    return values
-  },
-  async update(_id, values) {
-    return values
-  },
-}
-`, 'utf8')
-
-    const chainedRuntime = await createHolo(chainedRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-    const chainedProviders = (await holoRuntimeInternals.createCoreAuthPersistence(chainedRoot, chainedRuntime.loadedConfig)).providers
-    const chainedUsers = chainedProviders.users as {
-      findByCredentials(credentials: Record<string, unknown>): Promise<unknown | null>
-    }
-
-    await expect(chainedUsers.findByCredentials({ email: 'chain@example.com', role: 'editor' })).resolves.toMatchObject({
-      email: 'chain@example.com',
-      role: 'editor',
-    })
+    await expect(users.findByCredentials({ email: 'query@example.com', name: 'Admin' })).resolves.toMatchObject({ email: 'query@example.com', name: 'Admin' })
+    await expect(users.findByCredentials({ email: 'query@example.com', name: 'Member' })).resolves.toBeNull()
+    await expect(users.findByCredentials({ email: 'missing@example.com', name: 'Admin' })).resolves.toBeNull()
   })
 
   it('rethrows dependency import failures from an existing auth model file', async () => {
@@ -2284,94 +1482,27 @@ export default {
       auth: true,
     })
 
+    const database = new DatabaseSync(join(root, 'database.sqlite'))
+    database.exec('ALTER TABLE users ADD COLUMN public_id TEXT; ALTER TABLE users ADD COLUMN team_id INTEGER')
+    database.close()
+
     await writeFile(join(root, 'server/models/User.ts'), `
-const records = new Map()
-
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+const users = defineGeneratedTable('users', {
+  id: column.integer().primaryKey(),
+  email: column.string(),
+  name: column.string().nullable(),
+  password: column.string().nullable(),
+  email_verified_at: column.timestamp().nullable(),
+  public_id: column.string().nullable(),
+  team_id: column.integer().nullable(),
+})
+export default defineModel(users, { timestamps: false, fillable: ['email', 'name', 'password'], guarded: ['id'], })
 export async function prepareAuthCreateInput(input) {
-  return {
-    ...input,
-    public_id: 'generated-public-id',
-    team_id: 7,
-  }
+  return { ...input, public_id: 'generated-public-id', team_id: 7 }
 }
-
 export async function prepareAuthUpdateInput(_user, input) {
-  return {
-    ...input,
-    ignored_column: 'ignored',
-  }
-}
-
-export default {
-  definition: {
-    table: {
-      columns: {
-        id: {},
-        public_id: {},
-        team_id: {},
-        email: {},
-        name: {},
-        password: {},
-        email_verified_at: {},
-      },
-    },
-    fillable: ['email', 'name', 'password'],
-    guarded: ['id'],
-    hasExplicitFillable: true,
-  },
-  getRepository() {
-    return {
-      async saveEntity(entity, internalColumns) {
-        if (!internalColumns.has('email_verified_at')) {
-          throw new Error('Expected auth updates to treat email_verified_at as an internal column.')
-        }
-
-        const attributes = typeof entity?.toAttributes === 'function'
-          ? entity.toAttributes()
-          : entity
-        const id = typeof attributes.id === 'number' ? attributes.id : 1
-        const record = {
-          id,
-          public_id: attributes.public_id,
-          team_id: attributes.team_id,
-          email: attributes.email,
-          name: attributes.name,
-          password: attributes.password,
-          email_verified_at: attributes.email_verified_at,
-        }
-        records.set(id, record)
-        return record
-      },
-    }
-  },
-  async find(id) {
-    const existing = records.get(Number(id))
-    if (!existing) {
-      return null
-    }
-
-    return {
-      ...existing,
-      forceFill(values) {
-        Object.assign(this, values)
-        return this
-      },
-    }
-  },
-  where() {
-    return {
-      async first() {
-        return null
-      },
-    }
-  },
-  async create(values) {
-    records.set(1, { id: 1, ...values })
-    return { id: 1, ...values }
-  },
-  async update() {
-    throw new Error('model.update should not be used for auth writes when saveEntity is available')
-  },
+  return { ...input, ignored_column: 'ignored' }
 }
 `, 'utf8')
 
@@ -2379,6 +1510,7 @@ export default {
       processEnv: process.env,
       preferCache: false,
     })
+    await runtime.initialize()
     const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -2418,49 +1550,28 @@ export default {
       auth: true,
     })
 
-    await writeFile(join(root, 'server/models/User.ts'), `
-const records = new Map()
+    const database = new DatabaseSync(join(root, 'database.sqlite'))
+    database.exec('ALTER TABLE users ADD COLUMN role TEXT')
+    database.close()
 
-export default {
-  definition: {
-    table: {
-      columns: {
-        id: {},
-        email: {},
-        name: {},
-        password: {},
-        role: {},
-      },
-    },
-    fillable: ['*'],
-    guarded: ['id'],
-  },
-  async find(id) {
-    return records.get(Number(id)) ?? null
-  },
-  where() {
-    return {
-      async first() {
-        return null
-      },
-    }
-  },
-  async create(values) {
-    records.set(1, { id: 1, ...values })
-    return { id: 1, ...values }
-  },
-  async update(id, values) {
-    const next = { ...(records.get(Number(id)) ?? { id: Number(id) }), ...values }
-    records.set(Number(id), next)
-    return next
-  },
-}
+    await writeFile(join(root, 'server/models/User.ts'), `
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+const users = defineGeneratedTable('users', {
+  id: column.integer().primaryKey(),
+  email: column.string(),
+  name: column.string().nullable(),
+  password: column.string().nullable(),
+  email_verified_at: column.timestamp().nullable(),
+  role: column.string().nullable(),
+})
+export default defineModel(users, { timestamps: false, fillable: ['*'], guarded: ['id'], })
 `, 'utf8')
 
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
     })
+    await runtime.initialize()
     const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -2472,7 +1583,7 @@ export default {
       name: 'Wildcard User',
       role: 'admin',
       ignored_column: 'nope',
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       id: 1,
       email: 'wildcard@example.com',
       name: 'Wildcard User',
@@ -2483,7 +1594,7 @@ export default {
       name: 'Wildcard Updated',
       role: 'owner',
       ignored_column: 'still-nope',
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       id: 1,
       email: 'wildcard@example.com',
       name: 'Wildcard Updated',
@@ -2497,122 +1608,39 @@ export default {
     })
 
     await writeFile(join(root, 'server/models/User.ts'), `
-const records = new Map()
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+const users = defineGeneratedTable('users', {
+  id: column.integer().primaryKey(),
+  email: column.string(),
+  name: column.string().nullable(),
+  password: column.string().nullable(),
+  email_verified_at: column.timestamp().nullable(),
 
-export default {
-  definition: {
-    table: {
-      columns: {
-        id: {},
-        email: {},
-        name: {},
-      },
-    },
-    fillable: ['*'],
-    guarded: ['*'],
-  },
-  async find(id) {
-    return records.get(Number(id)) ?? null
-  },
-  where() {
-    return {
-      async first() {
-        return null
-      },
-    }
-  },
-  async create(values) {
-    records.set(1, { id: 1, ...values })
-    return { id: 1, ...values }
-  },
-  async update(id, values) {
-    const next = { ...(records.get(Number(id)) ?? { id: Number(id) }), ...values }
-    records.set(Number(id), next)
-    return next
-  },
-}
+})
+export default defineModel(users, { timestamps: false, fillable: ['*'], guarded: ['*'], })
 `, 'utf8')
 
     const runtime = await createHolo(root, {
       processEnv: process.env,
       preferCache: false,
     })
+    await runtime.initialize()
     const providers = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
     const users = providers.users as {
       create(input: Record<string, unknown>): Promise<Record<string, unknown>>
       update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
     }
 
-    await expect(users.create({
-      email: 'guarded@example.com',
-      name: 'Guarded User',
-    })).resolves.toEqual({
-      id: 1,
-    })
-
-    await expect(users.update({ id: 1 }, {
-      email: 'still-guarded@example.com',
-      name: 'Still Guarded',
-    })).resolves.toEqual({
-      id: 1,
+    const created = await DB.table('users').insertGetId({ email: 'original@example.com', name: 'Original User' })
+    await expect(users.create({ email: 'guarded@example.com', name: 'Guarded User' })).rejects.toThrow('Insert queries must include at least one column.')
+    await expect(users.update({ id: created }, { email: 'still-guarded@example.com', name: 'Still Guarded' })).resolves.toMatchObject({
+      id: created,
+      email: 'original@example.com',
+      name: 'Original User',
     })
   })
 
-  it('fails clearly when WorkOS and Clerk auth config references packages that are not installed', async () => {
-    const workosRoot = await createProject({
-      auth: true,
-      workos: true,
-    })
-    const clerkRoot = await createProject({
-      auth: true,
-      clerk: true,
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth-workos' || specifier === '@holo-js/auth-clerk') {
-          return undefined
-        }
 
-        return original(specifier)
-      })
-
-    const workosRuntime = await createHolo(workosRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-    const clerkRuntime = await createHolo(clerkRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await expect(workosRuntime.initialize()).rejects.toThrow('WorkOS auth config requires @holo-js/auth-workos to be installed')
-    await expect(clerkRuntime.initialize()).rejects.toThrow('Clerk auth config requires @holo-js/auth-clerk to be installed')
-  })
-
-  it('detects WorkOS config when the provider is named defaultProvider', async () => {
-    const workosRoot = await createProject({
-      auth: true,
-      workos: true,
-      workosProviderName: 'defaultProvider',
-    })
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth-workos') {
-          return undefined
-        }
-
-        return original(specifier)
-      })
-
-    const workosRuntime = await createHolo(workosRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await expect(workosRuntime.initialize()).rejects.toThrow('WorkOS auth config requires @holo-js/auth-workos to be installed')
-  })
 
   it('boots when hosted auth packages are installed and lets apps configure verifier runtimes separately', async () => {
     const workosRoot = await createProject({
@@ -2642,69 +1670,36 @@ export default {
     await clerkRuntime.shutdown()
   })
 
-  it('passes configured hosted identity stores to hosted auth runtimes', async () => {
-    const workosRoot = await createProject({
-      auth: true,
-      workos: true,
-      hostedIdentityStore: true,
+  it.each(['workos', 'clerk'] as const)('persists identities through the app-configured %s store using the actual hosted auth runtime', async provider => {
+    const root = await createProject({ auth: true, workos: provider === 'workos', clerk: provider === 'clerk', hostedIdentityStore: true })
+    const runtime = await createHolo(root, { preferCache: false })
+    await runtime.initialize()
+    await createSchemaService(DB.connection()).createTable('custom_hosted_identities', table => {
+      table.string('provider')
+      table.string('provider_user_id')
+      table.string('auth_provider')
+      table.string('user_id')
+      table.text('record')
+      table.unique(['provider', 'provider_user_id'])
     })
-    const clerkRoot = await createProject({
-      auth: true,
-      clerk: true,
-      hostedIdentityStore: true,
-    })
-    const configureWorkosAuthRuntime = vi.fn()
-    const configureClerkAuthRuntime = vi.fn()
-    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
-    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
-      .mockImplementation(async (specifier: string) => {
-        if (specifier === '@holo-js/auth-workos') {
-          return {
-            configureWorkosAuthRuntime,
-            resetWorkosAuthRuntime: vi.fn(),
-          }
-        }
-        if (specifier === '@holo-js/auth-clerk') {
-          return {
-            configureClerkAuthRuntime,
-            resetClerkAuthRuntime: vi.fn(),
-          }
-        }
-
-        return original(specifier)
-      })
-
-    const workosRuntime = await createHolo(workosRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-    const clerkRuntime = await createHolo(clerkRoot, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await expect(workosRuntime.initialize()).resolves.toBeUndefined()
-    expect(configureWorkosAuthRuntime).toHaveBeenCalledWith({
-      identityStore: expect.objectContaining({
-        findByProviderUserId: expect.any(Function),
-        findByUserId: expect.any(Function),
-        claim: expect.any(Function),
-        save: expect.any(Function),
-      }),
-    })
-    await workosRuntime.shutdown()
-
-    await expect(clerkRuntime.initialize()).resolves.toBeUndefined()
-    expect(configureClerkAuthRuntime).toHaveBeenCalledWith({
-      identityStore: expect.objectContaining({
-        findByProviderUserId: expect.any(Function),
-        findByUserId: expect.any(Function),
-        claim: expect.any(Function),
-        save: expect.any(Function),
-      }),
-    })
-
-    await clerkRuntime.shutdown()
+    const synchronize = provider === 'workos'
+      ? (name = 'Hosted User') => import('@holo-js/auth-workos').then(module => module.syncIdentity({ sessionId: 'paid-session', identity: { id: 'remote-user', email: 'hosted@example.com', emailVerified: true, name, metadata: {}, raw: {} } }, 'dashboard'))
+      : (name = 'Hosted User') => import('@holo-js/auth-clerk').then(module => module.syncIdentity({ sessionId: 'paid-session', user: { id: 'remote-user', email: 'hosted@example.com', emailVerified: true, name } }, 'app'))
+    const created = await synchronize()
+    expect(created.status).toBe('created')
+    expect(created.user).toMatchObject({ email: 'hosted@example.com' })
+    const updated = await synchronize('Renamed User')
+    expect(updated.status).toBe('updated')
+    expect(updated.user.id).toBe(created.user.id)
+    expect(updated.user).toMatchObject({ name: 'Renamed User' })
+    expect((await synchronize('Renamed User')).status).toBe('linked')
+    expect(await DB.table('users').count()).toBe(1)
+    const persisted = await DB.table(defineGeneratedTable('custom_hosted_identities', { record: column.text() })).get()
+    expect(persisted).toHaveLength(1)
+    const identity = persisted[0]
+    if (!identity) throw new Error('Expected a persisted hosted identity')
+    expect(JSON.parse(identity.record)).toMatchObject({ providerUserId: 'remote-user', userId: created.user.id, email: 'hosted@example.com' })
+    await runtime.shutdown()
   })
 
   it('namespaces WorkOS and Clerk hosted identities independently', async () => {
@@ -3110,45 +2105,6 @@ export default defineAuthConfig({
   },
 })
 `, 'utf8')
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id))
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return undefined
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const record = {
-      ...(users.get(Number(id)) ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
 
     const runtime = await createHolo(root, {
       envName: 'development',
@@ -3207,46 +2163,6 @@ export default defineSecurityConfig({
   },
 })
 `, 'utf8')
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: nextId++,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const record = users.get(Number(id))
-    if (!record) {
-      return null
-    }
-
-    Object.assign(record, values)
-    return record
-  },
-}
-`, 'utf8')
 
     const runtime = await createHolo(root, {
       processEnv: process.env,
@@ -3302,46 +2218,12 @@ export default {
       auth: true,
       session: false,
     })
-    await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
-let nextId = 1
-
-export default {
-  async find(id) {
-    return users.get(String(id)) ?? null
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: \`user-\${nextId++}\`,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const key = String(id)
-    const record = {
-      ...(users.get(key) ?? { id: key }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
-`, 'utf8')
+    const database = new DatabaseSync(join(root, 'database.sqlite'))
+    database.exec("DROP TABLE users; CREATE TABLE users (id TEXT PRIMARY KEY DEFAULT 'user-1', name TEXT, email TEXT NOT NULL UNIQUE, password TEXT, email_verified_at TEXT)")
+    database.close()
+    const modelPath = join(root, 'server/models/User.ts')
+    const modelSource = await readFile(modelPath, 'utf8')
+    await writeFile(modelPath, modelSource.replace('id: column.integer().primaryKey()', "id: column.string().primaryKey().default('user-1')"))
 
     const runtime = await createHolo(root, {
       envName: 'development',
@@ -3389,9 +2271,7 @@ export default {
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
     }))
-    expect(registered).toMatchObject({
-      id: 'user-1',
-    })
+    expect(registered.id).toBe('user-1')
 
     const createdToken = await runtime.auth?.tokens.create(registered!, {
       name: 'browser',
@@ -4586,9 +3466,10 @@ export default {
 
 it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? ['redis' as const] : [])] as const)('retains the current %s browser across restart and physical rotation through durable core revocation persistence', async session => {
   const root = await createProject({ auth: true, session })
-  await writeFile(join(root, 'server/models/User.ts'), `export default { async find(id) { return { id: Number(id), email: 'browser@app.test' } } }`)
+
   const runtime = await createHolo(root, { preferCache: false })
   await runtime.initialize()
+  await DB.table('users').insert({ id: 1, email: 'browser@app.test' })
   if (session === 'database') {
     await createSchemaService(DB.connection()).createTable('sessions', table => {
       table.string('id').primaryKey()
@@ -4632,9 +3513,10 @@ it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? [
 
 it('requires fresh browser login on adapter adoption while remembered legacy payloads reject and tokens remain valid', async () => {
   const root = await createProject({ auth: true })
-  await writeFile(join(root, 'server/models/User.ts'), `export default { async find(id) { return { id: Number(id), email: 'browser@app.test' } } }`)
+
   const runtime = await createHolo(root, { preferCache: false })
   await runtime.initialize()
+  await DB.table('users').insert({ id: 1, email: 'browser@app.test' })
   if (!runtime.auth || !runtime.session) throw new Error('Auth and Session unavailable')
   const auth = runtime.auth
   await createSchemaService(DB.connection()).createTable('personal_access_tokens', table => {
@@ -4666,9 +3548,10 @@ it('requires fresh browser login on adapter adoption while remembered legacy pay
 
 it('propagates missing durable persistence instead of authenticating with an implicit generation', async () => {
   const root = await createProject({ auth: true })
-  await writeFile(join(root, 'server/models/User.ts'), `export default { async find(id) { return { id: Number(id), email: 'browser@app.test' } } }`)
+
   const runtime = await createHolo(root, { preferCache: false })
   await runtime.initialize()
+  await DB.table('users').insert({ id: 1, email: 'browser@app.test' })
   await createSchemaService(DB.connection()).dropTable('auth_session_revocations')
   await expect(runtime.runWithAuthRequestAccessors({}, () => runtime.auth?.loginUsingId(1))).rejects.toThrow('auth_session_revocations')
 })

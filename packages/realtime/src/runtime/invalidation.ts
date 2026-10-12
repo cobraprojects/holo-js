@@ -1,4 +1,4 @@
-import { onDatabaseDependencyInvalidated } from '@holo-js/db'
+import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
   EMPTY_TABLE_DEPENDENCIES,
   createMutationIndex,
@@ -36,7 +36,26 @@ import type {
 
 export function ensureDatabaseSubscription(): void {
   const state = getRuntimeState()
-  state.unsubscribeFromDatabase ??= onDatabaseDependencyInvalidated(handleBatchedDatabaseInvalidation)
+  if (state.unsubscribeFromDatabase) return
+  state.unsubscribeFromDatabase = onDatabaseDependencyInvalidated(handleBatchedDatabaseInvalidation)
+  queryCacheInternals.setMutationPreviousRowsRequirement(handleBatchedDatabaseInvalidation, requiresMutationPreviousRows)
+}
+
+function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
+  const state = getRuntimeState()
+  const tableKey = queryCacheInternals.createTableCacheDependency(connectionName, tableName)
+  const entries = new Set(state.tableBroadSubscribers.get(tableKey))
+  for (const keys of state.tablePredicateColumnSubscribers.get(tableKey)?.values() ?? []) {
+    for (const key of keys) entries.add(key)
+  }
+  for (const key of entries) {
+    for (const query of state.queryEntries.get(key)?.queries ?? []) {
+      if (query.connectionName !== connectionName || query.tableName !== tableName || (!query.aggregate && !query.groupedAggregate)) continue
+      const aggregateColumn = query.aggregate?.column ?? query.groupedAggregate?.aggregateColumn
+      if (columns.some(column => column === aggregateColumn || column === query.groupedAggregate?.groupColumn || query.predicates.some(predicate => predicate.column === column))) return true
+    }
+  }
+  return false
 }
 
 function readExactPredicatesForPatching(event: ParsedInvalidationEvent): PredicateDependencyIndex | undefined {

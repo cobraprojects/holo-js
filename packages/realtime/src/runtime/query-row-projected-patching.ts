@@ -692,6 +692,12 @@ export function applyProjectedMutationToRows(
     return UNPATCHED_RESULT
   }
 
+  if (nextRows.length < rows.length && !canPatchShrinkingRows(rows, query)) {
+    return canBackfillShrinkingRows(rows, sortedRows, query)
+      ? { patched: true, backfill: true, rows: sortedRows }
+      : UNPATCHED_RESULT
+  }
+
   const windowedRows = applySortedRowsWindow(sortedRows, query)
   return windowedRows
     ? { patched: true, rows: windowedRows }

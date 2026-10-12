@@ -1,6 +1,6 @@
-import { watch } from 'node:fs'
+import { realpathSync, watch } from 'node:fs'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js/kernel'
 import type { LoadedProjectConfig } from './types'
 import type { WatchFactory, WatchHandle } from './cli-types'
@@ -254,13 +254,25 @@ function normalizeContainedWatchedFilePath(
   projectRoot: string,
   watchedRoot: string,
   fileName: string,
+  canonicalProjectRoot: string,
 ): string | undefined {
   const normalized = normalizeWatchedFilePath(projectRoot, watchedRoot, fileName)
   if (isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
     return undefined
   }
 
-  return normalized
+  let target = resolve(projectRoot, normalized)
+  while (true) {
+    try {
+      const canonicalRelative = relative(canonicalProjectRoot, realpathSync(target))
+      return isAbsolute(canonicalRelative) || canonicalRelative === '..' || canonicalRelative.startsWith(`..${sep}`)
+        ? undefined
+        : normalized
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT' || target === projectRoot) return undefined
+      target = dirname(target)
+    }
+  }
 }
 
 type WatchedPathSnapshot = {
@@ -352,6 +364,7 @@ export async function startDiscoveryWatch({
   observe,
   writeWarning,
 }: DiscoveryWatchOptions): Promise<DiscoveryWatch> {
+  const canonicalProjectRoot = await realpath(projectRoot)
   let project = initialProject
   let pluginWatches: readonly PluginPrepareWatch[] = []
   let snapshots = new Map<string, WatchedPathSnapshot>()
@@ -379,7 +392,7 @@ export async function startDiscoveryWatch({
     const acquiredGeneration = generation
     const handle = createWatcher(root, { recursive }, (eventType, fileName) => {
       if (closed || signal.aborted || acquiredGeneration !== generation || typeof fileName !== 'string') return
-      const path = normalizeContainedWatchedFilePath(projectRoot, root, fileName)
+      const path = normalizeContainedWatchedFilePath(projectRoot, root, fileName, canonicalProjectRoot)
       if (!path || !isDiscoveryRelevantPath(path, project, pluginWatches)) return
       if (eventType !== 'rename') {
         observe({ path, kind: 'changed' })

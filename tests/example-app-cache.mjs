@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { runMaintenance } from './example-app-maintenance.mjs'
 import { setTimeout } from 'node:timers/promises'
 
 export async function assertExampleAppCacheBehavior(cache, Category) {
@@ -38,4 +39,16 @@ export async function assertExampleAppCacheBehavior(cache, Category) {
     await cache.forget(flexibleKey)
     await cache.flush()
   }
+  await cache.put('cli:forgotten', { title: 'Stored through the app' }, 60)
+  runMaintenance('cache:forget', 'cli:forgotten')
+  assert.throws(() => runMaintenance('cache:forget'), /Missing required argument.*key/)
+  assert.equal(await cache.get('cli:forgotten'), null)
+  runMaintenance('cache:forget', 'cli:forgotten')
+  await cache.put('cli:cleared', { title: 'Database cache' }, 60)
+  runMaintenance('cache:clear')
+  assert.equal(await cache.get('cli:cleared'), null)
+  const file = cache.driver('file')
+  await file.put('cli:cleared', { title: 'File cache' }, 60)
+  runMaintenance('cache:clear', '--driver', 'file')
+  assert.equal(await file.get('cli:cleared'), null)
 }

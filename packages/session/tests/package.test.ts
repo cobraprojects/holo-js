@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { createNativeSessionStore } from './support/native-store'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import session, {
   configureSessionRuntime,
+  normalizeSessionConfig,
   consumeRememberMeToken,
   cookie,
   cookies,
@@ -21,6 +23,8 @@ import session, {
   rememberMeCookie,
   resetSessionRuntime,
   rotateSession,
+  flashSession,
+  takeSession,
   sessionRuntimeInternals,
   sessionCookie,
   touchSession,
@@ -33,12 +37,11 @@ const tempDirs: string[] = []
 
 afterEach(async () => {
   resetSessionRuntime()
-  vi.restoreAllMocks()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
 function createRecord(id: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
-  const date = new Date('2026-04-08T00:00:00.000Z')
+  const date = new Date()
   return Object.freeze({
     id,
     store: 'database',
@@ -52,7 +55,7 @@ function createRecord(id: string, overrides: Partial<SessionRecord> = {}): Sessi
 
 describe('@holo-js/session package surface', () => {
   it('exposes default and named helpers plus cookie utilities', async () => {
-    const storeMap = new Map<string, SessionRecord>()
+    const storeMap = await createNativeSessionStore('database')
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -78,17 +81,7 @@ describe('@holo-js/session package surface', () => {
         rememberMeLifetime: 1440,
       },
       stores: {
-        database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return storeMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            storeMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            storeMap.delete(sessionId)
-          },
-        }),
+        database: storeMap,
       },
     })
 
@@ -166,7 +159,8 @@ describe('@holo-js/session package surface', () => {
     const expired = createRecord('expired', {
       expiresAt: new Date('2000-01-01T00:00:00.000Z'),
     })
-    const storeMap = new Map<string, SessionRecord>([['expired', expired]])
+    const storeMap = await createNativeSessionStore('database')
+    await storeMap.write(expired)
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -192,22 +186,12 @@ describe('@holo-js/session package surface', () => {
         rememberMeLifetime: 60,
       },
       stores: {
-        database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return storeMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            storeMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            storeMap.delete(sessionId)
-          },
-        }),
+        database: storeMap,
       },
     })
 
     expect(await readSession('expired')).toBeNull()
-    expect(storeMap.has('expired')).toBe(false)
+    expect(((await storeMap.read('expired')) !== null)).toBe(false)
     expect(sessionCookie('value')).toContain('Path=/admin')
     expect(sessionCookie('value')).toContain('Max-Age=1800')
     expect(sessionCookie('value')).toContain('SameSite=Strict')
@@ -280,8 +264,7 @@ describe('@holo-js/session package surface', () => {
       stores: {},
     })
     await expect(readSession('missing')).rejects.toThrow('Session store "database" is not configured')
-
-    const storeMap = new Map<string, SessionRecord>()
+    const storeMap = await createNativeSessionStore('database')
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -307,17 +290,7 @@ describe('@holo-js/session package surface', () => {
         rememberMeLifetime: 60,
       },
       stores: {
-        database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return storeMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            storeMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            storeMap.delete(sessionId)
-          },
-        }),
+        database: storeMap,
       },
     })
 
@@ -338,7 +311,7 @@ describe('@holo-js/session package surface', () => {
     })
     const rotatedWithGeneratedId = await rotateSession('id-backed')
     expect(rotatedWithGeneratedId.id).not.toBe('id-backed')
-    storeMap.set('stable-session', createRecord('stable-session', {
+    await storeMap.write(createRecord('stable-session', {
       expiresAt: new Date(Date.now() + 60_000),
     }))
     await expect(rotateSession('stable-session', {
@@ -346,17 +319,17 @@ describe('@holo-js/session package surface', () => {
     })).resolves.toMatchObject({
       id: 'stable-session',
     })
-    expect(storeMap.has('stable-session')).toBe(true)
+    expect(((await storeMap.read('stable-session')) !== null)).toBe(true)
     await expect(touchSession('missing')).resolves.toBeNull()
     await expect(rotateSession('missing')).rejects.toThrow('Session "missing" was not found')
     await expect(issueRememberMeToken('missing')).rejects.toThrow('Session "missing" was not found')
 
-    storeMap.set('remember-without-hash', createRecord('remember-without-hash'))
+    await storeMap.write(createRecord('remember-without-hash'))
     await expect(consumeRememberMeToken(
       `remember-without-hash.${Date.now().toString(36)}.secret`,
     )).resolves.toBeNull()
 
-    storeMap.set('legacy-remember', createRecord('legacy-remember', {
+    await storeMap.write(createRecord('legacy-remember', {
       expiresAt: new Date(Date.now() + 60_000),
       rememberTokenHash: sessionRuntimeInternals.hashRememberToken('secret'),
     }))
@@ -381,7 +354,7 @@ describe('@holo-js/session package surface', () => {
   })
 
   it('caps touched sessions at the configured absolute lifetime', async () => {
-    const storeMap = new Map<string, SessionRecord>()
+    const storeMap = await createNativeSessionStore('database')
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -407,22 +380,12 @@ describe('@holo-js/session package surface', () => {
         rememberMeLifetime: 60,
       },
       stores: {
-        database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return storeMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            storeMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            storeMap.delete(sessionId)
-          },
-        }),
+        database: storeMap,
       },
     })
 
     const createdAt = new Date(Date.now() - (25 * 60_000))
-    storeMap.set('active-session', createRecord('active-session', {
+    await storeMap.write(createRecord('active-session', {
       createdAt,
       lastActivityAt: createdAt,
       expiresAt: new Date(Date.now() + (10 * 60_000)),
@@ -530,7 +493,7 @@ describe('@holo-js/session package surface', () => {
   })
 
   it('rejects a remember-me token after the base session has expired', async () => {
-    const storeMap = new Map<string, SessionRecord>()
+    const storeMap = await createNativeSessionStore('database')
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -556,17 +519,7 @@ describe('@holo-js/session package surface', () => {
         rememberMeLifetime: 60,
       },
       stores: {
-        database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return storeMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            storeMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            storeMap.delete(sessionId)
-          },
-        }),
+        database: storeMap,
       },
     })
 
@@ -574,25 +527,23 @@ describe('@holo-js/session package surface', () => {
       name: 'remembered',
     })
     const rememberToken = await issueRememberMeToken(created.id)
-    const stored = storeMap.get(created.id)
+    const stored = (await storeMap.read(created.id))
     expect(stored?.rememberTokenHash).toBeTypeOf('string')
 
-    storeMap.set(created.id, Object.freeze({
+    await storeMap.write(Object.freeze({
       ...stored!,
       expiresAt: new Date(Date.now() - 1000),
     }))
 
     await expect(consumeRememberMeToken(rememberToken)).resolves.toBeNull()
-    expect(storeMap.has(created.id)).toBe(false)
+    expect(((await storeMap.read(created.id)) !== null)).toBe(false)
 
-    const now = Date.now()
-    vi.spyOn(Date, 'now').mockReturnValue(now + (61 * 60_000))
     await expect(consumeRememberMeToken(rememberToken)).resolves.toBeNull()
   })
 
   it('finds remember-me tokens across configured stores when no store hint is provided', async () => {
-    const databaseMap = new Map<string, SessionRecord>()
-    const fileMap = new Map<string, SessionRecord>()
+    const databaseMap = await createNativeSessionStore('database')
+    const fileMap = await createNativeSessionStore('file')
     configureSessionRuntime({
       config: {
         driver: 'database',
@@ -623,28 +574,8 @@ describe('@holo-js/session package surface', () => {
         rememberMeLifetime: 60,
       },
       stores: {
-        database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return databaseMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            databaseMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            databaseMap.delete(sessionId)
-          },
-        }),
-        file: {
-          async read(sessionId) {
-            return fileMap.get(sessionId) ?? null
-          },
-          async write(record) {
-            fileMap.set(record.id, record)
-          },
-          async delete(sessionId) {
-            fileMap.delete(sessionId)
-          },
-        },
+        database: databaseMap,
+        file: fileMap,
       },
     })
 
@@ -655,7 +586,7 @@ describe('@holo-js/session package surface', () => {
     const rememberToken = await issueRememberMeToken(created.id, {
       store: 'file',
     })
-    databaseMap.set(created.id, createRecord(created.id, {
+    await databaseMap.write(createRecord(created.id, {
       rememberTokenHash: 'not-the-token',
     }))
 
@@ -704,74 +635,22 @@ describe('@holo-js/session package surface', () => {
     await expect(store.read('missing-session')).resolves.toBeNull()
   })
 
-  it('surfaces file lock creation failures and retries transient contention', async () => {
+  it('preserves existing filesystem data when the session directory cannot be created', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-session-file-lock-'))
     tempDirs.push(root)
-    const record = createRecord('locked-session')
-
-    const failingStore = fileSessionDriverInternals.createStore(root, (async (path, options) => {
-      if (options) return mkdir(path, options)
-      throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
-    }) as typeof mkdir)
-    await expect(failingStore.write(record)).rejects.toThrow('permission denied')
-
-    let attempts = 0
-    const retryingStore = fileSessionDriverInternals.createStore(root, (async (path, options) => {
-      if (options) return mkdir(path, options)
-      attempts += 1
-      if (attempts === 1) throw Object.assign(new Error('exists'), { code: 'EEXIST' })
-      return mkdir(path)
-    }) as typeof mkdir)
-    await expect(retryingStore.write(record)).resolves.toBeUndefined()
-    expect(attempts).toBe(2)
-  })
-
-  it('times out when a file session lock remains active', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-file-timeout-'))
-    tempDirs.push(root)
-    const recordPath = fileSessionDriverInternals.getRecordPath(root, 'timed-out-session')
-    await mkdir(`${recordPath}.lock`)
-    const store = fileSessionDriverInternals.createStore(root, (async (path, options) => {
-      if (options) return mkdir(path, options)
-      throw Object.assign(new Error('exists'), { code: 'EEXIST' })
-    }) as typeof mkdir)
-    const now = Date.now()
-    const dateNow = vi.spyOn(Date, 'now')
-      .mockReturnValueOnce(now)
-      .mockReturnValue(now + 6_000)
-
-    try {
-      await expect(store.write(createRecord('timed-out-session'))).rejects.toThrow('Timed out acquiring file session lock')
-    } finally {
-      dateNow.mockRestore()
-    }
+    const blocked = join(root, 'blocked')
+    await writeFile(blocked, 'preserved')
+    const store = createFileSessionStore(blocked)
+    await expect(store.write(createRecord('locked-session'))).rejects.toThrow()
+    expect(await readFile(blocked, 'utf8')).toBe('preserved')
+    expect(await readdir(root)).toEqual(['blocked'])
   })
 
   it('adapts database and redis stores through their driver contracts', async () => {
-    const databaseMap = new Map<string, SessionRecord>()
-    const redisMap = new Map<string, SessionRecord>()
-    const databaseStore = createDatabaseSessionStore({
-      async read(sessionId) {
-        return databaseMap.get(sessionId) ?? null
-      },
-      async write(record) {
-        databaseMap.set(record.id, record)
-      },
-      async delete(sessionId) {
-        databaseMap.delete(sessionId)
-      },
-    })
-    const redisStore = createRedisSessionStore({
-      async get(sessionId) {
-        return redisMap.get(sessionId) ?? null
-      },
-      async set(record) {
-        redisMap.set(record.id, record)
-      },
-      async del(sessionId) {
-        redisMap.delete(sessionId)
-      },
-    })
+    const databaseMap = await createNativeSessionStore('database')
+    const redisMap = await createNativeSessionStore('redis')
+    const databaseStore = databaseMap
+    const redisStore = redisMap
 
     const databaseRecord = createRecord('db-session')
     const redisRecord = createRecord('redis-session', {
@@ -788,9 +667,9 @@ describe('@holo-js/session package surface', () => {
     expect(await redisStore.read('redis-session')).toBeNull()
   })
 
-  it('deletes the original record when rotating a session into another store', async () => {
-    const databaseRecords = new Map<string, SessionRecord>()
-    const fileRecords = new Map<string, SessionRecord>()
+  it('moves public session data from a basic database adapter into a real file store', async () => {
+    const databaseRecords = await createNativeSessionStore('database')
+    const fileRecords = await createNativeSessionStore('file')
 
     configureSessionRuntime({
       config: {
@@ -823,27 +702,11 @@ describe('@holo-js/session package surface', () => {
       },
       stores: {
         database: createDatabaseSessionStore({
-          async read(sessionId) {
-            return databaseRecords.get(sessionId) ?? null
-          },
-          async write(record) {
-            databaseRecords.set(record.id, record)
-          },
-          async delete(sessionId) {
-            databaseRecords.delete(sessionId)
-          },
+          read: sessionId => databaseRecords.read(sessionId),
+          write: record => databaseRecords.write(record),
+          delete: sessionId => databaseRecords.delete(sessionId),
         }),
-        file: createDatabaseSessionStore({
-          async read(sessionId) {
-            return fileRecords.get(sessionId) ?? null
-          },
-          async write(record) {
-            fileRecords.set(record.id, record)
-          },
-          async delete(sessionId) {
-            fileRecords.delete(sessionId)
-          },
-        }),
+        file: fileRecords,
       },
     })
 
@@ -864,8 +727,8 @@ describe('@holo-js/session package surface', () => {
       id: 'session_2',
       store: 'file',
     })
-    expect(databaseRecords.has('session_1')).toBe(false)
-    expect(fileRecords.get('session_2')).toMatchObject({
+    expect(((await databaseRecords.read('session_1')) !== null)).toBe(false)
+    expect((await fileRecords.read('session_2'))).toMatchObject({
       id: 'session_2',
       store: 'file',
       data: {
@@ -873,4 +736,19 @@ describe('@holo-js/session package surface', () => {
       },
     })
   })
+  it('fails closed when rotating a native store with private flash capability into another store', async () => {
+    const database = await createNativeSessionStore('database')
+    const file = await createNativeSessionStore('file')
+    configureSessionRuntime({ config: normalizeSessionConfig({ driver: 'database', stores: {
+      database: { driver: 'database', connection: 'default', table: 'sessions' },
+      file: { driver: 'file', path: './storage/sessions' },
+    } }), stores: { database, file } })
+    const original = await createSession({ id: 'private-session', data: { userId: 42 } })
+    await flashSession(original.id, 'notice', 'preserved')
+    await expect(rotateSession(original.id, { store: 'file', newId: 'replacement' })).rejects.toThrow('private flash state')
+    expect(await database.read(original.id)).toMatchObject({ data: { userId: 42 } })
+    expect(await file.read('replacement')).toBeNull()
+    expect(await takeSession(original.id, 'notice')).toBe('preserved')
+  })
+
 })

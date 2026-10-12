@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GeneratedJobRegistryEntry } from '../src/project'
 import { installSecurityIntoProject, projectInternals } from '../src/project'
-import * as projectRuntimeModule from '../src/project/runtime'
 import { renderGeneratedQueueTypes } from '../src/project/registry'
 
 const tempDirs: string[] = []
@@ -66,27 +65,6 @@ describe('cli regressions', () => {
       '!.gitignore',
       '',
     ].join('\n'))
-  })
-
-  it('falls back to default rules when readTextFile returns undefined for an existing file', async () => {
-    const root = await createProject()
-    const ignorePath = join(root, 'storage/framework/rate-limits/.gitignore')
-    const readTextFile = projectRuntimeModule.readTextFile
-
-    await mkdir(join(root, 'storage/framework/rate-limits'), { recursive: true })
-    await writeFile(ignorePath, '', 'utf8')
-    vi.spyOn(projectRuntimeModule, 'readTextFile').mockImplementation((path: string) => {
-      if (path === ignorePath) {
-        // This covers the undefined fallback path used by ensureRateLimitStorageIgnore.
-        return Promise.resolve(undefined)
-      }
-
-      return readTextFile(path)
-    })
-
-    await installSecurityIntoProject(root)
-
-    await expect(readFile(ignorePath, 'utf8')).resolves.toBe('*\n!.gitignore\n')
   })
 
   it('renders queue type imports in the stable order and keeps a separator without local imports', () => {

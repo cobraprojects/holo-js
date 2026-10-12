@@ -344,22 +344,18 @@ function clearBrowserCookie(name: string): void {
 function takeFlashedValidationState<TData>(
   schemaDefinition: ValidationSchema,
 ): FormFailurePayload<TData> | undefined {
-  if (typeof (globalThis as { readonly window?: unknown }).window !== 'undefined') {
-    return undefined
-  }
-
   const event = getCurrentSvelteKitRequestEvent()
-  const payload = parseValidationFlashCookie<TData>(event?.cookies.get(validationFlashCookie))
-  if (!event || !payload || !stateMatchesSchema(schemaDefinition, payload)) {
+  const payload = parseValidationFlashCookie<TData>(event
+    ? event.cookies.get(validationFlashCookie)
+    : readBrowserCookie(validationFlashCookie))
+  if (!payload || (payload.bag ?? DEFAULT_VALIDATION_BAG) !== DEFAULT_VALIDATION_BAG || !stateMatchesSchema(schemaDefinition, payload)) {
     return undefined
   }
 
-  event.cookies.set(validationFlashCookie, '', {
-    path: event.url?.pathname || '/',
-    maxAge: 0,
-    sameSite: 'lax',
-    httpOnly: true,
-  })
+  if (!event) {
+    scheduleBrowserFormValueRestore(payload.values)
+    clearBrowserCookie(validationFlashCookie)
+  }
 
   return payload
 }

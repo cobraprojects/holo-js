@@ -1,9 +1,9 @@
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { createApp, defineEventHandler, getResponseHeader, toNodeListener } from 'h3'
+import { createApp, defineEventHandler, getResponseHeader, readRawBody, toNodeListener, toWebHandler } from 'h3'
 import { NextRequest } from 'next/server.js'
 import { afterEach, describe, expect, it } from 'vitest'
-import { configureSecurityRuntime, defineSecurityConfig, resetSecurityRuntime } from '../src'
+import { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } from '../src'
 import { csrfProtection as nextCsrfProtection } from '../src/next/server'
 import { csrfProtection as nuxtCsrfProtection } from '../src/nuxt/server'
 
@@ -17,6 +17,29 @@ function configureSecurity(enabled = true): void {
 afterEach(resetSecurityRuntime)
 
 describe('native csrf middleware', () => {
+  it('preserves web request bodies for handlers after Nuxt CSRF validation', async () => {
+    configureSecurity()
+    const source = new Request('http://localhost/page')
+    const token = await csrf.token(source)
+    const cookie = (await csrf.cookie(source, token)).split(';', 1)[0]
+    if (!cookie) throw new Error('Missing CSRF cookie')
+    const app = createApp()
+    app.use(nuxtCsrfProtection())
+    app.use(defineEventHandler(async event => ({ body: await readRawBody(event) })))
+    const fetch = toWebHandler(app)
+    for (const [contentType, body] of [
+      ['application/json', JSON.stringify({ title: 'Guide' })],
+      ['application/x-www-form-urlencoded', new URLSearchParams({ _token: token, title: 'Guide' }).toString()],
+    ] as const) {
+      const response = await fetch(new Request(source.url, {
+        body,
+        headers: { cookie, 'content-type': contentType, 'x-csrf-token': token },
+        method: 'POST',
+      }))
+      expect(response.status, await response.clone().text()).toBe(200)
+      expect(await response.json()).toEqual({ body })
+    }
+  })
   it('serves credentialed CORS preflight and preserves CORS headers on CSRF rejection', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({ csrf: { enabled: true } }),

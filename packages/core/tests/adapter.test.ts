@@ -19,8 +19,7 @@ import {
 } from '../src'
 import { Queue, listRegisteredQueueJobs } from '@holo-js/queue'
 import { dispatchEvent } from '@holo-js/events'
-import { runtimeModuleInternals } from '../src/runtimeModule'
-import { configureStorageRuntime, resetStorageRuntime, useStorage } from '@holo-js/storage/runtime'
+import { resetStorageRuntime, useStorage } from '@holo-js/storage/runtime'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
@@ -49,6 +48,7 @@ async function createProjectRoot(): Promise<string> {
   tempDirs.push(root)
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await symlink(resolve(import.meta.dirname, '../../authorization'), join(root, 'node_modules/@holo-js/authorization'))
+  await symlink(resolve(import.meta.dirname, '../../db'), join(root, 'node_modules/@holo-js/db'))
   await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
   await symlink(resolve(import.meta.dirname, '../../events'), join(root, 'node_modules/@holo-js/events'))
   await symlink(resolve(import.meta.dirname, '../../queue'), join(root, 'node_modules/@holo-js/queue'))
@@ -164,124 +164,49 @@ describe('@holo-js/core adapter helpers', () => {
     )
   })
 
-  it('creates typed config accessors from a resolved project', async () => {
-    const project = {
-      projectRoot: '/tmp/adapter-project',
-      config: {
-        app: {
-          name: 'Adapter App',
-          env: 'development',
-        },
-        database: {
-          defaultConnection: 'main',
-          connections: {},
-        },
-        storage: {
-          defaultDisk: 'local',
-          disks: {},
-        },
-        custom: {
-          services: {
-            mailgun: {
-              secret: 'typed-secret',
-            },
-          },
-        },
-        all: {
-          app: {
-            name: 'Adapter App',
-            env: 'development',
-          },
-          database: {
-            defaultConnection: 'main',
-            connections: {},
-          },
-          storage: {
-            defaultDisk: 'local',
-            disks: {},
-          },
-          services: {
-            mailgun: {
-              secret: 'typed-secret',
-            },
-          },
-        },
-      },
-      runtime: {
-        useConfig: (key: string) => key === 'services.mailgun.secret'
-          ? 'typed-secret'
-          : { mailgun: { secret: key === 'services' ? 'typed-secret' : 'never' } },
-        config: () => 'typed-secret',
-      },
-    } as unknown as HoloAdapterProject<{
-      services: {
-        mailgun: {
-          secret: string
-        }
-      }
-    }>
-    const resolveProject = vi.fn(async () => project)
-    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
-
-    await expect(accessors.getApp()).resolves.toBe(project)
-    await expect(accessors.getProject()).resolves.toBe(project)
+  it('reads typed configuration through accessors backed by a real project', async () => {
+    const root = await createProjectRoot()
+    const accessors = createHoloProjectAccessors(() => createHoloAdapterProject<{ services: { services: { secret: string } } }>(root, { preferCache: false }), { cache: true })
+    const app = await accessors.getApp()
+    expect(app.projectRoot).toBe(root)
+    await expect(accessors.getProject()).resolves.toBe(app)
     await expect(accessors.getSession()).resolves.toBeUndefined()
     await expect(accessors.getAuth()).resolves.toBeUndefined()
-    await expect(accessors.useConfig('services')).resolves.toEqual({
-      mailgun: {
-        secret: 'typed-secret',
-      },
-    })
-    await expect(accessors.useConfig('services.mailgun.secret')).resolves.toBe('typed-secret')
-    await expect(accessors.config('services.mailgun.secret')).resolves.toBe('typed-secret')
-    expect(resolveProject).toHaveBeenCalledTimes(1)
+    await expect(accessors.useConfig('services')).resolves.toEqual({ services: { secret: 'adapter-secret' } })
+    await expect(accessors.useConfig('services.services.secret')).resolves.toBe('adapter-secret')
+    await expect(accessors.config('services.services.secret')).resolves.toBe('adapter-secret')
   })
 
-  it('retries project resolution after an initialization failure', async () => {
-    const project = { runtime: {} } as HoloAdapterProject
-    const resolveProject = vi.fn()
-      .mockRejectedValueOnce(new Error('initialization failed'))
-      .mockResolvedValue(project)
-    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
-
-    await expect(accessors.getApp()).rejects.toThrow('initialization failed')
-    await expect(accessors.getApp()).resolves.toBe(project)
-    await expect(accessors.getProject()).resolves.toBe(project)
-    expect(resolveProject).toHaveBeenCalledTimes(2)
+  it('retries real project loading after a configuration syntax error is repaired', async () => {
+    const root = await createProjectRoot()
+    const configPath = join(root, 'config/app.ts')
+    const original = await readFile(configPath, 'utf8')
+    await writeFile(configPath, 'export default )')
+    const accessors = createHoloProjectAccessors(() => createHoloAdapterProject(root, { preferCache: false }), { cache: true })
+    await expect(accessors.getApp()).rejects.toThrow()
+    await writeFile(configPath, original)
+    const app = await accessors.getApp()
+    expect(app.config.app.name).toBe('Adapter App')
+    await expect(accessors.getProject()).resolves.toBe(app)
   })
 
-  it('shares one in-flight project resolution across cached accessors', async () => {
-    const project = { runtime: {} } as HoloAdapterProject
-    let finishInitialization: ((project: HoloAdapterProject) => void) | undefined
-    const resolveProject = vi.fn(() => new Promise<HoloAdapterProject>((resolveProjectPromise) => {
-      finishInitialization = resolveProjectPromise
-    }))
-    const accessors = createHoloProjectAccessors(resolveProject, { cache: true })
-
-    const projects = Promise.all([
-      accessors.getApp(),
-      accessors.getProject(),
-      accessors.getApp(),
-    ])
-
-    expect(resolveProject).toHaveBeenCalledOnce()
-    finishInitialization?.(project)
-    await expect(projects).resolves.toEqual([project, project, project])
+  it('shares the actual project across concurrent cached accessor calls', async () => {
+    const root = await createProjectRoot()
+    const accessors = createHoloProjectAccessors(() => createHoloAdapterProject(root, { preferCache: false }), { cache: true })
+    const [app, project, repeated] = await Promise.all([accessors.getApp(), accessors.getProject(), accessors.getApp()])
+    expect(app?.config.app.name).toBe('Adapter App')
+    expect(project).toBe(app)
+    expect(repeated).toBe(app)
   })
 
-  it('resolves every accessor call independently when caching is disabled', async () => {
-    const first = { runtime: {} } as HoloAdapterProject
-    const second = { runtime: {} } as HoloAdapterProject
-    const resolveProject = vi.fn()
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second)
-    const accessors = createHoloProjectAccessors(resolveProject, { cache: false })
-
-    await expect(Promise.all([
-      accessors.getApp(),
-      accessors.getProject(),
-    ])).resolves.toEqual([first, second])
-    expect(resolveProject).toHaveBeenCalledTimes(2)
+  it('returns independent real projects when accessor caching is disabled', async () => {
+    const root = await createProjectRoot()
+    const accessors = createHoloProjectAccessors(() => createHoloAdapterProject(root, { preferCache: false }), { cache: false })
+    const [app, project] = await Promise.all([accessors.getApp(), accessors.getProject()])
+    expect(app.config.app.name).toBe('Adapter App')
+    expect(project.config.app.name).toBe('Adapter App')
+    expect(project).not.toBe(app)
+    expect(project.runtime).not.toBe(app.runtime)
   })
 
   it('creates reusable singleton adapters with runtime-agnostic capabilities', async () => {
@@ -729,8 +654,6 @@ export default defineAbility('manage-posts', () => true)
       ],
     }, null, 2)}\n`, 'utf8')
 
-    const loadEsbuildSpy = vi.spyOn(runtimeModuleInternals, 'loadEsbuild')
-
     const project = await adapter.initializeProject({
       projectRoot: root,
       registerProjectQueueJobs: true,
@@ -739,47 +662,21 @@ export default defineAbility('manage-posts', () => true)
     expect(project.runtime.initialized).toBe(true)
     expect(listRegisteredQueueJobs().map(job => job.name)).toContain('report')
     await expect(Queue.dispatchSync('report', {})).resolves.toBe('ok')
-    expect(loadEsbuildSpy).toHaveBeenCalled()
   })
 
-  it('does not rebind storage runtime when only creating a project', async () => {
+  it('preserves the initialized filesystem storage when only creating another project', async () => {
     const root = await createProjectRoot()
-    const sentinelBackend = {
-      getItemRaw: vi.fn(async () => null),
-      setItemRaw: vi.fn(async () => {}),
-      getItem: vi.fn(async () => null),
-      hasItem: vi.fn(async () => false),
-      removeItem: vi.fn(async () => {}),
-      getKeys: vi.fn(async () => []),
-    }
-
-    configureStorageRuntime({
-      getRuntimeConfig: () => ({
-        holoStorage: {
-          defaultDisk: 'sentinel',
-          diskNames: ['sentinel'],
-          routePrefix: '/storage',
-          disks: {
-            sentinel: {
-              name: 'sentinel',
-              driver: 'local',
-              visibility: 'private',
-              root: './storage/sentinel',
-            },
-          },
-        },
-      }),
-      getStorage: () => sentinelBackend as never,
-    })
-
-    const adapter = createHoloFrameworkAdapter({
-      stateKey: '__holoTestAdapter__',
-      displayName: 'Test',
-    })
-
-    await adapter.createProject({ projectRoot: root })
-
-    expect(useStorage('sentinel').getKeys).toBe(sentinelBackend.getKeys)
+    await writeFile(join(root, 'config/storage.ts'), `
+import { defineStorageConfig } from ${storageEntry}
+export default defineStorageConfig({ defaultDisk: 'local', disks: { local: { driver: 'local', root: './storage/app', visibility: 'private' } } })
+`)
+    const adapter = createHoloFrameworkAdapter({ stateKey: '__holoTestAdapter__', displayName: 'Test' })
+    await adapter.initializeProject({ projectRoot: root })
+    await useStorage('local').put('sentinel.txt', 'preserved storage')
+    await adapter.createProject({ projectRoot: await createProjectRoot() })
+    await useStorage('local').put('after.txt', 'same storage')
+    await expect(readFile(join(root, 'storage/app/sentinel.txt'), 'utf8')).resolves.toBe('preserved storage')
+    await expect(readFile(join(root, 'storage/app/after.txt'), 'utf8')).resolves.toBe('same storage')
   })
 
   it('rehydrates the shared runtime when a cached project outlives runtime state', async () => {
@@ -963,6 +860,7 @@ export default defineJob({
       displayName: 'Test',
     })
     const root = await createProjectRoot()
+    await writeFile(join(root, 'config/database.ts'), `import { defineDatabaseConfig } from ${databaseEntry}; export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ${JSON.stringify(join(root, 'auth.sqlite'))} } } })`)
 
     await writeFile(join(root, 'config/session.ts'), `
 import { defineSessionConfig } from ${sessionEntry}
@@ -999,40 +897,16 @@ export default defineAuthConfig({
 })
 `, 'utf8')
     await writeFile(join(root, 'server/models/User.ts'), `
-let nextId = 1
-
-export default {
-  async find(id) {
-    return id
-  },
-  where() {
-    return {
-      async first() {
-        return null
-      },
-    }
-  },
-  async create(values) {
-    return {
-      id: nextId++,
-      role: 'first',
-      ...values,
-    }
-  },
-  async update(id, values) {
-    return {
-      id,
-      role: 'first',
-      ...values,
-    }
-  },
-}
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+export default defineModel(defineGeneratedTable('users', { id: column.id(), email: column.string(), password: column.string(), role: column.string() }), { timestamps: false, fillable: ['email', 'password', 'role'], pendingAttributes: { role: 'first' } })
 `, 'utf8')
 
     const first = await adapter.initializeProject({
       projectRoot: root,
       preferCache: false,
     })
+
+    await createSchemaService(DB.connection()).createTable('users', table => { table.id(); table.string('email'); table.string('password'); table.string('role') })
 
     await expect(first.runtime.auth?.register({
       email: 'first@app.test',
@@ -1042,37 +916,13 @@ export default {
       role: 'first',
     })
 
+    await expect(DB.table('users').where('email', 'first@app.test').exists()).resolves.toBe(true)
+    expect((await DB.table('users').where('email', 'first@app.test').first())?.password).not.toBe('secret')
     await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
 
     await writeFile(join(root, 'server/models/User.ts'), `
-let nextId = 1
-
-export default {
-  async find(id) {
-    return id
-  },
-  where() {
-    return {
-      async first() {
-        return null
-      },
-    }
-  },
-  async create(values) {
-    return {
-      id: nextId++,
-      role: 'second',
-      ...values,
-    }
-  },
-  async update(id, values) {
-    return {
-      id,
-      role: 'second',
-      ...values,
-    }
-  },
-}
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+export default defineModel(defineGeneratedTable('users', { id: column.id(), email: column.string(), password: column.string(), role: column.string() }), { timestamps: false, fillable: ['email', 'password', 'role'], pendingAttributes: { role: 'second' } })
 `, 'utf8')
 
     const second = await adapter.initializeProject({
@@ -1087,6 +937,8 @@ export default {
     })).resolves.toMatchObject({
       role: 'second',
     })
+    await expect(DB.table('users').where('email', 'first@app.test').value('role')).resolves.toBe('first')
+    await expect(DB.table('users').where('email', 'second@app.test').value('role')).resolves.toBe('second')
   })
 
   it('mounts the plain-node storage runtime and refreshes stale adapter runtime references', async () => {

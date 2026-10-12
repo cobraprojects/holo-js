@@ -48,6 +48,7 @@
     "nitropack": "catalog:"
   },
   "peerDependencies": {
+    "vue": "catalog:",
     "@holo-js/broadcast": "catalog:",
     "@holo-js/forms": "catalog:",
     "@holo-js/realtime": "catalog:",
@@ -72,6 +73,7 @@
     }
   },
   "devDependencies": {
+    "vue": "catalog:",
     "@holo-js/broadcast": "catalog:",
     "@holo-js/realtime": "catalog:",
     "@holo-js/storage-s3": "catalog:",
@@ -79,7 +81,8 @@
     "@types/node": "catalog:",
     "nuxt": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@nuxt/nitro-server": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

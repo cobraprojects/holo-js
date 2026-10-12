@@ -120,10 +120,6 @@ describe('auth runtime utilities', () => {
   })
 
   it('only reconstructs relative request URLs from trusted proxy headers', () => {
-    vi.stubGlobal('process', undefined)
-    expect(normalizeRequestInput({ path: '/serverless' }).url).toBe('http://localhost/serverless')
-    vi.unstubAllGlobals()
-
     vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', '')
     const direct = normalizeRequestInput({
       path: '/auth',

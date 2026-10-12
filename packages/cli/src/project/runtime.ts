@@ -9,7 +9,6 @@ import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
   EventsDiscoveryModule,
-  ProjectModuleBundler,
   QueueDiscoveryModule,
 } from './shared'
 import {
@@ -17,8 +16,6 @@ import {
   CLI_RUNTIME_ROOT,
   pathExists,
 } from './shared'
-
-let projectModuleBundler: ProjectModuleBundler = build
 
 function createHoloPackageBundlerPlugin(projectRoot: string): Plugin {
   const projectRequire = createRequire(join(projectRoot, 'package.json'))
@@ -186,7 +183,7 @@ export async function bundleProjectModule(
   }
 
   try {
-    await projectModuleBundler({
+    await build({
       absWorkingDir: projectRoot,
       bundle: true,
       entryPoints: [entryPath],
@@ -291,12 +288,4 @@ export async function readTextFile(path: string): Promise<string | undefined> {
 export async function writeTextFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, contents, 'utf8')
-}
-
-export function resetProjectModuleBundlerForTesting(): void {
-  projectModuleBundler = build
-}
-
-export function setProjectModuleBundlerForTesting(bundler: ProjectModuleBundler): void {
-  projectModuleBundler = bundler
 }

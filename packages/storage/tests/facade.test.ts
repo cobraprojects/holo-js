@@ -1,40 +1,15 @@
 import { createHash, createHmac } from 'node:crypto'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { storageRuntimeInternals } from '../../core/src/storageRuntime'
 import type { HoloStorageRuntimeConfig } from '../src'
 import type * as StorageRuntimeModule from '../src/runtime/composables/index'
 
-type StoredValue = string | Uint8Array | ArrayBuffer | Buffer
-
-interface MockStorageBackend {
-  getItemRaw: (key: string) => Promise<StoredValue | null>
-  setItemRaw: (key: string, value: StoredValue) => Promise<void>
-  hasItem: (key: string) => Promise<boolean>
-  removeItem: (key: string) => Promise<void>
-  getKeys: (baseKey?: string) => Promise<string[]>
-  getKeysPage: (baseKey: string | undefined, request: {
-    readonly cursor: string | null
-    readonly limit: number
-  }) => Promise<StorageRuntimeModule.StorageFileListPage>
-  getItemStream: (
-    key: string,
-    options: StorageRuntimeModule.StorageStreamReadOptions,
-  ) => Promise<StorageRuntimeModule.StorageByteStream | null>
-  setItemStream: (
-    key: string,
-    source: StorageRuntimeModule.StorageByteStream,
-    options: Required<StorageRuntimeModule.StorageStreamWriteOptions>,
-  ) => Promise<void>
-  getMeta: (key: string) => Promise<StoredValue | null>
-  setMeta: (key: string, value: StoredValue) => Promise<void>
-  removeMeta: (key: string) => Promise<void>
-}
-
 let runtimeConfig: { holoStorage: HoloStorageRuntimeConfig, holo?: { appUrl?: string } }
-let backends: Record<string, MockStorageBackend>
-let storedValues: Record<string, Map<string, StoredValue>>
+let backends: Record<string, ReturnType<typeof storageRuntimeInternals.createFileStorageBackend>>
+let storageRoot: string
 const temporaryDirectories: string[] = []
 
 const {
@@ -43,64 +18,11 @@ const {
   createS3TemporaryUrl,
   resetStorageRuntime,
   StoragePaginationError,
-  StorageStreamingUnsupportedError,
   useStorage,
 } = await import('../src/runtime/composables')
 
-function createBackend(base: string): MockStorageBackend {
-  const values = new Map<string, StoredValue>()
-  storedValues[base] = values
-
-  return {
-    getItemRaw: vi.fn(async (key: string) => values.get(key) ?? null),
-    setItemRaw: vi.fn(async (key: string, value: StoredValue) => {
-      values.set(key, value)
-    }),
-    hasItem: vi.fn(async (key: string) => values.has(key)),
-    removeItem: vi.fn(async (key: string) => {
-      values.delete(key)
-    }),
-    getKeys: vi.fn(async (baseKey = '') => Array.from(values.keys()).filter(key => key.startsWith(baseKey))),
-    getKeysPage: vi.fn(async (baseKey = '', request) => {
-      const keys = Array.from(values.keys())
-        .filter(key => key.startsWith(baseKey) && (!request.cursor || key > request.cursor))
-        .sort()
-      return {
-        nextCursor: keys.length > request.limit ? keys[request.limit - 1] ?? null : null,
-        paths: keys.slice(0, request.limit),
-      }
-    }),
-    getItemStream: vi.fn(async (key, options) => {
-      const value = values.get(key)
-      if (!value) return null
-      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value instanceof ArrayBuffer ? value : Buffer.from(value))
-      const chunkBytes = options.chunkBytes ?? 64 * 1024
-      return (async function* (): AsyncGenerator<Uint8Array> {
-        for (let offset = 0; offset < bytes.byteLength; offset += chunkBytes) {
-          yield bytes.subarray(offset, Math.min(offset + chunkBytes, bytes.byteLength))
-        }
-      })()
-    }),
-    setItemStream: vi.fn(async (key, source, options) => {
-      if (!options.overwrite && values.has(key)) {
-        const error = new Error('exists')
-        error.name = 'StorageDestinationExistsError'
-        throw error
-      }
-      const chunks: Uint8Array[] = []
-      for await (const chunk of source) chunks.push(chunk)
-      values.set(key, Buffer.concat(chunks))
-    }),
-    getMeta: vi.fn(async (key: string) => {
-      return values.get(`${key}$`) ?? null
-    }),
-    setMeta: vi.fn(async (key: string, value: StoredValue) => {
-      values.set(`${key}$`, value)
-    }),
-    removeMeta: vi.fn(async (key: string) => {
-      values.delete(`${key}$`)
-    }),
-  }
+function createBackend(base: string) {
+  return storageRuntimeInternals.createFileStorageBackend(join(storageRoot, base.replace('holo:', '')))
 }
 
 function sha256(value: string): string {
@@ -147,9 +69,10 @@ describe('Storage facade', () => {
     await Promise.all(temporaryDirectories.splice(0).map(path => rm(path, { recursive: true, force: true })))
   })
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetStorageRuntime()
-    storedValues = {}
+    storageRoot = await mkdtemp(join(tmpdir(), 'holo-storage-facade-'))
+    temporaryDirectories.push(storageRoot)
 
     runtimeConfig = {
       holoStorage: {
@@ -327,7 +250,11 @@ describe('Storage facade', () => {
 
     configureStorageRuntime({
       getRuntimeConfig: () => runtimeConfig,
-      getStorage: (base: string) => backends[base] as never,
+      getStorage: (base: string) => {
+        const backend = backends[base]
+        if (!backend) throw new Error(`Storage backend ${base} is not configured`)
+        return backend
+      },
     })
   })
 
@@ -352,27 +279,22 @@ describe('Storage facade', () => {
     await expect(Storage.readStream('reports/result.bin', { chunkBytes: 4095 })).rejects.toThrow('4096 through 1048576')
   })
 
-  it('supports read-only and write-only streaming backends independently', async () => {
-    const backend = backends['holo:local']
-    if (!backend) throw new Error('Expected local storage backend.')
-    await backend.setItemRaw('reports:result.bin', Buffer.from('read-only'))
-    Reflect.deleteProperty(backend, 'setItemStream')
-
-    const stream = await Storage.readStream('reports/result.bin')
-    const chunks: Uint8Array[] = []
-    for await (const chunk of stream ?? []) chunks.push(chunk)
-    expect(Buffer.concat(chunks).toString()).toBe('read-only')
-    await expect(Storage.writeStream('reports/result.bin', (async function* (): AsyncGenerator<Uint8Array> {})())).rejects.toBeInstanceOf(StorageStreamingUnsupportedError)
-
-    const writeOnlyBackend = createBackend('holo:local')
-    Reflect.deleteProperty(writeOnlyBackend, 'getItemStream')
-    backends['holo:local'] = writeOnlyBackend
-    const source = async function* (): AsyncGenerator<Uint8Array> {
-      yield Buffer.from('write-only')
-    }
-
-    await expect(Storage.writeStream('reports:write-only.bin', source())).resolves.toBe(true)
-    await expect(Storage.readStream('reports:write-only.bin')).rejects.toBeInstanceOf(StorageStreamingUnsupportedError)
+  it('reads a native read-only directory and rejects writes, then writes a native write-only file without exposing its contents', async () => {
+    const directory = join(storageRoot, 'local', 'reports')
+    await Storage.put('reports/result.bin', 'read-only')
+    await chmod(directory, 0o500)
+    try {
+      const stream = await Storage.readStream('reports/result.bin')
+      const chunks: Uint8Array[] = []
+      for await (const chunk of stream ?? []) chunks.push(chunk)
+      expect(Buffer.concat(chunks).toString()).toBe('read-only')
+      await expect(Storage.writeStream('reports/blocked.bin', (async function* () { yield Buffer.from('blocked') })())).rejects.toThrow()
+    } finally { await chmod(directory, 0o700) }
+    const path = join(directory, 'write-only.bin')
+    await writeFile(path, 'private', { mode: 0o200 })
+    await expect(Storage.get('reports/write-only.bin')).rejects.toThrow('EACCES')
+    await expect(Storage.writeStream('reports/write-only.bin', (async function* () { yield Buffer.from('write-only') })())).resolves.toBe(true)
+    expect(await Storage.get('reports/write-only.bin')).toBe('write-only')
   })
 
   it('keeps the package root focused on module exports', async () => {
@@ -384,11 +306,11 @@ describe('Storage facade', () => {
   })
 
   it('preserves the mounted storage backend surface on useStorage()', async () => {
-    const storage = useStorage('local') as unknown as MockStorageBackend
+    const storage = useStorage('local')
 
     await storage.setItemRaw('legacy:file.txt', 'legacy-value')
 
-    await expect(storage.getItemRaw('legacy:file.txt')).resolves.toBe('legacy-value')
+    await expect(storage.getItemRaw('legacy:file.txt')).resolves.toEqual(Buffer.from('legacy-value'))
   })
 
   it('shares explicit runtime bindings across isolated module instances', async () => {
@@ -405,7 +327,11 @@ describe('Storage facade', () => {
       isolatedRuntime.resetStorageRuntime()
       configureStorageRuntime({
         getRuntimeConfig: () => runtimeConfig,
-        getStorage: (base: string) => backends[base] as never,
+        getStorage: (base: string) => {
+        const backend = backends[base]
+        if (!backend) throw new Error(`Storage backend ${base} is not configured`)
+        return backend
+      },
       })
     }
   })
@@ -422,7 +348,11 @@ describe('Storage facade', () => {
 
     configureStorageRuntime({
       getRuntimeConfig: () => runtimeConfig,
-      getStorage: (base: string) => backends[base] as never,
+      getStorage: (base: string) => {
+        const backend = backends[base]
+        if (!backend) throw new Error(`Storage backend ${base} is not configured`)
+        return backend
+      },
     })
   })
 
@@ -529,40 +459,23 @@ describe('Storage facade', () => {
     })).rejects.toBeInstanceOf(StoragePaginationError)
   })
 
-  it('rejects pagination when a backend does not implement paged listing', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-list-'))
-    temporaryDirectories.push(root)
-    const directory = join(root, 'reports%202024')
-    await mkdir(directory, { recursive: true })
-    await writeFile(join(directory, 'Q1%3Afinal.txt'), 'ready')
-    runtimeConfig = {
-      ...runtimeConfig,
-      holoStorage: {
-        ...runtimeConfig.holoStorage,
-        disks: {
-          ...runtimeConfig.holoStorage.disks,
-          local: {
-            ...runtimeConfig.holoStorage.disks.local!,
-            root,
-          },
-        },
-      },
-    }
-    const backend = backends['holo:local']
-    if (!backend) throw new Error('Expected local storage backend.')
-    Reflect.deleteProperty(backend, 'getKeysPage')
-
-    await expect(Storage.listFiles('reports 2024')).rejects.toBeInstanceOf(StoragePaginationError)
+  it('fails closed when a native directory cannot be listed and resumes after its permissions are restored', async () => {
+    await Storage.put('reports/private.txt', 'private')
+    const directory = join(storageRoot, 'local', 'reports')
+    await chmod(directory, 0)
+    try { await expect(Storage.listFiles('reports')).rejects.toBeInstanceOf(StoragePaginationError) } finally { await chmod(directory, 0o700) }
+    expect((await Storage.listFiles('reports')).paths).toEqual(['reports/private.txt'])
   })
 
-  it('rejects invalid list limits and malformed backend pages', async () => {
+  it('rejects invalid list limits and excludes native symlinks pointing outside the storage root', async () => {
     await expect(Storage.listFiles('', { limit: 0 })).rejects.toBeInstanceOf(StoragePaginationError)
     await expect(Storage.listFiles('', { limit: 1001 })).rejects.toBeInstanceOf(StoragePaginationError)
-    backends['holo:local']!.getKeysPage = vi.fn(async () => ({
-      nextCursor: null,
-      paths: ['../secret.txt'],
-    }))
-    await expect(Storage.listFiles()).rejects.toBeInstanceOf(StoragePaginationError)
+    const outside = join(storageRoot, 'secret.txt')
+    await writeFile(outside, 'secret')
+    await Storage.put('safe.txt', 'safe')
+    await symlink(outside, join(storageRoot, 'local', 'outside.txt'))
+    expect((await Storage.listFiles()).paths).toEqual(['safe.txt'])
+    await expect(Storage.get('outside.txt')).rejects.toThrow()
   })
 
   it('preserves literal colons in file listings', async () => {
@@ -574,9 +487,10 @@ describe('Storage facade', () => {
   })
 
   it('omits metadata sidecars from file listings', async () => {
-    const local = useStorage('local') as unknown as MockStorageBackend
+    const local = useStorage('local')
 
     await Storage.put('reports/daily.txt', 'ready')
+    if (!local.setMeta) throw new Error('Native metadata storage is unavailable')
     await local.setMeta('reports:daily.txt', 'etag-1')
 
     await expect(Storage.disk('local').listFiles('reports')).resolves.toMatchObject({ paths: [
@@ -593,9 +507,9 @@ describe('Storage facade', () => {
     await local.put('blob/data.bin', new Blob(['blob-data']))
     expect(await local.get('blob/data.bin')).toBe('blob-data')
 
-    storedValues['holo:local']?.set('raw:buffer.txt', Buffer.from('buffer-data'))
-    storedValues['holo:local']?.set('raw:arraybuffer.txt', new TextEncoder().encode('array-buffer-data').buffer)
-    storedValues['holo:local']?.set('raw:uint8.txt', new TextEncoder().encode('uint8-data'))
+    await backends['holo:local']!.setItemRaw('raw:buffer.txt', Buffer.from('buffer-data'))
+    await backends['holo:local']!.setItemRaw('raw:arraybuffer.txt', new TextEncoder().encode('array-buffer-data').buffer)
+    await backends['holo:local']!.setItemRaw('raw:uint8.txt', new TextEncoder().encode('uint8-data'))
 
     expect(await local.get('raw/buffer.txt')).toBe('buffer-data')
     expect(new TextDecoder().decode((await local.getBytes('raw/arraybuffer.txt')) ?? new Uint8Array())).toBe('array-buffer-data')
@@ -603,14 +517,13 @@ describe('Storage facade', () => {
     expect(new TextDecoder().decode((await local.getBytes('blob/data.bin')) ?? new Uint8Array())).toBe('blob-data')
   })
 
-  it('returns null for malformed backend values that cannot be decoded into bytes', async () => {
-    storedValues['holo:local']?.set('raw:invalid.txt', 0 as never)
-
-    await expect(Storage.disk('local').get('raw/invalid.txt')).resolves.toBeNull()
+  it('rejects unsupported JavaScript values without creating a native file', async () => {
+    await expect(Storage.put('raw/invalid.txt', 0 as never)).rejects.toThrow()
+    expect(await Storage.exists('raw/invalid.txt')).toBe(false)
   })
 
   it('preserves malformed encoded keys when listing backend files', async () => {
-    storedValues['holo:local']?.set('reports:bad%ZZname.txt', new TextEncoder().encode('bad'))
+    await backends['holo:local']!.setItemRaw('reports:bad%ZZname.txt', new TextEncoder().encode('bad'))
 
     expect((await Storage.disk('local').listFiles('reports')).paths).toContain('reports/bad%ZZname.txt')
   })

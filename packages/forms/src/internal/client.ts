@@ -27,6 +27,7 @@ import {
 import { getClientCsrfField } from '../client-security'
 import { validationExceptionToFailure } from './validation-exception'
 import { FormClientState } from './state'
+import { normalizeHoloHttpError } from '@holo-js/kernel/http-errors'
 export { FormClientState, collectFormDirtyPaths } from './state'
 import {
   buildFormData,
@@ -799,7 +800,7 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
 
         return applyServerState(
           validationExceptionToFailure<TData>(error, localSubmission.data)
-            ?? createTransportFailure(localSubmission.data),
+            ?? createTransportFailure(localSubmission.data, normalizeHoloHttpError(error)?.status),
           submissionSequence,
         )
       }

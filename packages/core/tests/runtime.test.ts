@@ -1,17 +1,23 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
+import { createServer as createHttpServer } from 'node:http'
+import { once } from 'node:events'
+import { DatabaseSync } from 'node:sqlite'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { startRedisService } from '../../session/tests/support/redis'
 import { config, loadConfigDirectory, useConfig } from '@holo-js/config'
 import {
   createSchemaService,
   DB,
   getDatabaseDriverFactory,
-  getDatabaseQueryCacheBridge,
 } from '@holo-js/db'
 import {
   broadcastRaw,
+  normalizeBroadcastConfig,
+  startBroadcastWorker,
   configureBroadcastRuntime,
   getBroadcastRuntimeBindings,
   resetBroadcastRuntime,
@@ -51,11 +57,13 @@ import {
 import {
   configureSecurityRuntime,
   createMemoryRateLimitStore,
+  defaultRateLimitKey,
+  limit,
+  protect,
+  rateLimit,
   getSecurityRuntimeBindings,
   resetSecurityRuntime,
 } from '@holo-js/security'
-import type * as HoloConfigModule from '@holo-js/config'
-import type * as HoloQueueModule from '@holo-js/queue'
 import type * as PortableHoloModule from '../src/portable/holo'
 import { createHoloAdapterProject, createHoloFrameworkAdapter, initializeHoloAdapterProject } from '../src'
 import {
@@ -89,53 +97,16 @@ const sessionPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../s
 const kernelPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../kernel/src/index.ts'))
 const tempDirs: string[] = []
 
-function getCacheRuntimeBindingsForTest(): unknown {
-  const runtime = globalThis as typeof globalThis & {
-    __holoCacheRuntime__?: {
-      bindings?: unknown
-    }
-  }
-
-  return runtime.__holoCacheRuntime__?.bindings
-}
-
-function seedCacheRuntimeGlobalsForTest(): void {
-  const runtime = globalThis as typeof globalThis & {
-    __holoCacheRuntime__?: {
-      bindings?: unknown
-    }
-    __holoDbQueryCacheBridge__?: {
-      bridge?: unknown
-    }
-  }
-
-  runtime.__holoCacheRuntime__ = {
-    bindings: {
-      config: {
-        default: 'memory',
-      },
-    },
-  }
-  runtime.__holoDbQueryCacheBridge__ = {
-    bridge: {
-      get: async () => null,
-      put: async () => {},
-      flexible: async <TValue>(_key: string, _ttl: unknown, callback: () => TValue | Promise<TValue>) => {
-        return await callback()
-      },
-      forget: async () => true,
-      invalidateDependencies: async () => {},
-    },
-  }
-}
-
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-runtime-'))
   tempDirs.push(root)
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await symlink(resolve(import.meta.dirname, '../../broadcast'), join(root, 'node_modules/@holo-js/broadcast'))
   await symlink(resolve(import.meta.dirname, '../../db-mysql'), join(root, 'node_modules/@holo-js/db-mysql'))
+  await symlink(resolve(import.meta.dirname, '../../db-postgres'), join(root, 'node_modules/@holo-js/db-postgres'))
   await symlink(resolve(import.meta.dirname, '../../db-sqlite'), join(root, 'node_modules/@holo-js/db-sqlite'))
+  await symlink(resolve(import.meta.dirname, '../../db'), join(root, 'node_modules/@holo-js/db'))
+  await symlink(resolve(import.meta.dirname, '../../security'), join(root, 'node_modules/@holo-js/security'))
   await symlink(resolve(import.meta.dirname, '../../queue-db'), join(root, 'node_modules/@holo-js/queue-db'))
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'server/models'), { recursive: true })
@@ -146,6 +117,22 @@ async function createProject(): Promise<string> {
   await mkdir(join(root, 'server/events'), { recursive: true })
   await mkdir(join(root, 'server/listeners'), { recursive: true })
   return root
+}
+
+async function createNotificationTable(): Promise<void> {
+  await createSchemaService(DB.connection()).createTable('notifications', (table) => {
+      table.string('id').primaryKey()
+      table.string('type').nullable()
+      table.string('notifiable_type')
+      table.string('notifiable_id')
+      table.json('data').default({})
+      table.timestamp('read_at').nullable()
+      table.timestamp('created_at')
+      table.timestamp('updated_at')
+      table.index(['notifiable_type', 'notifiable_id'])
+      table.index(['read_at'])
+    })
+
 }
 
 async function writeBaseConfig(root: string, databaseUrl = ':memory:'): Promise<void> {
@@ -346,42 +333,18 @@ export default defineSessionConfig({
 
 async function writeUserModel(root: string): Promise<void> {
   await writeFile(join(root, 'server/models/User.ts'), `
-const users = new Map()
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
 
-export default {
-  async find(id) {
-    return users.get(Number(id)) ?? null
-  },
-  where(column, value) {
-    return {
-      async first() {
-        for (const record of users.values()) {
-          if (record?.[column] === value) {
-            return record
-          }
-        }
-
-        return null
-      },
-    }
-  },
-  async create(values) {
-    const record = {
-      id: users.size + 1,
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-  async update(id, values) {
-    const record = {
-      ...(users.get(Number(id)) ?? { id: Number(id) }),
-      ...values,
-    }
-    users.set(record.id, record)
-    return record
-  },
-}
+export default defineModel(defineGeneratedTable('users', {
+  id: column.id(),
+  name: column.string(),
+  email: column.string(),
+  password: column.string(),
+}), {
+  timestamps: false,
+  fillable: ['name', 'email', 'password'],
+  hidden: ['password'],
+})
 `, 'utf8')
 }
 
@@ -580,46 +543,6 @@ export default defineAppConfig({
     await resetHoloRuntime()
 
     expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
-  })
-
-  it('does not require @holo-js/queue-db for the implicit default sync queue runtime', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(
-      async <TModule>(specifier: string): Promise<TModule | undefined> => {
-        if (specifier === '@holo-js/queue-db') {
-          return undefined
-        }
-
-        return await import(specifier) as TModule
-      },
-    )
-
-    const runtime = await initializeHolo(root)
-    expect(runtime.queue.config.default).toBe('sync')
-    await runtime.shutdown()
-    importOptionalModule.mockRestore()
-  })
-
-  it('does not load notifications support when notifications config is absent', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(
-      async <TModule>(specifier: string, options?: { readonly projectRoot?: string }): Promise<TModule | undefined> => {
-        if (specifier === '@holo-js/notifications') {
-          return undefined
-        }
-
-        return await import(specifier) as TModule
-      },
-    )
-
-    const runtime = await initializeHolo(root)
-    expect(runtime.initialized).toBe(true)
-    importOptionalModule.mockRestore()
-    await runtime.shutdown()
   })
 
   it('rethrows non-module-resolution errors from optional imports', async () => {
@@ -2058,63 +1981,36 @@ export default defineQueueConfig({
     expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
   })
 
-  it.each([
-    ['mysql://user:password@localhost/runtime', '@holo-js/db-mysql'],
-    ['mysql2://user:password@localhost/runtime', '@holo-js/db-mysql'],
-    [':memory:', '@holo-js/db-sqlite'],
-  ])('loads the concrete driver package for %s', async (databaseUrl, packageName) => {
+  it('clears the database runtime after PostgreSQL terminates its own active connection', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/database.ts'), `
 import { defineDatabaseConfig } from ${databasePackageEntry}
-
 export default defineDatabaseConfig({
   defaultConnection: 'main',
   connections: {
-    main: ${JSON.stringify(databaseUrl)},
+    main: ${JSON.stringify({
+      driver: 'postgres',
+      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+      username: process.env.HOLO_POSTGRES_USER ?? 'postgres',
+      password: process.env.HOLO_POSTGRES_PASSWORD,
+      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+    })},
   },
 })
 `, 'utf8')
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const importOptionalModule = vi.spyOn(
-        portable.holoRuntimeInternals.moduleInternals,
-        'importOptionalModule',
-      ).mockImplementation(async (specifier, options) => {
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      await portable.createHolo(root)
-
-      expect(importOptionalModule).toHaveBeenCalledWith(packageName, { projectRoot: root })
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('clears database runtime state when disconnecting during shutdown fails', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    const runtime = await createHolo(root, {
-      processEnv: {
-        ...process.env,
-        HOLO_INTERNAL_FRAMEWORK_BUILD: '1',
-      },
-    })
+    const runtime = await createHolo(root)
     await runtime.initialize()
-    const disconnectFailure = new Error('database disconnect failed')
-    vi.spyOn(runtime.manager, 'disconnectAll').mockRejectedValue(disconnectFailure)
-
-    await expect(runtime.shutdown()).rejects.toBe(disconnectFailure)
-
+    await expect(DB.connection().queryCompiled({
+      sql: 'SELECT pg_terminate_backend(pg_backend_pid())',
+      source: 'connection-termination',
+    })).rejects.toThrow('terminating connection')
+    await runtime.shutdown()
     expect(() => DB.getManager()).toThrow('DB facade is not configured')
-    expect(getDatabaseDriverFactory('sqlite')).toBeUndefined()
-  })
+    expect(getDatabaseDriverFactory('postgres')).toBeUndefined()
+    expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
+  }, 15000)
 
   it('skips eager service boot during generated framework builds', async () => {
     const root = await createProject()
@@ -2282,779 +2178,58 @@ export const boot = 'static'
     await runtime.shutdown()
   })
 
-  it('resets queue runtime caches when the core runtime shuts down', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-    const shutdownQueueRuntime = vi.fn(async () => {})
-    const resetQueueRuntime = vi.fn()
-    vi.doMock('@holo-js/queue', async () => {
-      const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
-      return {
-        ...actual,
-        shutdownQueueRuntime,
-        resetQueueRuntime,
-      }
-    })
-
-    try {
-      const portable = await import('../src/portable')
-      const runtime = await portable.initializeHolo(root)
-
-      await runtime.shutdown()
-
-      expect(shutdownQueueRuntime).toHaveBeenCalled()
-      expect(resetQueueRuntime).toHaveBeenCalled()
-    } finally {
-      vi.doUnmock('@holo-js/queue')
-      vi.resetModules()
-    }
-  })
-
-  it('disconnects initialized DB connections when queue runtime setup fails after DB boot', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-    vi.doMock('@holo-js/queue', async () => {
-      const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
-      return {
-        ...actual,
-        configureQueueRuntime() {
-          throw new Error('queue init failed')
-        },
-      }
-    })
-
-    try {
-      const portable = await import('../src/portable')
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow('queue init failed')
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-      expect(() => portable.getHolo()).toThrow('Holo runtime is not initialized.')
-      expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
-    } finally {
-      vi.doUnmock('@holo-js/queue')
-      vi.resetModules()
-    }
-  })
-
-  it('fails runtime initialization when queue config is present but the queue package is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeQueueConfig(root, `
-import { defineQueueConfig } from ${queuePackageEntry}
-
-export default defineQueueConfig({
-  default: 'sync',
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/queue') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Queue support requires @holo-js/queue to be installed.',
-      )
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-      expect(() => portable.getHolo()).toThrow('Holo runtime is not initialized.')
-      expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('fails runtime initialization when cache config is present but the cache package is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeCacheConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/cache') {
-          return undefined
-        }
-
-        return originalImportOptionalModule(specifier, options)
-      })
-
-      await expect(portable.initializeHolo(root)).rejects.toThrow('Cache support requires @holo-js/cache to be installed')
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('does not require the cache package when cache config is absent', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/cache') {
-          return undefined
-        }
-
-        return originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.initializeHolo(root)
-      expect(runtime.initialized).toBe(true)
-      await portable.resetHoloRuntime()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('configures the cache runtime with default cache config when the cache package is present', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureCacheRuntime = vi.fn()
-      const resetCacheRuntime = vi.fn()
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/cache') {
-          return {
-            configureCacheRuntime,
-            loadConfiguredCachePluginDriverContracts: vi.fn().mockResolvedValue([]),
-            resetCacheRuntime,
-          }
-        }
-
-        return originalImportOptionalModule(specifier, options)
-      })
-
-      const loadedConfig = await loadConfigDirectory(root, {
-        preferCache: false,
-        processEnv: process.env,
-      })
-
-      await portable.reconfigureOptionalHoloSubsystems(root, loadedConfig)
-      expect(configureCacheRuntime).toHaveBeenCalledWith({
-        config: loadedConfig.cache,
-        databaseConfig: loadedConfig.database,
-        redisConfig: loadedConfig.redis,
-      })
-    } finally {
-      vi.resetModules()
-      vi.restoreAllMocks()
-    }
-  })
-
-  it('fails runtime initialization when notifications config is present but the notifications package is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeNotificationsConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/notifications') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Notifications support requires @holo-js/notifications to be installed.',
-      )
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('fails runtime initialization when mail config is present but the mail package is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeMailConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/mail') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Mail support requires @holo-js/mail to be installed.',
-      )
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('fails runtime initialization when broadcast config is present but the broadcast package is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeBroadcastConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/broadcast') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Broadcast support requires @holo-js/broadcast to be installed.',
-      )
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('fails runtime initialization when security config is present but the security package is missing', async () => {
+  it('restores external CSRF policy and preserves real rate-limit buckets through managed runtime boot', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeSecurityConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/security') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Security support requires @holo-js/security to be installed.',
-      )
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('configures and restores the security runtime when security config is present', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeSecurityConfig(root)
-    const originalConfig = {
-      csrf: {
-        enabled: false,
-        cookie: 'PREEXISTING-XSRF',
-      },
-      rateLimit: {
-        driver: 'memory' as const,
-      },
-    }
-
-    const customStore = {
-      hit: vi.fn(async () => ({
-        limited: false,
-        snapshot: {
-          limiter: '',
-          key: 'custom',
-          attempts: 1,
-          maxAttempts: 5,
-          remainingAttempts: 4,
-          expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-        },
-        retryAfterSeconds: 60,
-      })),
-      clear: vi.fn(async () => true),
-      clearByPrefix: vi.fn(async () => 0),
-      clearAll: vi.fn(async () => 0),
-    }
-
     configureSecurityRuntime({
-      config: originalConfig,
-      rateLimitStore: customStore,
+      config: { csrf: { enabled: false }, rateLimit: { driver: 'memory', limiters: { login: limit.perMinute(5) } } },
+      rateLimitStore: createMemoryRateLimitStore(),
     })
-
+    const request = new Request('https://runtime.test/login', { method: 'POST' })
+    await expect(protect(request)).resolves.toBeUndefined()
+    await expect(rateLimit('login', { key: 'external' })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
     const runtime = await createHolo(root)
     await runtime.initialize()
-
-    expect(getSecurityRuntimeBindings()?.config?.rateLimit.driver).toBe('file')
-    expect(getSecurityRuntimeBindings()?.rateLimitStore).toBe(customStore)
-
+    await expect(protect(request)).rejects.toMatchObject({ status: 419 })
+    await expect(rateLimit('login', { key: 'external' })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
     await runtime.shutdown()
-
-    expect(getSecurityRuntimeBindings()).toEqual(expect.objectContaining({
-      config: expect.objectContaining({
-        csrf: expect.objectContaining({
-          enabled: false,
-          cookie: 'PREEXISTING-XSRF',
-        }),
-      }),
-      rateLimitStore: customStore,
-    }))
-    expect(getSecurityRuntimeBindings()?.csrfSigningKey).toBeUndefined()
+    await expect(protect(request)).resolves.toBeUndefined()
+    await expect(rateLimit('login', { key: 'external' })).resolves.toMatchObject({ snapshot: { attempts: 3 } })
   })
 
-  it('configures and resets the cache runtime when cache config is present', async () => {
+  it('preserves externally configured rate-limit buckets when no security configuration exists', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
-    await writeCacheConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureCacheRuntime = vi.fn()
-      const resetCacheRuntime = vi.fn()
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/cache') {
-          return {
-            configureCacheRuntime,
-            loadConfiguredCachePluginDriverContracts: vi.fn().mockResolvedValue([]),
-            resetCacheRuntime,
-          }
-        }
-
-        return originalImportOptionalModule(specifier, options)
-      })
-
-      const loadedConfig = await loadConfigDirectory(root, {
-        preferCache: false,
-        processEnv: process.env,
-      })
-
-      await portable.reconfigureOptionalHoloSubsystems(root, loadedConfig)
-      expect(configureCacheRuntime).toHaveBeenCalledWith({
-        config: loadedConfig.cache,
-        databaseConfig: loadedConfig.database,
-        redisConfig: loadedConfig.redis,
-      })
-
-      await portable.resetOptionalHoloSubsystems()
-      expect(resetCacheRuntime).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-    }
-  })
-
-  it('clears cache globals during subsystem reset even when the cache module is no longer resolvable', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    seedCacheRuntimeGlobalsForTest()
-
-    expect(getCacheRuntimeBindingsForTest()).toBeDefined()
-    expect(getDatabaseQueryCacheBridge()).toBeDefined()
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/cache') {
-          return undefined
-        }
-
-        return originalImportOptionalModule(specifier, options)
-      })
-
-      await portable.resetOptionalHoloSubsystems()
-
-      expect(getCacheRuntimeBindingsForTest()).toBeUndefined()
-      expect(getDatabaseQueryCacheBridge()).toBeUndefined()
-    } finally {
-      delete (globalThis as typeof globalThis & {
-        __holoCacheRuntime__?: {
-          bindings?: unknown
-        }
-        __holoDbQueryCacheBridge__?: {
-          bridge?: unknown
-        }
-      }).__holoCacheRuntime__
-      delete (globalThis as typeof globalThis & {
-        __holoCacheRuntime__?: {
-          bindings?: unknown
-        }
-        __holoDbQueryCacheBridge__?: {
-          bridge?: unknown
-        }
-      }).__holoDbQueryCacheBridge__
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('closes managed security stores on shutdown instead of restoring them', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  csrf: {
-    enabled: true,
-  },
-  rateLimit: {
-    driver: 'memory',
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const closeManagedStore = vi.fn(async () => {})
-      let configuredSecurityBindings: {
-        config: unknown
-        cors?: unknown
-        rateLimitStore?: unknown
-        csrfSigningKey?: string
-      } | undefined
-      const createRateLimitStoreFromConfig = vi.fn(() => ({
-        hit: vi.fn(async () => ({
-          limited: false,
-          snapshot: {
-            limiter: '',
-            key: 'custom',
-            attempts: 1,
-            maxAttempts: 5,
-            remainingAttempts: 4,
-            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-          },
-          retryAfterSeconds: 60,
-        })),
-        clear: vi.fn(async () => true),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeManagedStore,
-      }))
-      const configureSecurityRuntime = vi.fn((bindings?: {
-        config: unknown
-        cors?: unknown
-        rateLimitStore?: unknown
-        csrfSigningKey?: string
-      }) => {
-        configuredSecurityBindings = bindings ? {
-          config: bindings.config,
-          cors: bindings.cors,
-          rateLimitStore: bindings.rateLimitStore,
-          csrfSigningKey: bindings.csrfSigningKey,
-        } : undefined
-      })
-      const resetSecurityRuntime = vi.fn(() => {
-        configuredSecurityBindings = undefined
-      })
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig,
-            getSecurityRuntimeBindings: () => configuredSecurityBindings,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-      expect(configuredSecurityBindings).toBeDefined()
-
-      await runtime.shutdown()
-
-      expect(closeManagedStore).toHaveBeenCalledTimes(1)
-      expect(configuredSecurityBindings).toBeUndefined()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('closes a leftover managed security store when no security config file exists', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const closeManagedStore = vi.fn(async () => {})
-      const runtimeState = globalThis as typeof globalThis & {
-        __holoRuntime__?: {
-          securityRateLimitStore?: { close?(): Promise<void> }
-        }
-        __holoSecurityRuntime__?: {
-          bindings?: {
-            config: unknown
-            rateLimitStore?: unknown
-            csrfSigningKey?: string
-          }
-        }
-      }
-      const resetSecurityRuntime = vi.fn(() => {
-        runtimeState.__holoSecurityRuntime__ = undefined
-      })
-      const configuredSecurityBindings = {
-        config: {
-          csrf: {
-            enabled: true,
-          },
-          rateLimit: {
-            driver: 'memory',
-          },
-        },
-        rateLimitStore: {
-          hit: vi.fn(async () => ({
-            limited: false,
-            snapshot: {
-              limiter: '',
-              key: 'custom',
-              attempts: 1,
-              maxAttempts: 5,
-              remainingAttempts: 4,
-              expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-            },
-            retryAfterSeconds: 60,
-          })),
-          clear: vi.fn(async () => true),
-          clearByPrefix: vi.fn(async () => 0),
-          clearAll: vi.fn(async () => 0),
-          close: closeManagedStore,
-        },
-      }
-
-      runtimeState.__holoRuntime__ = {
-        ...(runtimeState.__holoRuntime__ ?? {}),
-        securityRateLimitStore: configuredSecurityBindings.rateLimitStore,
-      }
-      runtimeState.__holoSecurityRuntime__ = {
-        bindings: configuredSecurityBindings,
-      }
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime(bindings?: {
-              config: unknown
-              cors?: unknown
-              rateLimitStore?: unknown
-              csrfSigningKey?: string
-            }) {
-              runtimeState.__holoSecurityRuntime__ = bindings
-                ? { bindings }
-                : undefined
-            },
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig() {
-              return configuredSecurityBindings.rateLimitStore as never
-            },
-            getSecurityRuntimeBindings: () => runtimeState.__holoSecurityRuntime__?.bindings,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      expect(closeManagedStore).toHaveBeenCalledTimes(1)
-
-      await runtime.shutdown()
-
-      expect(resetSecurityRuntime).toHaveBeenCalled()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('preserves externally configured security bindings when no security config file exists', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    const customStore = {
-      hit: vi.fn(async () => ({
-        limited: false,
-        snapshot: {
-          limiter: '',
-          key: 'custom',
-          attempts: 1,
-          maxAttempts: 5,
-          remainingAttempts: 4,
-          expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-        },
-        retryAfterSeconds: 60,
-      })),
-      clear: vi.fn(async () => true),
-      clearByPrefix: vi.fn(async () => 0),
-      clearAll: vi.fn(async () => 0),
-    }
-
     configureSecurityRuntime({
-      config: {
-        csrf: {
-          enabled: false,
-        },
-      },
-      rateLimitStore: customStore,
+      config: { csrf: { enabled: false }, rateLimit: { driver: 'memory', limiters: { login: limit.perMinute(5) } } },
+      rateLimitStore: createMemoryRateLimitStore(),
     })
-
+    await expect(rateLimit('login', { key: 'external' })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
     const runtime = await createHolo(root)
     await runtime.initialize()
-
-    expect(getSecurityRuntimeBindings()?.rateLimitStore).toBe(customStore)
-
+    await expect(rateLimit('login', { key: 'external' })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
     await runtime.shutdown()
+    await expect(rateLimit('login', { key: 'external' })).resolves.toMatchObject({ snapshot: { attempts: 3 } })
   })
 
-  it('reuses a newly injected external security store after a prior managed runtime shutdown', async () => {
+  it('uses a newly supplied real rate-limit store after a prior managed runtime shuts down', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeSecurityConfig(root)
-    const secondExternalStore = {
-      hit: vi.fn(async () => ({
-        limited: false,
-        snapshot: {
-          limiter: '',
-          key: 'second',
-          attempts: 1,
-          maxAttempts: 5,
-          remainingAttempts: 4,
-          expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-        },
-        retryAfterSeconds: 60,
-      })),
-      clear: vi.fn(async () => true),
-      clearByPrefix: vi.fn(async () => 0),
-      clearAll: vi.fn(async () => 0),
-    }
-
     const firstRuntime = await createHolo(root)
     await firstRuntime.initialize()
-
-    expect(getSecurityRuntimeBindings()?.config.rateLimit.driver).toBe('file')
-
     await firstRuntime.shutdown()
-
     configureSecurityRuntime({
-      config: {
-        csrf: {
-          enabled: false,
-        },
-      },
-      rateLimitStore: secondExternalStore,
+      config: { csrf: { enabled: false }, rateLimit: { driver: 'memory', limiters: { login: limit.perMinute(5) } } },
+      rateLimitStore: createMemoryRateLimitStore(),
     })
-
+    await expect(rateLimit('login', { key: 'new-store' })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
     const secondRuntime = await createHolo(root)
     await secondRuntime.initialize()
-
-    expect(getSecurityRuntimeBindings()?.rateLimitStore).toBe(secondExternalStore)
-
+    await expect(rateLimit('login', { key: 'new-store' })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
     await secondRuntime.shutdown()
+    await expect(rateLimit('login', { key: 'new-store' })).resolves.toMatchObject({ snapshot: { attempts: 3 } })
   })
 
   it('rebuilds the security store when successive config loads change the driver', async () => {
@@ -3145,576 +2320,56 @@ export default defineSecurityConfig({
     expect(getSecurityRuntimeBindings()).toBeUndefined()
   })
 
-  it('passes a redis adapter into security runtime boot when the redis driver is configured', async () => {
+  it('releases real Redis session connections after a second configured store fails authentication', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    const admin = service.clients[0]
+    if (port === undefined || !admin) throw new Error('Expected an owned Redis server')
+    await admin.acl('SETUSER', 'session-worker', 'on', '>secret', '~*', '+@all')
     const root = await createProject()
     await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  csrf: {
-    enabled: true,
-  },
-  rateLimit: {
-    driver: 'redis',
-    redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    },
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureSecurityRuntime = vi.fn()
-      const closeRedisAdapter = vi.fn(async () => {})
-      const createSecurityRedisAdapter = vi.fn(() => ({
-        increment: vi.fn(async () => ({ attempts: 1, ttlSeconds: 60 })),
-        del: vi.fn(async () => 0),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeRedisAdapter,
-      }))
-      const createRateLimitStoreFromConfig = vi.fn((config, options) => {
-        expect(config.rateLimit.driver).toBe('redis')
-        expect(options?.projectRoot).toBe(root)
-        expect(options?.redisAdapter).toBeDefined()
-        return {
-          hit: vi.fn(async () => ({
-            limited: false,
-            snapshot: {
-              limiter: '',
-              key: 'custom',
-              attempts: 1,
-              maxAttempts: 5,
-              remainingAttempts: 4,
-              expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-            },
-            retryAfterSeconds: 60,
-          })),
-          clear: vi.fn(async () => true),
-          clearByPrefix: vi.fn(async () => 0),
-          clearAll: vi.fn(async () => 0),
-        }
-      })
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig,
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/security/drivers/redis-adapter') {
-          return {
-            createSecurityRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      expect(createSecurityRedisAdapter).toHaveBeenCalledTimes(1)
-      expect(createRateLimitStoreFromConfig).toHaveBeenCalledTimes(1)
-      expect(configureSecurityRuntime).toHaveBeenCalledTimes(1)
-
-      await runtime.shutdown()
-      expect(closeRedisAdapter).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('closes a newly created security rate-limit store when security runtime boot fails', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeSecurityConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureSecurityRuntime = vi.fn()
-      const closeNextStore = vi.fn(async () => {})
-      const initialStore = {
-        hit: vi.fn(async () => ({
-          limited: false,
-          snapshot: {
-            limiter: 'login',
-            key: 'user:7',
-            attempts: 1,
-            maxAttempts: 5,
-            remainingAttempts: 4,
-            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-          },
-          retryAfterSeconds: 60,
-        })),
-        clear: vi.fn(async () => true),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-      }
-      const nextStore = {
-        hit: vi.fn(async () => ({
-          limited: false,
-          snapshot: {
-            limiter: 'login',
-            key: 'user:7',
-            attempts: 1,
-            maxAttempts: 5,
-            remainingAttempts: 4,
-            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-          },
-          retryAfterSeconds: 60,
-        })),
-        clear: vi.fn(async () => true),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeNextStore,
-      }
-      const createRateLimitStoreFromConfig = vi.fn(() => (bootPhase === 'initial' ? initialStore : nextStore))
-      let bootPhase: 'initial' | 'failing' = 'initial'
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig,
-            getSecurityRuntimeBindings: () => bootPhase === 'initial'
-              ? undefined
-              : { rateLimitStore: initialStore },
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await expect(runtime.initialize()).resolves.toBeUndefined()
-
-      bootPhase = 'failing'
-      configureSecurityRuntime.mockImplementation(() => {
-        throw new Error('security boot failed')
-      })
-
-      await expect(portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow('security boot failed')
-      expect(createRateLimitStoreFromConfig).toHaveBeenCalledTimes(2)
-      expect(closeNextStore).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('provides the security runtime with an auth-aware default rate-limit key resolver', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeSecurityConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureSecurityRuntime = vi.fn()
-      const authId = vi.fn()
-        .mockResolvedValueOnce(123)
-        .mockResolvedValueOnce(null)
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig() {
-              return {
-                hit: vi.fn(async () => ({
-                  limited: false,
-                  snapshot: {
-                    limiter: '',
-                    key: 'custom',
-                    attempts: 1,
-                    maxAttempts: 5,
-                    remainingAttempts: 4,
-                    expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-                  },
-                  retryAfterSeconds: 60,
-                })),
-                clear: vi.fn(async () => true),
-                clearByPrefix: vi.fn(async () => 0),
-                clearAll: vi.fn(async () => 0),
-              }
-            },
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/auth') {
-          return {
-            getAuthRuntime() {
-              return {
-                id: authId,
-              }
-            },
-            resetAuthRuntime: vi.fn(),
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      const bindings = configureSecurityRuntime.mock.calls[0]?.[0] as
-        | { readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> }
-        | undefined
-
-      expect(typeof bindings?.defaultKeyResolver).toBe('function')
-      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBe('user:123')
-      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBeUndefined()
-      expect(authId).toHaveBeenCalledTimes(2)
-
-      await runtime.shutdown()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('disconnects redis session adapters created before session runtime boot fails', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${sessionPackageEntry}
-
-export default defineSessionConfig({
-  driver: 'primary',
-  stores: {
-    primary: {
-      driver: 'redis',
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:sessions:primary:',
-    },
-    secondary: {
-      driver: 'redis',
-      host: '127.0.0.1',
-      port: 6380,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:sessions:secondary:',
-    },
+    const writeStores = async (password: string) => {
+      await writeFile(join(root, 'config/redis.ts'), `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({
+  default: 'primary',
+  connections: {
+    primary: { host: '127.0.0.1', port: ${port}, username: 'session-worker', password: 'secret' },
+    secondary: { host: '127.0.0.1', port: ${port}, username: 'session-worker', password: ${JSON.stringify(password)} },
   },
 })
 `, 'utf8')
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const primaryAdapter = {
-        connect: vi.fn(async () => {}),
-        disconnect: vi.fn(async () => {}),
-        get: vi.fn(async () => null),
-        set: vi.fn(async () => {}),
-        del: vi.fn(async () => {}),
-      }
-      const secondaryAdapter = {
-        connect: vi.fn(async () => {}),
-        disconnect: vi.fn(async () => {}),
-        get: vi.fn(async () => null),
-        set: vi.fn(async () => {}),
-        del: vi.fn(async () => {}),
-      }
-      const createSessionRedisAdapter = vi.fn()
-        .mockReturnValueOnce(primaryAdapter)
-        .mockReturnValueOnce(secondaryAdapter)
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/session') {
-          return {
-            configureSessionRuntime: vi.fn(),
-            createDatabaseSessionStore: vi.fn(),
-            createFileSessionStore: vi.fn(),
-            createRedisSessionStore: vi.fn((adapter: unknown) => {
-              if (adapter === primaryAdapter) {
-                return {
-                  read: vi.fn(async () => null),
-                  write: vi.fn(async () => {}),
-                  delete: vi.fn(async () => {}),
-                }
-              }
-
-              throw new Error('session store boot failed')
-            }),
-            getSessionRuntime: vi.fn(),
-            resetSessionRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/session/drivers/redis-adapter') {
-          return {
-            createSessionRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      await expect(portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow('session store boot failed')
-      expect(createSessionRedisAdapter).toHaveBeenCalledTimes(2)
-      expect(primaryAdapter.connect).toHaveBeenCalledTimes(1)
-      expect(secondaryAdapter.connect).toHaveBeenCalledTimes(1)
-      expect(primaryAdapter.disconnect).toHaveBeenCalledTimes(1)
-      expect(secondaryAdapter.disconnect).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('surfaces cleanup errors when redis session store boot fails after adapter creation', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeFile(join(root, 'config/session.ts'), `
+      await writeFile(join(root, 'config/session.ts'), `
 import { defineSessionConfig } from ${sessionPackageEntry}
-
 export default defineSessionConfig({
   driver: 'primary',
   stores: {
-    primary: {
-      driver: 'redis',
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:sessions:primary:',
-    },
-    secondary: {
-      driver: 'redis',
-      host: '127.0.0.1',
-      port: 6380,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:sessions:secondary:',
-    },
+    primary: { driver: 'redis', connection: 'primary', prefix: 'primary:' },
+    secondary: { driver: 'redis', connection: 'secondary', prefix: 'secondary:' },
   },
 })
 `, 'utf8')
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const cleanupFailure = new Error('adapter cleanup failed')
-      const primaryAdapter = {
-        connect: vi.fn(async () => {}),
-        disconnect: vi.fn(async () => {
-          throw cleanupFailure
-        }),
-        get: vi.fn(async () => null),
-        set: vi.fn(async () => {}),
-        del: vi.fn(async () => {}),
-      }
-      const secondaryAdapter = {
-        connect: vi.fn(async () => {}),
-        disconnect: vi.fn(async () => {}),
-        get: vi.fn(async () => null),
-        set: vi.fn(async () => {}),
-        del: vi.fn(async () => {}),
-      }
-      const createSessionRedisAdapter = vi.fn()
-        .mockReturnValueOnce(primaryAdapter)
-        .mockReturnValueOnce(secondaryAdapter)
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/session') {
-          return {
-            configureSessionRuntime: vi.fn(),
-            createDatabaseSessionStore: vi.fn(),
-            createFileSessionStore: vi.fn(),
-            createRedisSessionStore: vi.fn((adapter: unknown) => {
-              if (adapter === primaryAdapter) {
-                return {
-                  read: vi.fn(async () => null),
-                  write: vi.fn(async () => {}),
-                  delete: vi.fn(async () => {}),
-                }
-              }
-
-              throw new Error('session store boot failed')
-            }),
-            getSessionRuntime: vi.fn(),
-            resetSessionRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/session/drivers/redis-adapter') {
-          return {
-            createSessionRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      let thrown: unknown
-      try {
-        await portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
-      } catch (error) {
-        thrown = error
-      }
-
-      expect(thrown).toBeInstanceOf(Error)
-      expect(thrown).toBeInstanceOf(AggregateError)
-      expect((thrown as AggregateError).errors).toEqual([expect.objectContaining({ message: 'session store boot failed' }), cleanupFailure])
-      expect(createSessionRedisAdapter).toHaveBeenCalledTimes(2)
-      expect(primaryAdapter.disconnect).toHaveBeenCalledTimes(1)
-      expect(secondaryAdapter.disconnect).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
     }
-  })
-
-  it('fails clearly when redis session stores are configured without the redis adapter package', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${sessionPackageEntry}
-
-export default defineSessionConfig({
-  driver: 'primary',
-  stores: {
-    primary: {
-      driver: 'redis',
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:sessions:primary:',
-    },
-  },
-})
-`, 'utf8')
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/session') {
-          return {
-            configureSessionRuntime: vi.fn(),
-            createDatabaseSessionStore: vi.fn(),
-            createFileSessionStore: vi.fn(),
-            createRedisSessionStore: vi.fn(),
-            getSessionRuntime: vi.fn(),
-            resetSessionRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/session/drivers/redis-adapter') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      await expect(portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow(
-        '[@holo-js/core] Redis-backed session stores require @holo-js/session/drivers/redis-adapter to be installed.',
-      )
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
+    await writeStores('incorrect')
+    const failed = await createHolo(root)
+    await expect(failed.initialize()).rejects.toThrow()
+    expect(await admin.acl('LOG', 1)).toEqual([
+      expect.arrayContaining(['reason', 'auth', 'username', 'session-worker']),
+    ])
+    await expect.poll(async () => await admin.client('LIST')).not.toContain('user=session-worker')
+    expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
+    await writeStores('secret')
+    const runtime = await createHolo(root, { preferCache: false })
+    await runtime.initialize()
+    if (!runtime.session) throw new Error('Expected the session runtime')
+    const primary = await runtime.session.create({ store: 'primary', data: { message: 'first store' } })
+    const secondary = await runtime.session.create({ store: 'secondary', data: { message: 'second store' } })
+    await expect(runtime.session.read(primary.id, { store: 'primary' })).resolves.toMatchObject({ data: { message: 'first store' } })
+    await expect(runtime.session.read(secondary.id, { store: 'secondary' })).resolves.toMatchObject({ data: { message: 'second store' } })
+    await expect(runtime.session.read(primary.id, { store: 'secondary' })).resolves.toBeNull()
+    await runtime.shutdown()
+    await expect.poll(async () => await admin.client('LIST')).not.toContain('user=session-worker')
+  }, 15000)
 
   it('creates usable file session stores relative to the project root', async () => {
     const root = await createProject()
@@ -3757,1173 +2412,69 @@ export default defineSessionConfig({
     await expect(fileStore.read(record.id)).resolves.toBeNull()
   })
 
-  it('closes managed redis session adapters during subsystem reset', async () => {
+  it('publishes through real workers, replaces stale generated bindings, and reports a closed native connection', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${sessionPackageEntry}
-
-export default defineSessionConfig({
-  driver: 'primary',
-  stores: {
-    primary: {
-      driver: 'redis',
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:sessions:primary:',
-    },
-  },
-})
-`, 'utf8')
-
-    vi.resetModules()
-
+    const workers: Array<Awaited<ReturnType<typeof startBroadcastWorker>>> = []
+    const sockets: WebSocket[] = []
     try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const close = vi.fn(async () => {})
-      const createSessionRedisAdapter = vi.fn(() => ({
-        connect: vi.fn(async () => {}),
-        disconnect: vi.fn(async () => {}),
-        close,
-        get: vi.fn(async () => null),
-        set: vi.fn(async () => {}),
-        del: vi.fn(async () => {}),
-      }))
-      const resetSessionRuntime = vi.fn()
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/session') {
-          return {
-            configureSessionRuntime: vi.fn(),
-            createDatabaseSessionStore: vi.fn(),
-            createFileSessionStore: vi.fn(),
-            createRedisSessionStore: vi.fn(() => ({
-              read: vi.fn(async () => null),
-              write: vi.fn(async () => {}),
-              delete: vi.fn(async () => {}),
-            })),
-            getSessionRuntime: vi.fn(),
-            resetSessionRuntime,
-          } as never
-        }
-
-        if (specifier === '@holo-js/session/drivers/redis-adapter') {
-          return {
-            createSessionRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      await portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
-      await portable.resetOptionalHoloSubsystems()
-
-      expect(createSessionRedisAdapter).toHaveBeenCalledTimes(1)
-      expect(close).toHaveBeenCalledTimes(1)
-      expect(resetSessionRuntime).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('returns undefined from the default security key resolver when auth runtime id lookup fails', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeSecurityConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureSecurityRuntime = vi.fn()
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig() {
-              return {
-                hit: vi.fn(async () => ({
-                  limited: false,
-                  snapshot: {
-                    limiter: '',
-                    key: 'custom',
-                    attempts: 1,
-                    maxAttempts: 5,
-                    remainingAttempts: 4,
-                    expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-                  },
-                  retryAfterSeconds: 60,
-                })),
-                clear: vi.fn(async () => true),
-                clearByPrefix: vi.fn(async () => 0),
-                clearAll: vi.fn(async () => 0),
-              }
-            },
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/auth') {
-          return {
-            getAuthRuntime() {
-              return {
-                id: vi.fn(async () => {
-                  throw new Error('auth id failure')
-                }),
-              }
-            },
-            resetAuthRuntime: vi.fn(),
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      const bindings = configureSecurityRuntime.mock.calls[0]?.[0] as
-        | { readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> }
-        | undefined
-
-      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBeUndefined()
-
-      await runtime.shutdown()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('returns undefined from the default security key resolver when auth is unavailable', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeSecurityConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const configureSecurityRuntime = vi.fn()
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig() {
-              return {
-                hit: vi.fn(async () => ({
-                  limited: false,
-                  snapshot: {
-                    limiter: '',
-                    key: 'custom',
-                    attempts: 1,
-                    maxAttempts: 5,
-                    remainingAttempts: 4,
-                    expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-                  },
-                  retryAfterSeconds: 60,
-                })),
-                clear: vi.fn(async () => true),
-                clearByPrefix: vi.fn(async () => 0),
-                clearAll: vi.fn(async () => 0),
-              }
-            },
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/auth') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      const bindings = configureSecurityRuntime.mock.calls[0]?.[0] as
-        | { readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> }
-        | undefined
-
-      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBeUndefined()
-
-      await runtime.shutdown()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('closes a newly created redis security adapter when runtime boot fails', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  rateLimit: {
-    driver: 'redis',
-    redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    },
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const closeRedisAdapter = vi.fn(async () => {})
-      const createSecurityRedisAdapter = vi.fn(() => ({
-        increment: vi.fn(async () => ({ attempts: 1, ttlSeconds: 60 })),
-        del: vi.fn(async () => 0),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeRedisAdapter,
-      }))
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime: vi.fn(),
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig() {
-              throw new Error('security store boot failed')
-            },
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/security/drivers/redis-adapter') {
-          return {
-            createSecurityRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow('security store boot failed')
-      expect(createSecurityRedisAdapter).toHaveBeenCalledTimes(1)
-      expect(closeRedisAdapter).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('closes a managed redis security adapter when security config is absent', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const closeRedisAdapter = vi.fn(async () => {})
-
-      const runtimeState = globalThis as typeof globalThis & {
-        __holoRuntime__?: {
-          securityRedisAdapter?: {
-            close?(): Promise<void>
-          }
-        }
-      }
-      runtimeState.__holoRuntime__ = {
-        ...(runtimeState.__holoRuntime__ ?? {}),
-        securityRedisAdapter: {
-          close: closeRedisAdapter,
-        },
-      }
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      expect(closeRedisAdapter).toHaveBeenCalledTimes(1)
-      await runtime.shutdown()
-    } finally {
-      vi.resetModules()
-    }
-  })
-
-  it('replaces an existing managed redis security adapter during security reconfiguration', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  rateLimit: {
-    driver: 'redis',
-    redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    },
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const closePreviousRedisAdapter = vi.fn(async () => {})
-      const closeNextRedisAdapter = vi.fn(async () => {})
-      const createSecurityRedisAdapter = vi.fn(() => ({
-        increment: vi.fn(async () => ({ attempts: 1, ttlSeconds: 60 })),
-        del: vi.fn(async () => 0),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeNextRedisAdapter,
-      }))
-
-      const runtimeState = globalThis as typeof globalThis & {
-        __holoRuntime__?: {
-          securityRedisAdapter?: {
-            close?(): Promise<void>
-          }
-        }
-      }
-      runtimeState.__holoRuntime__ = {
-        ...(runtimeState.__holoRuntime__ ?? {}),
-        securityRedisAdapter: {
-          close: closePreviousRedisAdapter,
-        },
-      }
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime: vi.fn(),
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig: vi.fn(() => ({
-              hit: vi.fn(async () => ({
-                limited: false,
-                snapshot: {
-                  limiter: '',
-                  key: 'custom',
-                  attempts: 1,
-                  maxAttempts: 5,
-                  remainingAttempts: 4,
-                  expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-                },
-                retryAfterSeconds: 60,
-              })),
-              clear: vi.fn(async () => true),
-              clearByPrefix: vi.fn(async () => 0),
-              clearAll: vi.fn(async () => 0),
-            })),
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/security/drivers/redis-adapter') {
-          return {
-            createSecurityRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      expect(createSecurityRedisAdapter).toHaveBeenCalledTimes(1)
-      expect(closePreviousRedisAdapter).toHaveBeenCalledTimes(1)
-
-      await runtime.shutdown()
-      expect(closeNextRedisAdapter).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('rebuilds redis-backed security stores when an existing managed adapter is present', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  rateLimit: {
-    driver: 'redis',
-    redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    },
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const previousStore = {
-        hit: vi.fn(async () => ({
-          limited: false,
-          snapshot: {
-            limiter: '',
-            key: 'previous',
-            attempts: 1,
-            maxAttempts: 5,
-            remainingAttempts: 4,
-            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-          },
-          retryAfterSeconds: 60,
-        })),
-        clear: vi.fn(async () => true),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: vi.fn(async () => {}),
-      }
-      const nextStore = {
-        hit: vi.fn(async () => ({
-          limited: false,
-          snapshot: {
-            limiter: '',
-            key: 'next',
-            attempts: 1,
-            maxAttempts: 5,
-            remainingAttempts: 4,
-            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-          },
-          retryAfterSeconds: 60,
-        })),
-        clear: vi.fn(async () => true),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: vi.fn(async () => {}),
-      }
-      const closePreviousRedisAdapter = vi.fn(async () => {})
-      const closeNextRedisAdapter = vi.fn(async () => {})
-      previousStore.close.mockImplementation(closePreviousRedisAdapter)
-      nextStore.close.mockImplementation(closeNextRedisAdapter)
-      let activeStore = previousStore
-      const configureSecurityRuntime = vi.fn((bindings: { rateLimitStore: typeof nextStore }) => {
-        activeStore = bindings.rateLimitStore
-      })
-      const createRateLimitStoreFromConfig = vi.fn(() => nextStore)
-      const createSecurityRedisAdapter = vi.fn(() => ({
-        increment: vi.fn(async () => ({ attempts: 1, ttlSeconds: 60 })),
-        del: vi.fn(async () => 0),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeNextRedisAdapter,
-      }))
-
-      const runtimeState = globalThis as typeof globalThis & {
-        __holoRuntime__?: {
-          securityRateLimitStore?: { close?(): Promise<void> }
-          securityRedisAdapter?: {
-            close?(): Promise<void>
-          }
-        }
-      }
-      runtimeState.__holoRuntime__ = {
-        ...(runtimeState.__holoRuntime__ ?? {}),
-        securityRateLimitStore: previousStore,
-        securityRedisAdapter: {
-          close: closePreviousRedisAdapter,
-        },
-      }
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime,
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig,
-            getSecurityRuntimeBindings: () => ({
-              config: {
-                csrf: {
-                  enabled: true,
-                  field: '_token',
-                  header: 'X-CSRF-TOKEN',
-                  cookie: 'XSRF-TOKEN',
-                  except: [],
-                },
-                rateLimit: {
-                  driver: 'redis',
-                  memory: { driver: 'memory' },
-                  file: { path: './storage/framework/rate-limits' },
-                  redis: {
-                    host: '127.0.0.1',
-                    port: 6379,
-                    password: undefined,
-                    username: undefined,
-                    db: 0,
-                    connection: 'default',
-                    prefix: 'holo:rate-limit:',
-                  },
-                  limiters: {},
-                },
-              },
-              rateLimitStore: activeStore,
-            }),
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/security/drivers/redis-adapter') {
-          return {
-            createSecurityRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      expect(createSecurityRedisAdapter).toHaveBeenCalledTimes(1)
-      expect(createRateLimitStoreFromConfig).toHaveBeenCalledTimes(1)
-      expect(configureSecurityRuntime).toHaveBeenCalledWith(expect.objectContaining({
-        rateLimitStore: nextStore,
-      }))
-      expect(configureSecurityRuntime).not.toHaveBeenCalledWith(expect.objectContaining({
-        rateLimitStore: previousStore,
-      }))
-      expect(closePreviousRedisAdapter).toHaveBeenCalledTimes(1)
-      expect(previousStore.close).toHaveBeenCalledTimes(1)
-
-      await runtime.shutdown()
-      expect(closeNextRedisAdapter).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('closes a newly created managed security store when security reconfiguration fails after store creation', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  rateLimit: {
-    driver: 'redis',
-    redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    },
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      const closeRedisAdapter = vi.fn(async () => {})
-      const nextStore = {
-        hit: vi.fn(async () => ({
-          limited: false,
-          snapshot: {
-            limiter: '',
-            key: 'next',
-            attempts: 1,
-            maxAttempts: 5,
-            remainingAttempts: 4,
-            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
-          },
-          retryAfterSeconds: 60,
-        })),
-        clear: vi.fn(async () => true),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: vi.fn(closeRedisAdapter),
-      }
-      const createSecurityRedisAdapter = vi.fn(() => ({
-        increment: vi.fn(async () => ({ attempts: 1, ttlSeconds: 60 })),
-        del: vi.fn(async () => 0),
-        clearByPrefix: vi.fn(async () => 0),
-        clearAll: vi.fn(async () => 0),
-        close: closeRedisAdapter,
-      }))
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime() {
-              throw new Error('configure security failed')
-            },
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig() {
-              return nextStore
-            },
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/security/drivers/redis-adapter') {
-          return {
-            createSecurityRedisAdapter,
-          } as never
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow('configure security failed')
-      expect(nextStore.close).toHaveBeenCalledTimes(1)
-      expect(closeRedisAdapter).toHaveBeenCalled()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('fails clearly when redis-backed security is configured without the redis adapter subpath', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeRedisConfig(root)
-    await writeSecurityConfig(root, `
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  rateLimit: {
-    driver: 'redis',
-    redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      connection: 'default',
-      prefix: 'holo:rate-limit:',
-    },
-    limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
-    },
-  },
-})
-`)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
-        if (specifier === '@holo-js/security') {
-          return {
-            configureSecurityRuntime: vi.fn(),
-            defineSecurityConfig(config: unknown) {
-              return config
-            },
-            createRateLimitStoreFromConfig: vi.fn(),
-            getSecurityRuntimeBindings: () => undefined,
-            ip() {
-              return '203.0.113.7'
-            },
-            limit: {
-              perMinute() {
-                return {
-                  by(resolver: unknown) {
-                    return {
-                      maxAttempts: 5,
-                      decaySeconds: 60,
-                      key: resolver,
-                    }
-                  },
-                }
-              },
-            },
-            resetSecurityRuntime: vi.fn(),
-          } as never
-        }
-
-        if (specifier === '@holo-js/security/drivers/redis-adapter') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier, options)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await expect(runtime.initialize()).rejects.toThrow('Redis-backed security rate limits require @holo-js/security/drivers/redis-adapter to be installed.')
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('auto-configures a publish binding for the default holo broadcast connection', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${broadcastPackageEntry}
-
-export default defineBroadcastConfig({
-  default: 'reverb',
-  connections: {
-    reverb: {
-      driver: 'holo',
-      key: 'app-key',
-      secret: 'app-secret',
-      appId: 'app-id',
-      options: {
-        host: '127.0.0.1',
-        port: 8080,
-        scheme: 'http',
-        useTLS: false,
-      },
-    },
-  },
-})
-`)
-
-    const requests: Request[] = []
-    let requestCount = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
-      requestCount += 1
-      const request = input instanceof Request ? input : new Request(input, init)
-      requests.push(request.clone())
-      if (requestCount === 1) {
-        return new Response(JSON.stringify({
-          ok: true,
-          deliveredChannels: ['private-users.user-1'],
-          deliveredSockets: 1,
-        }), {
-          status: 200,
-          headers: {
-            'content-type': 'application/json; charset=utf-8',
-          },
+      for (const appId of ['first', 'second']) {
+        const reservation = createServer()
+        reservation.listen(0, '127.0.0.1')
+        await once(reservation, 'listening')
+        const address = reservation.address()
+        if (!address || typeof address === 'string') throw new Error('Expected a native broadcast port')
+        await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+        const broadcastConfig = normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId, key: appId, secret: 'secret', options: { host: '127.0.0.1', port: address.port, scheme: 'http', useTLS: false } } }, worker: { host: '127.0.0.1', port: address.port } })
+        const worker = await startBroadcastWorker({ config: broadcastConfig })
+        workers.push(worker)
+        const socket = new WebSocket(`ws://127.0.0.1:${worker.port}/app/${appId}`)
+        sockets.push(socket)
+        const packets: Array<{ event: string, channel?: string, data: string }> = []
+        socket.addEventListener('message', message => packets.push(JSON.parse(String(message.data)) as { event: string, channel?: string, data: string }))
+        await new Promise<void>((resolve, reject) => {
+          socket.addEventListener('open', () => resolve(), { once: true })
+          socket.addEventListener('error', () => reject(new Error('Native broadcast connection failed')), { once: true })
         })
+        socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'invoices' } }))
+        await expect.poll(() => packets.some(packet => packet.event === 'pusher_internal:subscription_succeeded')).toBe(true)
+        await writeBroadcastConfig(root, `import { defineBroadcastConfig } from ${broadcastPackageEntry}; export default defineBroadcastConfig(${JSON.stringify(broadcastConfig)})`)
+        const runtime = await initializeHolo(root)
+        const result = await broadcastRaw({ event: 'invoice.paid', channels: ['invoices'], payload: { invoiceId: appId } })
+        expect(result).toMatchObject({ connection: 'main', driver: 'holo', queued: false, publishedChannels: ['invoices'] })
+        await expect.poll(() => packets.find(packet => packet.event === 'invoice.paid')?.data).toBe(JSON.stringify({ invoiceId: appId }))
+        const bindings = getBroadcastRuntimeBindings()
+        if (appId === 'second') {
+          await worker.stop()
+          workers.splice(workers.indexOf(worker), 1)
+          await expect(broadcastRaw({ event: 'invoice.paid', channels: ['invoices'], payload: { invoiceId: 'closed' } })).rejects.toMatchObject({ cause: { code: 'ECONNREFUSED' } })
+        }
+        await runtime.shutdown()
+        if (appId === 'first') configureBroadcastRuntime(bindings)
       }
-
-      if (requestCount === 2) {
-        return new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: {
-            'content-type': 'application/json; charset=utf-8',
-          },
-        })
-      }
-
-      return new Response('server error', { status: 500 })
-    }))
-
-    try {
-      await initializeHolo(root)
-      expect(getBroadcastRuntimeBindings().publish).toBeDefined()
-
-      const result = await broadcastRaw({
-        connection: 'reverb',
-        event: 'notifications.invoice-paid',
-        channels: ['private-users.user-1'],
-        payload: {
-          invoiceId: 'inv-1',
-        },
-      })
-
-      expect(result).toMatchObject({
-        connection: 'reverb',
-        driver: 'holo',
-        queued: false,
-        publishedChannels: ['private-users.user-1'],
-      })
-      expect(requests).toHaveLength(1)
-
-      const request = requests[0]!
-      const url = new URL(request.url)
-      expect(url.origin).toBe('http://127.0.0.1:8080')
-      expect(url.pathname).toBe('/apps/app-id/events')
-      expect(url.searchParams.get('auth_key')).toBe('app-key')
-      expect(url.searchParams.get('auth_version')).toBe('1.0')
-      expect(url.searchParams.get('body_md5')).toMatch(/^[a-f0-9]{32}$/)
-      await expect(request.clone().json()).resolves.toEqual({
-        name: 'notifications.invoice-paid',
-        channels: ['private-users.user-1'],
-        data: JSON.stringify({
-          invoiceId: 'inv-1',
-        }),
-      })
-
-      const fallbackResult = await broadcastRaw({
-        connection: 'reverb',
-        event: 'notifications.invoice-refunded',
-        channels: ['private-users.user-2'],
-        payload: {
-          invoiceId: 'inv-2',
-        },
-      })
-
-      expect(fallbackResult).toMatchObject({
-        connection: 'reverb',
-        driver: 'holo',
-        queued: false,
-        publishedChannels: ['private-users.user-2'],
-      })
-
-      await expect(broadcastRaw({
-        connection: 'reverb',
-        event: 'notifications.invoice-failed',
-        channels: ['private-users.user-3'],
-        payload: {
-          invoiceId: 'inv-3',
-        },
-      })).rejects.toThrow('Broadcast publish request failed with status 500')
     } finally {
-      vi.unstubAllGlobals()
+      sockets.forEach(socket => socket.close())
+      await Promise.all(workers.map(worker => worker.stop()))
     }
-  })
+  }, 15000)
 
-  it('times out stalled broadcast publish requests', async () => {
+  it('aborts a broadcast publish over a real HTTP connection when the server does not respond', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
-    await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${broadcastPackageEntry}
-
-export default defineBroadcastConfig({
-  default: 'reverb',
-  connections: {
-    reverb: {
-      driver: 'holo',
-      key: 'app-key',
-      secret: 'app-secret',
-      appId: 'app-id',
-      options: {
-        host: '127.0.0.1',
-        port: 8080,
-        scheme: 'http',
-        useTLS: false,
-      },
-    },
-  },
-})
-`)
-
-    vi.stubGlobal('fetch', vi.fn((_input: Request | string | URL, init?: RequestInit) => {
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => {
-          reject(Object.assign(new Error('Aborted'), {
-            name: 'AbortError',
-          }))
-        })
-      })
-    }))
-
+    const server = createHttpServer()
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a stalled HTTP server port')
     try {
+      await writeBroadcastConfig(root, `import { defineBroadcastConfig } from ${broadcastPackageEntry}; export default defineBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', key: 'key', secret: 'secret', appId: 'main', options: { host: '127.0.0.1', port: ${address.port}, scheme: 'http', useTLS: false } } } })`)
       await initializeHolo(root)
-      await expect(broadcastRaw({
-        connection: 'reverb',
-        event: 'notifications.invoice-paid',
-        channels: ['private-users.user-1'],
-        payload: {
-          invoiceId: 'inv-1',
-        },
-      })).rejects.toThrow('timed out after 10000ms')
+      await expect(broadcastRaw({ event: 'invoice.paid', channels: ['invoices'], payload: { invoiceId: 'stalled' } })).rejects.toThrow('timed out after 10000ms')
     } finally {
-      vi.unstubAllGlobals()
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     }
-  }, 15_000)
-
-  it('rethrows non-AbortError fetch failures from broadcast publish', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${broadcastPackageEntry}
-
-export default defineBroadcastConfig({
-  default: 'reverb',
-  connections: {
-    reverb: {
-      driver: 'holo',
-      key: 'app-key',
-      secret: 'app-secret',
-      appId: 'app-id',
-      options: {
-        host: '127.0.0.1',
-        port: 8080,
-        scheme: 'http',
-        useTLS: false,
-      },
-    },
-  },
-})
-`)
-
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      throw new Error('ECONNREFUSED')
-    }))
-
-    try {
-      await initializeHolo(root)
-      await expect(broadcastRaw({
-        connection: 'reverb',
-        event: 'notifications.invoice-paid',
-        channels: ['private-users.user-1'],
-        payload: {
-          invoiceId: 'inv-1',
-        },
-      })).rejects.toThrow('ECONNREFUSED')
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('replaces the generated broadcast publisher when the config changes', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${broadcastPackageEntry}
-
-export default defineBroadcastConfig({
-  default: 'reverb',
-  connections: {
-    reverb: {
-      driver: 'holo',
-      key: 'app-key-a',
-      secret: 'app-secret-a',
-      appId: 'app-id-a',
-      options: {
-        host: '127.0.0.1',
-        port: 8080,
-        scheme: 'http',
-        useTLS: false,
-      },
-    },
-  },
-})
-`)
-
-    const initialRequests: Request[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : new Request(input, init)
-      initialRequests.push(request.clone())
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-        },
-      })
-    }))
-
-    try {
-      const firstRuntime = await initializeHolo(root)
-      const firstBindings = getBroadcastRuntimeBindings()
-      expect(firstBindings.publish).toBeDefined()
-      await firstRuntime.shutdown()
-
-      await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${broadcastPackageEntry}
-
-export default defineBroadcastConfig({
-  default: 'reverb',
-  connections: {
-    reverb: {
-      driver: 'holo',
-      key: 'app-key-b',
-      secret: 'app-secret-b',
-      appId: 'app-id-b',
-      options: {
-        host: '127.0.0.2',
-        port: 9090,
-        scheme: 'http',
-        useTLS: false,
-      },
-    },
-  },
-})
-`)
-
-      configureBroadcastRuntime({
-        config: firstBindings.config,
-        publish: firstBindings.publish,
-      })
-
-      const secondRuntime = await initializeHolo(root)
-      expect(getBroadcastRuntimeBindings().publish).not.toBe(firstBindings.publish)
-
-      await broadcastRaw({
-        connection: 'reverb',
-        event: 'orders.updated',
-        channels: ['private-users.user-1'],
-        payload: {
-          id: 'ord-1',
-        },
-      })
-
-      expect(initialRequests).toHaveLength(1)
-      const request = initialRequests[0]!
-      const url = new URL(request.url)
-      expect(url.origin).toBe('http://127.0.0.2:9090')
-      expect(url.pathname).toBe('/apps/app-id-b/events')
-
-      await secondRuntime.shutdown()
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
+  }, 15000)
 
   it('boots mail when configured and forwards the render-view seam into the mail runtime', async () => {
     const root = await createProject()
@@ -4962,59 +2513,37 @@ export default defineBroadcastConfig({
 
   it('boots auth with mail delivery when mail is configured without notifications', async () => {
     const root = await createProject()
-    await writeBaseConfig(root)
+    const databasePath = join(root, 'auth.sqlite')
+    const database = new DatabaseSync(databasePath)
+    database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password TEXT NOT NULL)')
+    database.exec('CREATE TABLE auth_session_revocations (provider TEXT NOT NULL, user_id TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0, retained_session_id TEXT, PRIMARY KEY (provider, user_id))')
+    database.close()
+    await writeBaseConfig(root, databasePath)
     await writeMailConfig(root)
     await writeAuthConfig(root)
     await writeUserModel(root)
+    await writeSecurityConfig(root)
 
     const runtime = await createHolo(root)
     await runtime.initialize()
 
-    expect(runtime.auth).toBeDefined()
-    await expect(runtime.auth?.register({
+    const auth = runtime.auth
+    if (!auth) throw new Error('Auth did not initialize')
+    const registered = await auth.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })).resolves.toBeDefined()
-  })
-
-  it('resets the rendering runtime when initialization fails after render bindings are configured', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeMailConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/mail') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root, {
-        renderView: async () => '<p>Rendered</p>',
-      })
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Mail support requires @holo-js/mail to be installed.',
-      )
-      await expect(previewMail({
-        from: 'noreply@app.test',
-        to: 'ava@example.com',
-        subject: 'Missing renderer after reset',
-        render: {
-          view: 'emails/welcome',
-        },
-      })).rejects.toThrow('renderView runtime binding')
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
+    })
+    expect(registered).toMatchObject({ id: 1, email: 'ava@example.com', name: 'Ava' })
+    expect(registered).not.toHaveProperty('password')
+    const userId = registered.id
+    if (userId === undefined) throw new Error('Registration did not return its generated user id')
+    const established = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(userId))
+    await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? established.sessionId : undefined }, async () => {
+      expect(await auth.id()).toBe(registered.id)
+      expect(await defaultRateLimitKey(new Request('https://runtime.test/requests'))).toBe('user:1')
+    })
   })
 
   it('bridges notification email delivery into mail when notifications and mail are both installed', async () => {
@@ -5164,54 +2693,22 @@ export default defineBroadcastConfig({
         input,
       },
     }))
-    const broadcaster = {
-      send: vi.fn(async () => {}),
-    }
     const customNotificationMailer = {
       send: vi.fn(async () => {}),
     }
-    const store = {
-      create: vi.fn(async () => {}),
-      list: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
-      unread: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
-      markAsRead: vi.fn(async () => 0),
-      markAsUnread: vi.fn(async () => 0),
-      delete: vi.fn(async () => 0),
-    }
+    const store = holoRuntimeInternals.createCoreNotificationStore(await loadConfigDirectory(root, { preferCache: false }))
 
     configureMailRuntime({
       send: customSend,
     })
     configureNotificationsRuntime({
-      broadcaster,
       mailer: customNotificationMailer,
       store,
     })
 
     const runtime = await createHolo(root)
     await runtime.initialize()
-
-    await notify({
-      id: 'user-1',
-      type: 'users',
-      email: 'ava@example.com',
-      routeNotificationForBroadcast: () => ['private-users.user-1'],
-    }, defineNotification({
-      type: 'invoice-paid',
-      via() {
-        return ['broadcast']
-      },
-      build: {
-        broadcast() {
-          return {
-            event: 'invoice.paid',
-            data: {
-              invoiceId: 'inv-1',
-            },
-          }
-        },
-      },
-    }))
+    await createNotificationTable()
     await notify({
       email: 'ava@example.com',
       name: 'Ava',
@@ -5246,16 +2743,6 @@ export default defineBroadcastConfig({
         },
       },
     }))
-
-    expect(broadcaster.send).toHaveBeenCalledWith({
-      event: 'invoice.paid',
-      data: {
-        invoiceId: 'inv-1',
-      },
-    }, expect.objectContaining({
-      channel: 'broadcast',
-      route: ['private-users.user-1'],
-    }))
     expect(customNotificationMailer.send).toHaveBeenCalledWith({
       subject: 'Invoice paid email',
     }, expect.objectContaining({
@@ -5265,11 +2752,7 @@ export default defineBroadcastConfig({
         name: 'Ava',
       },
     }))
-    expect(store.create).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'invoice-paid-database',
-      notifiableType: 'users',
-      notifiableId: 'user-1',
-    }))
+    expect((await store.list({ recipient: { id: 'user-1', type: 'users' }, type: 'invoice-paid-database' }, { limit: 20, offset: 0 })).records).toMatchObject([{ data: { invoiceId: 'inv-1' } }])
     expect(mailRuntimeInternals.getRuntimeBindings().send).toBe(customSend)
     expect(getNotificationsRuntimeBindings().mailer).toBe(customNotificationMailer)
     expect(getNotificationsRuntimeBindings().store).toBe(store)
@@ -5277,48 +2760,43 @@ export default defineBroadcastConfig({
     expect(listFakeSentMails()).toHaveLength(0)
   })
 
-  it('preserves an external Session replacement and releases the previously acquired Redis adapter once', async () => {
+  it('preserves an external Session replacement and closes its previously owned real Redis connection', async () => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
     const root = await createProject()
     await writeBaseConfig(root)
-    await writeRedisConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
+`)
     await writeFile(join(root, 'config/session.ts'), `
 import { defineSessionConfig } from ${sessionPackageEntry}
-export default defineSessionConfig({ driver: 'redis', stores: { redis: { driver: 'redis' } } })
+export default defineSessionConfig({ driver: 'redis', stores: { redis: { driver: 'redis', host: '127.0.0.1', port: ${port} } } })
 `, 'utf8')
-    let closed = 0
-    vi.resetModules()
-    vi.doMock('@holo-js/session/drivers/redis-adapter', () => ({
-      createSessionRedisAdapter: () => ({
-        async connect() {},
-        async get() { return null },
-        async set() {},
-        async del() {},
-        async close() { closed += 1 },
-      }),
-    }))
-    try {
-      const portable = await import('../src/portable')
-      await portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
-      configureSessionRuntime({
-        config: normalizeSessionConfig(),
-        stores: { file: createFileSessionStore(join(root, 'external-sessions')) },
-      })
-      const externalSession = await getSessionRuntime().create({ data: { owner: 'application' } })
-      await writeFile(join(root, 'config/session.ts'), `
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const ownedSession = await getSessionRuntime().create({ data: { owner: 'framework' } })
+    await expect(getSessionRuntime().read(ownedSession.id)).resolves.toMatchObject({ data: { owner: 'framework' } })
+    expect(await connections()).toBe(baseline + 1)
+    configureSessionRuntime({
+      config: normalizeSessionConfig(),
+      stores: { file: createFileSessionStore(join(root, 'external-sessions')) },
+    })
+    const externalSession = await getSessionRuntime().create({ data: { owner: 'application' } })
+    await writeFile(join(root, 'config/session.ts'), `
 import { defineSessionConfig } from ${sessionPackageEntry}
 export default defineSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: 'owned-sessions' } } })
 `, 'utf8')
-      const runtime = await portable.createHolo(root, { preferCache: false })
-      await runtime.initialize()
-      await runtime.shutdown()
-      expect(await getSessionRuntime().read(externalSession.id)).toMatchObject({ data: { owner: 'application' } })
-      expect(closed).toBe(1)
-      await runtime.shutdown()
-      expect(closed).toBe(1)
-    } finally {
-      vi.doUnmock('@holo-js/session/drivers/redis-adapter')
-      vi.resetModules()
-    }
+    const runtime = await createHolo(root, { preferCache: false })
+    await runtime.initialize()
+    await runtime.shutdown()
+    await expect(getSessionRuntime().read(externalSession.id)).resolves.toMatchObject({ data: { owner: 'application' } })
+    await vi.waitFor(async () => expect(await connections()).toBe(baseline))
+    await runtime.shutdown()
+    expect(await connections()).toBe(baseline)
   })
 
   it('preserves an external Security replacement and releases the previously acquired owned store once', async () => {
@@ -5351,12 +2829,18 @@ export default defineSecurityConfig({ rateLimit: { driver: 'memory' } })
     expect(closeOwned).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['shutdown', 'rollback'] as const)('continues capability cleanup in dependency order after %s failures', async (ending) => {
+  it.each(['shutdown', 'rollback'] as const)('releases real Redis and database connections after %s', async ending => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
     const root = await createProject()
     await writeBaseConfig(root)
     await writeRedisConfig(root, `
 import { defineRedisConfig } from ${kernelPackageEntry}
-export default defineRedisConfig({ default: 'default', connections: { default: { host: '10.55.0.8', port: 6389, db: 4, username: 'runtime', password: 'test-password' } } })
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
 `)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig } from '@holo-js/security'
@@ -5364,7 +2848,7 @@ export default defineSecurityConfig({ rateLimit: { driver: 'redis' } })
 `)
     await writeFile(join(root, 'config/session.ts'), `
 import { defineSessionConfig } from ${sessionPackageEntry}
-export default defineSessionConfig({ driver: 'redis', stores: { redis: { driver: 'redis', host: '127.0.0.1', port: 6379 } } })
+export default defineSessionConfig({ driver: 'redis', stores: { redis: { driver: 'redis', host: '127.0.0.1', port: ${port} } } })
 `, 'utf8')
     if (ending === 'rollback') {
       await writeFile(join(root, 'config/app.ts'), `
@@ -5375,50 +2859,91 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', url: 'h
 export default { id: 'cleanup-failure', name: 'Cleanup Failure', contributes: { runtime: { boot: './boot.mjs' } } }
 `, { 'boot.mjs': `export default function boot() { throw new Error('startup failed') }` })
     }
-    const sessionFailure = new Error('session close failed')
-    const securityFailure = new Error('security close failed')
-    const closed: string[] = []
-    vi.resetModules()
-    vi.doMock('@holo-js/session/drivers/redis-adapter', () => ({
-      createSessionRedisAdapter: () => ({
-        async connect() {},
-        async get() { return null },
-        async set() {},
-        async del() {},
-        async close() { closed.push('session'); throw sessionFailure },
-      }),
-    }))
-    vi.doMock('@holo-js/security/drivers/redis-adapter', () => ({
-      createSecurityRedisAdapter: () => ({
-        async increment() { return { attempts: 1, ttlSeconds: 60 } },
-        async del() { return 0 },
-        async close() { closed.push('security'); throw securityFailure },
-      }),
-    }))
-    try {
-      const portable = await import('../src/portable')
-      const runtime = await portable.createHolo(root)
-      const expectedCleanup = expect.objectContaining({ errors: [sessionFailure, securityFailure] })
-      if (ending === 'rollback') {
-        await expect(runtime.initialize()).rejects.toMatchObject({
-          errors: [expect.objectContaining({ message: 'startup failed' }), expectedCleanup],
-        })
-      } else {
-        await runtime.initialize()
-        expect(getSecurityRuntimeBindings()?.config.rateLimit.redis).toMatchObject({
-          host: '10.55.0.8', port: 6389, db: 4, username: 'runtime', password: 'test-password', connection: 'default',
-        })
-        await expect(runtime.shutdown()).rejects.toEqual(expectedCleanup)
-      }
-      expect(runtime.manager.connection().isConnected()).toBe(false)
-      expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
+    const runtime = await createHolo(root)
+    if (ending === 'rollback') {
+      await expect(runtime.initialize()).rejects.toThrow('startup failed')
+    } else {
+      await runtime.initialize()
+      const session = await getSessionRuntime().create({ data: { owner: 'framework' } })
+      await expect(getSessionRuntime().read(session.id)).resolves.toMatchObject({ data: { owner: 'framework' } })
+      await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('application', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+      expect(await connections()).toBeGreaterThan(baseline)
       await runtime.shutdown()
-      expect(closed).toEqual(['session', 'security'])
-    } finally {
-      vi.doUnmock('@holo-js/session/drivers/redis-adapter')
-      vi.doUnmock('@holo-js/security/drivers/redis-adapter')
-      vi.resetModules()
     }
+    expect(runtime.manager.connection().isConnected()).toBe(false)
+    expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
+    await vi.waitFor(async () => expect(await connections()).toBe(baseline))
+    await runtime.shutdown()
+    expect(await connections()).toBe(baseline)
+  })
+
+  it('releases an already connected Redis session store when another native connection is unavailable', async () => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
+    const reservation = createServer()
+    await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
+    const address = reservation.address()
+    if (!address || typeof address === 'string') throw new Error('No unavailable Redis port allocated')
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} }, unavailable: { host: '127.0.0.1', port: ${address.port} } } })
+`)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: {
+  primary: { driver: 'redis', connection: 'default' },
+  secondary: { driver: 'redis', connection: 'unavailable' },
+} })
+`, 'utf8')
+    const runtime = await createHolo(root)
+    await expect(runtime.initialize()).rejects.toThrow(/ECONNREFUSED|Connection is closed/i)
+    expect(runtime.manager.connection().isConnected()).toBe(false)
+    await expect.poll(connections).toBe(baseline)
+    await runtime.shutdown()
+    expect(await connections()).toBe(baseline)
+  })
+
+  it.each(['redis', 'file', 'removed'] as const)('releases the previous real Redis store when security is reconfigured to %s', async driver => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
+`)
+    await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const previous = getSecurityRuntimeBindings()?.rateLimitStore
+    if (!previous) throw new Error('The configured Redis rate limiter was not acquired')
+    await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+    expect(await connections()).toBe(baseline + 1)
+    if (driver === 'removed') {
+      await rm(join(root, 'config/security.ts'))
+    } else {
+      await writeSecurityConfig(root, `export default { rateLimit: { driver: '${driver}', redis: { prefix: 'replacement:' }, file: { path: './rate-limits' } } }`)
+    }
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
+    await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).rejects.toThrow(/closed/i)
+    if (driver === 'removed') {
+      expect(getSecurityRuntimeBindings()).toBeUndefined()
+    } else {
+      await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+    }
+    await expect.poll(connections).toBe(baseline + (driver === 'redis' ? 1 : 0))
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
   })
 
   it('preserves an external Queue driver and its live configuration across the Holo lifetime', async () => {
@@ -5505,26 +3030,15 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
       driver: 'fake',
       queued: false,
     }))
-    const broadcaster = {
-      send: vi.fn(async () => {}),
-    }
     const customNotificationMailer = {
       send: vi.fn(async () => {}),
     }
-    const store = {
-      create: vi.fn(async () => {}),
-      list: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
-      unread: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
-      markAsRead: vi.fn(async () => 0),
-      markAsUnread: vi.fn(async () => 0),
-      delete: vi.fn(async () => 0),
-    }
+    const store = holoRuntimeInternals.createCoreNotificationStore(await loadConfigDirectory(root, { preferCache: false }))
 
     configureMailRuntime({
       send: customSend,
     })
     configureNotificationsRuntime({
-      broadcaster,
       mailer: customNotificationMailer,
       store,
     })
@@ -5537,7 +3051,6 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
       send: customSend,
     })
     expect(getNotificationsRuntimeBindings()).toMatchObject({
-      broadcaster,
       mailer: customNotificationMailer,
       store,
     })
@@ -5564,26 +3077,15 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
       driver: 'fake',
       queued: false,
     }))
-    const broadcaster = {
-      send: vi.fn(async () => {}),
-    }
     const customNotificationMailer = {
       send: vi.fn(async () => {}),
     }
-    const store = {
-      create: vi.fn(async () => {}),
-      list: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
-      unread: vi.fn(async () => ({ records: [], limit: 20, offset: 0, total: 0, unread: 0 })),
-      markAsRead: vi.fn(async () => 0),
-      markAsUnread: vi.fn(async () => 0),
-      delete: vi.fn(async () => 0),
-    }
+    const store = holoRuntimeInternals.createCoreNotificationStore(await loadConfigDirectory(root, { preferCache: false }))
 
     configureMailRuntime({
       send: customSend,
     })
     configureNotificationsRuntime({
-      broadcaster,
       mailer: customNotificationMailer,
       store,
     })
@@ -5596,7 +3098,6 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
       send: customSend,
     })
     expect(getNotificationsRuntimeBindings()).toMatchObject({
-      broadcaster,
       mailer: customNotificationMailer,
       store,
     })
@@ -5609,18 +3110,7 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
 
     const runtime = await initializeHolo(root)
 
-    await createSchemaService(DB.connection()).createTable('notifications', (table) => {
-      table.string('id').primaryKey()
-      table.string('type').nullable()
-      table.string('notifiable_type')
-      table.string('notifiable_id')
-      table.json('data').default({})
-      table.timestamp('read_at').nullable()
-      table.timestamp('created_at')
-      table.timestamp('updated_at')
-      table.index(['notifiable_type', 'notifiable_id'])
-      table.index(['read_at'])
-    })
+    await createNotificationTable()
 
     const store = holoRuntimeInternals.createCoreNotificationStore(runtime.loadedConfig)
     const createdAt = new Date('2026-01-01T00:00:00.000Z')
@@ -5730,6 +3220,14 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
       await expect(store.list({ ...query, id }, { limit: 1, offset: 0 })).resolves.toMatchObject({ records: [], total: 0, unread: 0 })
     }
     const allIds = notificationRecords.map(record => record.id)
+    expect((await store.find(query, allIds)).map(record => record.id).sort()).toEqual(['notif-1', 'notif-2'])
+    await expect(store.find({ ...query, id: 'notif-1' }, allIds)).resolves.toMatchObject([{ id: 'notif-1' }])
+    await expect(store.find(query, ['notif-other-recipient', 'notif-other-tenant', 'missing'])).resolves.toEqual([])
+    await expect(store.find(query, [])).resolves.toEqual([])
+    await expect(store.markAllAsRead(query)).resolves.toBe(1)
+    await expect(store.markAllAsRead(query)).resolves.toBe(0)
+    const markedPage = await store.list(query, { limit: 20, offset: 0 })
+    expect(markedPage.records.find(record => record.id === 'notif-2')?.readAt).toEqual(createdAt)
     await expect(store.markAsRead(query, allIds)).resolves.toBe(2)
     await expect(store.unread(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
       records: [],
@@ -5738,6 +3236,9 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
     })
     await expect(store.markAsUnread(query, allIds)).resolves.toBe(2)
     await expect(store.delete(query, allIds)).resolves.toBe(2)
+    for (const record of notificationRecords.slice(0, 2)) await store.create(record)
+    await expect(store.clear(query)).resolves.toBe(2)
+    await expect(store.clear(query)).resolves.toBe(0)
     await expect(store.list(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
       records: [],
       total: 0,
@@ -5761,65 +3262,15 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
     await runtime.shutdown()
   })
 
-  it('normalizes numeric notification route ids to strings for writes and reads', async () => {
-    let inserted: Record<string, unknown> | undefined
-    const tableCalls: Array<{
-      method: 'insert' | 'where'
-      column?: string
-      value?: unknown
-      payload?: Record<string, unknown>
-    }> = []
-    const builder = {
-      insertOrIgnore(payload: Record<string, unknown>) {
-        inserted = payload
-        tableCalls.push({
-          method: 'insert',
-          payload,
-        })
-        return Promise.resolve({ affectedRows: 1 })
-      },
-      where(column: string, value: unknown) {
-        tableCalls.push({
-          method: 'where',
-          column,
-          value,
-        })
-        return this
-      },
-      orderBy() {
-        return this
-      },
-      limit() {
-        return this
-      },
-      offset() {
-        return this
-      },
-      whereNull() {
-        return this
-      },
-      async count() {
-        return 0
-      },
-      async get() {
-        return []
-      },
-      async first() {
-        return inserted
-      },
-    }
-    const tableSpy = vi.spyOn(DB, 'table').mockReturnValue(builder as never)
-    const store = holoRuntimeInternals.createCoreNotificationStore({
-      notifications: {
-        table: 'notifications',
-      },
-      database: {
-        defaultConnection: 'main',
-      },
-    } as never)
-
+  it('reads numeric notification recipients through the real database store', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeNotificationsConfig(root)
+    const runtime = await initializeHolo(root)
+    await createNotificationTable()
+    const store = holoRuntimeInternals.createCoreNotificationStore(runtime.loadedConfig)
     await store.create({
-      id: 'notif-1',
+      id: 'notif-numeric',
       type: 'invoice-paid',
       notifiableType: 'users',
       notifiableId: 42,
@@ -5829,195 +3280,21 @@ export default { id: 'failed-boot', name: 'Failed Boot', contributes: { runtime:
       updatedAt: new Date('2026-01-01T00:00:00.000Z'),
     })
     const query = { recipient: { id: 42, type: 'users' } }
-    await store.list(query, { limit: 20, offset: 0 })
-    await store.unread(query, { limit: 20, offset: 0 })
-
-    expect(tableCalls).toContainEqual({
-      method: 'insert',
-      payload: expect.objectContaining({
-        notifiable_id: '42',
-      }),
+    await expect(store.list(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [{ id: 'notif-numeric', notifiableId: '42', data: { invoiceId: 'inv-1' } }],
+      total: 1,
+      unread: 1,
     })
-    expect(tableCalls).toContainEqual({
-      method: 'where',
-      column: 'notifiable_id',
-      value: '42',
+    await expect(store.unread(query, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [{ id: 'notif-numeric', notifiableId: '42' }],
+      total: 1,
     })
-
-    tableSpy.mockRestore()
-  })
-
-  it('keeps runtime.queue readable when queue support is not installed and no queue config is present', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/queue') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-      await runtime.initialize()
-
-      expect(runtime.queue.config.default).toBe('sync')
-      expect(runtime.queue.config.failed).toEqual(expect.objectContaining({
-        driver: 'database',
-        connection: 'default',
-        table: 'failed_jobs',
-      }))
-      expect([...runtime.queue.drivers.values()]).toEqual([])
-
-      await runtime.shutdown()
-    } finally {
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('treats Windows-style queue config paths as configured when queue support is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-    vi.doMock('@holo-js/config', async () => {
-      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
-      const loaded = await actual.loadConfigDirectory(root)
-      return {
-        ...actual,
-        loadConfigDirectory: vi.fn(async () => ({
-          app: actual.holoAppDefaults,
-          database: {
-            defaultConnection: 'default',
-            connections: {
-              default: {
-                driver: 'sqlite',
-                url: ':memory:',
-                logging: false,
-              },
-            },
-          },
-          storage: holoStorageDefaults,
-          queue: normalizeQueueConfig({
-            default: 'sync',
-            failed: false,
-          }),
-          media: {},
-          custom: {},
-          all: loaded.all,
-          environment: {
-            name: 'development',
-            values: {},
-            loadedFiles: [],
-            warnings: [],
-          },
-          loadedFiles: [
-            'C:\\workspace\\app\\config\\queue.ts',
-          ],
-          warnings: [],
-        })),
-      }
+    await expect(store.list({ recipient: { id: '42', type: 'users' } }, { limit: 20, offset: 0 })).resolves.toMatchObject({
+      records: [{ id: 'notif-numeric', notifiableId: '42' }],
+      total: 1,
     })
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/queue') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Queue support requires @holo-js/queue to be installed.',
-      )
-    } finally {
-      vi.doUnmock('@holo-js/config')
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
-  })
-
-  it('treats Windows-style storage config paths as configured when storage support is missing', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-
-    vi.resetModules()
-    vi.doMock('@holo-js/config', async () => {
-      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
-      const loaded = await actual.loadConfigDirectory(root)
-      return {
-        ...actual,
-        loadConfigDirectory: vi.fn(async () => ({
-          app: actual.holoAppDefaults,
-          database: {
-            defaultConnection: 'default',
-            connections: {
-              default: {
-                driver: 'sqlite',
-                url: ':memory:',
-                logging: false,
-              },
-            },
-          },
-          storage: normalizeStorageConfig({
-            disks: {
-              local: {
-                driver: 'local',
-                root: './storage/app',
-              },
-            },
-          }),
-          queue: holoQueueDefaults,
-          media: {},
-          custom: {},
-          all: loaded.all,
-          environment: {
-            name: 'development',
-            values: {},
-            loadedFiles: [],
-            warnings: [],
-          },
-          loadedFiles: [
-            'C:\\workspace\\app\\config\\storage.ts',
-          ],
-          warnings: [],
-        })),
-      }
-    })
-
-    try {
-      const portable = await import('../src/portable')
-      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
-      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
-        if (specifier === '@holo-js/storage') {
-          return undefined
-        }
-
-        return await originalImportOptionalModule(specifier)
-      })
-
-      const runtime = await portable.createHolo(root)
-
-      await expect(runtime.initialize()).rejects.toThrow(
-        '[@holo-js/core] Storage support requires @holo-js/storage to be installed.',
-      )
-    } finally {
-      vi.doUnmock('@holo-js/config')
-      vi.restoreAllMocks()
-      vi.resetModules()
-    }
+    await expect(store.list({ recipient: { id: 43, type: 'users' } }, { limit: 20, offset: 0 })).resolves.toMatchObject({ records: [], total: 0 })
+    await runtime.shutdown()
   })
 
   it('rejects initializing a second runtime instance while another runtime is current', async () => {

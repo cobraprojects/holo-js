@@ -65,6 +65,10 @@ export async function tryPatchQueryEntry(
   const version = entry.version
   const data = entry.current.data
   const relevantTargets = collectRelevantMutationTargets(entry.patchTargets, backfills)
+  if (relevantTargets.length === 0) {
+    return entry.patchTargets.length > 0
+      && entry.patchTargets.every(target => backfills.mutations.has(target.mutationIndexKey))
+  }
   for (const { mutations, target } of relevantTargets) {
     if (canSkipPatchedBelongsToHydrationTarget(target, patchedBelongsToHydrationKeys)) {
       continue

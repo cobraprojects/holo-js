@@ -1,10 +1,11 @@
+import { NextRequest } from 'next/server'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { getCurrentNextRequest, runWithNextRequest, setNextAuthRequestRunner } from '../src/request-context'
 
 describe('Next request context', () => {
   it('isolates requests and delegates through an installed runtime runner', async () => {
-    const request = { headers: new Headers(), cookies: { get: () => undefined } }
+    const request = new NextRequest('https://app.test/request')
     expect(getCurrentNextRequest()).toBeUndefined()
     await runWithNextRequest(request, async () => {
       expect(getCurrentNextRequest()).toBe(request)
@@ -27,16 +28,18 @@ for (const first of ['auth', 'adapter'] as const) {
     const auth = first === 'auth' ? await import('../../auth/src/next/request-context') : undefined
     const adapter = await import('../src/request-context')
     const authContext = auth ?? await import('../../auth/src/next/request-context')
-    const outer = { headers: new Headers(), cookies: { get: () => undefined } }
-    const inner = { headers: new Headers(), cookies: { get: () => undefined } }
+    const outer = new NextRequest('https://app.test/outer', { headers: { cookie: 'holo_session=outer' } })
+    const inner = new NextRequest('https://app.test/inner', { headers: { cookie: 'holo_session=inner' } })
     let release!: () => void
     const suspended = new Promise<void>(resolve => { release = resolve })
     const pending = authContext.runWithNextAuthRequest(outer, async () => {
       await suspended
       expect(adapter.getCurrentNextRequest()).toBe(outer)
+      expect(adapter.getCurrentNextRequest()?.cookies.get('holo_session')?.value).toBe('outer')
       await expect(adapter.runWithNextRequest(inner, async () => {
         await Promise.resolve()
         expect(authContext.getCurrentNextAuthRequest()).toBe(inner)
+        expect(authContext.getCurrentNextAuthRequest()?.cookies.get('holo_session')?.value).toBe('inner')
         throw new Error('nested failure')
       })).rejects.toThrow('nested failure')
       expect(authContext.getCurrentNextAuthRequest()).toBe(outer)
@@ -52,7 +55,7 @@ for (const first of ['auth', 'adapter'] as const) {
 }
 
 it('preserves callback result inference and cleans up synchronous exceptions', () => {
-  const request = { headers: new Headers(), cookies: { get: () => undefined } }
+  const request = new NextRequest('https://app.test/request')
   const result = runWithNextRequest(request, () => ({ status: 'ok' as const }))
   expectTypeOf(result).toEqualTypeOf<{ status: 'ok' }>()
   const promise = runWithNextRequest(request, async () => ({ status: 'ok' as const }))
@@ -68,8 +71,8 @@ it('isolates Edge requests with native global asynchronous storage', async () =>
   try {
     const edge = await import('../../adapter-shared/src/next/request-context')
     const requests = [
-      { headers: new Headers(), cookies: { get: () => undefined } },
-      { headers: new Headers(), cookies: { get: () => undefined } },
+      new NextRequest('https://app.test/request'),
+      new NextRequest('https://app.test/request'),
     ]
     await Promise.all(requests.map(request => edge.runWithNextRequest(request, async () => {
       await Promise.resolve()
@@ -87,7 +90,7 @@ it('reports unsupported request isolation without native asynchronous storage', 
   vi.stubGlobal('AsyncLocalStorage', undefined)
   try {
     const edge = await import('../../adapter-shared/src/next/request-context')
-    const request = { headers: new Headers(), cookies: { get: () => undefined } }
+    const request = new NextRequest('https://app.test/request')
     expect(() => edge.runWithNextRequest(request, () => 'unsafe')).toThrow('requires native AsyncLocalStorage')
   } finally {
     vi.unstubAllGlobals()

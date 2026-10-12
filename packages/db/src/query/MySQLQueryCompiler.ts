@@ -1,5 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, UpsertQueryPlan } from './ast'
+import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   protected override compileLateralJoinSource(subquery: string, alias: string): string {
@@ -27,6 +27,11 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
 
   protected override compileRandomOrder(): string {
     return 'RAND()'
+  }
+
+  protected override compileComparisonPlaceholder(predicate: QueryPredicate, index: number): string {
+    const placeholder = this.createPlaceholder(index)
+    return predicate.valueType === 'json' ? `CAST(${placeholder} AS JSON)` : placeholder
   }
 
   protected override compileJsonPredicate(
