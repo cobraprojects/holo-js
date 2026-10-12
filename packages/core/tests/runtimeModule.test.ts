@@ -1,7 +1,9 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { importBundledRuntimeModule, runtimeModuleInternals } from '../src/runtimeModule'
 
@@ -19,6 +21,34 @@ afterEach(async () => {
 })
 
 describe('@holo-js/core runtime module helpers', () => {
+  it('loads installed storage modules in a client module graph', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const repoRoot = resolve(import.meta.dirname, '../../..')
+    await writeFile(join(projectRoot, 'environment.mjs'), `export default {
+      name: 'runtime-client', viteEnvironment: 'client',
+      setup() { return { teardown() {} } },
+    }`)
+    await writeFile(join(projectRoot, 'vitest.config.mjs'), `export default {
+      test: { include: ['storage.test.mjs'], environment: './environment.mjs' },
+    }`)
+    await writeFile(join(projectRoot, 'storage.test.mjs'), `
+      import { expect, it } from ${JSON.stringify(join(repoRoot, 'node_modules/vitest/dist/index.js'))}
+      import { importOptionalRuntimeModule } from ${JSON.stringify(join(repoRoot, 'packages/core/src/runtimeModule.ts'))}
+      it('loads installed storage exports', async () => {
+        const storage = await importOptionalRuntimeModule('@holo-js/storage')
+        const runtime = await importOptionalRuntimeModule('@holo-js/storage/runtime')
+        expect(storage.normalizeModuleOptions({})).toHaveProperty('defaultDisk')
+        expect(runtime.Storage.disk).toBeTypeOf('function')
+      })
+    `)
+    const resultPath = join(projectRoot, 'results.json')
+    await promisify(execFile)(process.execPath, [
+      join(repoRoot, 'node_modules/vitest/vitest.mjs'), 'run',
+      '--root', projectRoot, '--config', join(projectRoot, 'vitest.config.mjs'),
+      '--fileParallelism', '--maxWorkers=2', '--reporter=json', `--outputFile=${resultPath}`,
+    ], { cwd: projectRoot })
+  })
+
   it('does not import package export targets pruned from a production artifact', async () => {
     const projectRoot = await createTempProject()
     const packageRoot = join(projectRoot, 'node_modules/@fixture/optional')

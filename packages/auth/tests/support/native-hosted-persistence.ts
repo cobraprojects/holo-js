@@ -3,7 +3,11 @@ import { createNativeAuthPersistence } from './native-persistence'
 import { importBundledRuntimeModule } from '../../../core/src/runtimeModule'
 import type { holoRuntimeInternals as CoreRuntimeInternals } from '../../../core/src/portable/holo'
 
-export async function createNativeHostedAuthPersistence(namespace: 'clerk' | 'workos') {
+export async function createNativeHostedAuthPersistence(namespace: 'clerk' | 'workos'): Promise<
+  Awaited<ReturnType<typeof createNativeAuthPersistence>> & {
+    identityStore: ReturnType<typeof CoreRuntimeInternals.createCoreHostedIdentityStore>
+  }
+> {
   const persistence = await createNativeAuthPersistence(undefined, resolve(import.meta.dirname, 'hosted-models'))
   for (const tableName of ['users', 'admins']) {
     await persistence.schema.table(tableName, table => {

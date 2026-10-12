@@ -9,7 +9,30 @@ type EsbuildModule = {
   build(options: BuildOptions): Promise<BuildResult>
 }
 
+const builtinModuleImporters = new Map<string, () => Promise<unknown>>([
+  ['@holo-js/auth', () => import('@holo-js/auth')],
+  ['@holo-js/auth-clerk', () => import('@holo-js/auth-clerk')],
+  ['@holo-js/auth-social', () => import('@holo-js/auth-social')],
+  ['@holo-js/auth-workos', () => import('@holo-js/auth-workos')],
+  ['@holo-js/authorization', () => import('@holo-js/authorization')],
+  ['@holo-js/broadcast', () => import('@holo-js/broadcast')],
+  ['@holo-js/cache', () => import('@holo-js/cache')],
+  ['@holo-js/events', () => import('@holo-js/events')],
+  ['@holo-js/mail', () => import('@holo-js/mail')],
+  ['@holo-js/media', () => import('@holo-js/media')],
+  ['@holo-js/notifications', () => import('@holo-js/notifications')],
+  ['@holo-js/queue', () => import('@holo-js/queue')],
+  ['@holo-js/security', () => import('@holo-js/security')],
+  ['@holo-js/security/drivers/redis-adapter', () => import('@holo-js/security/drivers/redis-adapter')],
+  ['@holo-js/session', () => import('@holo-js/session')],
+  ['@holo-js/session/drivers/redis-adapter', () => import('@holo-js/session/drivers/redis-adapter')],
+  ['@holo-js/storage', () => import('@holo-js/storage')],
+  ['@holo-js/storage/runtime', () => import('@holo-js/storage/runtime')],
+])
+
 async function importModule<TModule>(specifier: string): Promise<TModule> {
+  const importBuiltin = builtinModuleImporters.get(specifier)
+  if (importBuiltin) return importBuiltin() as Promise<TModule>
   return import(/* @vite-ignore */ /* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
