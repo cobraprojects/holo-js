@@ -12,8 +12,30 @@ const directory = await mkdtemp(join(tmpdir(), 'holo-native-browser-forms-'))
 const entry = join(directory, 'entry.js')
 const bundle = join(directory, 'client.js')
 await writeFile(entry, `
+import { createElement, useEffect } from ${JSON.stringify(join(root, 'node_modules/react/index.js'))}
+import { createRoot } from ${JSON.stringify(join(root, 'node_modules/react-dom/client.js'))}
+import { useForm } from ${JSON.stringify(join(root, 'packages/adapter-next/src/client.ts'))}
 import { createFormClient, runWithBrowserFormElement } from ${JSON.stringify(join(root, 'packages/forms/src/internal/client.ts'))}
 import { field, schema } from ${JSON.stringify(join(root, 'packages/validation/src/index.ts'))}
+globalThis.mountInvitation = () => {
+  const definition = schema({ token: field.string().required().max(2048), password: field.password().required().min(12).max(128) })
+  function Invitation() {
+    const form = useForm(definition, {
+      initialValues: { token: '', password: '' },
+      submitter: ({ values, formData }) => ({ ok: true, status: 200, data: { values, entries: Object.fromEntries(formData) } }),
+    })
+    useEffect(() => { void form.fields.token.onInput('invitation-token') }, [])
+    return createElement('form', { onSubmit: event => {
+      event.preventDefault()
+      void form.submit().then(result => { globalThis.invitationResult = result })
+    } },
+    createElement('input', { name: 'password', type: 'password', value: form.values.password, onChange: event => { void form.fields.password.onInput(event.target.value) } }),
+    createElement('button', { type: 'submit' }, 'Accept'))
+  }
+  const container = document.createElement('div')
+  document.body.append(container)
+  createRoot(container).render(createElement(Invitation))
+}
 globalThis.submitNativeForm = async (method) => {
   const form = createFormClient(schema({ email: field.string().required().email() }), {
     method,
@@ -96,6 +118,22 @@ try {
         await page.locator('input[type="file"]').setInputFiles({ name: 'image.txt', mimeType: 'text/plain', buffer: Buffer.from('native file content') })
         const result = await page.evaluate(() => globalThis.submitNativeUpload())
         assert.deepEqual(result, { ok: true, status: 200, data: { title: 'Native upload', name: 'image.txt', bytes: 19, content: 'native file content', sharedFile: true } })
+      } finally {
+        await context.close()
+      }
+    })
+    await suite.test('submits programmatic fields alongside controlled inputs through native Next useForm', async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        await page.goto(url)
+        await page.evaluate(() => globalThis.mountInvitation())
+        await page.locator('input[name="password"]').fill('secure-password')
+        await page.getByRole('button', { name: 'Accept' }).click()
+        await page.waitForFunction(() => globalThis.invitationResult !== undefined)
+        const result = await page.evaluate(() => globalThis.invitationResult)
+        const expected = { token: 'invitation-token', password: 'secure-password' }
+        assert.deepEqual(result, { ok: true, status: 200, data: { values: expected, entries: expected } })
       } finally {
         await context.close()
       }
