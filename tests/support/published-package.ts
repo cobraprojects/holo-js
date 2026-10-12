@@ -110,6 +110,11 @@ export async function provisionTempPackage(sourcePackageDir: string, tempPackage
         && !source.endsWith('/node_modules')
     },
   })
+  await linkInstalledDependenciesForPackage({
+    repoRoot: sourcePackageDir,
+    nodeModulesRoot: join(tempPackageDir, 'node_modules'),
+    packageJsonPath: join(sourcePackageDir, 'package.json'),
+  })
 }
 
 export async function stagePublishedPackage(

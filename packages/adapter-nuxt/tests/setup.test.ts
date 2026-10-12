@@ -157,9 +157,6 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await provisionTempPackage(resolve(packageDir, '../storage'), storagePackageRoot)
       await provisionTempPackage(packageDir, adapterPackageRoot)
 
-      await mkdir(join(corePackageRoot, 'node_modules'), { recursive: true })
-      await symlink(resolve(packageDir, '../core/node_modules/esbuild'), join(corePackageRoot, 'node_modules', 'esbuild'))
-
       await mkdir(tempNodeModulesRoot, { recursive: true })
       for (const packageName of optionalCorePackages) {
         const source = resolve(packageDir, `../${packageName}`)
