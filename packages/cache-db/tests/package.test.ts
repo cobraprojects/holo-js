@@ -166,10 +166,6 @@ describe('@holo-js/cache-db', () => {
       connectionName: 'cache',
       driver: 'postgres',
       schemaName: 'cache',
-      security: {
-        debugSqlInLogs: true,
-        redactBindingsInLogs: false,
-      },
     })
     expect(cacheDbInternals.createDatabaseContextOptions('cache', 'postgres://cache.internal/db')).toMatchObject({
       connectionName: 'cache',
