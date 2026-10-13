@@ -5809,6 +5809,86 @@ registerGeneratedTables(tables)
     expect(generatedRuntime).not.toContain('stale_name')
   }, 90000)
 
+  it('recovers migration metadata when a discovered model uses a generated table without a primary key', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_choices.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('choices', table => {
+      table.id()
+      table.string('label')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('choices')
+  },
+})
+`)
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+
+    const staleSchema = `
+import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+
+export const choices = defineGeneratedTable('choices', { label: column.string() })
+export const tables = { choices }
+registerGeneratedTables(tables)
+`
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', staleSchema)
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.mjs', staleSchema)
+    await writeProjectFile(projectRoot, 'server/models/Choice.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('choices')
+`)
+    await writeProjectFile(projectRoot, 'server/db/seeders/ChoiceSeeder.ts', `
+import { defineSeeder } from '@holo-js/db'
+import Choice from '../../models/Choice'
+
+export default defineSeeder({
+  name: 'ChoiceSeeder',
+  async run() {
+    await Choice.create({ label: 'Ready' })
+  },
+})
+`)
+
+    const repaired = runCliProcess(projectRoot, ['migrate'])
+    expect(repaired.status, repaired.stderr || repaired.stdout).toBe(0)
+    expect(repaired.stdout).toContain('No migrations were executed.')
+    for (const path of ['schema.generated.ts', 'schema.mjs']) {
+      expect(await readFile(join(projectRoot, '.holo-js/generated', path), 'utf8')).toContain('"id": column.id()')
+    }
+
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    const registry = await loadGeneratedProjectRegistry(projectRoot)
+    expect(registry?.models).toEqual([expect.objectContaining({ tableName: 'choices' })])
+    expect(registry?.seeders).toEqual([expect.objectContaining({ name: 'ChoiceSeeder' })])
+
+    const seeded = runCliProcess(projectRoot, ['seed'])
+    expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0)
+    const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+    try {
+      expect(database.prepare('SELECT label FROM choices').all()).toEqual([{ label: 'Ready' }])
+    } finally {
+      database.close()
+    }
+  }, 90000)
+
   it('refreshes generated-schema bundles before running migrate:fresh seeders', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

@@ -770,8 +770,14 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
       const action = options.action ?? liveForm?.action
       const liveFormData = getActiveBrowserFormData(liveForm)
       const formData = liveFormData ?? buildFormData(state.values)
+      if (liveFormData) {
+        const nativeFields = new Set([...liveFormData.keys()].map(name => name.replace(/\[\d+\]$/, '[]')))
+        for (const [name, value] of buildFormData(state.values)) {
+          if (!nativeFields.has(name)) formData.append(name, value)
+        }
+      }
       const localSubmission = liveFormData
-        ? await runValidationForInput(liveFormData)
+        ? await runValidationForInput(formData)
         : await runValidation()
 
       if (!localSubmission.valid) {

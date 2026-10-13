@@ -50,7 +50,7 @@ import {
   isCliModelReference,
   isInactiveGeneratedModelModule,
   isMigrationDefinition,
-  isMissingGeneratedSchemaModelError,
+  isUnresolvedModelSchemaError,
   isSeederDefinition,
   normalizeCommandAliases,
   resolveAuthorizationTargetName,
@@ -175,7 +175,7 @@ export async function prepareProjectDiscovery(
         ...(exportedModel.exportName === 'default' ? {} : { exportName: exportedModel.exportName }),
       })
     } catch (error) {
-      if (!isMissingGeneratedSchemaModelError(error)) {
+      if (!isUnresolvedModelSchemaError(error)) {
         throw error
       }
     }
@@ -213,7 +213,7 @@ export async function prepareProjectDiscovery(
         name: seeder.name,
       })
     } catch (error) {
-      if (!isMissingGeneratedSchemaModelError(error)) {
+      if (!isUnresolvedModelSchemaError(error)) {
         throw error
       }
     }

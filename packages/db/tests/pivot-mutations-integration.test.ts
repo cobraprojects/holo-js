@@ -1,6 +1,6 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { type Entity, belongsTo, belongsToMany, hasMany, morphToMany, column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { type Entity, belongsTo, belongsToMany, hasMany, morphToMany, column, configureDB, createConnectionManager, createDialect, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
 import type { QuerySuccessLog } from '../src/core/types'
 
 const users = defineGeneratedTable('pivot_users', { id: column.id() })
@@ -28,6 +28,66 @@ describe('pivot mutation integration', () => {
   afterEach(async () => {
     await adapter.disconnect()
     resetDB()
+  })
+
+  it('loads every pivot field without requiring withPivot', async () => {
+    const AllFieldsUser = defineModel(users, {
+      timestamps: false,
+      relations: { roles: belongsToMany(() => Role, pivots, 'userId', 'roleId') },
+    })
+    const user = await AllFieldsUser.findOrFail(1)
+    await user.attach('roles', 2)
+    const loaded = await AllFieldsUser.with('roles').findOrFail(1)
+    expect(loaded.roles[0]?.pivot).toEqual({ userId: 1, roleId: 2, note: 'default', rank: 0 })
+  })
+
+  it('maintains and loads pivot timestamps on attachments and updates', async () => {
+    const timedPivots = defineGeneratedTable('pivot_timed_memberships', {
+      userId: column.integer(),
+      roleId: column.integer(),
+      approved: column.boolean(),
+      created_at: column.timestamp(),
+      updated_at: column.timestamp(),
+    })
+    await adapter.execute('CREATE TABLE pivot_timed_memberships (userId INTEGER NOT NULL, roleId INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(userId, roleId))')
+    const TimedUser = defineModel(users, {
+      timestamps: false,
+      relations: {
+        roles: belongsToMany(() => Role, timedPivots, 'userId', 'roleId')
+          .withTimestamps().withPivot('approved').as('membership'),
+      },
+    })
+    registerGeneratedTables({ timedPivots })
+    const user = await TimedUser.findOrFail(1)
+    await user.attach('roles', [1, 2], { approved: true })
+    const loaded = await TimedUser.with('roles').findOrFail(1)
+    const membership = loaded.roles[0]?.membership
+    expect(membership?.approved).toBe(true)
+    expect(membership?.created_at).toBeInstanceOf(Date)
+    expect(membership?.updated_at).toEqual(membership?.created_at)
+    expect(loaded.roles[1]?.membership.created_at).toEqual(membership?.created_at)
+    const NamedTimedUser = defineModel(users, {
+      timestamps: false,
+      relations: {
+        roles: belongsToMany(() => Role, 'pivot_timed_memberships', 'userId', 'roleId').withTimestamps().as('membership'),
+      },
+    })
+    const named = await NamedTimedUser.with('roles').findOrFail(1)
+    expect(named.roles[0]?.membership).toEqual(membership)
+
+
+    await adapter.execute("UPDATE pivot_timed_memberships SET created_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE roleId = 1")
+    await user.updateExistingPivot('roles', 1, { approved: false })
+    const updated = await TimedUser.with('roles').findOrFail(1)
+    expect(updated.roles[0]?.membership.approved).toBe(false)
+    expect(updated.roles[0]?.membership.created_at).toEqual(new Date('2000-01-01T00:00:00.000Z'))
+    expect(updated.roles[0]?.membership.updated_at.getTime()).toBeGreaterThan(new Date('2000-01-01T00:00:00.000Z').getTime())
+
+    expect(await user.sync('roles', { 1: { approved: true }, 3: { approved: false } })).toEqual({ attached: [3], detached: [2], updated: [1] })
+    const synced = await TimedUser.with('roles').findOrFail(1)
+    expect(synced.roles.map(role => role.membership.approved)).toEqual([true, false])
+    expect(synced.roles[1]?.membership.created_at).toBeInstanceOf(Date)
+    expect(synced.roles[1]?.membership.updated_at).toEqual(synced.roles[1]?.membership.created_at)
   })
 
   it('batches compatible attachments and toggles without losing result order', async () => {

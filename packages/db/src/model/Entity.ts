@@ -249,6 +249,13 @@ class EntityBase<
   }
 
   setRelation(name: string, value: unknown): this {
+    if (!(name in this)) {
+      Object.defineProperty(this, name, {
+        configurable: true,
+        enumerable: false,
+        get: () => this.getRelation(name),
+      })
+    }
     this.relations[name] = value
     return this
   }
@@ -634,7 +641,7 @@ class EntityBase<
   async load<TPaths extends readonly ModelRelationPath<TRelations>[]>(
     ...relations: TPaths
   ): Promise<
-    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths>>
+    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths> | 'toJSON'>
     & ResolveEagerLoads<TRelations, TPaths>
     & (this extends { toJSON(): infer R }
       ? { toJSON(): R & SerializeLoaded<ResolveEagerLoads<TRelations, TPaths>> }
@@ -653,7 +660,7 @@ class EntityBase<
   async loadMissing<TPaths extends readonly ModelRelationPath<TRelations>[]>(
     ...relations: TPaths
   ): Promise<
-    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths>>
+    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths> | 'toJSON'>
     & ResolveEagerLoads<TRelations, TPaths>
     & (this extends { toJSON(): infer R }
       ? { toJSON(): R & SerializeLoaded<ResolveEagerLoads<TRelations, TPaths>> }

@@ -139,7 +139,9 @@ export function buildFormData(value: unknown, path = '', formData: FormData = ne
     return formData
   }
   if (Array.isArray(value)) {
-    for (const item of value) buildFormData(item, `${path}[]`, formData)
+    for (const [index, item] of value.entries()) {
+      buildFormData(item, `${path}[${isPlainFormObject(item) || Array.isArray(item) ? index : ''}]`, formData)
+    }
     return formData
   }
   if (isPlainFormObject(value)) {

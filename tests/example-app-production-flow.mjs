@@ -30,7 +30,7 @@ async function waitForProductionApp(baseUrl, expectedTitle, child, output) {
   throw new Error(`Timed out waiting for ${baseUrl}: ${lastError instanceof Error ? lastError.message : String(lastError)}\n${output()}`)
 }
 
-async function assertBrowserNavigation(baseUrl, expectedTitle) {
+async function assertBrowserNavigation(baseUrl, expectedTitle, framework) {
   const browser = await getExampleAppBrowser()
   const context = await browser.newContext({ baseURL: baseUrl })
   try {
@@ -38,6 +38,10 @@ async function assertBrowserNavigation(baseUrl, expectedTitle) {
     const observed = observeExampleAppPage(page)
     await page.goto('/', { waitUntil: 'networkidle' })
     await expectPageText(page, expectedTitle)
+    const detail = await page.goto(`/posts/shipping-a-real-holo-blog-on-${framework}`, { waitUntil: 'networkidle' })
+    assert.equal(detail?.status(), 200)
+    await expectPageText(page, 'Primary topic')
+    assert.ok(await page.locator('time[datetime]').count() > 0)
     await page.goto('/login', { waitUntil: 'networkidle' })
     assert.equal(new URL(page.url()).pathname, '/login')
     await page.goto('/register', { waitUntil: 'networkidle' })
@@ -245,7 +249,7 @@ export async function assertExampleAppProductionFlow({
 
   try {
     await waitForProductionApp(baseUrl, expectedTitle, child, () => output)
-    await assertBrowserNavigation(baseUrl, expectedTitle)
+    await assertBrowserNavigation(baseUrl, expectedTitle, framework)
     if (framework === 'nuxt' || framework === 'sveltekit') await assertExampleAppFormsBrowserFlow({ baseUrl, framework })
     await assertExampleAppAuthFlow({
       baseUrl,

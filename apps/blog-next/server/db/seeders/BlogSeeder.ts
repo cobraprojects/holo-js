@@ -61,7 +61,10 @@ export default defineSeeder({
       published_at: timestamp,
     })
 
-    await launchPost.tags().attach([frameworkTag.id, nextTag.id])
+    await launchPost.tags().sync({
+      [frameworkTag.id]: { is_primary: true },
+      [nextTag.id]: { is_primary: false },
+    })
 
     const roadmapPost = await Post.create({
       user_id: author.id,
@@ -74,6 +77,9 @@ export default defineSeeder({
       published_at: new Date('2026-04-24T14:30:00.000Z'),
     })
 
-    await roadmapPost.tags().attach([frameworkTag.id, releaseTag.id])
+    await roadmapPost.tags().sync({
+      [frameworkTag.id]: { is_primary: true },
+      [releaseTag.id]: { is_primary: false },
+    })
   },
 })

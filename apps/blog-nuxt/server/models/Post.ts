@@ -8,7 +8,7 @@ const relations = {
     pivotTable: 'post_tags',
     foreignPivotKey: 'post_id',
     relatedPivotKey: 'tag_id',
-  }),
+  }).withPivot('is_primary').withTimestamps(),
   comments: hasMany('Comment', { foreignKey: 'post_id' }),
 }
 

@@ -12,6 +12,7 @@ type Context = {
   scope: Attributes
   relatedColumn: string
   allowedColumns: readonly string[]
+  timestamps: boolean
   relationName: string
 }
 
@@ -46,7 +47,7 @@ export class PivotMutation {
     if (Object.keys(attributes).length === 0) return 0
     const [existing] = await this.read(this.connection, [id])
     if (!existing || !this.changed(existing, attributes)) return 0
-    await this.query(this.connection).where(this.context.relatedColumn, id).update(attributes)
+    await this.query(this.connection).where(this.context.relatedColumn, id).update(this.timestampAttributes(attributes, false))
     return 1
   }
 
@@ -89,9 +90,14 @@ export class PivotMutation {
   }
 
   private async execute(connection: DatabaseContext, actions: readonly Action[]): Promise<void> {
+    const timestamp = new Date().toISOString()
+    const timestamped = this.context.timestamps ? actions.map(action => action.kind === 'delete' ? action : {
+      ...action,
+      attributes: this.timestampAttributes(action.attributes, action.kind === 'insert', timestamp),
+    }) : actions
     let offset = 0
-    while (offset < actions.length) {
-      const action = actions[offset]!
+    while (offset < timestamped.length) {
+      const action = timestamped[offset]!
       if (action.kind === 'update') {
         await this.query(connection).where(this.context.relatedColumn, action.id).update(action.attributes)
         offset++
@@ -102,8 +108,8 @@ export class PivotMutation {
       const limit = action.kind === 'insert' ? Math.max(1, Math.floor(bindingBudget / rowWidth)) : this.idBatchSize()
       const batch: Action[] = [action]
       offset++
-      while (offset < actions.length && batch.length < limit) {
-        const next = actions[offset]!
+      while (offset < timestamped.length && batch.length < limit) {
+        const next = timestamped[offset]!
         if (next.kind !== action.kind) break
         const keys = Object.keys(next.attributes)
         if (action.kind === 'insert' && (keys.length !== columns.length || !columns.every(column => keys.includes(column)))) break
@@ -119,6 +125,15 @@ export class PivotMutation {
           ...entry.attributes,
         })))
       }
+    }
+  }
+
+  private timestampAttributes(attributes: Attributes, inserting: boolean, timestamp = new Date().toISOString()): Attributes {
+    if (!this.context.timestamps) return attributes
+    return {
+      ...attributes,
+      ...(inserting ? { created_at: attributes.created_at ?? timestamp } : {}),
+      updated_at: timestamp,
     }
   }
 

@@ -12,8 +12,30 @@ const directory = await mkdtemp(join(tmpdir(), 'holo-native-browser-forms-'))
 const entry = join(directory, 'entry.js')
 const bundle = join(directory, 'client.js')
 await writeFile(entry, `
+import { createElement, useEffect } from ${JSON.stringify(join(root, 'node_modules/react/index.js'))}
+import { createRoot } from ${JSON.stringify(join(root, 'node_modules/react-dom/client.js'))}
+import { useForm } from ${JSON.stringify(join(root, 'packages/adapter-next/src/client.ts'))}
 import { createFormClient, runWithBrowserFormElement } from ${JSON.stringify(join(root, 'packages/forms/src/internal/client.ts'))}
 import { field, schema } from ${JSON.stringify(join(root, 'packages/validation/src/index.ts'))}
+globalThis.mountInvitation = () => {
+  const definition = schema({ token: field.string().required().max(2048), password: field.password().required().min(12).max(128) })
+  function Invitation() {
+    const form = useForm(definition, {
+      initialValues: { token: '', password: '' },
+      submitter: ({ values, formData }) => ({ ok: true, status: 200, data: { values, entries: Object.fromEntries(formData) } }),
+    })
+    useEffect(() => { void form.fields.token.onInput('invitation-token') }, [])
+    return createElement('form', { onSubmit: event => {
+      event.preventDefault()
+      void form.submit().then(result => { globalThis.invitationResult = result })
+    } },
+    createElement('input', { name: 'password', type: 'password', value: form.values.password, onChange: event => { void form.fields.password.onInput(event.target.value) } }),
+    createElement('button', { type: 'submit' }, 'Accept'))
+  }
+  const container = document.createElement('div')
+  document.body.append(container)
+  createRoot(container).render(createElement(Invitation))
+}
 globalThis.submitNativeForm = async (method) => {
   const form = createFormClient(schema({ email: field.string().required().email() }), {
     method,
@@ -21,6 +43,29 @@ globalThis.submitNativeForm = async (method) => {
     submitter: ({ formData }) => ({ ok: true, status: 200, data: Object.fromEntries(formData) }),
   })
   return await form.submit()
+}
+globalThis.mountSurvey = () => {
+  const definition = schema({ tags: field.array(field.string()).required(), pages: field.array({ key: field.string().required(), questions: field.array({ text: field.string().required(), required: field.boolean() }).default([]) }).required() })
+  const initialValues = { tags: ['first', 'second'], pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
+  function Survey() {
+    const form = useForm(definition, {
+      initialValues,
+      submitter: async ({ values, formData }) => {
+        const { validate } = await import(${JSON.stringify(join(root, 'packages/validation/src/index.ts'))})
+        return { ok: true, status: 200, data: { values, transported: await validate(formData, definition) } }
+      },
+    })
+    return createElement('form', { onSubmit: event => {
+      event.preventDefault()
+      void form.submit().then(result => { globalThis.surveyResult = result })
+    } },
+    ...form.values.tags.map((tag, index) => createElement('input', { key: index, type: 'hidden', name: 'tags[' + index + ']', value: tag })),
+    createElement('output', { id: 'survey-questions' }, form.values.pages.flatMap(page => page.questions.map(question => question.text)).join(', ')),
+    createElement('button', { type: 'submit' }, 'Publish survey'))
+  }
+  const container = document.createElement('div')
+  document.body.append(container)
+  createRoot(container).render(createElement(Survey))
 }
 globalThis.submitNativeUpload = async () => {
   const form = createFormClient(schema({ title: field.string().required(), image: field.file().optional() }), {
@@ -100,6 +145,22 @@ try {
         await context.close()
       }
     })
+    await suite.test('submits programmatic fields alongside controlled inputs through native Next useForm', async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        await page.goto(url)
+        await page.evaluate(() => globalThis.mountInvitation())
+        await page.locator('input[name="password"]').fill('secure-password')
+        await page.getByRole('button', { name: 'Accept' }).click()
+        await page.waitForFunction(() => globalThis.invitationResult !== undefined)
+        const result = await page.evaluate(() => globalThis.invitationResult)
+        const expected = { token: 'invitation-token', password: 'secure-password' }
+        assert.deepEqual(result, { ok: true, status: 200, data: { values: expected, entries: expected } })
+      } finally {
+        await context.close()
+      }
+    })
     await suite.test('keeps concurrently submitted native forms and their action URLs isolated', async () => {
       const context = await browser.newContext()
       try {
@@ -110,6 +171,21 @@ try {
           { ok: true, status: 200, data: { email: 'first@example.com', action: '/first' } },
           { ok: true, status: 200, data: { email: 'second@example.com', action: '/second' } },
         ])
+      } finally {
+        await context.close()
+      }
+    })
+    await suite.test('preserves nested array items in React state and server validation when submitting a native form', async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        await page.goto(url)
+        await page.evaluate(() => globalThis.mountSurvey())
+        await page.getByRole('button', { name: 'Publish survey' }).click()
+        await page.waitForFunction(() => globalThis.surveyResult !== undefined)
+        const expected = { tags: ['first', 'second'], pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
+        assert.deepEqual(await page.evaluate(() => globalThis.surveyResult), { ok: true, status: 200, data: { values: expected, transported: expected } })
+        assert.equal(await page.locator('#survey-questions').textContent(), 'First question, Second question, Third question')
       } finally {
         await context.close()
       }

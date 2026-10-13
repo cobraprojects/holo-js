@@ -7,6 +7,6 @@ export default defineModel('tags', {
       pivotTable: 'post_tags',
       foreignPivotKey: 'tag_id',
       relatedPivotKey: 'post_id',
-    }),
+    }).withPivot('is_primary').withTimestamps(),
   },
 })
