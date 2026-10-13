@@ -769,6 +769,24 @@ describe('query core slice', () => {
     expect(await DB.table(counters).orderBy('id').pluck('score')).toEqual([10, 25, 30])
   })
 
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('adjusts bigint budgets through declared and named tables in transactions on %s', async (driver) => {
+    const { db, table, schema } = await openDatabase(driver)
+    await schema.table(table.tableName, table => { table.bigInteger('reserved_micros').default(0) })
+    const budgets = defineTable(table.tableName, { ...table.columns, reserved_micros: column.bigInteger() })
+    await db.table(budgets).insert([
+      { id: 1, name: 'Current', reserved_micros: 1_000_000_000_000 },
+      { id: 2, name: 'Previous', reserved_micros: 2_000_000_000_000 },
+    ])
+
+    await db.transaction(async (tx) => {
+      expect((await tx.table(budgets).where('id', 1).increment('reserved_micros', 500)).affectedRows).toBe(1)
+      expect((await tx.table(table.tableName).where('id', 1).decrement('reserved_micros', 200)).affectedRows).toBe(1)
+    })
+
+    const rows = await db.table(budgets).orderBy('id').pluck('reserved_micros')
+    expect(rows.map(Number)).toEqual([1_000_000_000_300, 2_000_000_000_000])
+  })
+
   it('updates only matching rows when incrementing and decrementing with extra values', async () => {
     const adapter = await createRealQueryDatabase()
     await adapter.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER NOT NULL, active INTEGER NOT NULL)')

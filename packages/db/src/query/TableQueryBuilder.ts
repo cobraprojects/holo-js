@@ -1460,7 +1460,7 @@ export class TableQueryBuilder<
       for (const selection of aggregates) {
         const value = row[selection.alias]
         if (value == null) continue
-        const number = this.normalizeAggregateMetadataNumber(value)
+        const number = this.normalizeNumericResult(value)
         if (typeof number === 'undefined' || (Number.isInteger(number) && !Number.isSafeInteger(number))) {
           throw new CompilerError(`Query aggregate "${selection.aggregate}" returned an invalid numeric value for "${selection.alias}".`)
         }
@@ -1543,9 +1543,9 @@ export class TableQueryBuilder<
     const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
     const states: DatabaseQueryGroupedAverageStateObservation[] = []
     for (const row of result.rows) {
-      const count = this.normalizeAggregateMetadataNumber(row[GROUPED_AVERAGE_COUNT_KEY])
-      const rowCount = this.normalizeAggregateMetadataNumber(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
-      const sum = this.normalizeAggregateMetadataNumber(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
+      const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
+      const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
+      const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
       if (
         typeof count === 'undefined'
         || typeof rowCount === 'undefined'
@@ -1594,7 +1594,7 @@ export class TableQueryBuilder<
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_KEY],
       )
-      const rowCount = this.normalizeAggregateMetadataNumber(row[GROUPED_AGGREGATE_ROW_COUNT_KEY])
+      const rowCount = this.normalizeNumericResult(row[GROUPED_AGGREGATE_ROW_COUNT_KEY])
       if (
         typeof aggregateValue === 'undefined'
         || typeof rowCount === 'undefined'
@@ -1652,7 +1652,7 @@ export class TableQueryBuilder<
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_COUNT_VALUE_KEY],
       )
-      const count = this.normalizeAggregateMetadataNumber(row[GROUPED_AGGREGATE_VALUE_COUNT_KEY])
+      const count = this.normalizeNumericResult(row[GROUPED_AGGREGATE_VALUE_COUNT_KEY])
       if (
         typeof value === 'undefined'
         || typeof count === 'undefined'
@@ -1719,10 +1719,10 @@ export class TableQueryBuilder<
       return undefined
     }
 
-    return this.normalizeAggregateMetadataNumber(value)
+    return this.normalizeNumericResult(value)
   }
 
-  private normalizeAggregateMetadataNumber(value: unknown): number | undefined {
+  private normalizeNumericResult(value: unknown): number | undefined {
     if (value === null) {
       return 0
     }
@@ -2665,7 +2665,7 @@ export class TableQueryBuilder<
     const rows = await uncachedSelection.get() as Record<string, unknown>[]
     for (const row of rows) {
       const currentValue = row[column]
-      if (typeof currentValue !== 'number' || Number.isNaN(currentValue)) {
+      if (currentValue == null || typeof this.normalizeNumericResult(currentValue) === 'undefined') {
         throw new CompilerError(`Cannot increment/decrement non-numeric column "${column}".`)
       }
     }
