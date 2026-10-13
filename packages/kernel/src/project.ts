@@ -1,3 +1,5 @@
+import type { ConcurrencyOptions, DatabaseLogger } from './database'
+
 export type HoloDatabaseDriver = 'sqlite' | 'postgres' | 'mysql'
 
 export interface HoloProjectPaths {
@@ -26,6 +28,12 @@ export interface HoloProjectConnectionConfig {
   filename?: string
   schema?: string
   ssl?: boolean | Record<string, unknown>
+  max?: number
+  connectionTimeoutMillis?: number
+  idleTimeoutMillis?: number
+  application_name?: string
+  concurrency?: ConcurrencyOptions
+  logger?: DatabaseLogger
   logging?: boolean
   security?: {
     allowUnsafeRawSql?: boolean

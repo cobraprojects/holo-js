@@ -36,6 +36,53 @@ export default defineDatabaseConfig({
 })
 ```
 
+For bounded PostgreSQL pools and operational telemetry, configure the connection directly:
+
+```ts
+import { defineDatabaseConfig, type DatabaseLogger } from '@holo-js/db'
+import { env } from '@holo-js/config'
+
+const logger: DatabaseLogger = {
+  onQuerySuccess({ connectionName, kind, durationMs, rowCount, affectedRows }) {
+    console.info({ connectionName, kind, durationMs, rowCount, affectedRows })
+  },
+  onQueryError({ connectionName, kind, durationMs }) {
+    console.error({ connectionName, kind, durationMs })
+  },
+}
+
+export default defineDatabaseConfig({
+  connections: {
+    main: {
+      driver: 'postgres',
+      url: env('DATABASE_URL'),
+      max: 4,
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+      application_name: 'my-app',
+      concurrency: { maxConcurrentQueries: 4, queueLimit: 32 },
+      logger,
+    },
+  },
+})
+```
+
+The PostgreSQL options use native `pg.PoolConfig` names and work with both `url` and
+structured host/port credentials. `max` must be a positive integer; the timeout values must be
+nonnegative integers in milliseconds. A timeout of zero disables that timeout. Budgets apply
+per named connection and per process, so account for all application processes when sizing pools.
+
+`concurrency` accepts `maxConcurrentQueries`, `queueLimit`, and `workerThreads`. It controls Holo's
+query scheduler separately from PostgreSQL's pool. A zero queue limit rejects additional queries
+when all scheduler slots are occupied. Transactions can hold pool connections for their full lifetime.
+
+Use an object of `DatabaseLogger` callbacks for custom telemetry. It survives config normalization
+and cached runtime boot; database config containing callbacks is reloaded from its source file.
+A custom `logger` takes precedence over `logging: true` and keeps SQL and binding redaction enabled.
+The existing `logging: true` console logger prints SQL and error messages when no custom logger is
+provided. For content-free telemetry, select only operational fields as above: driver error objects
+may contain SQL or application data even when SQL and bindings are redacted.
+
 Use SQLite for local development or switch to MySQL and Postgres by changing the named connection
 definitions.
 

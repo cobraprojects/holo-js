@@ -1,6 +1,7 @@
+import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 import type { CompiledStatement, DatabaseOperationOptions, DatabaseTransactionOptions, DriverAdapter, DriverExecutionResult, DriverQueryResult } from '../core/types'
 
-export type DatabaseDriverConnection = {
+export type DatabaseDriverConnection = Pick<HoloProjectConnectionConfig, 'max' | 'connectionTimeoutMillis' | 'idleTimeoutMillis' | 'application_name'> & {
   readonly url?: string
   readonly host?: string
   readonly port?: number

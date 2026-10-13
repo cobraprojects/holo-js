@@ -6,19 +6,8 @@ import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 
 export type SupportedDatabaseDriver = 'sqlite' | 'postgres' | 'mysql'
 
-export interface RuntimeConnectionConfig {
+export interface RuntimeConnectionConfig extends Omit<HoloProjectConnectionConfig, 'driver'> {
   driver?: SupportedDatabaseDriver | string
-  url?: string
-  host?: string
-  port?: number | string
-  username?: string
-  password?: string
-  database?: string
-  filename?: string
-  schema?: string
-  ssl?: boolean | Record<string, unknown>
-  logging?: boolean
-  security?: HoloProjectConnectionConfig['security']
 }
 
 export interface RuntimeDatabaseConfig {
@@ -62,6 +51,13 @@ function normalizeConnectionInput(input: RuntimeConnectionConfig | string | unde
   if (allowUnsafeRawSql !== undefined && typeof allowUnsafeRawSql !== 'boolean') {
     throw new Error('Database connection security.allowUnsafeRawSql must be a boolean.')
   }
+  for (const key of ['max', 'connectionTimeoutMillis', 'idleTimeoutMillis'] as const) {
+    const value = input?.[key]
+    const minimum = key === 'max' ? 1 : 0
+    if (value !== undefined && (!Number.isInteger(value) || value < minimum)) {
+      throw new Error(`Database connection ${key} must be an integer greater than or equal to ${minimum}.`)
+    }
+  }
   return input ?? {}
 }
 
@@ -99,7 +95,7 @@ function inferDatabaseDriver(value: string | undefined): SupportedDatabaseDriver
   return undefined
 }
 
-type RuntimeAdapterConnectionConfig = {
+type RuntimeAdapterConnectionConfig = Pick<HoloProjectConnectionConfig, 'max' | 'connectionTimeoutMillis' | 'idleTimeoutMillis' | 'application_name'> & {
   url?: string
   host?: string
   port?: number
@@ -188,11 +184,17 @@ function resolveConnectionConfig(
         password,
         database,
         ssl,
+        max: normalized.max,
+        connectionTimeoutMillis: normalized.connectionTimeoutMillis,
+        idleTimeoutMillis: normalized.idleTimeoutMillis,
+        application_name: normalized.application_name,
       }
 
-  const options = createRuntimeConnectionOptions(driver, connection, logging, schemaName, name)
+  const options = createRuntimeConnectionOptions(driver, connection, logging && !normalized.logger, schemaName, name)
   return {
     ...options,
+    logger: normalized.logger ?? options.logger,
+    concurrency: normalized.concurrency,
     security: normalized.security ? { ...options.security, ...normalized.security } : options.security,
   }
 }

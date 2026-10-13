@@ -328,15 +328,18 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
   driver: 'postgres',
   supportsConcurrentTransactionScopes: true,
   create(connection) {
-    return connection.url
-      ? createPostgresAdapter({ connectionString: connection.url })
-      : createPostgresAdapter({ config: {
-          host: connection.host,
-          port: connection.port,
-          user: connection.username,
-          password: connection.password,
-          database: connection.database,
-          ssl: connection.ssl,
-        } })
+    return createPostgresAdapter({ config: {
+      connectionString: connection.url,
+      host: connection.host,
+      port: connection.port,
+      user: connection.username,
+      password: connection.password,
+      database: connection.database,
+      ssl: connection.ssl,
+      max: connection.max,
+      connectionTimeoutMillis: connection.connectionTimeoutMillis,
+      idleTimeoutMillis: connection.idleTimeoutMillis,
+      application_name: connection.application_name,
+    } })
   },
 })

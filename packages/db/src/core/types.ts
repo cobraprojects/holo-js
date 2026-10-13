@@ -1,3 +1,5 @@
+import type { ConcurrencyOptions, DatabaseLogger, TransactionScopeKind } from '@holo-js/kernel'
+export type { TransactionScopeKind, ConcurrencyOptions, QueryStartLog, QuerySuccessLog, QueryErrorLog, TransactionLog, MigrationStartLog, MigrationSuccessLog, MigrationErrorLog, SeederStartLog, SeederSuccessLog, SeederErrorLog, DatabaseLogger } from '@holo-js/kernel'
 /* v8 ignore file -- type declarations only */
 import type { DatabaseCapabilities } from './capabilities'
 import type { SecurityPolicy } from '../security/policy'
@@ -6,14 +8,6 @@ import type { ModelRegistry } from '../model/ModelRegistry'
 import type { SchedulingMode } from './QueryScheduler'
 
 export type DatabaseDriverName = 'sqlite' | 'postgres' | 'mysql' | string
-export type TransactionScopeKind = 'root' | 'transaction' | 'savepoint'
-
-export interface ConcurrencyOptions {
-  maxConcurrentQueries?: number
-  queueLimit?: number
-  workerThreads?: boolean
-}
-
 export interface DatabaseOperationOptions {
   signal?: AbortSignal
   timeoutMs?: number
@@ -129,80 +123,6 @@ export interface Dialect {
   readonly capabilities: DatabaseCapabilities
   quoteIdentifier(identifier: string): string
   createPlaceholder(index: number): string
-}
-
-export interface QueryStartLog {
-  kind: 'query' | 'execute'
-  connectionName: string
-  sql: string
-  bindings: unknown[]
-  source?: string
-  scope: TransactionScopeKind
-  schedulingMode?: 'concurrent' | 'serialized' | 'worker'
-}
-
-export interface QuerySuccessLog extends QueryStartLog {
-  durationMs: number
-  rowCount?: number
-  affectedRows?: number
-}
-
-export interface QueryErrorLog extends QueryStartLog {
-  durationMs: number
-  error: unknown
-}
-
-export interface TransactionLog {
-  scope: Exclude<TransactionScopeKind, 'root'>
-  depth: number
-  savepointName?: string
-}
-
-export interface MigrationStartLog {
-  connectionName: string
-  migrationName: string
-  action: 'up' | 'down'
-  batch?: number
-}
-
-export interface MigrationSuccessLog extends MigrationStartLog {
-  durationMs: number
-}
-
-export interface MigrationErrorLog extends MigrationStartLog {
-  durationMs: number
-  error: unknown
-}
-
-export interface SeederStartLog {
-  connectionName: string
-  seederName: string
-  quietly: boolean
-  environment?: string
-}
-
-export interface SeederSuccessLog extends SeederStartLog {
-  durationMs: number
-}
-
-export interface SeederErrorLog extends SeederStartLog {
-  durationMs: number
-  error: unknown
-}
-
-export interface DatabaseLogger {
-  onQueryStart?(entry: QueryStartLog): void | Promise<void>
-  onQuerySuccess?(entry: QuerySuccessLog): void | Promise<void>
-  onQueryError?(entry: QueryErrorLog): void | Promise<void>
-  onTransactionStart?(entry: TransactionLog): void | Promise<void>
-  onTransactionCommit?(entry: TransactionLog): void | Promise<void>
-  onTransactionRollback?(entry: TransactionLog & { error?: unknown }): void | Promise<void>
-  onMigrationStart?(entry: MigrationStartLog): void | Promise<void>
-  onMigrationSuccess?(entry: MigrationSuccessLog): void | Promise<void>
-  onMigrationError?(entry: MigrationErrorLog): void | Promise<void>
-  onSeederStart?(entry: SeederStartLog): void | Promise<void>
-  onSeederSuccess?(entry: SeederSuccessLog): void | Promise<void>
-  onSeederError?(entry: SeederErrorLog): void | Promise<void>
 }
 
 export interface DatabaseContextOptions {

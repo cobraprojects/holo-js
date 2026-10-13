@@ -259,7 +259,7 @@ function splitCacheableConfig(rawConfig: RawConfigMap): {
       continue
     }
 
-    if (name === 'security') {
+    if (name === 'security' || name === 'database') {
       deferredConfigNames.push(name)
       continue
     }
