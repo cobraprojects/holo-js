@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { EventEmitter, once } from 'node:events'
 import { expect, it, onTestFinished } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { startDiscoveryWatch } from '../src/discovery-watch'
@@ -19,6 +20,22 @@ async function createProject(): Promise<string> {
   return root
 }
 
+function captureChanges() {
+  const changes: HoloProjectPrepareChange[] = []
+  const events = new EventEmitter()
+  return {
+    changes,
+    async observe(change: HoloProjectPrepareChange | (() => Promise<HoloProjectPrepareChange>)): Promise<void> {
+      const observed = typeof change === 'function' ? await change() : change
+      changes.push(observed)
+      events.emit(`${observed.path}:${observed.kind}`)
+    },
+    async waitForChange(path: string, kind: HoloProjectPrepareChange['kind']): Promise<void> {
+      await once(events, `${path}:${kind}`)
+    },
+  }
+}
+
 it('observes real source edits and excludes generated artifacts, dependency files, and symlink escapes', async () => {
   const root = await createProject()
   const outside = await createProject()
@@ -27,18 +44,19 @@ it('observes real source edits and excludes generated artifacts, dependency file
   for (const path of [...included, ...excluded]) await write(root, path)
   await write(outside, 'Outside.ts')
   await symlink(outside, join(root, 'server/models/escaped'), 'dir')
-  const changes: HoloProjectPrepareChange[] = []
+  const { changes, observe, waitForChange } = captureChanges()
   const watcher = await startDiscoveryWatch({
     projectRoot: root,
     signal: new AbortController().signal,
     writeWarning: message => { throw new Error(message) },
     project: { config: defaultProjectConfig() },
-    observe: async change => { changes.push(typeof change === 'function' ? await change() : change) },
+    observe,
   })
   onTestFinished(() => watcher.close())
   for (const path of included) {
+    const changed = waitForChange(path, 'changed')
     await write(root, path, 'edited')
-    await expect.poll(() => changes.some(change => change.path === path && change.kind === 'changed')).toBe(true)
+    await changed
   }
   for (const path of excluded) await write(root, path, 'excluded')
   await write(root, 'server/models/escaped/Outside.ts', 'escaped')
@@ -57,25 +75,29 @@ it('observes real file creation and deletion and switches to newly configured di
   const root = await createProject()
   await write(root, 'server/models/User.ts')
   await write(root, 'src/models/nested/Existing.ts')
-  const changes: HoloProjectPrepareChange[] = []
+  const { changes, observe, waitForChange } = captureChanges()
   const config = defaultProjectConfig()
   const watcher = await startDiscoveryWatch({
     projectRoot: root,
     signal: new AbortController().signal,
     writeWarning: message => { throw new Error(message) },
     project: { config },
-    observe: async change => { changes.push(typeof change === 'function' ? await change() : change) },
+    observe,
   })
   onTestFinished(() => watcher.close())
+  const created = waitForChange('server/models/New.ts', 'created')
   await write(root, 'server/models/New.ts')
-  await expect.poll(() => changes.some(change => change.path === 'server/models/New.ts' && change.kind === 'created')).toBe(true)
+  await created
+  const deleted = waitForChange('server/models/User.ts', 'deleted')
   await rm(join(root, 'server/models/User.ts'))
-  await expect.poll(() => changes.some(change => change.path === 'server/models/User.ts' && change.kind === 'deleted')).toBe(true)
+  await deleted
   await watcher.refresh({ config: { ...config, paths: { ...config.paths, models: 'src/models' } } })
+  const changed = waitForChange('src/models/nested/Existing.ts', 'changed')
   await write(root, 'src/models/nested/Existing.ts', 'updated')
-  await expect.poll(() => changes.some(change => change.path === 'src/models/nested/Existing.ts' && change.kind === 'changed')).toBe(true)
+  await changed
+  const nestedCreated = waitForChange('src/models/new/nested/Added.ts', 'created')
   await write(root, 'src/models/new/nested/Added.ts')
-  await expect.poll(() => changes.some(change => change.path === 'src/models/new/nested/Added.ts' && change.kind === 'created')).toBe(true)
+  await nestedCreated
   await new Promise(resolve => setTimeout(resolve, 100))
   changes.length = 0
   await write(root, 'server/models/New.ts', 'obsolete')

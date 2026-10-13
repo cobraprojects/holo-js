@@ -6,6 +6,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
+import { createExampleAppFixture } from './support/example-app-fixture.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const pg = createRequire(join(root, 'packages/db-postgres/package.json'))('pg')
@@ -16,7 +17,8 @@ const drivers = process.env.HOLO_TEST_DRIVER ? [process.env.HOLO_TEST_DRIVER] : 
 async function runApp(framework, driver) {
   assert.ok(['next', 'nuxt', 'sveltekit'].includes(framework))
   assert.ok(['sqlite', 'postgres', 'mysql'].includes(driver))
-  const projectRoot = join(root, `apps/blog-${framework}`)
+  const fixture = await createExampleAppFixture(root, framework)
+  const { projectRoot } = fixture
   const name = `holo_app_${randomUUID().replaceAll('-', '')}`
   const insertOnlyRole = `${name}_writer`
   const password = randomUUID()
@@ -81,6 +83,7 @@ async function runApp(framework, driver) {
         }
       } finally {
         await Promise.all(['', '-wal', '-shm'].map(suffix => rm(`${filename}${suffix}`, { force: true })))
+        await rm(fixture.directory, { recursive: true, force: true })
       }
     }
   }

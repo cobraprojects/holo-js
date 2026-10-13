@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 
@@ -30,8 +30,9 @@ const env = {
 const results = []
 let mysqlAdmin
 
-function run(label, command, args, cwd = root, extraEnv = {}) {
+function run(label, command, args, cwd = root, extraEnv = {}, reportPaths = []) {
   process.stdout.write(`Starting ${label}\n`)
+  for (const reportPath of reportPaths) rmSync(reportPath, { force: true })
   const result = spawnSync(command, args, {
     cwd,
     env: { ...env, ...extraEnv },
@@ -41,6 +42,20 @@ function run(label, command, args, cwd = root, extraEnv = {}) {
   writeFileSync(join(resultsRoot, `${label.replaceAll('/', '-')}.log`), `${result.stdout ?? ''}${result.stderr ?? ''}`)
   results.push({ label, status: result.status, error: result.error?.message })
   process.stdout.write(`${label}: ${result.status}\n`)
+  if (result.status !== 0) {
+    process.stderr.write(`${result.stdout ?? ''}${result.stderr ?? ''}`)
+    if (result.error) process.stderr.write(`${result.error.message}\n`)
+    for (const reportPath of reportPaths) {
+      if (!existsSync(reportPath)) continue
+      const report = JSON.parse(readFileSync(reportPath, 'utf8'))
+      for (const suite of report.testResults) {
+        if (suite.message) process.stderr.write(`${suite.name}\n${suite.message}\n`)
+        for (const test of suite.assertionResults) {
+          if (test.status === 'failed') process.stderr.write(`${test.fullName}\n${test.failureMessages.join('\n')}\n`)
+        }
+      }
+    }
+  }
 }
 
 mkdirSync(resultsRoot, { recursive: true })
@@ -62,13 +77,18 @@ try {
     const script = manifest.scripts?.test
     if (!script) continue
     let phase = 0
-    const command = script.replace(/\bvitest\b/g, () => `npx vitest --pool forks --fileParallelism --maxWorkers 4 --reporter=json --outputFile=../../coverage/native-libraries/${directory}-${phase++}.json`)
-    run(`packages/${directory}`, '/bin/sh', ['-c', command], cwd)
+    const reportPaths = []
+    const command = script.replace(/\bvitest\b/g, () => {
+      const filename = `${directory}-${phase++}.json`
+      reportPaths.push(join(resultsRoot, filename))
+      return `npx vitest --pool forks --fileParallelism --maxWorkers 4 --reporter=json --outputFile=../../coverage/native-libraries/${filename}`
+    })
+    run(`packages/${directory}`, '/bin/sh', ['-c', command], cwd, {}, reportPaths)
   }
   run('cache-redis-live', 'npx', [
     'vitest', 'run', '--pool', 'forks', '--fileParallelism', '--maxWorkers', '4', '--reporter=json',
     `--outputFile=${join(resultsRoot, 'cache-redis-live.json')}`,
-  ], join(root, 'packages/cache-redis'), { HOLO_REDIS_INTEGRATION: '1' })
+  ], join(root, 'packages/cache-redis'), { HOLO_REDIS_INTEGRATION: '1' }, [join(resultsRoot, 'cache-redis-live.json')])
 } finally {
   writeFileSync(join(resultsRoot, 'summary.json'), JSON.stringify(results, null, 2))
   try {

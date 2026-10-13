@@ -1,10 +1,40 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { collectLibraryBuilds } from '../../scripts/build-libraries.mjs'
 
 type PackageManifest = {
   dependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
   name?: string
+}
+
+export function stageWorkspacePackagesSync(
+  repoRoot: string,
+  targetPackagesRoot: string,
+  packageNames: readonly string[],
+): Array<{ name: string, directory: string }> {
+  const builds: Array<{ name: string, directory: string }> = collectLibraryBuilds(repoRoot, packageNames)
+  const packages = builds.map(({ name, directory }) => ({ name, sourceDirectory: directory, directory: join(targetPackagesRoot, basename(directory)) }))
+  const targets = new Map(packages.map(({ name, directory }) => [name, directory]))
+  for (const { sourceDirectory, directory } of packages) {
+    const manifestText = readFileSync(join(sourceDirectory, 'package.json'), 'utf8')
+    const manifest = JSON.parse(manifestText) as PackageManifest
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(directory, 'package.json'), manifestText)
+    linkInstalledDependenciesForPackageSync({
+      repoRoot,
+      nodeModulesRoot: join(directory, 'node_modules'),
+      packageJsonPath: join(sourceDirectory, 'package.json'),
+    })
+    const dependencies = { ...manifest.dependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies }
+    for (const dependency of Object.keys(dependencies)) {
+      const dependencyTarget = targets.get(dependency)
+      if (dependencyTarget) symlinkPackageDependencySync(join(directory, 'node_modules'), dependency, dependencyTarget)
+    }
+  }
+  return packages.map(({ name, directory }) => ({ name, directory }))
 }
 
 function unique(values: readonly string[]): string[] {

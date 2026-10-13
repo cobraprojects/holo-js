@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export function collectLibraryBuilds(rootDir) {
+export function collectLibraryBuilds(rootDir, packageNames) {
   const packagesRoot = join(rootDir, 'packages')
   const packages = new Map(readdirSync(packagesRoot, { withFileTypes: true })
     .filter(entry => entry.isDirectory())
@@ -34,7 +34,7 @@ export function collectLibraryBuilds(rootDir) {
     if (entry.manifest.scripts?.build) builds.push({ name, directory: entry.directory })
   }
 
-  for (const name of [...packages.keys()].sort()) visit(name)
+  for (const name of packageNames ?? [...packages.keys()].sort()) visit(name)
   return builds
 }
 

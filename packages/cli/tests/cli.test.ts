@@ -13,7 +13,7 @@ import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
 import { DB, createSchemaService, generateMigrationTemplate } from '@holo-js/db'
 import {
-  linkInstalledDependenciesForPackageSync,
+  stageWorkspacePackagesSync,
   resolveInstalledDependencyRoot,
   symlinkPackageDependencySync,
 } from '../../../tests/support/published-package'
@@ -275,31 +275,6 @@ function createTempBuildRootSync(prefix: string): string {
   return root
 }
 
-function writePackageWrapperSync(sourcePackageDir: string, targetPackageDir: string): void {
-  mkdirSync(targetPackageDir, { recursive: true })
-  writeFileSync(
-    join(targetPackageDir, 'package.json'),
-    readFileSync(join(sourcePackageDir, 'package.json'), 'utf8'),
-    'utf8',
-  )
-  linkInstalledDependenciesForPackageSync({
-    repoRoot: workspaceRoot,
-    nodeModulesRoot: join(targetPackageDir, 'node_modules'),
-    packageJsonPath: join(sourcePackageDir, 'package.json'),
-  })
-}
-
-function linkPackageDependencySync(
-  targetPackageDir: string,
-  packageName: string,
-  dependencyRoot: string,
-): void {
-  const dependencyPath = join(targetPackageDir, 'node_modules', ...packageName.split('/'))
-  rmSync(dependencyPath, { recursive: true, force: true })
-  mkdirSync(dirname(dependencyPath), { recursive: true })
-  symlinkSync(dependencyRoot, dependencyPath)
-}
-
 function buildWorkspacePackageSync(filter: string, outDir: string) {
   return spawnSync('bun', ['run', '--filter', filter, 'build'], {
     cwd: workspaceRoot,
@@ -348,217 +323,20 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const validationPackageRoot = join(root, 'packages/validation')
   const cliPackageRoot = join(root, 'packages/cli')
 
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/kernel'), kernelPackageRoot)
-  const kernelBuild = buildWorkspacePackageSync('@holo-js/kernel', join(kernelPackageRoot, 'dist'))
-  expect(kernelBuild.status, kernelBuild.stderr || kernelBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/config'), configPackageRoot)
-  linkPackageDependencySync(configPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const configBuild = buildWorkspacePackageSync('@holo-js/config', join(configPackageRoot, 'dist'))
-  expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/adapter-shared'), adapterSharedPackageRoot)
-  linkPackageDependencySync(adapterSharedPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const adapterSharedBuild = buildWorkspacePackageSync('@holo-js/adapter-shared', join(adapterSharedPackageRoot, 'dist'))
-  expect(adapterSharedBuild.status, adapterSharedBuild.stderr || adapterSharedBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-sqlite'), dbSqlitePackageRoot)
-  const dbSqliteBuild = buildWorkspacePackageSync('@holo-js/db-sqlite', join(dbSqlitePackageRoot, 'dist'))
-  expect(dbSqliteBuild.status, dbSqliteBuild.stderr || dbSqliteBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-postgres'), dbPostgresPackageRoot)
-  const dbPostgresBuild = buildWorkspacePackageSync('@holo-js/db-postgres', join(dbPostgresPackageRoot, 'dist'))
-  expect(dbPostgresBuild.status, dbPostgresBuild.stderr || dbPostgresBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-mysql'), dbMysqlPackageRoot)
-  const dbMysqlBuild = buildWorkspacePackageSync('@holo-js/db-mysql', join(dbMysqlPackageRoot, 'dist'))
-  expect(dbMysqlBuild.status, dbMysqlBuild.stderr || dbMysqlBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db'), dbPackageRoot)
-  linkPackageDependencySync(dbPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(dbPackageRoot, '@holo-js/db-sqlite', dbSqlitePackageRoot)
-  linkPackageDependencySync(dbPackageRoot, '@holo-js/db-postgres', dbPostgresPackageRoot)
-  linkPackageDependencySync(dbPackageRoot, '@holo-js/db-mysql', dbMysqlPackageRoot)
-  linkPackageDependencySync(dbPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const dbBuild = buildWorkspacePackageSync('@holo-js/db', join(dbPackageRoot, 'dist'))
-  expect(dbBuild.status, dbBuild.stderr || dbBuild.stdout).toBe(0)
-  linkPackageDependencySync(dbSqlitePackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(dbPostgresPackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(dbMysqlPackageRoot, '@holo-js/db', dbPackageRoot)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue'), queuePackageRoot)
-  linkPackageDependencySync(queuePackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(queuePackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const queueBuild = buildWorkspacePackageSync('@holo-js/queue', join(queuePackageRoot, 'dist'))
-  expect(queueBuild.status, queueBuild.stderr || queueBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue-redis'), queueRedisPackageRoot)
-  linkPackageDependencySync(queueRedisPackageRoot, '@holo-js/queue', queuePackageRoot)
-  const queueRedisBuild = buildWorkspacePackageSync('@holo-js/queue-redis', join(queueRedisPackageRoot, 'dist'))
-  expect(queueRedisBuild.status, queueRedisBuild.stderr || queueRedisBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue-db'), queueDbPackageRoot)
-  linkPackageDependencySync(queueDbPackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(queueDbPackageRoot, '@holo-js/queue', queuePackageRoot)
-  const queueDbBuild = buildWorkspacePackageSync('@holo-js/queue-db', join(queueDbPackageRoot, 'dist'))
-  expect(queueDbBuild.status, queueDbBuild.stderr || queueDbBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/events'), eventsPackageRoot)
-  linkPackageDependencySync(eventsPackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(eventsPackageRoot, '@holo-js/queue', queuePackageRoot)
-  const eventsBuild = buildWorkspacePackageSync('@holo-js/events', join(eventsPackageRoot, 'dist'))
-  expect(eventsBuild.status, eventsBuild.stderr || eventsBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/validation'), validationPackageRoot)
-  const validationBuild = buildWorkspacePackageSync('@holo-js/validation', join(validationPackageRoot, 'dist'))
-  expect(validationBuild.status, validationBuild.stderr || validationBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/session'), sessionPackageRoot)
-  linkPackageDependencySync(sessionPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(sessionPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const sessionBuild = buildWorkspacePackageSync('@holo-js/session', join(sessionPackageRoot, 'dist'))
-  expect(sessionBuild.status, sessionBuild.stderr || sessionBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/security'), securityPackageRoot)
-  linkPackageDependencySync(securityPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(securityPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const securityBuild = buildWorkspacePackageSync('@holo-js/security', join(securityPackageRoot, 'dist'))
-  expect(securityBuild.status, securityBuild.stderr || securityBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/auth'), authPackageRoot)
-  linkPackageDependencySync(authPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(authPackageRoot, '@holo-js/security', securityPackageRoot)
-  linkPackageDependencySync(authPackageRoot, '@holo-js/validation', validationPackageRoot)
-  const authBuild = buildWorkspacePackageSync('@holo-js/auth', join(authPackageRoot, 'dist'))
-  expect(authBuild.status, authBuild.stderr || authBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/authorization'), authorizationPackageRoot)
-  const authorizationBuild = buildWorkspacePackageSync('@holo-js/authorization', join(authorizationPackageRoot, 'dist'))
-  expect(authorizationBuild.status, authorizationBuild.stderr || authorizationBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cache'), cachePackageRoot)
-  linkPackageDependencySync(cachePackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(cachePackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(cachePackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  const cacheBuild = buildWorkspacePackageSync('@holo-js/cache', join(cachePackageRoot, 'dist'))
-  expect(cacheBuild.status, cacheBuild.stderr || cacheBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cache-db'), cacheDbPackageRoot)
-  linkPackageDependencySync(cacheDbPackageRoot, '@holo-js/cache', cachePackageRoot)
-  linkPackageDependencySync(cacheDbPackageRoot, '@holo-js/db', dbPackageRoot)
-  const cacheDbBuild = buildWorkspacePackageSync('@holo-js/cache-db', join(cacheDbPackageRoot, 'dist'))
-  expect(cacheDbBuild.status, cacheDbBuild.stderr || cacheDbBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cache-redis'), cacheRedisPackageRoot)
-  linkPackageDependencySync(cacheRedisPackageRoot, '@holo-js/cache', cachePackageRoot)
-  const cacheRedisBuild = buildWorkspacePackageSync('@holo-js/cache-redis', join(cacheRedisPackageRoot, 'dist'))
-  expect(cacheRedisBuild.status, cacheRedisBuild.stderr || cacheRedisBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
-  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/queue', queuePackageRoot)
-  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', validationPackageRoot)
-  const broadcastBuild = buildWorkspacePackageSync('@holo-js/broadcast', join(broadcastPackageRoot, 'dist'))
-  expect(broadcastBuild.status, broadcastBuild.stderr || broadcastBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/flux'), fluxPackageRoot)
-  linkPackageDependencySync(fluxPackageRoot, '@holo-js/broadcast', broadcastPackageRoot)
-  const fluxBuild = buildWorkspacePackageSync('@holo-js/flux', join(fluxPackageRoot, 'dist'))
-  expect(fluxBuild.status, fluxBuild.stderr || fluxBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/flux-react'), fluxReactPackageRoot)
-  linkPackageDependencySync(fluxReactPackageRoot, '@holo-js/broadcast', broadcastPackageRoot)
-  linkPackageDependencySync(fluxReactPackageRoot, '@holo-js/flux', fluxPackageRoot)
-  const fluxReactBuild = buildWorkspacePackageSync('@holo-js/flux-react', join(fluxReactPackageRoot, 'dist'))
-  expect(fluxReactBuild.status, fluxReactBuild.stderr || fluxReactBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/notifications'), notificationsPackageRoot)
-  linkPackageDependencySync(notificationsPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(notificationsPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  linkPackageDependencySync(notificationsPackageRoot, '@holo-js/queue', queuePackageRoot)
-  const notificationsBuild = buildWorkspacePackageSync('@holo-js/notifications', join(notificationsPackageRoot, 'dist'))
-  expect(notificationsBuild.status, notificationsBuild.stderr || notificationsBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/storage'), storagePackageRoot)
-  linkPackageDependencySync(storagePackageRoot, '@holo-js/config', configPackageRoot)
-  const storageBuild = buildWorkspacePackageSync('@holo-js/storage', join(storagePackageRoot, 'dist'))
-  expect(storageBuild.status, storageBuild.stderr || storageBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/storage-s3'), storageS3PackageRoot)
-  linkPackageDependencySync(storageS3PackageRoot, '@holo-js/storage', storagePackageRoot)
-  const storageS3Build = buildWorkspacePackageSync('@holo-js/storage-s3', join(storageS3PackageRoot, 'dist'))
-  expect(storageS3Build.status, storageS3Build.stderr || storageS3Build.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/mail'), mailPackageRoot)
-  linkPackageDependencySync(mailPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(mailPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  linkPackageDependencySync(mailPackageRoot, '@holo-js/queue', queuePackageRoot)
-  linkPackageDependencySync(mailPackageRoot, '@holo-js/storage', storagePackageRoot)
-  const mailBuild = buildWorkspacePackageSync('@holo-js/mail', join(mailPackageRoot, 'dist'))
-  expect(mailBuild.status, mailBuild.stderr || mailBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/media'), mediaPackageRoot)
-  linkPackageDependencySync(mediaPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(mediaPackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(mediaPackageRoot, '@holo-js/queue', queuePackageRoot)
-  linkPackageDependencySync(mediaPackageRoot, '@holo-js/storage', storagePackageRoot)
-  const mediaBuild = buildWorkspacePackageSync('@holo-js/media', join(mediaPackageRoot, 'dist'))
-  expect(mediaBuild.status, mediaBuild.stderr || mediaBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/core'), corePackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/auth', authPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/authorization', authorizationPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/cache', cachePackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/cache-db', cacheDbPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/cache-redis', cacheRedisPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/broadcast', broadcastPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/events', eventsPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/flux', fluxPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/flux-react', fluxReactPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/mail', mailPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/media', mediaPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/notifications', notificationsPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/queue', queuePackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/security', securityPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/session', sessionPackageRoot)
-  linkPackageDependencySync(corePackageRoot, '@holo-js/storage', storagePackageRoot)
-  const coreBuild = buildWorkspacePackageSync('@holo-js/core', join(corePackageRoot, 'dist'))
-  expect(coreBuild.status, coreBuild.stderr || coreBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/adapter-next'), adapterNextPackageRoot)
-  linkPackageDependencySync(adapterNextPackageRoot, '@holo-js/adapter-shared', adapterSharedPackageRoot)
-  linkPackageDependencySync(adapterNextPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(adapterNextPackageRoot, '@holo-js/core', corePackageRoot)
-  const adapterNextBuild = buildWorkspacePackageSync('@holo-js/adapter-next', join(adapterNextPackageRoot, 'dist'))
-  expect(adapterNextBuild.status, adapterNextBuild.stderr || adapterNextBuild.stdout).toBe(0)
-
-  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cli'), cliPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/authorization', authorizationPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/auth', authPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/cache', cachePackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/cache-db', cacheDbPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/cache-redis', cacheRedisPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/core', corePackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/db', dbPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/events', eventsPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/kernel', kernelPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/flux', fluxPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/flux-react', fluxReactPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/mail', mailPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/media', mediaPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/notifications', notificationsPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/queue', queuePackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/security', securityPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, '@holo-js/storage', storagePackageRoot)
-  const cliBuild = buildWorkspacePackageSync('@holo-js/cli', join(cliPackageRoot, 'dist'))
-  expect(cliBuild.status, cliBuild.stderr || cliBuild.stdout).toBe(0)
+  const packages = stageWorkspacePackagesSync(workspaceRoot, join(root, 'packages'), [
+    '@holo-js/cli',
+    '@holo-js/adapter-next',
+    '@holo-js/flux-react',
+    '@holo-js/db-sqlite',
+    '@holo-js/db-postgres',
+    '@holo-js/db-mysql',
+    '@holo-js/cache-redis',
+    '@holo-js/storage-s3',
+  ])
+  for (const { name, directory } of packages) {
+    const build = buildWorkspacePackageSync(name, join(directory, 'dist'))
+    expect(build.status, build.stderr || build.stdout).toBe(0)
+  }
 
   builtWorkspacePackages = {
     root,
