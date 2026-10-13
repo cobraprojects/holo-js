@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cli",
-  "version": "0.3.25",
+  "version": "0.3.27",
   "description": "Holo-JS Framework - project creation, discovery, and operational CLI",
   "type": "module",
   "license": "MIT",
@@ -28,28 +28,28 @@
     "test:integration": "HOLO_CLI_INCLUDE_INTEGRATION=1 vitest --run tests/cli.test.ts"
   },
   "dependencies": {
-    "@clack/prompts": "catalog:",
-    "@holo-js/auth": "catalog:",
-    "@holo-js/cache-db": "catalog:",
-    "@holo-js/config": "catalog:",
-    "@holo-js/core": "catalog:",
-    "@holo-js/db": "catalog:",
-    "@holo-js/kernel": "catalog:",
-    "@holo-js/security": "catalog:",
-    "@holo-js/storage": "catalog:",
-    "esbuild": "catalog:",
-    "inflection": "catalog:",
-    "minimatch": "catalog:",
-    "semver": "catalog:",
-    "typescript": "catalog:",
-    "yaml": "catalog:"
+    "@clack/prompts": "^1.5.1",
+    "@holo-js/auth": "^0.3.27",
+    "@holo-js/cache-db": "^0.3.27",
+    "@holo-js/config": "^0.3.27",
+    "@holo-js/core": "^0.3.27",
+    "@holo-js/db": "^0.3.27",
+    "@holo-js/kernel": "^0.3.27",
+    "@holo-js/security": "^0.3.27",
+    "@holo-js/storage": "^0.3.27",
+    "esbuild": "^0.28.2",
+    "inflection": "^3.0.2",
+    "minimatch": "^10.2.4",
+    "semver": "^7.7.4",
+    "typescript": "^5.7.2",
+    "yaml": "^2.8.3"
   },
   "peerDependencies": {
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/mail": "catalog:",
-    "@holo-js/media": "catalog:",
-    "@holo-js/session": "catalog:",
-    "@holo-js/queue": "catalog:"
+    "@holo-js/broadcast": "^0.3.27",
+    "@holo-js/mail": "^0.3.27",
+    "@holo-js/media": "^0.3.27",
+    "@holo-js/session": "^0.3.27",
+    "@holo-js/queue": "^0.3.27"
   },
   "peerDependenciesMeta": {
     "@holo-js/broadcast": {
@@ -69,19 +69,19 @@
     }
   },
   "devDependencies": {
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/events": "catalog:",
-    "@holo-js/mail": "catalog:",
-    "@holo-js/media": "catalog:",
-    "@holo-js/queue": "catalog:",
-    "@holo-js/queue-db": "catalog:",
-    "@holo-js/session": "catalog:",
-    "@sveltejs/kit": "catalog:",
-    "@types/node": "catalog:",
-    "@types/semver": "catalog:",
-    "tsup": "catalog:",
-    "vite": "catalog:",
-    "vitest": "catalog:"
+    "@holo-js/broadcast": "^0.3.27",
+    "@holo-js/events": "^0.3.27",
+    "@holo-js/mail": "^0.3.27",
+    "@holo-js/media": "^0.3.27",
+    "@holo-js/queue": "^0.3.27",
+    "@holo-js/queue-db": "^0.3.27",
+    "@holo-js/session": "^0.3.27",
+    "@sveltejs/kit": "^2.59.1",
+    "@types/node": "^22.10.2",
+    "@types/semver": "^7.7.1",
+    "tsup": "^8.3.5",
+    "vite": "^8.0.10",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

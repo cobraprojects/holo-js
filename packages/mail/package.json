@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/mail",
-  "version": "0.3.25",
+  "version": "0.3.27",
   "description": "Holo-JS Framework - mail contracts, preview helpers, and fluent send helpers",
   "type": "module",
   "license": "MIT",
@@ -33,14 +33,14 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:",
-    "@holo-js/kernel": "catalog:",
-    "nodemailer": "catalog:"
+    "@holo-js/config": "^0.3.27",
+    "@holo-js/kernel": "^0.3.27",
+    "nodemailer": "^10.1.0"
   },
   "peerDependencies": {
-    "@holo-js/db": "catalog:",
-    "@holo-js/queue": "catalog:",
-    "@holo-js/storage": "catalog:"
+    "@holo-js/db": "^0.3.27",
+    "@holo-js/queue": "^0.3.27",
+    "@holo-js/storage": "^0.3.27"
   },
   "peerDependenciesMeta": {
     "@holo-js/db": {
@@ -54,12 +54,12 @@
     }
   },
   "devDependencies": {
-    "@holo-js/db-sqlite": "catalog:",
-    "esbuild": "catalog:",
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@holo-js/db-sqlite": "^0.3.27",
+    "esbuild": "^0.28.2",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

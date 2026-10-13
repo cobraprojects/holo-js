@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-clerk",
-  "version": "0.3.25",
+  "version": "0.3.27",
   "description": "Holo-JS Framework - Clerk auth integration contracts",
   "type": "module",
   "license": "MIT",
@@ -23,15 +23,15 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@clerk/backend": "catalog:",
-    "@holo-js/auth": "catalog:",
-    "@holo-js/session": "catalog:"
+    "@clerk/backend": "^3.4.7",
+    "@holo-js/auth": "^0.3.27",
+    "@holo-js/session": "^0.3.27"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

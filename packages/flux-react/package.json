@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/flux-react",
-  "version": "0.3.25",
+  "version": "0.3.27",
   "description": "Holo-JS Framework - React and Next hook skeletons for Flux",
   "type": "module",
   "license": "MIT",
@@ -23,23 +23,23 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/flux": "catalog:"
+    "@holo-js/broadcast": "^0.3.27",
+    "@holo-js/flux": "^0.3.27"
   },
   "peerDependencies": {
-    "react": "catalog:"
+    "react": "^19.2.6"
   },
   "devDependencies": {
-    "@types/react": "catalog:",
-    "@types/react-dom": "catalog:",
-    "@types/react-test-renderer": "catalog:",
-    "@types/node": "catalog:",
-    "react": "catalog:",
-    "react-dom": "catalog:",
-    "react-test-renderer": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/react-test-renderer": "^19.1.0",
+    "@types/node": "^22.10.2",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-test-renderer": "^19.2.6",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

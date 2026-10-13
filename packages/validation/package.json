@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/validation",
-  "version": "0.3.25",
+  "version": "0.3.27",
   "description": "Holo-JS Framework - schema contracts, typing, and validation surface",
   "type": "module",
   "license": "MIT",
@@ -28,13 +28,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "valibot": "catalog:"
+    "valibot": "^1.1.0"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

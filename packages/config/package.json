@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/config",
-  "version": "0.3.25",
+  "version": "0.3.27",
   "description": "Holo-JS Framework - typed config loading, env layering, and runtime access",
   "type": "module",
   "license": "MIT",
@@ -26,13 +26,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/kernel": "catalog:",
-    "jiti": "catalog:"
+    "@holo-js/kernel": "^0.3.27",
+    "jiti": "^2.6.1"
   },
   "devDependencies": {
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

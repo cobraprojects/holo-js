@@ -47,9 +47,9 @@ class DatabaseFacade {
   }
 
   connection(name?: string): DatabaseContext {
-    if (!name) {
-      const active = connectionAsyncContext.getActive()
-      if (active) return active.connection
+    const active = connectionAsyncContext.getActive()
+    if (active && (!name || active.connectionName === name)) {
+      return active.connection
     }
 
     return this.getManager().connection(name)
