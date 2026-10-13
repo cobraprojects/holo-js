@@ -75,7 +75,9 @@ function readForwardedParameter(headers: HoloRequestHeaders | undefined, name: s
 }
 
 export function resolveRequestUrl(input: HoloRequestInput): URL {
-  const nested = input.request ?? input.web?.request ?? input.req ?? input.node?.req
+  const nested = input instanceof Request
+    ? undefined
+    : input.request ?? input.web?.request ?? input.req ?? input.node?.req
   const headers = input.headers ?? nested?.headers
   const value = input.url ?? nested?.url ?? input.path ?? (nested && 'path' in nested ? nested.path : undefined) ?? '/'
   const url = new URL(value, 'http://localhost')
