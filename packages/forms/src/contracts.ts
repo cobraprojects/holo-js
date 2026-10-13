@@ -1,3 +1,4 @@
+import { resolveRequestUrl, type HoloRequestHeaders } from '@holo-js/kernel'
 import {
   type FormLikeValidationInput,
   type InferSchemaData,
@@ -67,15 +68,7 @@ type RequestLikeBody =
   | NonNullable<RequestInit['body']>
   | AsyncIterable<Uint8Array>
 
-type RequestLikeHeaders =
-  | Headers
-  | ReadonlyArray<readonly [string, string]>
-  | Record<string, string | readonly string[] | undefined>
-  | {
-    readonly get?: (name: string) => string | null | undefined
-    readonly forEach?: (callback: (value: string, key: string) => void) => void
-    readonly entries?: () => Iterable<readonly [string, string]>
-  }
+type RequestLikeHeaders = HoloRequestHeaders
 
 interface StructuredRequestLikeObject {
   readonly method?: string
@@ -406,21 +399,6 @@ function createFormDataRequestHeaders(requestHeaders: Headers): Headers {
   return formHeaders
 }
 
-function resolveAmbientRequestUrl(headers: Headers): string {
-  const referer = headers.get('referer')
-  if (referer) {
-    try {
-      return new URL(referer).href
-    } catch {
-      // Ignore malformed client-controlled Referer headers and fall back to trusted request headers.
-    }
-  }
-
-  const protocol = headers.get('x-forwarded-proto') ?? 'http'
-  const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
-
-  return `${protocol}://${host}/`
-}
 
 function isNextHeadersModule(value: unknown): value is NextHeadersModule {
   return !!value
@@ -455,7 +433,7 @@ async function resolveAmbientFormDataRequest(input: unknown): Promise<Request | 
 
   const requestHeaders = await nextHeadersModule.headers()
 
-  return new Request(resolveAmbientRequestUrl(requestHeaders), {
+  return new Request(resolveRequestUrl({ headers: requestHeaders }), {
     method: 'POST',
     headers: createFormDataRequestHeaders(requestHeaders),
     body: input,
@@ -470,21 +448,7 @@ function getStructuredWebRequest(input: FormRequestLikeInput): StructuredRequest
 }
 
 function extractRequestLikeUrl(input: FormRequestLikeInput, headers: Headers): string {
-  const webRequest = getStructuredWebRequest(input)
-  const url = webRequest?.url
-    ?? (typeof input.url === 'string' ? input.url : input.url?.toString())
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
-    ?? input.node?.req?.url
-    ?? input.path
-    ?? '/'
-
-  try {
-    return new URL(url).toString()
-  } catch {
-    const protocol = headers.get('x-forwarded-proto') ?? 'http'
-    const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
-    return new URL(url, `${protocol}://${host}`).toString()
-  }
+  return resolveRequestUrl({ ...input, headers }).href
 }
 
 function extractRequestLikeMethod(input: FormRequestLikeInput): string {

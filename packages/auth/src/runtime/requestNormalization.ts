@@ -1,12 +1,6 @@
-export type AuthRuntimeRequestHeaders =
-  | Headers
-  | ReadonlyArray<readonly [string, string]>
-  | Record<string, string | readonly string[] | undefined>
-  | {
-    readonly get?: (name: string) => string | null | undefined
-    readonly forEach?: (callback: (value: string, key: string) => void) => void
-    readonly entries?: () => Iterable<readonly [string, string]>
-  }
+import { resolveRequestUrl, type HoloRequestHeaders } from '@holo-js/kernel'
+
+export type AuthRuntimeRequestHeaders = HoloRequestHeaders
 
 export type AuthRuntimeRequestLike = {
   readonly method?: string
@@ -36,27 +30,7 @@ export type NormalizeRequestInputOptions = {
   readonly createRelativeRequestBaseUrl?: (headers: Headers) => string
 }
 
-const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto'] as const
-
-function shouldTrustProxyHeaders(): boolean {
-  const value = typeof process === 'undefined'
-    ? undefined
-    : process.env.HOLO_SECURITY_TRUST_PROXY?.trim().toLowerCase()
-  return value === '1' || value === 'true' || value === 'yes' || value === 'on'
-}
-
-function createRequestBaseUrl(headers: Headers): string {
-  const trustProxy = shouldTrustProxyHeaders()
-  const protocol = trustProxy ? headers.get('x-forwarded-proto') ?? 'http' : 'http'
-  const host = trustProxy
-    ? headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
-    : headers.get('host') ?? 'localhost'
-  if (protocol !== 'http' && protocol !== 'https') {
-    throw new Error('[@holo-js/auth] Forwarded request protocols must be http or https.')
-  }
-
-  return `${protocol}://${host}`
-}
+const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'forwarded', 'x-forwarded-host', 'x-forwarded-proto'] as const
 
 function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
   return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
@@ -155,13 +129,11 @@ function getRequestLikeUrl(input: AuthRuntimeRequestLike, headers: Headers, opti
     ?? input.path
     ?? '/'
 
-  try {
-    return new URL(url).toString()
-  } catch {
-    const baseUrl = options.createRelativeRequestBaseUrl?.(headers)
-      ?? createRequestBaseUrl(headers)
-    return new URL(url, baseUrl).toString()
-  }
+  const baseUrl = URL.canParse(url) ? undefined : options.createRelativeRequestBaseUrl?.(headers)
+  return resolveRequestUrl({
+    url: baseUrl ? new URL(url, baseUrl) : url,
+    headers,
+  }).href
 }
 
 export function normalizeRequestInput(input: AuthRuntimeRequestInput, options: NormalizeRequestInputOptions = {}): Request {

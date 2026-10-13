@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { NextRequest } from 'next/server'
+import { resolveRequestUrl } from '@holo-js/kernel'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { resetHoloRuntime } from '../../core/src/portable/holo'
 import { createNextHoloHelpers, createNextRequestContext, runWithNextRequest } from '../src/runtime'
@@ -13,6 +14,14 @@ afterEach(async () => {
 })
 
 describe('Next native runtime', () => {
+  it('retains the request URL so its public origin and path can be resolved from Host', () => {
+    const request = new NextRequest('http://localhost:43201/auth/presentation?theme=light', {
+      headers: { host: '127.0.0.1:43201' },
+    })
+    const context = createNextRequestContext(request)
+    expect(resolveRequestUrl(context).href).toBe('http://127.0.0.1:43201/auth/presentation?theme=light')
+  })
+
   it('reads native Next cookies and standard HTTP cookies without inventing missing values', () => {
     for (const request of [
       new Request('https://app.test', { headers: { cookie: 'plain=value; encoded%20name=encoded%20value; invalid; empty=' } }),

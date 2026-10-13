@@ -27,6 +27,32 @@ If you installed Auth, Security is already installed and configured. You do not 
 
 ## Configuration
 
+### Client-facing request URLs
+
+Use the shared resolver when a framework's request URL contains an internal hostname:
+
+```ts
+import { resolveRequestUrl } from '@holo-js/kernel'
+
+const url = resolveRequestUrl(request)
+const origin = url.origin
+```
+
+It accepts a native `Request`, a Holo Next request context, a Nuxt event with `node.req`, or a SvelteKit request event.
+It returns a fresh `URL`, retaining the path and query without reading the request body. Host takes precedence over the
+hostname in the framework URL. Without Host, an absolute request URL supplies the origin; relative URLs default to HTTP
+and use `localhost` when no host is available.
+
+Forwarded host and protocol are used only when `HOLO_SECURITY_TRUST_PROXY` is explicitly enabled (`1`, `true`, `yes`, or
+`on`, case-insensitive). The resolver uses the first `X-Forwarded-Host` and `X-Forwarded-Proto` values, falling back to
+the first `Forwarded` entry's `host` and `proto` parameters. Configure trusted proxies to sanitize these headers before
+enabling this setting. Referer does not determine the request origin. Malformed hosts, non-HTTP protocols, and URL
+credentials are rejected.
+
+The forms request reconstruction and secure-cookie detection use the same resolver.
+
+### Security configuration
+
 Security uses separate config entrypoints: cross-origin rules live in `config/cors.ts`, while CSRF and rate limit settings live in
 `config/security.ts`:
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { chmod, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,6 +39,26 @@ async function configureNativeSecurity(): Promise<string> {
 }
 
 describe('@holo-js/forms contracts', () => {
+  it('resolves form request origins from Host and honors only explicitly trusted proxies', () => {
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const input = {
+      method: 'POST',
+      url: 'http://localhost/signup?next=%2Fadmin',
+      headers: {
+        host: '127.0.0.1:43201',
+        'x-forwarded-host': 'public.example',
+        'x-forwarded-proto': 'https',
+      },
+      body: 'email=ava',
+    }
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'false')
+    expect(formsInternals.normalizeRequestLikeInput(input)?.url).toBe('http://127.0.0.1:43201/signup?next=%2Fadmin')
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    expect(formsInternals.normalizeRequestLikeInput(input)?.url).toBe('https://public.example/signup?next=%2Fadmin')
+  })
+
   it('returns validated data from validate and throws validation exceptions for failures', async () => {
     const login = schema({
       email: field.string().required().email(),
@@ -945,12 +965,13 @@ describe('@holo-js/forms contracts', () => {
       method: 'POST',
       path: '/signup',
       headers: {
+        host: 'forms.example.test',
         'x-forwarded-proto': 'https',
         'x-forwarded-host': 'forms.example.test',
       },
       body: formDataBody,
     })
-    expect(formDataRequest?.url).toBe('https://forms.example.test/signup')
+    expect(formDataRequest?.url).toBe('http://forms.example.test/signup')
     expect(formDataRequest?.method).toBe('POST')
     await expect(formDataRequest?.formData()).resolves.toMatchObject({
       get: expect.any(Function),

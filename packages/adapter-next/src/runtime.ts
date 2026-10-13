@@ -158,6 +158,7 @@ export function createNextRequestContext(request: Request): NextRequestLike {
   const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
 
   return {
+    url: request.url,
     headers: request.headers,
     cookies: {
       get(name) {

@@ -105,9 +105,9 @@ describe('auth runtime utilities', () => {
 
     const forwarded = normalizeRequestInput({
       url: new URL('https://absolute.test/value'),
-      headers: { host: 'ignored.test' },
+      headers: { host: 'public.test' },
     })
-    expect(forwarded.url).toBe('https://absolute.test/value')
+    expect(forwarded.url).toBe('https://public.test/value')
 
     const customBase = normalizeRequestInput({ path: '/custom' }, {
       createRelativeRequestBaseUrl: () => 'https://custom.test',

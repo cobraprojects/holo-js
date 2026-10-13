@@ -316,6 +316,7 @@
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
+        "@holo-js/kernel": "workspace:*",
         "@holo-js/validation": "catalog:",
       },
       "devDependencies": {

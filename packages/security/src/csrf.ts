@@ -1,3 +1,4 @@
+import { resolveRequestUrl } from '@holo-js/kernel'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   SecurityCsrfError,
@@ -8,7 +9,6 @@ import {
 } from './contracts'
 import { rateLimit } from './rate-limit'
 import { getSecurityRuntime } from './runtime'
-import { shouldTrustProxyHeaders } from './proxy'
 
 const generatedTokenCache = new WeakMap<Request, string>()
 
@@ -84,34 +84,8 @@ function isExcludedPath(request: Request): boolean {
   return pathname === '/broadcasting/auth' || except.some(pattern => matchesPathPattern(pathname, pattern))
 }
 
-function normalizeForwardedValue(value: string): string {
-  return value.trim().replace(/^"|"$/g, '').toLowerCase()
-}
-
-function getForwardedProto(request: Request): string | undefined {
-  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',', 1)[0]?.trim()
-  if (forwardedProto) {
-    return normalizeForwardedValue(forwardedProto)
-  }
-
-  const forwarded = request.headers.get('forwarded')?.split(',', 1)[0]
-  if (!forwarded) {
-    return undefined
-  }
-
-  for (const segment of forwarded.split(';')) {
-    const [name, value] = segment.split('=', 2)
-    if (name?.trim().toLowerCase() === 'proto' && value) {
-      return normalizeForwardedValue(value)
-    }
-  }
-
-  return undefined
-}
-
 export function isSecureRequest(request: Request): boolean {
-  return new URL(request.url).protocol === 'https:'
-    || (shouldTrustProxyHeaders() && getForwardedProto(request) === 'https')
+  return resolveRequestUrl(request).protocol === 'https:'
 }
 
 function createCsrfToken(): string {
@@ -313,7 +287,6 @@ export const csrf = Object.freeze({
 export const csrfInternals = {
   createCsrfToken,
   generatedTokenCache,
-  getForwardedProto,
   getCookieToken,
   getHeaderToken,
   isSecureRequest,

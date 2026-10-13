@@ -1,4 +1,5 @@
 export type NextRequestLike = {
+  readonly url?: string
   readonly cookies: {
     get(name: string): { readonly value: string } | undefined
   }
