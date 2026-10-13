@@ -1,12 +1,12 @@
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { expect, it } from 'vitest'
-import { stagePublishedPackage } from '../../../tests/support/published-package'
+import { stagePublishedPackage, symlinkPackageDependency } from '../../../tests/support/published-package'
 
 const execute = promisify(execFile)
 const root = resolve(import.meta.dirname, '../../..')
@@ -50,10 +50,24 @@ it('refreshes prepared channel discovery and accepts a fresh private subscriptio
   try {
     await mkdir(join(projectRoot, 'config'), { recursive: true })
     await mkdir(join(projectRoot, 'server/channels'), { recursive: true })
-    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module' }))
-    for (const name of ['cli', 'broadcast', 'db-sqlite']) {
+    await writeFile(join(projectRoot, '.npmrc'), 'registry=http://127.0.0.1:1\nfetch-retries=0\n')
+    for (const name of ['cli', 'broadcast', 'db-sqlite', 'flux']) {
       await stagePublishedPackage(join(root, 'packages', name), join(projectRoot, 'node_modules/@holo-js', name), join(root, 'packages', name, 'dist'))
     }
+    const packagesRoot = join(projectRoot, 'packages')
+    await rename(join(projectRoot, 'node_modules/@holo-js'), packagesRoot)
+    for (const name of await readdir(packagesRoot)) {
+      const packageRoot = join(packagesRoot, name)
+      const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as { name: string, version: string }
+      await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ ...manifest, version: '0.0.0-lifecycle-local' }))
+      await symlinkPackageDependency(join(projectRoot, 'node_modules'), manifest.name, packageRoot)
+    }
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+      private: true,
+      type: 'module',
+      workspaces: ['packages/*'],
+      dependencies: Object.fromEntries(['cli', 'broadcast', 'core', 'kernel', 'db-sqlite', 'flux'].map(name => [`@holo-js/${name}`, 'workspace:*'])),
+    }))
     await writeFile(join(projectRoot, 'config/app.ts'), "export default { name: 'Broadcast Lifecycle' }")
     await writeFile(join(projectRoot, 'config/database.ts'), "export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }")
     await writeFile(join(projectRoot, 'config/broadcast.ts'), `import { defineBroadcastConfig } from '@holo-js/broadcast'; export default defineBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'key', secret: 'secret' } }, worker: { host: '127.0.0.1', port: ${address.port} } })`)
