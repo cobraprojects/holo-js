@@ -47,9 +47,11 @@ function normalizeConnectionInput(input: RuntimeConnectionConfig | string | unde
     return { url: input }
   }
 
-  const allowUnsafeRawSql = input?.security?.allowUnsafeRawSql
-  if (allowUnsafeRawSql !== undefined && typeof allowUnsafeRawSql !== 'boolean') {
-    throw new Error('Database connection security.allowUnsafeRawSql must be a boolean.')
+  for (const key of ['allowUnsafeRawSql', 'debugSqlInLogs'] as const) {
+    const value = input?.security?.[key]
+    if (value !== undefined && typeof value !== 'boolean') {
+      throw new Error(`Database connection security.${key} must be a boolean.`)
+    }
   }
   for (const key of ['max', 'connectionTimeoutMillis', 'idleTimeoutMillis'] as const) {
     const value = input?.[key]
@@ -190,10 +192,10 @@ function resolveConnectionConfig(
         application_name: normalized.application_name,
       }
 
-  const options = createRuntimeConnectionOptions(driver, connection, logging && !normalized.logger, schemaName, name)
+  const options = createRuntimeConnectionOptions(driver, connection, false, schemaName, name)
   return {
     ...options,
-    logger: normalized.logger ?? options.logger,
+    logger: normalized.logger ?? createRuntimeLogger(logging, normalized.security?.debugSqlInLogs),
     concurrency: normalized.concurrency,
     security: normalized.security ? { ...options.security, ...normalized.security } : options.security,
   }
@@ -308,7 +310,7 @@ export function createAdapter(
   return createDeferredDatabaseDriverAdapter(driver, target)
 }
 
-export function createRuntimeLogger(enabled: boolean): DatabaseLogger | undefined {
+export function createRuntimeLogger(enabled: boolean, debugSqlInLogs = false): DatabaseLogger | undefined {
   if (!enabled) {
     return undefined
   }
@@ -320,21 +322,19 @@ export function createRuntimeLogger(enabled: boolean): DatabaseLogger | undefine
         : typeof entry.affectedRows === 'number'
           ? ` affected=${entry.affectedRows}`
           : ''
-      console.warn(`[holo:db] ${entry.kind} ok connection=${entry.connectionName} scope=${entry.scope} duration=${entry.durationMs}ms${count} sql=${entry.sql}`)
+      console.warn(`[holo:db] ${entry.kind} ok connection=${entry.connectionName} scope=${entry.scope} duration=${entry.durationMs}ms${count}${debugSqlInLogs ? ` sql=${entry.sql}` : ''}`)
     },
     onQueryError(entry) {
-      const message = entry.error instanceof Error ? entry.error.message : String(entry.error)
-      console.error(`[holo:db] ${entry.kind} error connection=${entry.connectionName} scope=${entry.scope} duration=${entry.durationMs}ms sql=${entry.sql} error=${message}`)
+      console.error(`[holo:db] ${entry.kind} error connection=${entry.connectionName} scope=${entry.scope} duration=${entry.durationMs}ms${debugSqlInLogs ? ` sql=${entry.sql}` : ''}`)
     },
     onTransactionStart(entry) {
-      console.warn(`[holo:db] transaction start scope=${entry.scope} depth=${entry.depth}${entry.savepointName ? ` savepoint=${entry.savepointName}` : ''}`)
+      console.warn(`[holo:db] transaction start scope=${entry.scope} depth=${entry.depth}`)
     },
     onTransactionCommit(entry) {
-      console.warn(`[holo:db] transaction commit scope=${entry.scope} depth=${entry.depth}${entry.savepointName ? ` savepoint=${entry.savepointName}` : ''}`)
+      console.warn(`[holo:db] transaction commit scope=${entry.scope} depth=${entry.depth}`)
     },
     onTransactionRollback(entry) {
-      const message = entry.error instanceof Error ? ` error=${entry.error.message}` : entry.error ? ` error=${String(entry.error)}` : ''
-      console.warn(`[holo:db] transaction rollback scope=${entry.scope} depth=${entry.depth}${entry.savepointName ? ` savepoint=${entry.savepointName}` : ''}${message}`)
+      console.warn(`[holo:db] transaction rollback scope=${entry.scope} depth=${entry.depth}`)
     },
   }
 }
@@ -353,12 +353,6 @@ export function createRuntimeConnectionOptions(
     adapter: createAdapter(driver, connection),
     dialect: createDialect(driver),
     logger: createRuntimeLogger(dbLogging),
-    security: dbLogging
-      ? {
-          debugSqlInLogs: true,
-          redactBindingsInLogs: false,
-        }
-      : undefined,
   }
 }
 

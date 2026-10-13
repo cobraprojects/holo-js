@@ -1,6 +1,8 @@
+import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createAdapter,
+  registerDatabaseDriverFactory,
   createDialect,
   createRuntimeConnectionOptions,
   createRuntimeLogger,
@@ -10,6 +12,8 @@ import {
   DeferredDatabaseDriverAdapter } from '../src'
 import { openDatabase } from './support/database'
 import { DEFAULT_HOLO_PROJECT_PATHS, defineHoloProject, normalizeHoloProjectConfig } from '@holo-js/kernel'
+
+registerDatabaseDriverFactory(sqliteDatabaseDriverFactory)
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -22,6 +26,51 @@ describe('runtime config helpers', () => {
     }
     Object.assign(connections.main.security, { allowUnsafeRawSql: 'false' })
     expect(() => resolveRuntimeConnectionManagerOptions({ db: { connections } })).toThrow('allowUnsafeRawSql must be a boolean')
+  })
+
+  it('rejects a non-boolean SQL debug opt-in', () => {
+    const connection = { security: { debugSqlInLogs: false } }
+    Object.assign(connection.security, { debugSqlInLogs: 'true' })
+    expect(() => resolveRuntimeConnectionManagerOptions({ db: { connections: { main: connection } } })).toThrow('debugSqlInLogs must be a boolean')
+  })
+
+  it.each([false, true])('logs operational metadata with SQL debugging set to %s', async debugSqlInLogs => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const manager = resolveRuntimeConnectionManagerOptions({ db: { connections: {
+      main: { driver: 'sqlite', url: ':memory:', logging: true, security: { debugSqlInLogs } },
+    } } })
+    try {
+      const db = manager.connection()
+      await db.queryCompiled({ sql: 'SELECT ? AS value', bindings: ['private-binding'], source: 'query' })
+      await expect(db.queryCompiled({ sql: 'SELECT * FROM private_missing_table', source: 'query' })).rejects.toThrow()
+      await expect(db.transaction(async () => { throw new Error('private-rollback-message') })).rejects.toThrow('private-rollback-message')
+      const logs = [...warnings.mock.calls, ...errors.mock.calls].flat().join('\n')
+      expect(logs).toContain('query ok connection=main')
+      expect(logs).toContain('query error connection=main')
+      expect(logs).toContain('transaction rollback')
+      expect(logs.includes('sql=SELECT ? AS value')).toBe(debugSqlInLogs)
+      expect(logs.includes('sql=SELECT * FROM private_missing_table')).toBe(debugSqlInLogs)
+      expect(logs).not.toMatch(/private-binding|private-rollback-message|error=/)
+      expect(db.getSecurityPolicy().redactBindingsInLogs).toBe(true)
+    } finally {
+      await manager.disconnectAll()
+    }
+  })
+
+  it('keeps SQL debugging silent when logging is disabled', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const manager = resolveRuntimeConnectionManagerOptions({ db: { connections: {
+      main: { driver: 'sqlite', url: ':memory:', logging: false, security: { debugSqlInLogs: true } },
+    } } })
+    try {
+      await manager.connection().queryCompiled({ sql: 'SELECT 1', source: 'query' })
+      expect(warnings).not.toHaveBeenCalled()
+      expect(errors).not.toHaveBeenCalled()
+    } finally {
+      await manager.disconnectAll()
+    }
   })
 
   it('normalizes and defines Holo project configuration', () => {
@@ -128,16 +177,14 @@ describe('runtime config helpers', () => {
     expect(postgresOptions.connectionName).toBe('pg-main')
     expect(postgresOptions.driver).toBe('postgres')
     expect(postgresOptions.logger).toBeDefined()
-    expect(postgresOptions.security).toEqual({
-      debugSqlInLogs: true,
-      redactBindingsInLogs: false })
+    expect(postgresOptions.security).toBeUndefined()
   })
 
   it.each(['sqlite', 'postgres', 'mysql'] as const)('logs real %s query and transaction outcomes', async driver => {
     expect(createRuntimeLogger(false)).toBeUndefined()
     const warnings = vi.spyOn(console, 'warn')
     const errors = vi.spyOn(console, 'error')
-    const { db, table } = await openDatabase(driver, { logger: createRuntimeLogger(true), security: { debugSqlInLogs: true } })
+    const { db, table } = await openDatabase(driver, { logger: createRuntimeLogger(true) })
     await db.table(table).insert({ id: 1, name: 'Persisted' })
     expect(await db.table(table).count()).toBe(1)
     await db.transaction(async tx => { await tx.table(table).insert({ id: 2, name: 'Committed' }) })
@@ -154,6 +201,11 @@ describe('runtime config helpers', () => {
     expect(output).toContain('transaction commit')
     expect(output).toContain('transaction rollback')
     expect(errors.mock.calls.flat().join('\n')).toContain('query error connection=default')
+    const logs = [...warnings.mock.calls, ...errors.mock.calls].flat().join('\n')
+    expect(logs).toContain('duration=')
+    expect(logs).not.toMatch(/sql=|error=|savepoint=/)
+    expect(logs).not.toMatch(/Persisted|Committed|Rolled back|transaction failed|holo_nonexistent_table/)
+
   })
 
   it('resolves runtime connection managers from defaults and explicit groups', () => {

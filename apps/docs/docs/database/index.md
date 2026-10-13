@@ -39,17 +39,8 @@ export default defineDatabaseConfig({
 For bounded PostgreSQL pools and operational telemetry, configure the connection directly:
 
 ```ts
-import { defineDatabaseConfig, type DatabaseLogger } from '@holo-js/db'
+import { defineDatabaseConfig } from '@holo-js/db'
 import { env } from '@holo-js/config'
-
-const logger: DatabaseLogger = {
-  onQuerySuccess({ connectionName, kind, durationMs, rowCount, affectedRows }) {
-    console.info({ connectionName, kind, durationMs, rowCount, affectedRows })
-  },
-  onQueryError({ connectionName, kind, durationMs }) {
-    console.error({ connectionName, kind, durationMs })
-  },
-}
 
 export default defineDatabaseConfig({
   connections: {
@@ -61,7 +52,7 @@ export default defineDatabaseConfig({
       idleTimeoutMillis: 30_000,
       application_name: 'my-app',
       concurrency: { maxConcurrentQueries: 4, queueLimit: 32 },
-      logger,
+      logging: true,
     },
   },
 })
@@ -76,12 +67,42 @@ per named connection and per process, so account for all application processes w
 query scheduler separately from PostgreSQL's pool. A zero queue limit rejects additional queries
 when all scheduler slots are occupied. Transactions can hold pool connections for their full lifetime.
 
-Use an object of `DatabaseLogger` callbacks for custom telemetry. It survives config normalization
-and cached runtime boot; database config containing callbacks is reloaded from its source file.
-A custom `logger` takes precedence over `logging: true` and keeps SQL and binding redaction enabled.
-The existing `logging: true` console logger prints SQL and error messages when no custom logger is
-provided. For content-free telemetry, select only operational fields as above: driver error objects
-may contain SQL or application data even when SQL and bindings are redacted.
+`logging: true` enables the built-in operational logger. It records query success/failure, connection
+name, scope, duration, row or affected-row counts, and transaction outcomes. It omits SQL, bindings,
+raw error messages, and savepoint names by default.
+
+To explicitly enable SQL debugging for a connection:
+
+```ts
+{
+  driver: 'postgres',
+  url: env('DATABASE_URL'),
+  logging: true,
+  security: { debugSqlInLogs: true },
+}
+```
+
+SQL debugging adds statement text to query success and failure logs. SQL can contain sensitive
+literals, so enable it only when appropriate. Bindings and raw error messages remain omitted.
+Logging is disabled when `logging` is false or absent, including when SQL debugging is enabled.
+
+For specialized telemetry or a different logging destination, optionally provide a `logger` object:
+
+```ts
+import { type DatabaseLogger } from '@holo-js/db'
+
+const logger: DatabaseLogger = {
+  onQuerySuccess({ connectionName, kind, durationMs, rowCount }) {
+    console.info({ connectionName, kind, durationMs, rowCount })
+  },
+}
+```
+
+Set `logger` on the connection config. It takes precedence over `logging: true` and survives
+normalization and cached runtime boot; database config containing callbacks is reloaded from its
+source file. SQL and bindings supplied to custom callbacks are redacted by default. The explicit
+`security.debugSqlInLogs` setting also controls SQL redaction for custom callbacks. Custom callbacks
+receive error objects that may contain sensitive data; select operational fields for safe telemetry.
 
 Use SQLite for local development or switch to MySQL and Postgres by changing the named connection
 definitions.

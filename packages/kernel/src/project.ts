@@ -37,6 +37,7 @@ export interface HoloProjectConnectionConfig {
   logging?: boolean
   security?: {
     allowUnsafeRawSql?: boolean
+    debugSqlInLogs?: boolean
   }
 }
 
