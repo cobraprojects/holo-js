@@ -23,10 +23,10 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "^0.3.27"
+    "@holo-js/db": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/queue": "^0.3.27"
+    "@holo-js/queue": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/queue": {
@@ -34,11 +34,11 @@
     }
   },
   "devDependencies": {
-    "@holo-js/queue": "^0.3.27",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
-    "vitest": "^4.1.5"
+    "@holo-js/queue": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

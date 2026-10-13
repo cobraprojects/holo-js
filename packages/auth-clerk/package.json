@@ -23,15 +23,15 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@clerk/backend": "^3.4.7",
-    "@holo-js/auth": "^0.3.27",
-    "@holo-js/session": "^0.3.27"
+    "@clerk/backend": "catalog:",
+    "@holo-js/auth": "catalog:",
+    "@holo-js/session": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
-    "vitest": "^4.1.5"
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

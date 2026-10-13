@@ -33,14 +33,14 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.3.27",
-    "@holo-js/kernel": "^0.3.27",
-    "nodemailer": "^10.1.0"
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:",
+    "nodemailer": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "^0.3.27",
-    "@holo-js/queue": "^0.3.27",
-    "@holo-js/storage": "^0.3.27"
+    "@holo-js/db": "catalog:",
+    "@holo-js/queue": "catalog:",
+    "@holo-js/storage": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/db": {
@@ -54,12 +54,12 @@
     }
   },
   "devDependencies": {
-    "@holo-js/db-sqlite": "^0.3.27",
-    "esbuild": "^0.28.2",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
-    "vitest": "^4.1.5"
+    "@holo-js/db-sqlite": "catalog:",
+    "esbuild": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
