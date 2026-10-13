@@ -481,6 +481,14 @@ export function renderScaffoldAppConfig(
   ].join('\n')
 }
 
+const postgresBudgetDefaults = {
+  DB_POOL_MAX: 4,
+  DB_CONNECTION_TIMEOUT_MS: 5_000,
+  DB_IDLE_TIMEOUT_MS: 30_000,
+  DB_MAX_CONCURRENT_QUERIES: 4,
+  DB_QUERY_QUEUE_LIMIT: 32,
+} as const
+
 export function renderScaffoldDatabaseConfig(
   options: Pick<ProjectScaffoldOptions, 'databaseDriver' | 'projectName'>,
 ): string {
@@ -524,7 +532,16 @@ export function renderScaffoldDatabaseConfig(
     `      username: env('DB_USERNAME', '${username}'),`,
     '      password: env(\'DB_PASSWORD\'),',
     `      database: env('DB_DATABASE', '${packageName}'),`,
-    ...(schemaLine ? [schemaLine] : []),
+    ...(schemaLine ? [
+      schemaLine,
+      `      max: env('DB_POOL_MAX', ${postgresBudgetDefaults.DB_POOL_MAX}),`,
+      `      connectionTimeoutMillis: env('DB_CONNECTION_TIMEOUT_MS', ${postgresBudgetDefaults.DB_CONNECTION_TIMEOUT_MS}),`,
+      `      idleTimeoutMillis: env('DB_IDLE_TIMEOUT_MS', ${postgresBudgetDefaults.DB_IDLE_TIMEOUT_MS}),`,
+      '      concurrency: {',
+      `        maxConcurrentQueries: env('DB_MAX_CONCURRENT_QUERIES', ${postgresBudgetDefaults.DB_MAX_CONCURRENT_QUERIES}),`,
+      `        queueLimit: env('DB_QUERY_QUEUE_LIMIT', ${postgresBudgetDefaults.DB_QUERY_QUEUE_LIMIT}),`,
+      '      },',
+    ] : []),
     '    },',
     '  },',
     '})',
@@ -566,7 +583,10 @@ export function renderScaffoldEnvFiles(
         `DB_USERNAME=${options.databaseDriver === 'mysql' ? 'root' : 'postgres'}`,
         'DB_PASSWORD=',
         `DB_DATABASE=${sanitizePackageName(options.projectName) || 'holo_app'}`,
-        ...(options.databaseDriver === 'postgres' ? ['DB_SCHEMA=public'] : []),
+        ...(options.databaseDriver === 'postgres' ? [
+          'DB_SCHEMA=public',
+          ...Object.entries(postgresBudgetDefaults).map(([name, value]) => `${name}=${value}`),
+        ] : []),
       ]
   const databaseLines = ['DB_CONNECTION=main', `DB_DRIVER=${options.databaseDriver}`, ...driverLines]
   const redisLines = ['REDIS_CONNECTION=default']

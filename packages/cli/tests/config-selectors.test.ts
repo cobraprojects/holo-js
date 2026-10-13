@@ -196,6 +196,42 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
     expect(overridden.database.connections.main).toMatchObject({ driver: 'postgres' })
   })
 
+  it('loads finite PostgreSQL scaffold budgets and numeric environment overrides', async () => {
+    const root = await createProject()
+    const options = { databaseDriver: 'postgres' as const, projectName: 'Fixture', storageDefaultDisk: 'public' as const, optionalPackages: [] }
+    await writeConfig(root, 'database', renderScaffoldDatabaseConfig(options))
+    const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(defaults.database.connections.main).toMatchObject({
+      max: 4, connectionTimeoutMillis: 5_000, idleTimeoutMillis: 30_000,
+      concurrency: { maxConcurrentQueries: 4, queueLimit: 32 },
+    })
+    const overrides = {
+      DB_POOL_MAX: '6', DB_CONNECTION_TIMEOUT_MS: '2500', DB_IDLE_TIMEOUT_MS: '15000',
+      DB_MAX_CONCURRENT_QUERIES: '3', DB_QUERY_QUEUE_LIMIT: '0',
+    }
+    const configured = await loadConfigDirectory(root, { processEnv: overrides, preferCache: false })
+    expect(configured.database.connections.main).toMatchObject({
+      max: 6, connectionTimeoutMillis: 2_500, idleTimeoutMillis: 15_000,
+      concurrency: { maxConcurrentQueries: 3, queueLimit: 0 },
+    })
+    const files = renderScaffoldEnvFiles(options)
+    for (const contents of [files.env, files.example]) {
+      await writeFile(join(root, '.env'), contents)
+      const fromFile = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+      expect(fromFile.database.connections.main).toMatchObject({
+        max: 4, connectionTimeoutMillis: 5_000, idleTimeoutMillis: 30_000,
+        concurrency: { maxConcurrentQueries: 4, queueLimit: 32 },
+      })
+      const customized = Object.entries(overrides).reduce(
+        (text, [name, value]) => text.replace(new RegExp(`^${name}=.*$`, 'm'), `${name}=${value}`),
+        contents,
+      )
+      await writeFile(join(root, '.env'), customized)
+      const fromCustomizedFile = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+      expect(fromCustomizedFile.database.connections.main).toEqual(configured.database.connections.main)
+    }
+  })
+
   it('selects the shared Redis connection and rate-limit driver from the environment', async () => {
     const root = await createProject()
     await writeConfig(root, 'redis', renderRedisConfig(), `

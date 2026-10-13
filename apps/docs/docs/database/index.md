@@ -67,6 +67,23 @@ per named connection and per process, so account for all application processes w
 query scheduler separately from PostgreSQL's pool. A zero queue limit rejects additional queries
 when all scheduler slots are occupied. Transactions can hold pool connections for their full lifetime.
 
+New PostgreSQL projects scaffold these finite defaults in `config/database.ts`. Each can be changed
+in `.env`; `.env.example` lists the same settings:
+
+| Environment setting | Default | Connection setting |
+| --- | ---: | --- |
+| `DB_POOL_MAX` | 4 | `max` |
+| `DB_CONNECTION_TIMEOUT_MS` | 5000 | `connectionTimeoutMillis` |
+| `DB_IDLE_TIMEOUT_MS` | 30000 | `idleTimeoutMillis` |
+| `DB_MAX_CONCURRENT_QUERIES` | 4 | `concurrency.maxConcurrentQueries` |
+| `DB_QUERY_QUEUE_LIMIT` | 32 | `concurrency.queueLimit` |
+
+These are starting budgets per named connection per application process. Size the pool for your
+database's total connection allowance across all processes and replicas, and tune concurrency and
+queue limits alongside it. The connection timeout bounds waiting for a pool connection; it is not a
+query execution timeout. A full scheduler queue rejects additional operations. Existing projects
+keep their current configuration; scaffolding does not change runtime defaults.
+
 `logging: true` enables the built-in operational logger. It records query success/failure, connection
 name, scope, duration, row or affected-row counts, and transaction outcomes. It omits SQL, bindings,
 raw error messages, and savepoint names by default.
