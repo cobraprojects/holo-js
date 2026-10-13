@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { setTimeout } from 'node:timers/promises'
 import { Client } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
   column, configureDB, createConnectionManager, createDialect, defineGeneratedTable,
-  defineModel, resetDB,
+  createDatabase, defineModel, resetDB,
 } from '@holo-js/db'
 import { createPostgresAdapter } from '../src'
 
@@ -15,6 +16,80 @@ const livePostgresConfig = {
 }
 
 describe('@holo-js/db-postgres', () => {
+  it.each([1, 4, 8])('completes overlapping transactions and ordinary queries with a four-client pool and %i admission slots', async maxConcurrentQueries => {
+    const adapter = createPostgresAdapter({ config: {
+      ...livePostgresConfig, max: 4, connectionTimeoutMillis: 500, idleTimeoutMillis: 30_000,
+    } })
+    const db = createDatabase({
+      adapter, dialect: createDialect('postgres'),
+      concurrency: { maxConcurrentQueries, queueLimit: 128, workerThreads: false },
+    })
+    const tableName = `holo_admission_${randomUUID().replaceAll('-', '')}`
+    let notifyReady = () => {}
+    let release = () => {}
+    const ready = new Promise<void>(resolve => { notifyReady = resolve })
+    const proceed = new Promise<void>(resolve => { release = resolve })
+    let entered = 0
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY)`)
+      const transactions = Array.from({ length: 21 }, (_, id) => db.transaction(async tx => {
+        entered += 1
+        if (entered === Math.min(4, maxConcurrentQueries)) notifyReady()
+        await proceed
+        await tx.executeCompiled({ sql: `INSERT INTO ${tableName} VALUES ($1)`, bindings: [id] })
+        expect((await tx.queryCompiled({ sql: `SELECT id FROM ${tableName} WHERE id = $1`, bindings: [id] })).rows)
+          .toEqual([{ id }])
+      }))
+      const settledTransactions = Promise.allSettled(transactions)
+      await ready
+      const queries = Promise.allSettled(Array.from({ length: 4 }, () => db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })))
+      await setTimeout(20)
+      release()
+      expect(await settledTransactions).toEqual(Array.from({ length: 21 }, () => ({ status: 'fulfilled', value: undefined })))
+      expect(await queries).toEqual(Array.from({ length: 4 }, () => ({ status: 'fulfilled', value: { rows: [{ value: 1 }], rowCount: 1 } })))
+      expect((await db.queryCompiled({ sql: `SELECT count(*)::int AS count FROM ${tableName}`, bindings: [] })).rows)
+        .toEqual([{ count: 21 }])
+    } finally {
+      release()
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await db.disconnect()
+    }
+  }, 10_000)
+
+  it('applies shared admission backpressure to transactions and releases capacity after rollback', async () => {
+    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 4, connectionTimeoutMillis: 500 } })
+    const db = createDatabase({
+      adapter, dialect: createDialect('postgres'),
+      concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },
+    })
+    let notifyReady = () => {}
+    let release = () => {}
+    const ready = new Promise<void>(resolve => { notifyReady = resolve })
+    const proceed = new Promise<void>(resolve => { release = resolve })
+    try {
+      const running = db.transaction(async tx => {
+        notifyReady()
+        await proceed
+        await tx.transaction(nested => nested.queryCompiled({ sql: 'SELECT 1', bindings: [] }))
+        throw new Error('abort')
+      })
+      const rejected = expect(running).rejects.toThrow('abort')
+      await ready
+      await expect(db.transaction(tx => tx.queryCompiled({ sql: 'SELECT 1', bindings: [] })))
+        .rejects.toMatchObject({ code: 'QUERY_SCHEDULER_BACKPRESSURE' })
+      await expect(db.queryCompiled({ sql: 'SELECT 1', bindings: [] }))
+        .rejects.toMatchObject({ code: 'QUERY_SCHEDULER_BACKPRESSURE' })
+      release()
+      await rejected
+      expect((await db.transaction(tx => tx.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [] }))).rows)
+        .toEqual([{ value: 2 }])
+      expect((await db.queryCompiled({ sql: 'SELECT 3 AS value', bindings: [] })).rows).toEqual([{ value: 3 }])
+    } finally {
+      release()
+      await db.disconnect()
+    }
+  })
+
   it('connects to the selected integration database', async () => {
     const adapter = createPostgresAdapter({ config: livePostgresConfig })
     try {

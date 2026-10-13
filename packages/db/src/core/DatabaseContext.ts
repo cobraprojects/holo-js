@@ -375,7 +375,7 @@ export class DatabaseContext {
 
     try {
       const result = this._adapter.supportsConcurrentTransactionScopes === true
-        ? await runTransaction()
+        ? await this._runtime.scheduler.transaction(runTransaction)
         : this._adapter.runWithTransactionScope
           ? await this._runtime.scheduler.exclusive(runTransaction)
           : await this._runSerializedRootTransaction(

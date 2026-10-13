@@ -32,6 +32,7 @@ export class QueryScheduler {
   private readonly operationWaiters: Array<() => void> = []
   private readonly exclusiveWaiters: Array<() => void> = []
   private readonly exclusiveScope = new AsyncLocalStorage<boolean>()
+  private readonly transactionScope = new AsyncLocalStorage<QueueState>()
 
   constructor(options: QuerySchedulerOptions) {
     const maxConcurrentQueries = options.concurrency?.maxConcurrentQueries
@@ -80,13 +81,14 @@ export class QueryScheduler {
     },
     callback: (schedulingMode: SchedulingMode) => Promise<T>,
   ): Promise<{ result: T, schedulingMode: SchedulingMode }> {
-    const withinExclusive = options.withinExclusive || this.exclusiveScope.getStore() === true
+    const transactionState = this.transactionScope.getStore()
+    const withinExclusive = options.withinExclusive || this.exclusiveScope.getStore() === true || !!transactionState
     if (!withinExclusive) {
       const operationWait = this.acquireOperation()
       if (operationWait) await operationWait
     }
     const schedulingMode = this.preview(options)
-    const state = this.resolveState(schedulingMode)
+    const state = transactionState ?? this.resolveState(schedulingMode)
 
     let slotReserved = false
 
@@ -123,6 +125,17 @@ export class QueryScheduler {
     }
   }
 
+  async transaction<T>(callback: () => Promise<T>): Promise<T> {
+    if (this.transactionScope.getStore()) return callback()
+    const scheduled = await this.schedule({ transactional: false }, () => this.transactionScope.run({
+      active: 0,
+      queued: 0,
+      limit: 1,
+      waiters: [],
+    }, callback))
+    return scheduled.result
+  }
+
   async exclusive<T>(callback: () => Promise<T>): Promise<T> {
     this.exclusivePending += 1
     if (this.exclusiveActive || this.activeOperations > 0) {
@@ -149,7 +162,7 @@ export class QueryScheduler {
     transactional: boolean
     preferWorkerThreads?: boolean
   }): SchedulingMode {
-    if (options.transactional) {
+    if (options.transactional || this.transactionScope.getStore()) {
       return 'serialized'
     }
 
