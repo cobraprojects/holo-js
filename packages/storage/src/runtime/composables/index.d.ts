@@ -25,6 +25,15 @@ export type StorageContent
 
 export type StorageByteStream = AsyncIterable<Uint8Array>
 
+export interface StorageFileMetadata {
+  readonly size: number
+  readonly mimeType: string | null
+}
+
+export declare class StorageMetadataUnsupportedError extends Error {
+  constructor()
+}
+
 export interface StorageStreamReadOptions {
   readonly chunkBytes?: number
 }
@@ -59,6 +68,7 @@ export declare class StoragePaginationError extends Error {
 export interface StorageBackend {
   getItem<T = unknown>(key: string): Promise<T | null>
   getItemRaw(key: string): Promise<string | Uint8Array | ArrayBuffer | Buffer | null>
+  getItemStat?(key: string): Promise<StorageFileMetadata | null>
   setItem(key: string, value: unknown): Promise<void>
   setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void>
   hasItem(key: string): Promise<boolean>
@@ -92,6 +102,7 @@ export interface StorageDisk {
   putJson(path: string, value: unknown): Promise<boolean>
   get(path: string): Promise<string | null>
   getBytes(path: string): Promise<Uint8Array | null>
+  stat(path: string): Promise<StorageFileMetadata | null>
   readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null>
   writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean>
   json<T>(path: string): Promise<T | null>
@@ -139,6 +150,7 @@ export declare const Storage: {
   putJson(path: string, value: unknown): Promise<boolean>
   get(path: string): Promise<string | null>
   getBytes(path: string): Promise<Uint8Array | null>
+  stat(path: string): Promise<StorageFileMetadata | null>
   readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null>
   writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean>
   json<T>(path: string): Promise<T | null>

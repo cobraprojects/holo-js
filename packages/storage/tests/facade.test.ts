@@ -18,6 +18,7 @@ const {
   createS3TemporaryUrl,
   resetStorageRuntime,
   StoragePaginationError,
+  StorageMetadataUnsupportedError,
   useStorage,
 } = await import('../src/runtime/composables')
 
@@ -65,6 +66,52 @@ function restoreGlobalProperty(
 }
 
 describe('Storage facade', () => {
+  it.each(['local', 'public'])('reports persisted byte sizes on the %s disk after runtime reload', async (name) => {
+    const disk = Storage.disk(name)
+    const backend = backends[`holo:${name}`]
+    if (!backend) throw new Error('Missing test storage backend')
+    await disk.put('uploads/report.txt', new Uint8Array(96))
+    await backend.setMeta?.('uploads:report.txt', { size: 0, mimeType: 'wrong/type' })
+    resetStorageRuntime()
+    configureStorageRuntime({
+      getRuntimeConfig: () => runtimeConfig,
+      getStorage: base => createBackend(base),
+    })
+    const reloaded = useStorage(name)
+    await expect(reloaded.stat('uploads/report.txt')).resolves.toEqual({ size: 96, mimeType: null })
+    await reloaded.put('empty.txt', '')
+    await expect(reloaded.stat('empty.txt')).resolves.toEqual({ size: 0, mimeType: null })
+    await expect(reloaded.stat('missing.txt')).resolves.toBeNull()
+    await expect(reloaded.stat('uploads')).resolves.toBeNull()
+    await expect(reloaded.stat('empty.txt/child')).resolves.toBeNull()
+    await reloaded.delete('uploads/report.txt')
+    await expect(reloaded.stat('uploads/report.txt')).resolves.toBeNull()
+  })
+
+  it('uses the default disk for file metadata', async () => {
+    await Storage.put('default.txt', 'é')
+    await expect(Storage.stat('default.txt')).resolves.toEqual({ size: 2, mimeType: null })
+  })
+
+  it.each(['../private.txt', 'nested/../../private.txt', '..\\private.txt', '/private.txt', 'C:\\private.txt', '', 'file\0.txt'])('rejects unsafe metadata paths: %j', async (path) => {
+    await expect(Storage.stat(path)).rejects.toThrow()
+  })
+
+  it('rejects metadata reads through symlinks outside the disk root', async () => {
+    await Storage.put('inside.txt', 'inside')
+    const outside = join(storageRoot, 'private.txt')
+    await writeFile(outside, 'private')
+    await symlink(outside, join(storageRoot, 'local', 'escape.txt'))
+    await expect(Storage.stat('escape.txt')).rejects.toThrow('Storage paths must stay inside')
+  })
+
+  it('reports unsupported metadata backends without downloading the file', async () => {
+    const backend = backends['holo:local']
+    if (!backend) throw new Error('Missing test storage backend')
+    backend.getItemStat = undefined
+    await expect(Storage.stat('file.txt')).rejects.toBeInstanceOf(StorageMetadataUnsupportedError)
+  })
+
   afterEach(async () => {
     await Promise.all(temporaryDirectories.splice(0).map(path => rm(path, { recursive: true, force: true })))
   })

@@ -16,6 +16,7 @@ type StorageRuntimeConfigValue = {
 export interface StorageBackend {
   getItem<T = unknown>(key: string): Promise<T | null>
   getItemRaw(key: string): Promise<RawStorageValue>
+  getItemStat?(key: string): Promise<StorageFileMetadata | null>
   setItem(key: string, value: unknown): Promise<void>
   setItemRaw(key: string, value: Exclude<RawStorageValue, null>): Promise<void>
   hasItem(key: string): Promise<boolean>
@@ -49,6 +50,18 @@ export type StorageContent
     | Blob
 
 export type StorageByteStream = AsyncIterable<Uint8Array>
+
+export interface StorageFileMetadata {
+  readonly size: number
+  readonly mimeType: string | null
+}
+
+export class StorageMetadataUnsupportedError extends Error {
+  constructor() {
+    super('[Holo Storage] The configured storage backend does not support file metadata.')
+    this.name = 'StorageMetadataUnsupportedError'
+  }
+}
 
 export interface StorageStreamReadOptions {
   readonly chunkBytes?: number
@@ -102,6 +115,7 @@ export interface StorageDisk {
   putJson(path: string, value: unknown): Promise<boolean>
   get(path: string): Promise<string | null>
   getBytes(path: string): Promise<Uint8Array | null>
+  stat(path: string): Promise<StorageFileMetadata | null>
   readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null>
   writeStream(path: string, source: StorageByteStream, options?: StorageStreamWriteOptions): Promise<boolean>
   json<T>(path: string): Promise<T | null>
@@ -636,6 +650,19 @@ function createDisk(diskName?: string): StorageInstance {
       return toUint8Array(await backend.getItemRaw(normalizeKey(path)))
     },
 
+    async stat(path) {
+      const hasControlCharacter = Array.from(path).some(character => {
+        const code = character.charCodeAt(0)
+        return code <= 31 || code === 127
+      })
+      if (!path.trim() || /^[\\/]/.test(path.trim()) || /^[a-z]:/i.test(path.trim()) || hasControlCharacter) {
+        throw new TypeError('[Holo Storage] File metadata requires a safe relative file path.')
+      }
+      const key = normalizeKey(path)
+      if (!backend.getItemStat) throw new StorageMetadataUnsupportedError()
+      return backend.getItemStat(key)
+    },
+
     async readStream(path, options = {}) {
       if (!backend.getItemStream) {
         throw new StorageStreamingUnsupportedError()
@@ -790,6 +817,9 @@ export const Storage = {
   },
   getBytes(path: string): Promise<Uint8Array | null> {
     return createDisk().getBytes(path)
+  },
+  stat(path: string): Promise<StorageFileMetadata | null> {
+    return createDisk().stat(path)
   },
   readStream(path: string, options?: StorageStreamReadOptions): Promise<StorageByteStream | null> {
     return createDisk().readStream(path, options)

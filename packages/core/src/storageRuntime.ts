@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 import { importOptionalRuntimeModule } from './runtimeModule'
@@ -7,6 +7,7 @@ import { importOptionalRuntimeModule } from './runtimeModule'
 type StorageBackend = {
   getItem<T = unknown>(key: string): Promise<T | null>
   getItemRaw(key: string): Promise<string | Uint8Array | ArrayBuffer | Buffer | null>
+  getItemStat?(key: string): Promise<{ readonly size: number, readonly mimeType: string | null } | null>
   setItem(key: string, value: unknown): Promise<void>
   setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void>
   hasItem(key: string): Promise<boolean>
@@ -278,6 +279,19 @@ function createFileStorageBackend(root: string): StorageBackend {
         return await readFile(targetPath)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      }
+    },
+
+    async getItemStat(key: string) {
+      try {
+        const targetPath = await resolveStorageReadPath(root, key)
+        if (!targetPath) return null
+        const metadata = await stat(targetPath)
+        return metadata.isFile() ? { size: metadata.size, mimeType: null } : null
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ENOTDIR') return null
         throw error
       }
     },

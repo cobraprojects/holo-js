@@ -503,6 +503,23 @@ export default function createS3Driver(input: S3DriverOptions) {
       const response = await s3Fetch(options, 'GET', resolveObjectUrl(options, key))
       return response ? response.arrayBuffer() : null
     },
+    async getItemStat(key: string): Promise<{ readonly size: number, readonly mimeType: string | null } | null> {
+      const options = getOptions()
+      const url = resolveObjectUrl(options, key)
+      let response: Response | null
+      try {
+        response = await s3Fetch(options, 'HEAD', url)
+      } catch {
+        throw createDriverError('File metadata request failed.')
+      }
+      if (!response) return null
+      const contentLength = response.headers.get('content-length')
+      const size = Number(contentLength)
+      if (contentLength === null || !/^\d+$/.test(contentLength) || !Number.isSafeInteger(size)) {
+        throw createDriverError('File metadata response has an invalid content length.')
+      }
+      return { size, mimeType: response.headers.get('content-type') }
+    },
     async getItemStream(
       key: string,
       request: { readonly chunkBytes?: number },

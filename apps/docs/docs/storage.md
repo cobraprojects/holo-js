@@ -67,6 +67,33 @@ Composable-style helper:
 const exportsDisk = useStorage('local')
 ```
 
+## File metadata
+
+Read file properties without downloading the contents:
+
+```ts
+import { Storage, type StorageFileMetadata } from '@holo-js/storage/runtime'
+
+const metadata: StorageFileMetadata | null = await Storage.disk('public').stat('uploads/report.txt')
+```
+
+`Storage.stat(path)` uses the default disk. `Storage.disk(name).stat(path)` and
+`useStorage(name).stat(path)` use the selected disk. The exported `StorageFileMetadata`
+type contains `readonly size: number` (bytes) and `readonly mimeType: string | null`.
+
+Local and public disks read filesystem properties; their MIME type is `null` because
+the filesystem does not store it. S3 disks use one signed HEAD request and return
+the object's content type when present. Custom sidecar data and S3 user metadata
+are separate from file properties and do not affect the result.
+
+Missing files return `null`, while empty files return a size of zero. Local directories
+also return `null`. Paths must be nonempty and relative; traversal, absolute paths,
+control characters, and local symlinks escaping the disk root are rejected. Other
+filesystem and S3 failures throw; invalid S3 content lengths are rejected.
+
+Backends without the optional `StorageBackend.getItemStat(key)` capability throw
+`StorageMetadataUnsupportedError`, exported from `@holo-js/storage/runtime`.
+
 ## Public URLs and temporary URLs
 
 Use `url()` for public files:
