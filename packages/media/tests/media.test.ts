@@ -1665,7 +1665,7 @@ describe('@holo-js/media', () => {
     for (const original of originals) {
       const path = `media/${original.uuid}/original/${original.fileName}`
       await Storage.disk('public').put(path, Buffer.from(original.name))
-      await Media.create({
+      await DB.table('media').insert({
         uuid: original.uuid,
         model_type: modelType,
         model_id: modelId,
@@ -1678,7 +1678,7 @@ describe('@holo-js/media', () => {
         extension: 'txt',
         size: 1,
         path,
-        generated_conversions: original.generatedConversions,
+        generated_conversions: original.generatedConversions === null ? 'null' : original.generatedConversions,
         order_column: original.order,
       })
     }
@@ -3048,7 +3048,7 @@ describe('@holo-js/media', () => {
     expect(implicitContentsName.fileName).toBe('media.bin')
     expect(defaultName.fileName).toBe('media.bin')
 
-    const noConversions = await Media.create({
+    await DB.table('media').insert({
       uuid: 'manual-3',
       model_type: post.getRepository().definition.morphClass,
       model_id: String(post.get('id')),
@@ -3056,21 +3056,23 @@ describe('@holo-js/media', () => {
       name: 'manual-3',
       file_name: 'manual-3.txt',
       disk: 'public',
-      conversions_disk: null as never,
-      mime_type: null as never,
-      extension: null as never,
+      conversions_disk: null,
+      mime_type: null,
+      extension: null,
       size: 1,
       path: 'manual-3/original.txt',
-      generated_conversions: null as never,
+      generated_conversions: 'null',
       order_column: 101,
     })
+    const noConversions = await Media.where('uuid', 'manual-3').firstOrFail()
+    expect(noConversions.get('generated_conversions')).toBeNull()
 
     await Storage.disk('public').put('manual-3/original.txt', Buffer.from('manual-3'))
     expect(new MediaItem(noConversions).getAvailableConversions()).toEqual([])
     await expect(new MediaItem(noConversions).regenerate('copy')).resolves.toBeInstanceOf(MediaItem)
     await new MediaItem(noConversions).delete()
 
-    const nullDelete = await Media.create({
+    await DB.table('media').insert({
       uuid: 'manual-3-delete',
       model_type: post.getRepository().definition.morphClass,
       model_id: String(post.get('id')),
@@ -3078,14 +3080,16 @@ describe('@holo-js/media', () => {
       name: 'manual-3-delete',
       file_name: 'manual-3-delete.txt',
       disk: 'public',
-      conversions_disk: null as never,
-      mime_type: null as never,
-      extension: null as never,
+      conversions_disk: null,
+      mime_type: null,
+      extension: null,
       size: 1,
       path: 'manual-3-delete/original.txt',
-      generated_conversions: null as never,
+      generated_conversions: 'null',
       order_column: 101,
     })
+    const nullDelete = await Media.where('uuid', 'manual-3-delete').firstOrFail()
+    expect(nullDelete.get('generated_conversions')).toBeNull()
 
     await new MediaItem(nullDelete).delete()
 

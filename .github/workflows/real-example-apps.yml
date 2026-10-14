@@ -75,7 +75,7 @@ jobs:
         if: matrix.framework != 'libraries'
         env:
           HOLO_TEST_FRAMEWORK: ${{ matrix.framework }}
-        run: node --test --test-concurrency=3 tests/example-app-matrix.mjs
+        run: bun run test:examples
       - uses: actions/upload-artifact@v4
         if: always()
         with:

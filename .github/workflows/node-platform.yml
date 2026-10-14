@@ -33,4 +33,4 @@ jobs:
       - run: node scripts/build-libraries.mjs
       - name: Test native package loading and server lifecycle
         working-directory: packages/cli
-        run: node ../../node_modules/vitest/vitest.mjs --run tests/native-broadcast-installation.test.ts --pool forks --fileParallelism --maxWorkers 4 --reporter=json
+        run: bun run test:platform
