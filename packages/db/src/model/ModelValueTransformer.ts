@@ -125,12 +125,16 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   normalizeFromStorage(
     values: Partial<ModelRecord<TTable>>,
     extraCasts: Record<string, ModelCastDefinition> = {},
+    source: 'serialized' | 'database' = 'serialized',
   ): Partial<ModelRecord<TTable>> {
     const casts = { ...this.definition.casts, ...extraCasts }
     return Object.fromEntries(
       Object.entries(values).map(([key, value]) => {
-        const normalized = this.applySchemaReadNormalization(key, value)
-        return [key, this.applyCastGet(casts[key], normalized)]
+        const normalized = this.applySchemaReadNormalization(key, value, source)
+        const cast = this.definition.table.columns[key]?.kind === 'json' && this.parseBuiltInCast(casts[key])?.name === 'json'
+          ? undefined
+          : casts[key]
+        return [key, this.applyCastGet(cast, normalized)]
       }),
     ) as Partial<ModelRecord<TTable>>
   }
@@ -160,23 +164,35 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   normalizeForStorage(key: string, value: unknown): unknown {
     const mutator = this.definition.mutators[key]
     const mutated = mutator ? mutator(value) : value
-    const casted = this.applyCastSet(this.definition.casts[key], mutated)
+    const cast = this.definition.casts[key]
+    const casted = this.definition.table.columns[key]?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
+      ? mutated
+      : this.applyCastSet(cast, mutated)
     return this.applySchemaWriteNormalization(key, casted)
   }
 
-  private applySchemaReadNormalization(key: string, value: unknown): unknown {
+  private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database'): unknown {
     const column = this.definition.table.columns[key]
     if (!column) {
       return value
     }
 
-    return normalizeDialectReadValue(this.getSchemaDialectName(), column, value)
+    const dialect = this.getSchemaDialectName()
+    if (column.kind === 'json' && source === 'database' && dialect !== 'sqlite') {
+      return value
+    }
+
+    return normalizeDialectReadValue(dialect, column, value)
   }
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = this.definition.table.columns[key]
     if (!column) {
       return value
+    }
+
+    if (column.kind === 'json') {
+      return value == null ? value : JSON.stringify(value)
     }
 
     return normalizeDialectWriteValue(this.getSchemaDialectName(), column, value)

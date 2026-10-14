@@ -330,16 +330,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   async retrieve(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
-    const entity = this.hydrate(values)
-    await this.dispatchEvent('retrieved', entity)
-    return entity
+    return this.retrieveWithCasts(values, {})
   }
 
   async retrieveWithCasts(
     values: Partial<ModelRecord<TTable>>,
     casts: Record<string, ModelCastDefinition>,
   ): Promise<Entity<TTable>> {
-    const entity = new Entity(this, this.normalizeFromStorage(values, casts), true)
+    const entity = new Entity(this, this.valueTransformer.normalizeFromStorage(values, casts, 'database'), true)
     await this.dispatchEvent('retrieved', entity)
     return entity
   }
