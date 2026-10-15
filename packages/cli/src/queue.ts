@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type SpawnOptions } from 'node:child_process'
 import { existsSync, watch } from 'node:fs'
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
@@ -34,7 +34,6 @@ import type {
   QueueRuntimeEnvironment,
   QueueMaintenanceEnvironment,
   SpawnProcessLike,
-  WatchFactory,
   WatchHandle,
 } from './cli-types'
 import type { LoadedProjectConfig, CommandFlagValue } from './types'
@@ -68,6 +67,7 @@ export const QUEUE_LISTEN_IGNORED_DIRECTORY_NAMES = new Set([
 
 export const QUEUE_LISTEN_IGNORED_PATH_PREFIXES = [
   HOLO_RUNTIME_ROOT,
+  '.holo-js/generated',
   '.holo-js/project-prepare.lock',
 ].map(toPosixSlashes)
 
@@ -173,7 +173,6 @@ export function isQueueListenRelevantPath(
     project.config.paths.events,
     project.config.paths.listeners,
     'config',
-    '.holo-js/generated',
   ]
 
   if (normalized === '.env' || normalized.startsWith('.env.')) {
@@ -527,8 +526,8 @@ export async function runQueueListen(
   io: IoStreams,
   projectRoot: string,
   flags: Readonly<Record<string, CommandFlagValue>>,
-  spawnProcess: typeof spawn = spawn,
-  createWatcher: WatchFactory = watch,
+  spawnProcess: (command: string, args: readonly string[], options: SpawnOptions) => SpawnProcessLike = spawn,
+  createWatcher: (path: string, options: { recursive: boolean }, listener: (eventType: string, fileName: string | null) => void) => WatchHandle = watch,
   prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
 ): Promise<void> {
   let project = await ensureProjectConfig(projectRoot)
@@ -630,12 +629,16 @@ export async function runQueueListen(
     await refreshNonRecursiveWatchers?.()
 
     while (!shuttingDown) {
+      while (pendingPrepare) {
+        await pendingPrepare
+      }
+
       const childStartedAt = Date.now()
       const child = spawnProcess(process.execPath, [cliEntrypoint.path, ...childArgs], {
         cwd: projectRoot,
         env: process.env,
         stdio: ['pipe', 'pipe', 'pipe'],
-      }) as SpawnProcessLike
+      })
 
       child.stdout?.on('data', chunk => io.stdout.write(chunk))
       child.stderr?.on('data', chunk => io.stderr.write(chunk))
