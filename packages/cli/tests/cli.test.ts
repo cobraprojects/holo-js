@@ -4103,7 +4103,7 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-db": "${expectedHoloPackageRange}"`)
   }, 30_000)
 
-  it('installs broadcast support without requiring framework Flux bootstrap files', async () => {
+  it('installs Next.js broadcast support without requiring framework Flux bootstrap files', async () => {
     const nextRoot = await createTempProject()
     tempDirs.push(nextRoot)
     await writeProjectFile(nextRoot, 'package.json', JSON.stringify({
@@ -4126,7 +4126,7 @@ export default defineCacheConfig({
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("driver: 'holo'")
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("host: env('BROADCAST_HOST', '127.0.0.1')")
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("port: env('BROADCAST_PORT', 8080)")
-await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain('scheme: broadcastScheme')
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain('scheme: broadcastScheme')
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain('useTLS: broadcastScheme ===')
     await expect(readFile(join(nextRoot, '.env'), 'utf8')).resolves.toContain('BROADCAST_CONNECTION=holo')
     await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_CONNECTION=holo')
@@ -4157,7 +4157,9 @@ await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.t
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-next": "${expectedHoloPackageRange}"`)
+  }, 30_000)
 
+  it('installs Nuxt broadcast support without requiring framework Flux bootstrap files', async () => {
     const nuxtRoot = await createTempProject()
     tempDirs.push(nuxtRoot)
     await writeProjectFile(nuxtRoot, 'package.json', JSON.stringify({
@@ -4175,7 +4177,9 @@ await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.t
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-vue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-nuxt": "${expectedHoloPackageRange}"`)
+  }, 30_000)
 
+  it('installs SvelteKit broadcast support without requiring framework Flux bootstrap files', async () => {
     const svelteRoot = await createTempProject()
     tempDirs.push(svelteRoot)
     await writeProjectFile(svelteRoot, 'package.json', JSON.stringify({
@@ -4192,7 +4196,9 @@ await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.t
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-svelte": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-sveltekit": "${expectedHoloPackageRange}"`)
+  }, 30_000)
 
+  it('installs broadcast support with CommonJS configuration', async () => {
     const cjsRoot = await createTempDirectory()
     tempDirs.push(cjsRoot)
     await writeProjectFile(cjsRoot, 'package.json', JSON.stringify({
@@ -4217,7 +4223,7 @@ module.exports = {
     await expect(readFile(join(cjsRoot, 'config/broadcast.cjs'), 'utf8')).resolves.toContain('module.exports = defineBroadcastConfig(')
     await expect(readFile(join(cjsRoot, 'config/broadcast.cjs'), 'utf8')).resolves.not.toContain("env<'http' | 'https'>(")
     await expect(stat(join(cjsRoot, 'config/broadcast.ts'))).rejects.toThrow()
-  }, 30000)
+  }, 30_000)
 
   it('installs broadcast dependencies for active plugin framework descriptors', async () => {
     const projectRoot = await createTempProject()
