@@ -106,7 +106,11 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
         break
       case 'regex':
         if (rule.args[0] instanceof RegExp) {
-          actions.push(asPipeItem(v.regex(rule.args[0], rule.message ?? 'This field format is invalid.')))
+          const pattern = new RegExp(rule.args[0])
+          actions.push(asPipeItem(v.check((input: string) => {
+            pattern.lastIndex = 0
+            return pattern.test(input)
+          }, rule.message ?? 'This field format is invalid.')))
         }
         break
       case 'in': {
