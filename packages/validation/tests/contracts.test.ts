@@ -374,6 +374,35 @@ describe('@holo-js/validation contracts', () => {
     })
   })
 
+  it.each([{ value: null }, {}, { value: [] }, { value: ['Valid'] }])('preserves nullable array input %j without validating nonexistent elements', async (input) => {
+    const contract = schema({
+      value: field.array(field.string().required().min(2)).optional().nullable(),
+    })
+
+    expect(await contract['~standard'].validate(input)).toEqual({ value: { value: input.value } })
+  })
+
+  it.each([{ value: [''] }, { value: [null] }, { value: ['x'] }])('rejects invalid elements %j in nullable arrays', async (input) => {
+    const contract = schema({
+      value: field.array(field.string().required().min(2)).optional().nullable(),
+    })
+
+    expect(await contract['~standard'].validate(input)).toMatchObject({
+      issues: [{ path: [{ key: 'value' }, { key: '0' }] }],
+    })
+  })
+
+  it('retains element validation when coercing non-nullable arrays', async () => {
+    const contract = schema({ value: field.array(field.string().required().min(2)).optional() })
+
+    expect(await contract['~standard'].validate({ value: null })).toMatchObject({
+      issues: [{ message: 'This field is required.', path: [{ key: 'value' }, { key: '0' }] }],
+    })
+    expect(await contract['~standard'].validate({ value: 'Valid' })).toEqual({
+      value: { value: ['Valid'] },
+    })
+  })
+
   it.each([{ action: [] }, { action: ['add'] }, { action: ['invalid', 'add'] }])('rejects array input %j for a scalar enum with status 422', async ({ action }) => {
     const memberAction = schema({ action: field.string().required().in(['add', 'remove']) })
 

@@ -469,8 +469,8 @@ function coerceDate(value: unknown): unknown {
 
 export function coerceFieldValue(definition: FieldDefinition, value: unknown): unknown {
   if (definition.kind === 'array') {
-    if (typeof value === 'undefined') {
-      return undefined
+    if (value === undefined || (value === null && definition.rules.some(rule => rule.name === 'nullable'))) {
+      return value
     }
 
     const rawItems = Array.isArray(value) ? value : [value]
