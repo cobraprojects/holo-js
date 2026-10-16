@@ -204,6 +204,15 @@ Allows `null`.
 field.date().nullable()
 ```
 
+A nullable array preserves `null` without validating array elements. Rules on the item field still
+apply to each supplied array element:
+
+```ts
+field.array(field.string().required().min(2)).optional().nullable()
+```
+
+This accepts `null`, an omitted value, `[]`, or `['Valid']`, and rejects `[null]`, `['']`, or `['x']`.
+
 ### `default(value, message?)`
 
 Provides a default value when the input is missing.
