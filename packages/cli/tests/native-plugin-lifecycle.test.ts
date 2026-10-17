@@ -39,7 +39,7 @@ it.each(['valid', 'broken'] as const)('activates an actually installed %s plugin
       ? "export default { apiVersion: 1, prepare: () => ({ kind: 'prepared', generatedArtifacts: [{ path: 'message.txt', contents: 'prepared by the installed plugin' }], watch: { roots: ['extensions/source'], excludes: [] } }) }"
       : "import { HoloProjectPrepareError } from '@holo-js/kernel'; export default { apiVersion: 1, prepare() { throw new HoloProjectPrepareError({ code: 'NATIVE_PREPARE_REJECTED', message: 'native prepare rejected' }) } }")
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'native-plugin-app', private: true, type: 'module', packageManager: 'npm@10.0.0', dependencies: { '@holo-js/cli': `file:${packages['@holo-js/cli']}`, '@holo-js/db-sqlite': `file:${packages['@holo-js/db-sqlite']}`, '@holo-js/security': `file:${packages['@holo-js/security']}`, 'holo-plugin-native': `file:${pluginRoot}` } }))
-    await execute('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: root, timeout: 30000 })
+    await execute('npm', ['install', '--prefer-offline', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: root, timeout: 30000 })
     const cli = join(root, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
     const manifest = await readFile(join(root, 'package.json'), 'utf8')
     if (mode === 'broken') {
