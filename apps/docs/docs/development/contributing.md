@@ -11,15 +11,12 @@ If you are building a Holo-JS application, use [Application Development](/develo
 
 ```bash
 bun install
-bun run setup:hooks
 bun run check
 ```
 
-`setup:hooks` installs the repository's pre-push gate for this checkout. A push requires a clean
-working tree and the pushed commit checked out. The gate runs `check`: typechecking, linting, all
-library suites against real services, and the Next, Nuxt, and SvelteKit example journeys across
-SQLite, PostgreSQL, and MySQL. Package-only tests are useful while editing, but do not replace this
-gate for shared-package changes.
+`check` runs typechecking, linting, all library suites against real services, and the Next, Nuxt,
+and SvelteKit example journeys across SQLite, PostgreSQL, and MySQL. Package-only tests are useful
+while editing, but do not replace `check` for shared-package changes.
 
 `bun run test` includes `test:ci` (all native library suites and all nine framework/database journeys)
 and the published-package, scaffold, and browser-bundle acceptance checks. `bun run test:ci` runs
@@ -34,7 +31,7 @@ Node 22.12.0, 24, and 26.
 The native suites need PostgreSQL on port 5432 with the `postgres` user, MySQL on port 3306 with
 the `root` user and an empty password, Redis on port 6379, and the `redis-server` executable.
 Install the browser used by the journeys with `bun x playwright install chromium` (add
-`--with-deps` on Linux). Missing services or failed checks block the push.
+`--with-deps` on Linux). Missing services fail `check`.
 
 Use `bun run test:coverage` when investigating behavior coverage; coverage is diagnostic, not a
 push threshold. CI also checks supported Node versions on Linux, Windows, and macOS.
