@@ -72,8 +72,3 @@ export function resolveTemporaryLocalStorageRequest(
   const root = resolve(projectRoot, disk.root)
   return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments) }
 }
-
-export const storageRuntimeInternals = Object.freeze({
-  isTemporaryLocalStorageRequest,
-  resolveTemporaryLocalStorageRequest,
-})

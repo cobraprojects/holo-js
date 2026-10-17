@@ -1,3 +1,4 @@
+import { storageRuntimeInternals } from '@holo-js/storage'
 import {
   inferMimeType,
   isImageSource,
@@ -125,6 +126,9 @@ const imageMimeTypes = {
 } as const
 
 export const mediaRuntimeInternals = Object.freeze({
+  async inspectMimeType(contents: Uint8Array): Promise<string> {
+    return storageRuntimeInternals.inspectMimeType(contents)
+  },
   async inspectImage(contents: Uint8Array, maximumPixels = 40_000_000): Promise<MediaImageInspection> {
     if (!Number.isSafeInteger(maximumPixels) || maximumPixels < 1) throw new TypeError('[Holo Media] Image pixel limits require a positive integer.')
     const factory = await loadSharp()

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -34,6 +34,57 @@ describe('createPublicStorageResponse', () => {
   afterEach(async () => {
     await Promise.all(Array.from(tempRoots, root => rm(root, { recursive: true, force: true })))
     tempRoots.clear()
+  })
+
+  it('serves encoded media with native byte ranges independent of its extension', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    const contents = await readFile(new URL('../../media/tests/fixtures/mime/sample.wav', import.meta.url))
+    await writeFile(join(publicRoot, 'audio.bin'), contents)
+    const config = storageConfig('./storage/app/public')
+    const url = 'https://app.test/storage/audio.bin'
+    for (const [range, start, end] of [
+      ['bytes=0-', 0, contents.length - 1],
+      ['bytes=10-19', 10, 19],
+      ['bytes=10-99999999999999999999', 10, contents.length - 1],
+      ['bytes=-10', contents.length - 10, contents.length - 1],
+      ['bytes=-99999999999999999999', 0, contents.length - 1],
+    ] as const) {
+      const response = await createPublicStorageResponse(projectRoot, config, new Request(url, { headers: { range } }))
+      expect(response.status).toBe(206)
+      expect(response.headers.get('content-type')).toBe('audio/wav')
+      expect(response.headers.get('accept-ranges')).toBe('bytes')
+      expect(response.headers.get('content-range')).toBe(`bytes ${start}-${end}/${contents.length}`)
+      expect(response.headers.get('content-length')).toBe(String(end - start + 1))
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(contents.subarray(start, end + 1))
+    }
+    for (const range of ['bytes=99999999999999999999-', 'bytes=-0']) {
+      const response = await createPublicStorageResponse(projectRoot, config, new Request(url, { headers: { range } }))
+      expect(response.status).toBe(416)
+      expect(response.headers.get('content-range')).toBe(`bytes */${contents.length}`)
+      expect(response.headers.get('content-length')).toBe('0')
+      await expect(response.text()).resolves.toBe('')
+    }
+    const ignoredRanges: HeadersInit[] = [{ range: 'bytes=4-2' }, { range: 'bytes=0-1,4-5' }, { range: 'items=0-1' }, { range: 'bytes=0-1', 'if-range': '"stale"' }]
+    for (const headers of ignoredRanges) {
+      const response = await createPublicStorageResponse(projectRoot, config, new Request(url, { headers }))
+      expect(response.status).toBe(200)
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(contents)
+    }
+    const head = await createPublicStorageResponse(projectRoot, config, new Request(url, { method: 'HEAD', headers: { range: 'bytes=0-1' } }))
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-type')).toBe('audio/wav')
+    expect(head.headers.get('content-length')).toBe(String(contents.length))
+    expect(head.headers.get('content-range')).toBeNull()
+    expect(head.body).toBeNull()
+  })
+
+  it('serves empty files without opening a response stream', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await writeFile(join(publicRoot, 'empty.bin'), '')
+    const response = await createPublicStorageResponse(projectRoot, storageConfig('./storage/app/public'), new Request('https://app.test/storage/empty.bin', { headers: { range: 'bytes=0-' } }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-length')).toBe('0')
+    await expect(response.text()).resolves.toBe('')
   })
 
   it('serves public symlinks through their resolved in-root target', async () => {

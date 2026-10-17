@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
+import { type FileHandle, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 import { importOptionalRuntimeModule } from './runtimeModule'
@@ -47,6 +47,9 @@ type RuntimeDiskConfig = {
 }
 
 type StorageModule = {
+  storageRuntimeInternals: {
+    inspectFileMimeType(file: FileHandle): Promise<string>
+  }
   normalizeModuleOptions(options: {
     defaultDisk?: string
     routePrefix?: string
@@ -287,8 +290,17 @@ function createFileStorageBackend(root: string): StorageBackend {
       try {
         const targetPath = await resolveStorageReadPath(root, key)
         if (!targetPath) return null
-        const metadata = await stat(targetPath)
-        return metadata.isFile() ? { size: metadata.size, mimeType: null } : null
+        const file = await open(targetPath, 'r')
+        try {
+          const metadata = await file.stat()
+          if (!metadata.isFile()) return null
+          const storage = await importOptionalModule<StorageModule>('@holo-js/storage')
+          if (!storage) throw new Error('[Holo Storage] Storage runtime is unavailable.')
+          const mimeType = await storage.storageRuntimeInternals.inspectFileMimeType(file)
+          return { size: metadata.size, mimeType: mimeType === 'application/octet-stream' ? null : mimeType }
+        } finally {
+          await file.close()
+        }
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code
         if (code === 'ENOENT' || code === 'ENOTDIR') return null

@@ -1,5 +1,7 @@
+import { Readable } from 'node:stream'
 import { open, realpath, stat } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
+import { inspectFileMimeType } from './mimeType'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
@@ -86,7 +88,7 @@ function isActiveContentPath(absolutePath: string): boolean {
   }
 }
 
-function resolvePublicFileHeaders(absolutePath: string): PublicStorageResponseHeaders {
+function resolvePublicFileHeaders(absolutePath: string, mimeType: string): PublicStorageResponseHeaders {
   if (isActiveContentPath(absolutePath)) {
     return {
       'content-disposition': 'attachment',
@@ -96,7 +98,7 @@ function resolvePublicFileHeaders(absolutePath: string): PublicStorageResponseHe
   }
 
   return {
-    'content-type': resolveContentType(absolutePath),
+    'content-type': mimeType === 'application/octet-stream' ? resolveContentType(absolutePath) : mimeType,
     'x-content-type-options': 'nosniff',
   }
 }
@@ -105,18 +107,55 @@ function createMissingFileResponse(): Response {
   return new Response('Storage file not found.', { status: 404 })
 }
 
-async function readLocalStorageFile(projectRoot: string, disk: RuntimeDiskConfig & { root: string }, absolutePath: string, head = false): Promise<{ contents: Buffer<ArrayBuffer> | null, path: string, size: number } | null> {
+type ByteRange = { start: number, end: number }
+
+function resolveByteRange(request: Request, size: number): ByteRange | 'unsatisfiable' | null {
+  if (request.method !== 'GET' || request.headers.has('if-range') || size === 0) return null
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(request.headers.get('range')?.trim() ?? '')
+  if (!match || (!match[1] && !match[2])) return null
+  const length = BigInt(size)
+  if (!match[1]) {
+    const suffix = BigInt(match[2]!)
+    if (suffix === 0n) return 'unsatisfiable'
+    return { start: Number(suffix >= length ? 0n : length - suffix), end: size - 1 }
+  }
+  const start = BigInt(match[1])
+  const end = match[2] ? BigInt(match[2]) : length - 1n
+  if (match[2] && end < start) return null
+  if (start >= length) return 'unsatisfiable'
+  return { start: Number(start), end: Number(end < length ? end : length - 1n) }
+}
+
+async function createLocalStorageFileResponse(projectRoot: string, disk: RuntimeDiskConfig & { root: string }, absolutePath: string, request: Request, privateFile = false): Promise<Response | null> {
   const root = await realpath(resolve(projectRoot, disk.root))
   const file = await open(absolutePath, 'r')
+  let streaming = false
   try {
     const opened = await file.stat()
     const path = await realpath(absolutePath)
     if (path === root || !path.startsWith(`${root}${sep}`)) return null
     const resolvedFile = await stat(path)
     if (opened.dev !== resolvedFile.dev || opened.ino !== resolvedFile.ino || !opened.isFile()) return null
-    return { contents: head ? null : await file.readFile(), path, size: opened.size }
+    const headers = new Headers(resolvePublicFileHeaders(path, await inspectFileMimeType(file)))
+    headers.set('accept-ranges', 'bytes')
+    if (privateFile) headers.set('cache-control', 'private, no-store')
+    const range = resolveByteRange(request, opened.size)
+    if (range === 'unsatisfiable') {
+      headers.set('content-range', `bytes */${opened.size}`)
+      headers.set('content-length', '0')
+      return new Response(null, { status: 416, headers })
+    }
+    const { start, end } = range ?? { start: 0, end: opened.size - 1 }
+    headers.set('content-length', String(end - start + 1))
+    if (range) headers.set('content-range', `bytes ${start}-${end}/${opened.size}`)
+    const status = range ? 206 : 200
+    if (request.method === 'HEAD' || opened.size === 0) return new Response(null, { status, headers })
+    const body = Readable.toWeb(file.createReadStream({ start, end, highWaterMark: 65_536 }))
+    const response = new Response(body as ReadableStream<Uint8Array>, { status, headers })
+    streaming = true
+    return response
   } finally {
-    await file.close()
+    if (!streaming) await file.close()
   }
 }
 
@@ -204,11 +243,7 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
     const entry = resolveTemporaryLocalStorageRequest(projectRoot, normalized, url, appKey, request.method)
     if (!entry) return createMissingFileResponse()
     try {
-      const file = await readLocalStorageFile(projectRoot, entry.disk, entry.absolutePath, request.method === 'HEAD')
-      if (!file) return createMissingFileResponse()
-      return new Response(file.contents, {
-        headers: { ...resolvePublicFileHeaders(file.path), 'cache-control': 'private, no-store', 'content-length': String(file.size) },
-      })
+      return await createLocalStorageFileResponse(projectRoot, entry.disk, entry.absolutePath, request, true) ?? createMissingFileResponse()
     } catch {
       return createMissingFileResponse()
     }
@@ -228,12 +263,7 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
 
   const tryRead = async (entry: ResolvedPublicStorageRequest): Promise<Response | null> => {
     try {
-      const file = await readLocalStorageFile(projectRoot, entry.disk, entry.absolutePath, request.method === 'HEAD')
-      if (!file) return null
-      return new Response(file.contents, {
-        status: 200,
-        headers: { ...resolvePublicFileHeaders(file.path), 'content-length': String(file.size) },
-      })
+      return await createLocalStorageFileResponse(projectRoot, entry.disk, entry.absolutePath, request)
     } catch {
       return null
     }

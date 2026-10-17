@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -37,6 +37,30 @@ afterEach(async () => {
 })
 
 describe('private local storage URLs', () => {
+  it('serves ranges only after validating the signed URL', async () => {
+    const { root, config, runtime, disk } = await fixture()
+    const contents = await readFile(new URL('../../media/tests/fixtures/mime/sample.wav', import.meta.url))
+    await writeFile(join(root, 'private', 'sound.bin'), contents)
+    const url = createTemporaryLocalStorageUrl(disk, 'sound.bin', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)
+    const range = { range: 'bytes=4-11' }
+    const response = await createPublicStorageResponse(root, config, new Request(url, { headers: range }), appKey)
+    expect(response.status).toBe(206)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('content-type')).toBe('audio/wav')
+    expect(response.headers.get('content-range')).toBe(`bytes 4-11/${contents.length}`)
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(contents.subarray(4, 12))
+    const unsigned = new URL(url)
+    unsigned.search = ''
+    const rejected = await createPublicStorageResponse(root, config, new Request(unsigned, { headers: range }), appKey)
+    expect(rejected.status).toBe(404)
+    expect(rejected.headers.get('content-range')).toBeNull()
+    const unsatisfiable = await createPublicStorageResponse(root, config, new Request(url, { headers: { range: 'bytes=999999-' } }), appKey)
+    expect(unsatisfiable.status).toBe(416)
+    expect(unsatisfiable.headers.get('cache-control')).toBe('private, no-store')
+    expect(unsatisfiable.headers.get('content-range')).toBe(`bytes */${contents.length}`)
+    expect(unsatisfiable.body).toBeNull()
+  })
+
   it('verifies the incoming HTTP authority when the framework uses an internal request hostname', async () => {
     const { root, config, url } = await fixture()
     const internal = new URL(url)

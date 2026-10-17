@@ -31,6 +31,15 @@ async function createSymlinkedStorageDirectory(): Promise<{
 }
 
 describe('@holo-js/core storage runtime optional imports', () => {
+  it('reports MIME metadata from the encoded local file instead of its name', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-mime-'))
+    tempDirs.push(root)
+    const backend = storageRuntimeInternals.createFileStorageBackend(root)
+    const contents = await readFile(new URL('../../media/tests/fixtures/mime/sample.wav', import.meta.url))
+    await backend.setItemRaw('spoofed.png', contents)
+    await expect(backend.getItemStat?.('spoofed.png')).resolves.toEqual({ size: contents.length, mimeType: 'audio/wav' })
+  })
+
   it('serves private local files through facade URLs signed by the discovered application key', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-signed-local-'))
     tempDirs.push(root)
