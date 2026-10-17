@@ -261,6 +261,12 @@ type BuiltWorkspacePackages = {
 const tempBuildRoots: string[] = []
 let builtWorkspacePackages: BuiltWorkspacePackages | null = null
 const expectedHoloPackageRange = `^${HOLO_PACKAGE_VERSION}`
+const nativeAppDependencies = {
+  '@holo-js/config': expectedHoloPackageRange,
+  '@holo-js/core': expectedHoloPackageRange,
+  '@holo-js/db': expectedHoloPackageRange,
+  '@holo-js/kernel': expectedHoloPackageRange,
+}
 const expectedNextPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.next
 const expectedNuxtPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
 const expectedSvelteKitPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
@@ -4110,13 +4116,15 @@ export default defineCacheConfig({
     await writeProjectFile(nextRoot, 'package.json', JSON.stringify({
       name: 'next-broadcast-fixture',
       private: true,
+      packageManager: 'npm@10.0.0',
       dependencies: {
+        ...nativeAppDependencies,
         next: expectedNextPackageRange,
       },
     }, null, 2))
     await writeProjectFile(nextRoot, 'app/layout.tsx', 'export default function Layout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html> }\n')
     const nextResult = runCliProcess(nextRoot, ['install', 'broadcast'])
-    expect(nextResult.status).toBe(0)
+    expect(nextResult.status, `${nextResult.stdout}\n${nextResult.stderr}`).toBe(0)
     expect(nextResult.stdout).toContain('Installed broadcast support.')
     expect(nextResult.stdout).toContain('  - updated .env')
     expect(nextResult.stdout).toContain('  - updated .env.example')
@@ -4166,19 +4174,21 @@ export default defineCacheConfig({
     await writeProjectFile(nuxtRoot, 'package.json', JSON.stringify({
       name: 'nuxt-broadcast-fixture',
       private: true,
+      packageManager: 'npm@10.0.0',
       dependencies: {
+        ...nativeAppDependencies,
         nuxt: expectedNuxtPackageRange,
       },
     }, null, 2))
     const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'])
-    expect(nuxtResult.status).toBe(0)
+    expect(nuxtResult.status, `${nuxtResult.stdout}\n${nuxtResult.stderr}`).toBe(0)
     await expect(stat(join(nuxtRoot, 'app/plugins/flux.client.ts'))).rejects.toThrow()
     await expect(stat(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'))).rejects.toThrow()
     await expect(stat(join(nuxtRoot, 'server/holo.ts'))).rejects.toThrow()
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-vue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-nuxt": "${expectedHoloPackageRange}"`)
-  }, 60_000)
+  }, 30_000)
 
   it('installs SvelteKit broadcast support without requiring framework Flux bootstrap files', async () => {
     const svelteRoot = await createTempProject()
@@ -4186,12 +4196,14 @@ export default defineCacheConfig({
     await writeProjectFile(svelteRoot, 'package.json', JSON.stringify({
       name: 'svelte-broadcast-fixture',
       private: true,
+      packageManager: 'npm@10.0.0',
       dependencies: {
+        ...nativeAppDependencies,
         '@sveltejs/kit': expectedSvelteKitPackageRange,
       },
     }, null, 2))
     const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'])
-    expect(svelteResult.status).toBe(0)
+    expect(svelteResult.status, `${svelteResult.stdout}\n${svelteResult.stderr}`).toBe(0)
     await expect(stat(join(svelteRoot, 'src/lib/flux.ts'))).rejects.toThrow()
     await expect(stat(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'))).rejects.toThrow()
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-svelte": "${expectedHoloPackageRange}"`)
