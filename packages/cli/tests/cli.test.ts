@@ -4787,7 +4787,8 @@ export default defineBroadcastConfig({
     })).rejects.toThrow('Unsupported optional package')
   })
 
-  it('prepares discovery artifacts and syncs managed driver dependencies before installing them', async () => {
+  it('prepares discovery artifacts and syncs managed driver dependencies before installing them', async ({ signal }) => {
+    vi.stubEnv('npm_config_prefer_offline', 'true')
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await linkWorkspaceCli(projectRoot)
@@ -4822,7 +4823,7 @@ export default defineDatabaseConfig({
     }, null, 2))
 
     const io = createIo(projectRoot)
-    await runProjectPrepare(projectRoot, io.io)
+    await runProjectPrepare(projectRoot, io.io, { signal })
 
     expect(await readFile(join(projectRoot, '.holo-js/generated/registry.json'), 'utf8')).toContain('"version": 1')
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
