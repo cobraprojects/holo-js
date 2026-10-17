@@ -204,7 +204,7 @@
     },
     "packages/adapter-next": {
       "name": "@holo-js/adapter-next",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -232,7 +232,7 @@
     },
     "packages/adapter-nuxt": {
       "name": "@holo-js/adapter-nuxt",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -273,7 +273,7 @@
     },
     "packages/adapter-shared": {
       "name": "@holo-js/adapter-shared",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
         "typescript": "catalog:",
@@ -285,7 +285,7 @@
     },
     "packages/adapter-sveltekit": {
       "name": "@holo-js/adapter-sveltekit",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -313,7 +313,7 @@
     },
     "packages/auth": {
       "name": "@holo-js/auth",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
@@ -348,7 +348,7 @@
     },
     "packages/auth-clerk": {
       "name": "@holo-js/auth-clerk",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@clerk/backend": "catalog:",
         "@holo-js/auth": "catalog:",
@@ -363,7 +363,7 @@
     },
     "packages/auth-social": {
       "name": "@holo-js/auth-social",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth": "catalog:",
       },
@@ -376,7 +376,7 @@
     },
     "packages/auth-social-apple": {
       "name": "@holo-js/auth-social-apple",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth": "catalog:",
         "@holo-js/auth-social": "catalog:",
@@ -390,7 +390,7 @@
     },
     "packages/auth-social-discord": {
       "name": "@holo-js/auth-social-discord",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -403,7 +403,7 @@
     },
     "packages/auth-social-facebook": {
       "name": "@holo-js/auth-social-facebook",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -416,7 +416,7 @@
     },
     "packages/auth-social-github": {
       "name": "@holo-js/auth-social-github",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -429,7 +429,7 @@
     },
     "packages/auth-social-google": {
       "name": "@holo-js/auth-social-google",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -442,7 +442,7 @@
     },
     "packages/auth-social-linkedin": {
       "name": "@holo-js/auth-social-linkedin",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -455,7 +455,7 @@
     },
     "packages/auth-workos": {
       "name": "@holo-js/auth-workos",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/auth": "catalog:",
         "@holo-js/session": "catalog:",
@@ -469,7 +469,7 @@
     },
     "packages/authorization": {
       "name": "@holo-js/authorization",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "devDependencies": {
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -479,7 +479,7 @@
     },
     "packages/broadcast": {
       "name": "@holo-js/broadcast",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -507,7 +507,7 @@
     },
     "packages/cache": {
       "name": "@holo-js/cache",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -522,7 +522,7 @@
     },
     "packages/cache-db": {
       "name": "@holo-js/cache-db",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "tslib": "catalog:",
       },
@@ -544,7 +544,7 @@
     },
     "packages/cache-redis": {
       "name": "@holo-js/cache-redis",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "ioredis": "catalog:",
         "tslib": "catalog:",
@@ -562,7 +562,7 @@
     },
     "packages/cli": {
       "name": "@holo-js/cli",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "bin": {
         "holo": "./dist/bin/holo.mjs",
         "holo-js": "./dist/bin/holo.mjs",
@@ -616,7 +616,7 @@
     },
     "packages/config": {
       "name": "@holo-js/config",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
         "jiti": "catalog:",
@@ -629,7 +629,7 @@
     },
     "packages/core": {
       "name": "@holo-js/core",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -698,7 +698,7 @@
     },
     "packages/create-holo-js": {
       "name": "create-holo-js",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "bin": {
         "create-holo-js": "dist/bin/create-holo-js.mjs",
       },
@@ -714,7 +714,7 @@
     },
     "packages/db": {
       "name": "@holo-js/db",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -736,7 +736,7 @@
     },
     "packages/db-mysql": {
       "name": "@holo-js/db-mysql",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "mysql2": "catalog:",
       },
@@ -752,7 +752,7 @@
     },
     "packages/db-postgres": {
       "name": "@holo-js/db-postgres",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "pg": "catalog:",
       },
@@ -769,7 +769,7 @@
     },
     "packages/db-sqlite": {
       "name": "@holo-js/db-sqlite",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "better-sqlite3": "catalog:",
       },
@@ -786,7 +786,7 @@
     },
     "packages/events": {
       "name": "@holo-js/events",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/db": "catalog:",
       },
@@ -806,7 +806,7 @@
     },
     "packages/flux": {
       "name": "@holo-js/flux",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
       },
@@ -819,7 +819,7 @@
     },
     "packages/flux-react": {
       "name": "@holo-js/flux-react",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -842,7 +842,7 @@
     },
     "packages/flux-svelte": {
       "name": "@holo-js/flux-svelte",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -860,7 +860,7 @@
     },
     "packages/flux-vue": {
       "name": "@holo-js/flux-vue",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -878,7 +878,7 @@
     },
     "packages/forms": {
       "name": "@holo-js/forms",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
         "@holo-js/validation": "catalog:",
@@ -898,7 +898,7 @@
     },
     "packages/kernel": {
       "name": "@holo-js/kernel",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "devDependencies": {
         "@types/node": "catalog:",
         "file-type": "catalog:",
@@ -918,7 +918,7 @@
     },
     "packages/mail": {
       "name": "@holo-js/mail",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -945,7 +945,7 @@
     },
     "packages/media": {
       "name": "@holo-js/media",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -964,7 +964,7 @@
     },
     "packages/notifications": {
       "name": "@holo-js/notifications",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -986,7 +986,7 @@
     },
     "packages/queue": {
       "name": "@holo-js/queue",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -1000,7 +1000,7 @@
     },
     "packages/queue-db": {
       "name": "@holo-js/queue-db",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/db": "catalog:",
         "@holo-js/queue": "catalog:",
@@ -1015,7 +1015,7 @@
     },
     "packages/queue-redis": {
       "name": "@holo-js/queue-redis",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "bullmq": "catalog:",
         "ioredis": "catalog:",
@@ -1034,7 +1034,7 @@
     },
     "packages/realtime": {
       "name": "@holo-js/realtime",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/broadcast": "workspace:*",
         "@holo-js/db": "catalog:",
@@ -1061,7 +1061,7 @@
     },
     "packages/security": {
       "name": "@holo-js/security",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -1088,7 +1088,7 @@
     },
     "packages/session": {
       "name": "@holo-js/session",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -1109,7 +1109,7 @@
     },
     "packages/storage": {
       "name": "@holo-js/storage",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
@@ -1124,7 +1124,7 @@
     },
     "packages/storage-s3": {
       "name": "@holo-js/storage-s3",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "devDependencies": {
         "@holo-js/storage": "catalog:",
         "@types/node": "catalog:",
@@ -1138,7 +1138,7 @@
     },
     "packages/validation": {
       "name": "@holo-js/validation",
-      "version": "0.3.27",
+      "version": "0.3.28",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
         "file-type": "catalog:",
@@ -1160,51 +1160,51 @@
     "@clack/prompts": "^1.5.1",
     "@clerk/backend": "^3.4.7",
     "@eslint/js": "^9.17.0",
-    "@holo-js/adapter-next": "^0.3.27",
-    "@holo-js/adapter-nuxt": "^0.3.27",
-    "@holo-js/adapter-shared": "^0.3.27",
-    "@holo-js/adapter-sveltekit": "^0.3.27",
-    "@holo-js/auth": "^0.3.27",
-    "@holo-js/auth-clerk": "^0.3.27",
-    "@holo-js/auth-social": "^0.3.27",
-    "@holo-js/auth-social-apple": "^0.3.27",
-    "@holo-js/auth-social-discord": "^0.3.27",
-    "@holo-js/auth-social-facebook": "^0.3.27",
-    "@holo-js/auth-social-github": "^0.3.27",
-    "@holo-js/auth-social-google": "^0.3.27",
-    "@holo-js/auth-social-linkedin": "^0.3.27",
-    "@holo-js/auth-workos": "^0.3.27",
-    "@holo-js/authorization": "^0.3.27",
-    "@holo-js/broadcast": "^0.3.27",
-    "@holo-js/cache": "^0.3.27",
-    "@holo-js/cache-db": "^0.3.27",
-    "@holo-js/cache-redis": "^0.3.27",
-    "@holo-js/cli": "^0.3.27",
-    "@holo-js/config": "^0.3.27",
-    "@holo-js/core": "^0.3.27",
-    "@holo-js/db": "^0.3.27",
-    "@holo-js/db-mysql": "^0.3.27",
-    "@holo-js/db-postgres": "^0.3.27",
-    "@holo-js/db-sqlite": "^0.3.27",
-    "@holo-js/events": "^0.3.27",
-    "@holo-js/flux": "^0.3.27",
-    "@holo-js/flux-react": "^0.3.27",
-    "@holo-js/flux-svelte": "^0.3.27",
-    "@holo-js/flux-vue": "^0.3.27",
-    "@holo-js/forms": "^0.3.27",
-    "@holo-js/kernel": "^0.3.27",
-    "@holo-js/mail": "^0.3.27",
-    "@holo-js/media": "^0.3.27",
-    "@holo-js/notifications": "^0.3.27",
-    "@holo-js/queue": "^0.3.27",
-    "@holo-js/queue-db": "^0.3.27",
-    "@holo-js/queue-redis": "^0.3.27",
-    "@holo-js/realtime": "^0.3.27",
-    "@holo-js/security": "^0.3.27",
-    "@holo-js/session": "^0.3.27",
-    "@holo-js/storage": "^0.3.27",
-    "@holo-js/storage-s3": "^0.3.27",
-    "@holo-js/validation": "^0.3.27",
+    "@holo-js/adapter-next": "^0.3.28",
+    "@holo-js/adapter-nuxt": "^0.3.28",
+    "@holo-js/adapter-shared": "^0.3.28",
+    "@holo-js/adapter-sveltekit": "^0.3.28",
+    "@holo-js/auth": "^0.3.28",
+    "@holo-js/auth-clerk": "^0.3.28",
+    "@holo-js/auth-social": "^0.3.28",
+    "@holo-js/auth-social-apple": "^0.3.28",
+    "@holo-js/auth-social-discord": "^0.3.28",
+    "@holo-js/auth-social-facebook": "^0.3.28",
+    "@holo-js/auth-social-github": "^0.3.28",
+    "@holo-js/auth-social-google": "^0.3.28",
+    "@holo-js/auth-social-linkedin": "^0.3.28",
+    "@holo-js/auth-workos": "^0.3.28",
+    "@holo-js/authorization": "^0.3.28",
+    "@holo-js/broadcast": "^0.3.28",
+    "@holo-js/cache": "^0.3.28",
+    "@holo-js/cache-db": "^0.3.28",
+    "@holo-js/cache-redis": "^0.3.28",
+    "@holo-js/cli": "^0.3.28",
+    "@holo-js/config": "^0.3.28",
+    "@holo-js/core": "^0.3.28",
+    "@holo-js/db": "^0.3.28",
+    "@holo-js/db-mysql": "^0.3.28",
+    "@holo-js/db-postgres": "^0.3.28",
+    "@holo-js/db-sqlite": "^0.3.28",
+    "@holo-js/events": "^0.3.28",
+    "@holo-js/flux": "^0.3.28",
+    "@holo-js/flux-react": "^0.3.28",
+    "@holo-js/flux-svelte": "^0.3.28",
+    "@holo-js/flux-vue": "^0.3.28",
+    "@holo-js/forms": "^0.3.28",
+    "@holo-js/kernel": "^0.3.28",
+    "@holo-js/mail": "^0.3.28",
+    "@holo-js/media": "^0.3.28",
+    "@holo-js/notifications": "^0.3.28",
+    "@holo-js/queue": "^0.3.28",
+    "@holo-js/queue-db": "^0.3.28",
+    "@holo-js/queue-redis": "^0.3.28",
+    "@holo-js/realtime": "^0.3.28",
+    "@holo-js/security": "^0.3.28",
+    "@holo-js/session": "^0.3.28",
+    "@holo-js/storage": "^0.3.28",
+    "@holo-js/storage-s3": "^0.3.28",
+    "@holo-js/validation": "^0.3.28",
     "@nuxt/kit": "^4.4.4",
     "@nuxt/module-builder": "^1.0.2",
     "@nuxt/nitro-server": "^4.4.4",
@@ -1223,7 +1223,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "better-sqlite3": "^13.0.3",
     "bullmq": "^5.71.0",
-    "create-holo-js": "^0.3.27",
+    "create-holo-js": "^0.3.28",
     "esbuild": "^0.28.2",
     "eslint": "^9.17.0",
     "fast-check": "^4.5.3",

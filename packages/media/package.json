@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/media",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "description": "Holo-JS Framework - media collections and conversions for Holo-JS models",
   "type": "module",
   "license": "MIT",

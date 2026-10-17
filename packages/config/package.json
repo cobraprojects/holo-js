@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/config",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "description": "Holo-JS Framework - typed config loading, env layering, and runtime access",
   "type": "module",
   "license": "MIT",
