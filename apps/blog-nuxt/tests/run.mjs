@@ -13,6 +13,7 @@ import { assertExampleAppDatabaseBehavior, openExampleAppDatabase } from '../../
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
+import { assertExampleAppImageUploadBrowserFlow } from '../../../tests/example-app-image-upload-browser-flow.mjs'
 import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
 import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate-limit.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
@@ -441,6 +442,7 @@ async function assertAuthenticatedAdminPostFlows(context) {
     cookieHeader: context.jar.header(),
   })
   await startBroadcastWorker(context.baseUrl)
+  await assertExampleAppImageUploadBrowserFlow({ baseUrl: context.baseUrl })
   await assertExampleAppBroadcastBrowserFlow({
     baseUrl: context.baseUrl,
     appName: 'blog-nuxt',

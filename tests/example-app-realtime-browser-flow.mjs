@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
+import { getExampleAppBrowser, observeExampleAppPage, signInAsExampleAppEditor } from './example-app-browser.mjs'
 
 const realtimePath = '/admin/posts/realtime'
 const postSelector = '[data-post-id]'
@@ -237,11 +237,7 @@ async function assertPostCreationSavesNothingWithoutWorker(baseUrl) {
   const title = `Unsaved while worker is unreachable ${Date.now()}`
   try {
     const page = await context.newPage()
-    await page.goto('/login', { waitUntil: 'networkidle' })
-    await page.locator('[name="email"]').fill('editor@example.com')
-    await page.locator('[name="password"]').fill('secret-secret')
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-    await page.waitForURL(url => url.pathname === '/admin', { timeout: 20000 })
+    await signInAsExampleAppEditor(page)
 
     await page.goto('/admin/posts/new', { waitUntil: 'networkidle' })
     await page.locator('[name="title"]').fill(title)

@@ -35,6 +35,14 @@ export function observeExampleAppPage(page, options = {}) {
   return { failures, warnings }
 }
 
+export async function signInAsExampleAppEditor(page) {
+  await page.goto('/login', { waitUntil: 'networkidle' })
+  await page.locator('[name="email"]').fill('editor@example.com')
+  await page.locator('[name="password"]').fill('secret-secret')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.waitForURL(url => url.pathname === '/admin', { timeout: 20000 })
+}
+
 export async function getExampleAppBrowser() {
   browserPromise ??= chromium.launch({ headless: true }).catch((error) => {
     browserPromise = undefined
