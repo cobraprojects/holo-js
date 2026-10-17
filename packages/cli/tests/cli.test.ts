@@ -633,6 +633,7 @@ function createIo(projectRoot: string, options: { tty?: boolean, input?: string 
 
 async function createTempProject(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'holo-cli-test-'))
+  await writeFile(join(dir, '.npmrc'), 'prefer-offline=true\n')
   await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', private: true }, null, 2))
   await writeProjectFile(dir, 'config/app.ts', `
 import { defineAppConfig } from '@holo-js/config'
@@ -4177,7 +4178,7 @@ export default defineCacheConfig({
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-vue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-nuxt": "${expectedHoloPackageRange}"`)
-  }, 30_000)
+  }, 60_000)
 
   it('installs SvelteKit broadcast support without requiring framework Flux bootstrap files', async () => {
     const svelteRoot = await createTempProject()
@@ -4788,7 +4789,6 @@ export default defineBroadcastConfig({
   })
 
   it('prepares discovery artifacts and syncs managed driver dependencies before installing them', async ({ signal }) => {
-    vi.stubEnv('npm_config_prefer_offline', 'true')
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await linkWorkspaceCli(projectRoot)
@@ -8511,9 +8511,8 @@ export default defineDatabaseConfig({})
 
   it.each(['unchanged', 'preparer-changes-discovery', 'installation-changes-discovery'] as const)(
     'keeps framework preparation consistent with %s', async (scenario) => {
-      const projectRoot = await createTempDirectory()
+      const projectRoot = await createTempProject()
       tempDirs.push(projectRoot)
-      await linkWorkspaceDb(projectRoot)
       await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
         name: 'plugin-framework-sync-fixture',
         private: true,

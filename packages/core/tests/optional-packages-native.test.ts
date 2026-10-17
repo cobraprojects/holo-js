@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
 import { stagePublishedPackage } from '../../../tests/support/published-package'
+import { version as holoVersion } from '../package.json'
 
 const root = resolve(import.meta.dirname, '../../..')
 
@@ -72,7 +73,11 @@ async function runNativeBoot({ configName, installQueue = false, missingRedisAda
     const source = join(root, 'packages/authorization')
     await stagePublishedPackage(source, join(project, 'node_modules/@holo-js/authorization'), join(source, 'dist'))
     await writeFile(join(project, 'server/abilities/export.ts'), "import { defineAbility } from '@holo-js/authorization'; export default defineAbility('export', () => true)")
-    const prepared = spawnSync(process.execPath, [join(root, 'packages/cli/dist/bin/holo.mjs'), 'prepare'], { cwd: project, encoding: 'utf8', timeout: 30000 })
+    await writeFile(join(project, 'package.json'), JSON.stringify({
+      type: 'module',
+      dependencies: Object.fromEntries(['core', 'kernel', 'db-sqlite', 'authorization'].map(name => [`@holo-js/${name}`, `^${holoVersion}`])),
+    }))
+    const prepared = spawnSync(process.execPath, [join(root, 'packages/cli/dist/bin/holo.mjs'), 'prepare'], { cwd: project, encoding: 'utf8', timeout: 15000 })
     expect(prepared.status, `${prepared.stdout}\n${prepared.stderr}`).toBe(0)
     await rm(join(project, 'node_modules/@holo-js/authorization'), { recursive: true, force: true })
   }
@@ -244,7 +249,6 @@ it.each(['social', 'workos', 'clerk'] as const)('rejects native auth configurati
 
 it('rejects a native app with ability definitions when authorization is not installed',
   () => runNativeBoot({ missingAuthorization: true }),
-  60_000,
 )
 
 it('creates a real verification token and reports missing delivery when notifications are absent',
