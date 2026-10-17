@@ -1,227 +1,187 @@
 # Seeding
 
-Seeders prepare an environment with named, repeatable data sets.
-
-Use seeders for:
-
-- local development bootstrap data
-- demo accounts and showcase data
-- reference data such as roles, plans, and settings
-- repeatable environment setup in CI or staging
-
-Use factories when you need flexible generated records. Use seeders when the setup step itself should be
-callable by name, such as `database`, `roles`, or `demo_content`.
-
-## Where seeders live
-
-Seeders live under `server/db/seeders`.
-
-```text
-server/db/seeders/RolesSeeder.ts
-server/db/seeders/AdminSeeder.ts
-server/db/seeders/DatabaseSeeder.ts
-```
-
-## Create a seeder
+Seeders fill your database with data: reference rows like roles and plans, an admin account, or a batch of fake posts for local development. Each seeder has a name, so you can run one setup step on its own or all of them together.
 
 ```bash
 npx holo make:seeder RolesSeeder
 ```
 
-Create `server/db/seeders/RolesSeeder.ts`:
-
-```ts
+```ts [server/db/seeders/RolesSeeder.ts]
 import { defineSeeder } from '@holo-js/db'
 import Role from '../../models/Role'
 
 export default defineSeeder({
   name: 'roles',
   async run() {
-    await Role.unguarded(async () => {
-      await Role.firstOrCreate({ slug: 'admin' }, { name: 'Admin' })
-      await Role.firstOrCreate({ slug: 'editor' }, { name: 'Editor' })
-      await Role.firstOrCreate({ slug: 'viewer' }, { name: 'Viewer' })
-    })
+    await Role.firstOrCreate({ slug: 'admin' }, { name: 'Admin' })
+    await Role.firstOrCreate({ slug: 'editor' }, { name: 'Editor' })
   },
 })
 ```
-
-Create `server/db/seeders/AdminSeeder.ts`:
-
-```ts
-import { hashPassword } from '@holo-js/auth'
-import { defineSeeder } from '@holo-js/db'
-import User from '../../models/User'
-
-export default defineSeeder({
-  name: 'admin',
-  async run() {
-    const password = await hashPassword('secret-secret')
-
-    await User.unguarded(() =>
-      User.updateOrCreate(
-        { email: 'admin@example.com' },
-        {
-          name: 'Admin',
-          password,
-          role: 'admin',
-        },
-      ),
-    )
-  },
-})
-```
-
-Keep each seeder focused on one setup concern.
-
-## Create a root seeder
-
-Use a root seeder to run a complete setup path.
 
 ```bash
-npx holo make:seeder DatabaseSeeder
+npx holo seed
 ```
 
-Create `server/db/seeders/DatabaseSeeder.ts`:
+## Writing seeders
 
-```ts
+`make:seeder` creates a file in `server/db/seeders`. The `name` comes from the file name without the `Seeder` suffix, in snake case: `RolesSeeder` becomes `roles`, `DemoContentSeeder` becomes `demo_content`. You use this name with `--only` and `call()`.
+
+Inside `run()`, use your [models](/orm/) or the [query builder](/database/query-builder/) as usual. `run()` also receives a context:
+
+| Property | What it is |
+| --- | --- |
+| `db` | The database connection |
+| `schema` | The schema builder, same as in [migrations](/database/migrations) |
+| `call(...names)` | Runs other seeders by name |
+
+```ts [server/db/seeders/SettingsSeeder.ts]
+import { defineSeeder } from '@holo-js/db'
+
+export default defineSeeder({
+  name: 'settings',
+  async run({ db }) {
+    await db.table('settings').insert({ key: 'site_name', value: 'My Blog' })
+  },
+})
+```
+
+::: tip
+Use `firstOrCreate()` or `updateOrCreate()` for reference data so running the seeder twice doesn't create duplicates.
+:::
+
+## Using factories
+
+[Factories](/orm/factories) are the easiest way to create lots of realistic records:
+
+```ts [server/db/seeders/DemoContentSeeder.ts]
+import { defineSeeder } from '@holo-js/db'
+import PostFactory from '../factories/PostFactory'
+import UserFactory from '../factories/UserFactory'
+
+export default defineSeeder({
+  name: 'demo_content',
+  async run() {
+    await UserFactory
+      .count(5)
+      .has(PostFactory.count(3), 'posts')
+      .create()
+  },
+})
+```
+
+## Calling other seeders
+
+A root seeder can run the others in a fixed order with `call()`:
+
+```ts [server/db/seeders/DatabaseSeeder.ts]
 import { defineSeeder } from '@holo-js/db'
 
 export default defineSeeder({
   name: 'database',
   async run({ call }) {
     await call('roles')
-    await call('admin')
+    await call('settings')
+    await call('demo_content')
   },
 })
 ```
 
-Use separate `call(...)` statements when order matters.
+Run it on its own with `--only`:
 
-## Run seeders
+```bash
+npx holo seed --only database
+```
+
+::: warning
+`npx holo seed` without `--only` runs **every** seeder in `server/db/seeders`. If a root seeder calls the others, they run twice. Use `--only database` when you rely on a root seeder.
+:::
+
+## Running seeders
 
 ```bash
 npx holo seed
-npx holo seed --only database
-npx holo seed --only roles,admin
-npx holo seed --quietly
-npx holo seed --force
+npx holo seed --only roles,settings
 ```
 
-`npx holo seed` runs registered seeders discovered from `server/db/seeders`.
-
-Use `--only` when you want one named setup path instead of every registered seeder.
-
-## Run seeders after fresh migrations
+Reset the database and seed it in one step:
 
 ```bash
-npx holo migrate:fresh --seed
 npx holo migrate:fresh --seed --only database
-npx holo migrate:fresh --seed --quietly
-npx holo migrate:fresh --seed --force
 ```
 
-`migrate:fresh --seed` drops the database tables, reruns migrations, then runs seeders.
+| Flag | Effect |
+| --- | --- |
+| `--only <names>` | Run only these seeders. Comma-separated, or repeat the flag |
+| `--quietly` | Turn off [model events and observers](/orm/observers) while seeding |
+| `--force` | Allow seeding in production |
 
-## Call seeders from code
+### Transactions
 
-```ts
-import { DB, createSeederService } from '@holo-js/db'
-import AdminSeeder from './AdminSeeder'
-import DatabaseSeeder from './DatabaseSeeder'
-import RolesSeeder from './RolesSeeder'
+Each seeder runs in a transaction. If it throws, everything it wrote rolls back. Seeders started with `call()`, and any model writes inside them, join the same transaction, so a failing root seeder undoes the whole run.
 
-const seeders = createSeederService(DB.connection(), [
-  RolesSeeder,
-  AdminSeeder,
-  DatabaseSeeder,
-])
+### Seeding in production
 
-await seeders.seed({ only: ['database'] })
+Holo refuses to seed when the environment is `production`. It reads the environment from `APP_ENV`, then `NODE_ENV`, and defaults to `development`. Pass `--force` when you really mean it:
+
+```bash
+npx holo seed --only roles --force
 ```
 
-## Seeder context
+## Seeder reference
 
-`run(...)` receives:
+### defineSeeder()
 
-- `db` for the active database connection
-- `schema` for schema operations
-- `call(...)` for running other registered seeders
+Declares a seeder. It takes an object with a `name` (string) and a `run(context)` function, and returns that object.
 
-```ts
+```ts [server/db/seeders/SettingsSeeder.ts]
 import { defineSeeder } from '@holo-js/db'
 
 export default defineSeeder({
-  name: 'setup',
-  async run({ schema, call }) {
-    await schema.createTable('settings', (table) => {
-      table.id()
-      table.string('key')
-      table.string('value')
-    })
-
-    await call('roles')
+  name: 'settings',
+  async run({ db }) {
+    await db.table('settings').insert({ key: 'site_name', value: 'My Blog' })
   },
 })
 ```
 
-## When seeders run
+### call()
 
-Seeders run only when you call them explicitly.
+Runs other seeders by name, in the order you list them, inside the current seeder's transaction. It is available on the context passed to `run()`.
 
-Common places:
+```ts [server/db/seeders/DatabaseSeeder.ts]
+import { defineSeeder } from '@holo-js/db'
 
-- `npx holo seed`
-- `npx holo migrate:fresh --seed`
-- test setup
-- development bootstrap scripts
-- staging or deployment bootstrap tooling
-
-Seeders are not run by model creation, migrations without `--seed`, route registration, or normal server
-startup.
-
-## Transactions
-
-Each seeder runs inside a transaction. If the seeder throws, its writes roll back.
-
-Nested seeders called with `call(...)` reuse the active seeder transaction.
-
-## Production safety
-
-Production seeding is blocked unless `force` is enabled.
-
-```ts
-await seeders.seed({
-  only: ['database'],
-  environment: 'production',
-  force: true,
+export default defineSeeder({
+  name: 'database',
+  async run({ call }) {
+    await call('roles', 'settings')
+  },
 })
 ```
 
-The CLI uses `APP_ENV`, then `NODE_ENV`, then `development` as the seeding environment.
+### Context properties
 
-## Quiet seeding
+`run()` receives these properties:
 
-Use `quietly` to disable model events while seeders run.
+| Property | Type | Meaning |
+| --- | --- | --- |
+| `db` | connection | The active database connection. Use `db.table()` for query builder calls. |
+| `schema` | schema builder | Creates and changes tables, same as in [migrations](/database/migrations) |
 
-```ts
-await seeders.seed({
-  only: ['database'],
-  quietly: true,
-})
-```
+### Seed options
 
-## Factories
+The seeder run accepts these options. The CLI sets them from the flags in [Running seeders](#running-seeders).
 
-Use factories inside seeders when the seeded data needs related model graphs.
+| Option | Meaning |
+| --- | --- |
+| `only` | Names of the seeders to run. Unknown names throw. |
+| `quietly` | Turn off model events and observers while seeding |
+| `force` | Allow seeding when `environment` is `production` |
+| `environment` | Environment name used for the production check. The CLI uses `APP_ENV`, then `NODE_ENV`, then `development`. |
 
-```ts
-await UserFactory
-  .has(PostFactory.count(3), 'posts')
-  .create()
-```
+## Next steps
 
-## Continue
-
-- [ORM Factories](/orm/factories)
-- [Database Getting Started](/database/)
+- [Factories](/orm/factories)
+- [Migrations](/database/migrations)
+- [Database Tests](/testing/database)

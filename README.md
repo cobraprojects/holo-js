@@ -50,7 +50,7 @@ npx holo seed
 
 ## Contributing
 
-Thank you for considering contributing to Holo-JS. Contribution notes and development workflow documentation are available in the [documentation](https://docs.holo-js.com/development/contributing).
+Thank you for considering contributing to Holo-JS. Contribution notes and development workflow documentation are available in the [documentation](https://docs.holo-js.com/advanced/contributing).
 
 ## Security Vulnerabilities
 

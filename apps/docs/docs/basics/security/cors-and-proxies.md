@@ -1,0 +1,165 @@
+# CORS and Proxies
+
+This page covers three settings you need once your app leaves `localhost`: CORS for frontends on another origin, trusted proxies for apps behind a load balancer, and signed tokens for links that must not be tampered with.
+
+## CORS
+
+CORS (cross-origin resource sharing) lets a frontend on one origin, such as `https://app.example.com`, call your API on another, such as `https://api.example.com`. Rules live in `config/cors.ts`:
+
+```ts [config/cors.ts]
+import { env } from '@holo-js/config'
+import { defineCorsConfig } from '@holo-js/security'
+
+export default defineCorsConfig({
+  paths: ['/api/*', '/broadcasting/auth'],
+  origins: [
+    env('FRONTEND_URL', 'http://localhost:3000'),
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  headers: ['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-Requested-With'],
+  credentials: true,
+  maxAge: 7200,
+  statefulDomains: [
+    env('FRONTEND_DOMAIN', 'localhost:3000'),
+  ],
+})
+```
+
+The [security middleware](/basics/security/#register-the-middleware) applies these rules. It answers preflight `OPTIONS` requests from allowed origins and adds CORS headers to responses, including `419` CSRF failures, so the browser can read the error.
+
+### How origins are matched
+
+For a request to a path in `paths`, Holo looks at the `Origin` header:
+
+- If the origin is listed in `origins`, or its host is in `statefulDomains`, Holo echoes it back in `Access-Control-Allow-Origin`.
+- If `origins` contains `'*'`, any origin is allowed. With `credentials: true`, Holo echoes the request's origin instead of `*`, because browsers reject `*` with credentials.
+- Otherwise no CORS headers are added and the browser blocks the response.
+
+Responses always include `Vary: Origin` so caches don't mix up origins.
+
+::: danger
+`origins: ['*']` together with `credentials: true` lets any website make cookie-authenticated requests to your API. List your real frontend origins instead.
+:::
+
+### Cookies across origins
+
+When your frontend sends cookies with `fetch(url, { credentials: 'include' })`, the response must include `Access-Control-Allow-Credentials: true`. Holo sends it when `credentials` is `true`, or when the request comes from a host in `statefulDomains`.
+
+Use `statefulDomains` for first-party frontends that use session cookies. Entries are hosts with an optional port (`app.example.com`, `localhost:3000`); full URLs also work.
+
+Cross-origin frontends usually can't read the CSRF cookie. See [CSRF with a separate frontend](/basics/security/csrf#forms-built-with-useform) for fetching the token from an endpoint.
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `paths` | `['/api/*']` | Path patterns that get CORS headers. `*` matches any characters. |
+| `origins` | `[]` | Allowed origins, such as `https://app.example.com`. `'*'` allows any. |
+| `methods` | `GET, POST, PUT, PATCH, DELETE, OPTIONS` | Sent in `Access-Control-Allow-Methods` on preflight. |
+| `headers` | `Content-Type, Authorization, X-CSRF-TOKEN, X-Requested-With` | Sent in `Access-Control-Allow-Headers` on preflight. |
+| `credentials` | `false` (the generated config sets `true`) | Send `Access-Control-Allow-Credentials: true`. |
+| `maxAge` | `7200` | Seconds the browser may cache a preflight result. |
+| `statefulDomains` | `[]` | Hosts treated as first-party cookie clients. |
+
+### Apply CORS manually
+
+The middleware covers most apps. For a route that runs outside it, use the `cors` helpers:
+
+```ts [app/api/feed/route.ts]
+import { cors } from '@holo-js/security'
+
+export async function OPTIONS(request: Request) {
+  return cors.preflight(request) ?? new Response(null, { status: 204 })
+}
+
+export async function GET(request: Request) {
+  return cors.apply(request, Response.json({ posts: [] }))
+}
+```
+
+| Helper | Description |
+|---|---|
+| `cors.headers(request)` | Returns a `Headers` object with the CORS headers for this request. |
+| `cors.apply(request, response?)` | Returns a copy of `response` with CORS headers added. Without a response, it returns an empty `204`. |
+| `cors.preflight(request)` | Returns a preflight response for an allowed `OPTIONS` request, or `null`. |
+
+## Trusted proxies
+
+Behind a load balancer, CDN, or reverse proxy, your app sees the proxy's connection, not the visitor's. The proxy passes the real details in headers like `X-Forwarded-For` and `X-Forwarded-Proto`.
+
+Holo ignores those headers by default, because any client can send them. Turn them on when your proxy overwrites them:
+
+```bash [.env]
+HOLO_SECURITY_TRUST_PROXY=true
+```
+
+Proxies send one of two header styles. Set the value that matches yours (any case):
+
+| Value | Use when your proxy sends | Headers read |
+|---|---|---|
+| `true`, `1`, `yes`, `on`, or `x-forwarded` | `X-Forwarded-*` headers (most proxies, load balancers, and CDNs) | Client IP: first `X-Forwarded-For` value, then `X-Real-IP`. Protocol: first `X-Forwarded-Proto` value. Host: first `X-Forwarded-Host` value, then `Host`. |
+| `forwarded` | The standard `Forwarded` header | Client IP: `for=`. Protocol: `proto=`. Host: `host=`, then `Host`. All from the first `Forwarded` entry. |
+
+Holo reads only the style you choose. A client can't slip in the other style to change your app's host or protocol.
+
+The client IP is used for [rate limiting](/basics/security/rate-limiting#who-gets-counted).
+
+The protocol decides whether cookies, including the CSRF cookie, get the `Secure` flag. If TLS ends at your proxy and trust is off, Holo sees plain HTTP and leaves `Secure` off.
+
+If a trusted header has a malformed value, such as an unknown protocol or a host with spaces, Holo answers `400 Bad Request` instead of guessing.
+
+::: warning
+Only enable `HOLO_SECURITY_TRUST_PROXY` when every request reaches your app through a proxy that replaces the headers of the style you chose. Otherwise a client can fake its IP to dodge rate limits or fake its host.
+:::
+
+### Read the public URL
+
+`resolveRequestUrl` returns the URL the visitor actually used, following the same trust rules. Use it when you build absolute links from a request:
+
+```ts
+import { resolveRequestUrl } from '@holo-js/kernel'
+
+const url = resolveRequestUrl(request)
+const resetLink = new URL('/reset-password', url.origin)
+```
+
+It accepts a `Request`, a Nuxt `event`, or a SvelteKit request event, and doesn't read the body. It throws on hosts with invalid characters, non-HTTP protocols, and URLs with credentials.
+
+## Signed tokens
+
+Signed tokens carry a small JSON payload that can't be changed without detection, and that expires. Use them for download links, unsubscribe links, or one-time actions where you don't want to store a row in the database.
+
+```ts
+import { createSignedToken, verifySignedToken } from '@holo-js/security'
+
+const token = createSignedToken({ exportId: 'export-1' }, {
+  purpose: 'export-download',
+  expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+})
+
+const payload = verifySignedToken<{ readonly exportId: string }>(token, {
+  purpose: 'export-download',
+})
+
+if (!payload) {
+  return new Response('Link expired or invalid.', { status: 403 })
+}
+```
+
+`verifySignedToken` returns the payload, or `null` when the token was modified, has expired, or was created for a different `purpose`. Use a distinct `purpose` for each kind of link so a token for one feature can't be replayed against another.
+
+Rules:
+
+- The payload must be a plain object of JSON values: strings, finite numbers, booleans, `null`, arrays, and plain objects. Dates, class instances, `NaN`, and circular references throw.
+- `expiresAt` must be in the future. The encoded payload can be at most 64 KiB.
+- Tokens are signed with your app key. Changing `APP_KEY` invalidates every token.
+- The payload is encoded, not encrypted. Don't put secrets in it.
+
+Pass `now` to `verifySignedToken` to check against a specific time, which is useful in tests.
+
+## Next steps
+
+- [CSRF protection](/basics/security/csrf)
+- [Rate limiting](/basics/security/rate-limiting)
+- [Broadcasting](/broadcasting/)
+- [Production checklist](/deployment/checklist)

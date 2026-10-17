@@ -8,7 +8,7 @@ metadata:
 
 # Authentication and security
 
-Read the exact guide for the feature: [local auth](https://docs.holo-js.com/auth/local-auth), [guards and providers](https://docs.holo-js.com/auth/guards-and-providers), [sessions and cookies](https://docs.holo-js.com/auth/session-and-cookies), [password reset](https://docs.holo-js.com/auth/password-reset), [email verification](https://docs.holo-js.com/auth/email-verification), [MFA](https://docs.holo-js.com/auth/multi-factor-authentication), [personal access tokens](https://docs.holo-js.com/auth/personal-access-tokens), [social login](https://docs.holo-js.com/auth/social-login), [authorization](https://docs.holo-js.com/authorization/), and [security](https://docs.holo-js.com/security).
+Read the exact guide for the feature: [local auth](https://docs.holo-js.com/auth/local-auth), [guards and providers](https://docs.holo-js.com/auth/guards-and-providers), [sessions and cookies](https://docs.holo-js.com/auth/session-and-cookies), [password reset](https://docs.holo-js.com/auth/password-reset), [email verification](https://docs.holo-js.com/auth/email-verification), [MFA](https://docs.holo-js.com/auth/multi-factor), [personal access tokens](https://docs.holo-js.com/auth/api-tokens), [social login](https://docs.holo-js.com/auth/social-login), [authorization](https://docs.holo-js.com/authorization/), and [security](https://docs.holo-js.com/basics/security/).
 
 ## Request order
 

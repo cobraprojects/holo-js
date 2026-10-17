@@ -8,7 +8,7 @@ metadata:
 
 # Testing and deployment
 
-Read [testing](https://docs.holo-js.com/testing), [configuration](https://docs.holo-js.com/configuration), [database commands](https://docs.holo-js.com/database/commands), [queue workers](https://docs.holo-js.com/queue/workers), [broadcast deployment](https://docs.holo-js.com/broadcast/deployment-and-scaling), and [deployment](https://docs.holo-js.com/deployment).
+Read [testing](https://docs.holo-js.com/testing), [configuration](https://docs.holo-js.com/getting-started/configuration), [database commands](https://docs.holo-js.com/reference/cli), [queue workers](https://docs.holo-js.com/queue/workers), [broadcast deployment](https://docs.holo-js.com/broadcasting/production), and [deployment](https://docs.holo-js.com/deployment).
 
 ## Testing
 

@@ -2217,7 +2217,7 @@ export default defineAppConfig({
     const codexSkill = await readFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8')
     const cursorSkill = await readFile(join(projectRoot, '.cursor/skills/holo-js/SKILL.md'), 'utf8')
 
-    expect(codexSkill).toContain('[framework integration](https://docs.holo-js.com/forms/framework-integration)')
+    expect(codexSkill).toContain('[framework integration](https://docs.holo-js.com/basics/forms/frameworks)')
     expect(cursorSkill).toBe(codexSkill)
     expect(commandIo.read().stdout).toContain('Installed Holo-JS agent skills.')
 

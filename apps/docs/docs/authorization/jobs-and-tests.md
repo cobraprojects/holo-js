@@ -1,50 +1,89 @@
-# Jobs And Tests
+# Jobs and Tests
 
-Authorization is often easiest to use when you already have an explicit actor.
+Background jobs and tests have no signed-in user, so pass the user to `authorization.forUser()`. The same policies and abilities run, and the result doesn't depend on any request.
 
-That is common in jobs, queues, tests, and service code.
+## Authorize inside a job
 
-## Jobs
+Put the acting user's ID in the payload, load the user in the job, and check before doing the work:
+
+```ts [server/jobs/posts/publish-post.ts]
+import { defineJob } from '@holo-js/queue'
+import authorization from '@holo-js/authorization'
+import Post from '../../models/Post'
+import User from '../../models/User'
+
+export default defineJob<{ postId: number, userId: number }>({
+  async handle(payload) {
+    const [post, actor] = await Promise.all([
+      Post.findOrFail(payload.postId),
+      User.findOrFail(payload.userId),
+    ])
+
+    await authorization.forUser(actor).authorize('publish', post)
+
+    await post.update({ status: 'published' })
+  },
+})
+```
+
+Check again in the job even if the route already checked. Permissions can change between dispatch and run. If the check fails, `authorize()` throws and the job fails like any other error; see [Failed Jobs](/queue/failed-jobs).
+
+To skip the job quietly instead, use `can()`:
 
 ```ts
-import authorization from '@holo-js/authorization'
-
-export async function runPublishJob(postId: string, actor: { id: string, role: string }) {
-  const post = await Post.findOrFail(postId)
-
-  await authorization.forUser(actor).policy('posts').authorize('update', post)
-
-  await post.publish()
+if (!(await authorization.forUser(actor).can('publish', post))) {
+  return
 }
 ```
 
-Passing the actor explicitly keeps the job deterministic. It does not depend on request context or auth state.
-Use `.policy('posts')` to select the posts policy explicitly. If you omit it, the default policy resolution will be used.
+Pass IDs, not whole user objects. Job payloads are stored as JSON, and loading the user fresh means you check their current permissions. See [Writing Jobs](/queue/jobs).
 
-## Tests
+## Test a policy
 
-```ts
+Test rules through `forUser()` with the kinds of users that matter: the owner, someone else, a guest. Use `can()` or `inspect()`, which return a value instead of throwing:
+
+```ts [tests/policies/post-policy.test.ts]
+import { describe, expect, it } from 'vitest'
 import authorization from '@holo-js/authorization'
+import '../../server/policies/PostPolicy'
+import Post from '../../server/models/Post'
+import User from '../../server/models/User'
 
-await expect(
-  authorization.forUser({ id: 'user-1', role: 'editor' }).policy('posts').authorize('update', post),
-).resolves.toBeUndefined()
+describe('posts policy', () => {
+  it('lets only the author update a post', async () => {
+    const author = await User.create({ name: 'Ava', email: 'ava@example.com' })
+    const reader = await User.create({ name: 'Ben', email: 'ben@example.com' })
+    const post = await Post.create({ title: 'Hello', body: 'First post', user_id: author.id })
 
-await expect(
-  authorization.forUser(null).policy('posts').authorize('update', post),
-).rejects.toThrow()
+    expect(await authorization.forUser(author).can('update', post)).toBe(true)
+    expect(await authorization.forUser(reader).can('update', post)).toBe(false)
+  })
+
+  it('hides drafts from guests', async () => {
+    const post = await Post.create({ title: 'Draft', body: 'Not yet', status: 'draft' })
+
+    const decision = await authorization.forUser(null).inspect('view', post)
+
+    expect(decision).toMatchObject({ allowed: false, status: 404 })
+  })
+})
 ```
 
-Use explicit actor tests when you want the authorization rule itself under test, not the request stack.
+Importing the policy file registers it, so the test works even when nothing else has loaded your policies. These tests create records, so run them with a test database; see [Database Tests](/testing/database).
+
+To check the message a user sees, assert on `decision.message`, which is the text you passed to `deny()`.
 
 ## What to prefer
 
-- Call `authorization.forUser(user)` when the actor is already known.
-- Invoke `authorization.guard('web')` or top-level helpers only when you want auth to resolve the actor for you.
-- Enable standalone mode in tests when you want to avoid booting auth.
+| Situation | Use |
+| --- | --- |
+| A route checking the signed-in user | `authorize()` from `@holo-js/authorization` |
+| A route for a specific guard | `authorization.guard(name)` |
+| Jobs, scripts, commands | `authorization.forUser(user)` |
+| Tests of a policy or ability | `authorization.forUser(user)` with `can()` or `inspect()` |
 
-## Continue
+## Next steps
 
-- [Standalone Mode](/authorization/standalone-mode)
-- [Auth Integration](/authorization/auth-integrated-mode)
-- [403 Vs 404](/authorization/errors)
+- [Using without Auth](/authorization/standalone)
+- [Policies](/authorization/policies)
+- [Testing Your App](/testing/)

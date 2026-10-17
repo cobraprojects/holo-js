@@ -5,7 +5,7 @@ metadata:
   type: router
   library: holo-js
   library_version: 0.3.15
-  source: https://docs.holo-js.com/architecture
+  source: https://docs.holo-js.com/advanced/architecture
 ---
 
 # Holo-JS
@@ -26,19 +26,19 @@ Application code never imports `internal` paths. Prefer public package exports a
 
 | Work | Read | Documentation |
 | --- | --- | --- |
-| Forms, schemas, browser/server validation | [forms-validation](forms-validation/SKILL.md) | [framework integration](https://docs.holo-js.com/forms/framework-integration) |
+| Forms, schemas, browser/server validation | [forms-validation](forms-validation/SKILL.md) | [framework integration](https://docs.holo-js.com/basics/forms/frameworks) |
 | Tables, models, queries, relations, scopes, observers | [database-orm](database-orm/SKILL.md) | [ORM](https://docs.holo-js.com/orm/) |
 | Authentication, authorization, sessions, security | [auth-security](auth-security/SKILL.md) | [Authentication](https://docs.holo-js.com/auth/) |
 | Storage disks, uploads, media collections | [storage-media](storage-media/SKILL.md) | [Media](https://docs.holo-js.com/media) |
 | Jobs, queues, domain events, listeners | [queues-events](queues-events/SKILL.md) | [Events](https://docs.holo-js.com/events/) |
-| Broadcast events, channels, sockets, realtime | [broadcast-realtime](broadcast-realtime/SKILL.md) | [Broadcasting](https://docs.holo-js.com/broadcast/) |
+| Broadcast events, channels, sockets, realtime | [broadcast-realtime](broadcast-realtime/SKILL.md) | [Broadcasting](https://docs.holo-js.com/broadcasting/) |
 | Mail, notification channels, delivery | [mail-notifications](mail-notifications/SKILL.md) | [Notifications](https://docs.holo-js.com/notifications/) |
-| Application boot, config, services, cache, routing, plugins | [application-runtime](application-runtime/SKILL.md) | [Architecture](https://docs.holo-js.com/architecture) |
-| Next.js integration | [framework-next](framework-next/SKILL.md) | [Runtime services](https://docs.holo-js.com/runtime-services) |
-| Nuxt integration | [framework-nuxt](framework-nuxt/SKILL.md) | [Runtime services](https://docs.holo-js.com/runtime-services) |
-| SvelteKit integration | [framework-sveltekit](framework-sveltekit/SKILL.md) | [Runtime services](https://docs.holo-js.com/runtime-services) |
+| Application boot, config, services, cache, routing, plugins | [application-runtime](application-runtime/SKILL.md) | [Architecture](https://docs.holo-js.com/advanced/architecture) |
+| Next.js integration | [framework-next](framework-next/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
+| Nuxt integration | [framework-nuxt](framework-nuxt/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
+| SvelteKit integration | [framework-sveltekit](framework-sveltekit/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
 | Tests, configuration, CLI, deployment | [testing-deployment](testing-deployment/SKILL.md) | [Testing](https://docs.holo-js.com/testing) |
-| Replace custom or legacy architecture with Holo | [convert-to-holo](lifecycle/convert-to-holo/SKILL.md) | [Upgrade architecture](https://docs.holo-js.com/upgrade-architecture) |
+| Replace custom or legacy architecture with Holo | [convert-to-holo](lifecycle/convert-to-holo/SKILL.md) | [Upgrade architecture](https://docs.holo-js.com/getting-started/upgrading) |
 | Package choice, ownership, or install question | [package catalog](references/packages.md) | Read the direct link in the matching package row |
 
 ## Universal rules

@@ -8,7 +8,7 @@ metadata:
 
 # Storage and media
 
-Use [storage](https://docs.holo-js.com/storage) for disk-level file operations, [media](https://docs.holo-js.com/media) for model-attached assets, and [queued media](https://docs.holo-js.com/queue/media) when conversions run asynchronously.
+Use [storage](https://docs.holo-js.com/storage) for disk-level file operations, [media](https://docs.holo-js.com/media) for model-attached assets, and [queued media](https://docs.holo-js.com/media/conversions) when conversions run asynchronously.
 
 ## Choose the abstraction
 

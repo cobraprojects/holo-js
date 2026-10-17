@@ -1,92 +1,333 @@
-# ORM: Collections
+# Collections
 
-Model queries return model-aware collections that preserve ORM workflows after the query is complete.
+Queries that return more than one model give you a collection. A collection is a real JavaScript array of models with a few extra methods for loading relations, re-querying, and serializing the whole set.
 
-## When you get a model collection
+```ts
+const posts = await Post.where('status', 'published').get()
 
-A collection is returned when a model query yields many rows:
+const titles = posts.map(post => post.title)
+const ids = posts.modelKeys()
+
+await posts.load('author')
+
+return posts.toJSON()
+```
+
+## Available methods
+
+Every method is listed alphabetically below and described in the [method reference](#method-reference). Standard array methods, such as `map()` and `filter()`, also work.
+
+<div class="method-list">
+
+- [append()](#append)
+- [fresh()](#fresh)
+- [load()](#load)
+- [loadAvg()](#loadavg)
+- [loadCount()](#loadcount)
+- [loadExists()](#loadexists)
+- [loadMax()](#loadmax)
+- [loadMin()](#loadmin)
+- [loadMissing()](#loadmissing)
+- [loadMorph()](#loadmorph)
+- [loadSum()](#loadsum)
+- [makeHidden()](#makehidden)
+- [makeVisible()](#makevisible)
+- [modelKeys()](#modelkeys)
+- [setHidden()](#sethidden)
+- [setVisible()](#setvisible)
+- [toJSON()](#tojson)
+- [toQuery()](#toquery)
+- [withoutAppends()](#withoutappends)
+
+</div>
+
+## Collections are arrays
+
+`get()`, `all()`, `findMany()`, `createMany()`, and the `data` of a paginated result all return collections. Because a collection is an `Array`, every array method works and keeps the model types:
+
+```ts
+const posts = await Post.all()
+
+const featured = posts.filter(post => post.is_featured)
+const first = posts[0]
+const count = posts.length
+
+for (const post of posts) {
+  console.log(post.title)
+}
+```
+
+Methods like `filter()` and `map()` return plain arrays, not collections. Call collection methods before you transform the array.
+
+## Getting primary keys
+
+`modelKeys()` returns the primary key of every model:
 
 ```ts
 const users = await User.where('active', true).get()
+
+users.modelKeys()
+// [1, 4, 9]
 ```
 
-This is not just a plain array. It is the ORM-aware result wrapper for multiple models.
+## Querying the same records again
 
-## Why model-aware collections matter
-
-A plain array would lose too much context after the query finishes. Holo-JS collections keep enough model
-knowledge to continue relationship loading, visibility shaping, and follow-up querying without rebuilding
-that context manually.
-
-Use them when the result set still needs model behavior after retrieval.
-
-## Common helpers
-
-- `modelKeys()`
-- `toQuery()`
-- `load()`
-- `loadMissing()`
-- `loadCount()`
-- `loadExists()`
-- `loadSum()`
-- `loadAvg()`
-- `fresh()`
-- `append()`
-- visibility controls
-
-## Continue working with the same record set
+`toQuery()` builds a model query limited to the records in the collection. Use it to run a bulk update or a fresh query on exactly that set:
 
 ```ts
-const users = await User.where('active', true).get()
+const drafts = await Post.where('status', 'draft').get()
 
-const refreshed = await users
-  .toQuery()
-  .with('posts')
-  .latest()
-  .get()
+await drafts.toQuery().update({ status: 'archived' })
 ```
 
-`toQuery()` is the bridge back to the query layer when the collection already represents the set you want
-to keep operating on.
+`toQuery()` throws on an empty collection, so check `length` first if the collection might be empty.
 
-## Load relation data across the whole collection
+## Reloading from the database
 
-Collections can batch-load relations and aggregates after the initial query:
+`fresh()` reloads every model and returns a new collection. Records deleted in the meantime are left out:
 
 ```ts
-const users = await User.latest().take(25).get()
+const latest = await posts.fresh()
+```
 
-await users.load('profile', 'roles')
+## Loading relations
+
+Load relations for every model in one query per relation. This avoids running a query per model:
+
+```ts
+const posts = await Post.all()
+
+await posts.load('author', 'comments')
+
+await posts.loadMissing('author')
+```
+
+`load()` always queries. `loadMissing()` skips relations that are already loaded. Both return the collection with the loaded relations typed.
+
+For `morphTo` relations, `loadMorph()` loads different nested relations depending on the related model. The keys are the stored morph types:
+
+```ts
+await comments.loadMorph('commentable', {
+  Post: 'author',
+  Video: ['channel', 'tags'],
+})
+```
+
+## Loading aggregates
+
+Add relation counts and sums to every model without loading the related rows:
+
+```ts
+const users = await User.all()
+
 await users.loadCount('posts')
-await users.loadSum('payments', 'amount')
+await users.loadExists('posts')
+await users.loadSum('orders', 'total')
+await users.loadAvg('orders', 'total')
+await users.loadMin('orders', 'total')
+await users.loadMax('orders', 'total')
+
+users.toJSON()
+// [{ id: 1, name: 'Amina', posts_count: 3, posts_exists: true, orders_sum_total: 240, ... }]
 ```
 
-That keeps the common "query first, then enrich" workflow efficient and readable.
+| Method | Attribute name |
+| --- | --- |
+| `loadCount('posts')` | `posts_count` |
+| `loadExists('posts')` | `posts_exists` |
+| `loadSum('orders', 'total')` | `orders_sum_total` |
+| `loadAvg('orders', 'total')` | `orders_avg_total` |
+| `loadMin('orders', 'total')` | `orders_min_total` |
+| `loadMax('orders', 'total')` | `orders_max_total` |
 
-## Shape JSON output across the whole set
+The column argument autocompletes from the related model's columns. To add aggregates while querying, use `withCount()` and friends from [eager loading and aggregates](/orm/relationships/loading).
 
-The same visibility and append helpers available on one entity also work across collections:
+## Serializing a collection
+
+`toJSON()` serializes each model, respecting its `hidden`, `visible`, and `appended` settings:
 
 ```ts
-const users = await User.with('profile').get()
-
-users.append('display_name')
-users.makeHidden('internalNotes')
+return users.toJSON()
 ```
 
-Use those collection helpers when an API response or export should expose a different shape without
-changing the model's global defaults.
+Change visibility for every model in the collection at once:
 
-## When to use a collection helper instead of another query
+```ts
+users.makeHidden('email').toJSON()
+users.makeVisible('phone').toJSON()
+users.setVisible(['id', 'name']).toJSON()
+users.setHidden(['password']).toJSON()
+users.append('display_name').toJSON()
+users.withoutAppends().toJSON()
+```
 
-Use collection helpers when:
+See [serialization](/orm/serialization) for how each option works.
 
-- you already have the models
-- you want to enrich or reshape that exact set
-- you do not want to rebuild the selection logic
+## Method reference
 
-If you actually need a different record set, go back to a fresh query instead.
+### append()
 
-## Read more
+Adds computed attributes to the JSON output of every model. Repeated keys are added once.
 
-[ORM Getting Started](/orm/)
+```ts
+users.append('display_name').toJSON()
+```
+
+### fresh()
+
+Reloads every model from the database and returns a new collection. Models whose row was deleted are left out.
+
+```ts
+const current = await users.fresh()
+```
+
+### load()
+
+Eager loads relations on every model in the collection, even ones already loaded. Use `loadMissing()` to skip the loaded ones.
+
+```ts
+await posts.load('author', 'tags')
+```
+
+### loadAvg()
+
+Adds a `{relation}_avg_{column}` attribute to each model with the average of a related column.
+
+```ts
+await authors.loadAvg('books', 'rating')
+// authors[0].books_avg_rating
+```
+
+### loadCount()
+
+Adds a `{relation}_count` attribute to each model.
+
+```ts
+await authors.loadCount('books')
+// authors[0].books_count
+```
+
+### loadExists()
+
+Adds a `{relation}_exists` boolean to each model. It's `true` when at least one related row exists.
+
+```ts
+await authors.loadExists('books')
+// authors[0].books_exists
+```
+
+### loadMax()
+
+Adds a `{relation}_max_{column}` attribute to each model with the largest related value.
+
+```ts
+await authors.loadMax('books', 'pages')
+```
+
+### loadMin()
+
+Adds a `{relation}_min_{column}` attribute to each model with the smallest related value.
+
+```ts
+await authors.loadMin('books', 'pages')
+```
+
+### loadMissing()
+
+Eager loads only the relations that aren't loaded on the models yet.
+
+```ts
+await posts.loadMissing('author')
+```
+
+### loadMorph()
+
+Loads nested relations for a `morphTo` relation, with a different set per parent type. Keys are model names or morph class values. Each value is a relation name, an array of names, or an object of constraint callbacks.
+
+```ts
+await images.loadMorph('imageable', {
+  User: ['profile', 'posts'],
+  Post: 'comments',
+})
+```
+
+### loadSum()
+
+Adds a `{relation}_sum_{column}` attribute to each model with the total of a related column.
+
+```ts
+await authors.loadSum('books', 'pages')
+// authors[0].books_sum_pages
+```
+
+### makeHidden()
+
+Hides the given keys on every model in the collection, in addition to their current hidden keys.
+
+```ts
+users.makeHidden('email').toJSON()
+```
+
+### makeVisible()
+
+Shows the given hidden keys on every model in the collection.
+
+```ts
+users.makeVisible('phone').toJSON()
+```
+
+### modelKeys()
+
+Returns the primary key of every model, in collection order.
+
+```ts
+const ids = users.modelKeys()
+// [1, 4, 9]
+```
+
+### setHidden()
+
+Replaces the hidden keys on every model with the list you pass.
+
+```ts
+users.setHidden(['password']).toJSON()
+```
+
+### setVisible()
+
+Shows only the listed keys on every model.
+
+```ts
+users.setVisible(['id', 'name']).toJSON()
+```
+
+### toJSON()
+
+Returns an array of serialized models, respecting each model's `hidden`, `visible`, and `appended` settings.
+
+```ts
+return users.toJSON()
+```
+
+### toQuery()
+
+Builds a model query limited to the primary keys in the collection. It throws on an empty collection.
+
+```ts
+await drafts.toQuery().update({ status: 'archived' })
+```
+
+### withoutAppends()
+
+Removes the appended attributes from every model in the collection.
+
+```ts
+users.withoutAppends().toJSON()
+```
+
+## Next steps
+
+- [Querying models](/orm/querying)
+- [Eager loading and aggregates](/orm/relationships/loading)
+- [Serialization](/orm/serialization)
+- [Chunking large results](/database/query-builder/chunking)

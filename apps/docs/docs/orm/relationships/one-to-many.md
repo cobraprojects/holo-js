@@ -1,93 +1,158 @@
-# Relationships: One to Many
+# One to Many
 
-One-to-many is the right fit when one parent owns many children, and each child points back to one parent.
+A one-to-many relationship links one parent to any number of children: a post has many comments, and each comment belongs to one post. Use `hasMany` on the parent and `belongsTo` on the child.
 
-## `hasMany`
+```ts [server/models/Post.ts]
+import { defineModel, hasMany } from '@holo-js/db'
 
-Use `hasMany` on the parent-facing side.
-
-```ts
-const User = defineModel('users', {
+export default defineModel('posts', {
   relations: {
-    posts: hasMany('Post', {
-      foreignKey: 'user_id',
-    }),
+    comments: hasMany('Comment', { foreignKey: 'post_id' }),
   },
 })
 ```
 
-String relation targets use the model name inferred from the related table, so `posts -> Post`,
-`people -> Person`, and `children -> Child`.
+```ts [server/models/Comment.ts]
+import { belongsTo, defineModel } from '@holo-js/db'
 
-### Load children
-
-```ts
-const users = await User.with('posts').get()
-```
-
-### Filter parents by child conditions
-
-```ts
-const users = await User.whereHas('posts', query => {
-  query.where('published', true)
-}).get()
-```
-
-### Save many related models
-
-```ts
-await user.posts().createMany([
-  { title: 'First post' },
-  { title: 'Second post' },
-])
-```
-
-### Relation queries
-
-```ts
-await user.load('posts')
-
-const posts = user.getRelation('posts')
-```
-
-### Count and aggregate children
-
-```ts
-const users = await User.withCount('posts').withSum('posts', 'views').get()
-```
-
-## `belongsTo`
-
-Use `belongsTo` on the child-facing side when the child table stores the foreign key.
-
-```ts
-const Post = defineModel('posts', {
+export default defineModel('comments', {
   relations: {
-    author: belongsTo('User', {
-      foreignKey: 'user_id',
-    }),
+    post: belongsTo('Post', { foreignKey: 'post_id' }),
   },
 })
 ```
 
-### Access the parent
+```ts [server/lib/posts.ts]
+import Post from '../models/Post'
+
+const post = await Post.with('comments').findOrFail(1)
+
+for (const comment of post.comments) {
+  console.log(comment.body)
+}
+```
+
+After `with('comments')`, `post.comments` is typed as an array of `Comment` models. It is an empty array when the post has no comments.
+
+## Defining the relation
+
+`hasMany(related, foreignKey, localKey?)` takes the related model, the key column on the *child* table, and the column on the parent it matches (default `id`):
+
+```ts
+comments: hasMany('Comment', { foreignKey: 'post_id' })
+
+comments: hasMany('Comment', 'post_id')
+
+comments: hasMany('Comment', { foreignKey: 'post_slug', localKey: 'slug' })
+```
+
+## The inverse: belongs to
+
+The child side uses `belongsTo`. Load it the same way:
+
+```ts
+import Comment from '../models/Comment'
+
+const comment = await Comment.with('post').findOrFail(10)
+
+comment.post?.title
+```
+
+See [One to One](/orm/relationships/one-to-one#belongs-to) for `belongsTo` options and `associate()`.
+
+## Constraining the children
+
+Pass a callback to `with()` to filter or sort the loaded children:
+
+```ts
+const post = await Post
+  .with('comments', query => query.where('status', 'approved').latest())
+  .findOrFail(1)
+```
+
+For a subset you use often, define it once with [`scopeRelation()`](/orm/relationships/#scoped-relationships).
+
+## Creating children
+
+Call the relation as a method to get write helpers that fill in the foreign key for you:
 
 ```ts
 const post = await Post.findOrFail(1)
 
-await post.load('author')
+const comment = await post.comments().create({ body: 'Great write-up!' })
 
-const author = post.getRelation('author')
+const comments = await post.comments().createMany([
+  { body: 'First!' },
+  { body: 'Thanks for sharing.' },
+])
 ```
 
-### Constrain by the parent
+To attach models you built yourself, use `save()` and `saveMany()`:
 
 ```ts
-const posts = await Post.whereBelongsTo(user, 'author').get()
+import Comment from '../models/Comment'
+
+await post.comments().save(Comment.make({ body: 'Saved through the relation.' }))
+
+await post.comments().saveMany([
+  Comment.make({ body: 'One' }),
+  Comment.make({ body: 'Two' }),
+])
 ```
 
-## Common patterns
+The parent must already exist in the database; Holo throws otherwise.
 
-- use `hasMany` when the parent owns a collection of children
-- use `belongsTo` on the child that stores the foreign key
-- reach for `withCount(...)` when you need metadata instead of the full relation payload
+### Without model events
+
+The entity methods `createRelatedQuietly`, `createManyRelatedQuietly`, `saveRelatedQuietly`, and `saveManyRelatedQuietly` do the same work without firing [model events](/orm/observers):
+
+```ts
+await post.createRelatedQuietly('comments', { body: 'Imported comment' })
+```
+
+## One of many
+
+Sometimes you want a single child out of many: a user's latest post, or their highest order. These helpers define a to-one relation over a has-many table. They take the related model as a function.
+
+```ts [server/models/User.ts]
+import { defineModel, latestOfMany, oldestOfMany, ofMany } from '@holo-js/db'
+import Order from './Order'
+import Post from './Post'
+
+export default defineModel('users', {
+  relations: {
+    latestPost: latestOfMany(() => Post, 'user_id'),
+    firstPost: oldestOfMany(() => Post, 'user_id'),
+    largestOrder: ofMany(() => Order, 'user_id', 'total', 'max'),
+  },
+})
+```
+
+```ts
+const user = await User.with('latestPost', 'largestOrder').findOrFail(1)
+
+user.latestPost?.title
+user.largestOrder?.total
+```
+
+Each loads as a single model or `null`.
+
+| Helper | Signature | Picks |
+| --- | --- | --- |
+| `latestOfMany` | `(related, foreignKey, localKey = 'id', column = 'id')` | Row with the highest `column` |
+| `oldestOfMany` | `(related, foreignKey, localKey = 'id', column = 'id')` | Row with the lowest `column` |
+| `ofMany` | `(related, foreignKey, aggregateColumn, aggregate = 'max', localKey = 'id')` | Row with the `'max'` or `'min'` of `aggregateColumn` |
+
+To pick the latest by a column other than `id`, pass it as the fourth argument:
+
+```ts
+latestPublished: latestOfMany(() => Post, 'user_id', 'id', 'published_at')
+```
+
+One-of-many relations work with `has()`, `whereHas()`, `withCount()`, and the other relation methods.
+
+## Next steps
+
+- [Many to Many](/orm/relationships/many-to-many)
+- [Eager Loading and Aggregates](/orm/relationships/loading)
+- [Collections](/orm/collections)

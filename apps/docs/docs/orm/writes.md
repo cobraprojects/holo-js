@@ -1,269 +1,722 @@
-# ORM Writes
+# Creating and Updating Models
 
-Use model writes when the application is working with domain records instead of raw tables.
+Models create, update, and delete rows for you. They fill in timestamps and generated IDs, enforce your `fillable` rules, and fire [model events](/orm/observers).
 
-This page covers:
+```ts [server/lib/posts.ts]
+import Post from '../models/Post'
 
-- `create(...)`
-- `make(...)` + `save()`
-- `update(...)`
-- `saveMany(...)`
-- unique slug fields
-- mass assignment with `fillable` and `guarded`
-- trusted bypasses with `unguarded(...)` and `forceFill(...)`
-
-## Creating Records
-
-Use `create(...)` when you want to persist a new model in one step.
-
-```ts
-const user = await User.create({
-  name: 'Amina',
-  email: 'amina@example.com',
-})
-```
-
-This is the most common pattern in:
-
-- route handlers
-- server services
-- jobs
-- seeders
-
-## Making Then Saving
-
-Use `make(...)` when you want an entity instance first, then decide when to persist it.
-
-```ts
-const user = User.make({
-  name: 'Amina',
-  email: 'amina@example.com',
+const post = await Post.create({
+  title: 'Hello Holo',
+  body: 'My first post.',
+  user_id: 1,
 })
 
-user.set('status', 'active')
-
-await user.save()
+post.title = 'Hello, Holo'
+await post.save()
 ```
 
-Use this form when:
+The payload is typed from your table. `create()` requires every column that has no default, and rejects columns that don't exist.
 
-- extra attributes need to be set before persistence
-- you want dirty tracking before save
-- the entity should go through a longer application workflow first
+## Available methods
 
-## Updating Records
+Each method is described in the [method reference](#method-reference) at the bottom of this page. Relation writes such as `attach()` and `createRelated()` are on the [relationship pages](/orm/relationships/).
 
-Update a loaded entity when you are changing one record:
+**Create:** [create()](#create), [createMany()](#createmany), [createQuietly()](#createquietly), [createManyQuietly()](#createmanyquietly), [make()](#make), [firstOrCreate()](#firstorcreate), [firstOrNew()](#firstornew), [updateOrCreate()](#updateorcreate), [upsert()](#upsert)
+
+**Update:** [update()](#update), [updateJson()](#updatejson), [increment()](#increment), [decrement()](#decrement), [fill()](#fill), [forceFill()](#forcefill), [set()](#set), [save()](#save), [push()](#push), [saveQuietly()](#savequietly), [saveMany()](#savemany)
+
+**Delete and restore:** [delete()](#delete), [deleteQuietly()](#deletequietly), [destroy()](#destroy), [prune()](#prune), [forceDelete()](#forcedelete), [forceDeleteQuietly()](#forcedeletequietly), [restore()](#restore), [restoreQuietly()](#restorequietly)
+
+**Copy and slugs:** [replicate()](#replicate), [uniqueSlug()](#uniqueslug)
+
+**Change tracking:** [isDirty()](#isdirty), [isClean()](#isclean), [getDirty()](#getdirty), [getChanges()](#getchanges), [wasChanged()](#waschanged), [syncOriginal()](#syncoriginal), [syncChanges()](#syncchanges)
+
+**Events and guards:** [withoutEvents()](#withoutevents), [unguarded()](#unguarded)
+
+**Relation writes:** [associate()](#associate), [dissociate()](#dissociate)
+
+## Create records
+
+`create()` inserts a row and returns the saved model, including its new ID and timestamps:
 
 ```ts
-const user = await User.findOrFail(1)
-
-await user.update({
-  name: 'Amina Hassan',
-})
+const post = await Post.create({ title: 'Hello', body: '...', user_id: 1 })
+post.id
+post.created_at
 ```
 
-You can still mutate attributes and save explicitly when the workflow needs intermediate steps:
+Insert several at once with `createMany()`. It returns a [collection](/orm/collections):
 
 ```ts
-const user = await User.findOrFail(1)
-
-user.set('name', 'Amina Hassan')
-
-await user.save()
+const posts = await Post.createMany([
+  { title: 'First', body: '...', user_id: 1 },
+  { title: 'Second', body: '...', user_id: 1 },
+])
 ```
 
-Update several rows through a model query:
+### Build first, save later
+
+`make()` builds an unsaved instance. Set more values, then call `save()`:
 
 ```ts
-await Post
-  .where('status', 'draft')
-  .update({
-    status: 'published',
-    published_at: new Date(),
-  })
+const post = Post.make({ title: 'Draft', user_id: 1 })
+post.body = await renderBody()
+await post.save()
+
+post.exists()
+// true
 ```
 
-## Unique Slug Fields
+## Update records
 
-Use `uniqueSlug(...)` when a model needs a readable unique slug. The helper is typed from the model,
-checks the existing rows for the target column, and returns the next available value.
+Change attributes on a loaded model and call `save()`. Holo only writes the columns that changed, and skips the query entirely when nothing did.
+
+```ts
+const post = await Post.findOrFail(1)
+post.status = 'published'
+post.published_at = new Date()
+await post.save()
+```
+
+`update()` fills and saves in one step:
+
+```ts
+await post.update({ status: 'published' })
+```
+
+Update by primary key without loading the model yourself:
+
+```ts
+const post = await Post.update(1, { status: 'archived' })
+```
+
+`fill()` sets several attributes without saving. `set()` and `get()` work on one attribute at a time, the same as property access:
+
+```ts
+post.fill({ title: 'New title', excerpt: 'Short summary' })
+post.set('status', 'review')
+await post.save()
+```
+
+### Update many rows
+
+Call `update()` on a query to change every matching row with one statement:
+
+```ts
+await Post.where('status', 'draft')
+  .where('created_at', '<', cutoff)
+  .update({ status: 'archived' })
+```
+
+::: warning
+Query updates and deletes run a single SQL statement. They don't fire model events and don't change `updated_at` for you. Use `chunkById()` and save each model when you need either.
+:::
+
+### Increment and decrement
+
+```ts
+await Post.where('id', post.id).increment('views')
+await Post.where('id', post.id).increment('views', 10)
+await Product.where('id', productId).decrement('stock', 1, { restocked: false })
+```
+
+The optional third argument updates other columns in the same statement. Calling `Post.increment('views')` directly on the model updates every row.
+
+### Update JSON columns
+
+Use `updateJson()` with a `->` path to change one key inside a JSON column:
+
+```ts
+await User.where('id', user.id).updateJson('settings->theme', 'dark')
+```
+
+## Insert or update
+
+`firstOrCreate()` returns the first match, or creates a record from both arguments:
+
+```ts
+const tag = await Tag.firstOrCreate(
+  { slug: 'typescript' },
+  { name: 'TypeScript' },
+)
+```
+
+If two requests race and the table has a unique index on the matched columns, `firstOrCreate()` catches the duplicate-key error and returns the row the other request created.
+
+`firstOrNew()` does the same but returns an unsaved instance when nothing matches:
+
+```ts
+const tag = await Tag.firstOrNew({ slug: 'typescript' }, { name: 'TypeScript' })
+if (!tag.exists()) {
+  await tag.save()
+}
+```
+
+`updateOrCreate()` updates the first match with the second argument, or creates a new record:
+
+```ts
+const subscription = await Subscription.updateOrCreate(
+  { user_id: user.id },
+  { plan: 'pro', renews_at: renewal },
+)
+```
+
+`Model.upsert(match, values)` is another name for `updateOrCreate()`.
+
+### Bulk upserts
+
+To insert or update many rows with one statement, call `upsert()` on a query. Pass the rows, the unique columns that identify a match, and the columns to update on conflict:
+
+```ts
+await Product.query().upsert(
+  [
+    { sku: 'TSHIRT-S', name: 'T-Shirt S', price: 1999 },
+    { sku: 'TSHIRT-M', name: 'T-Shirt M', price: 1999 },
+  ],
+  ['sku'],
+  ['name', 'price'],
+)
+```
+
+Like other query writes, this skips model events.
+
+## Track changes
+
+Before you save, `isDirty()` tells you whether anything changed. After you save, `wasChanged()` tells you what the last save wrote.
+
+```ts
+const post = await Post.findOrFail(1)
+post.title = 'Renamed'
+
+post.isDirty()
+// true
+post.isDirty('title')
+// true
+post.isDirty('body')
+// false
+post.getDirty()
+// { title: 'Renamed' }
+
+await post.save()
+
+post.isClean()
+// true
+post.wasChanged('title')
+// true
+post.getChanges()
+// { title: 'Renamed' }
+```
+
+These are useful inside [observers](/orm/observers) to react only to meaningful changes.
+
+## Delete records
+
+```ts
+const post = await Post.findOrFail(1)
+await post.delete()
+```
+
+Delete by key:
+
+```ts
+await Post.delete(1)
+
+const deleted = await Post.destroy([2, 3, 4])
+// 3
+```
+
+`delete(id)` throws a not-found error when the key doesn't exist. `destroy()` skips missing keys and returns how many it deleted. Both load each model first, so events fire.
+
+Delete every matching row with one statement:
+
+```ts
+await Session.where('expires_at', '<', new Date()).delete()
+```
+
+## Soft delete and restore
+
+When a model has [soft deletes](/orm/#soft-deletes) enabled, `delete()` sets `deleted_at` instead of removing the row. This applies to instance, key, and query deletes.
+
+```ts
+await post.delete()
+post.trashed()
+// true
+```
+
+Bring it back with `restore()`:
+
+```ts
+await post.restore()
+
+await Post.restore(1)
+
+const restoredCount = await Post.onlyTrashed().where('user_id', userId).restore()
+```
+
+Remove the row for good with `forceDelete()`:
+
+```ts
+await post.forceDelete()
+
+await Post.forceDelete(1)
+
+await Post.onlyTrashed().where('deleted_at', '<', cutoff).forceDelete()
+```
+
+## Copy a record
+
+`replicate()` returns an unsaved copy without the primary key, generated unique IDs, or timestamps:
+
+```ts
+const copy = post.replicate()
+copy.title = `${post.title} (copy)`
+copy.slug = await uniqueSlug(Post, copy.title)
+await copy.save()
+```
+
+Leave out more columns by passing them, or set `replicationExcludes` on the model to always skip them:
+
+```ts
+const copy = post.replicate(['slug', 'views'])
+```
+
+## Unique slugs
+
+`uniqueSlug()` turns text into a URL slug that isn't already used in the table:
 
 ```ts
 import { uniqueSlug } from '@holo-js/db'
 import Post from '../models/Post'
 
-const post = await Post.create({
-  title: input.title,
-  slug: await uniqueSlug(Post, input.title),
-  body: input.body,
+const slug = await uniqueSlug(Post, 'Hello World')
+// 'hello-world', or 'hello-world-2' if taken
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `column` | `'slug'` | Column to check |
+| `ignore` | | Primary key to skip, for example the record you're editing |
+| `separator` | `'-'` | Word separator |
+| `fallback` | `'entry'` | Slug used when the text has no letters or digits |
+
+```ts
+const slug = await uniqueSlug(Post, input.title, { ignore: post.id })
+```
+
+Concurrent calls in the same process never return the same slug. Keep a unique index on the column to protect against other processes.
+
+## Save a model with its relationships
+
+`push()` saves the model plus every loaded relationship that holds model instances. Parents (`belongsTo`) are saved first, then the model, then children.
+
+```ts
+const post = await Post.with('author').findOrFail(1)
+post.title = 'Updated'
+post.author!.name = 'Ada Lovelace'
+await post.push()
+```
+
+`Post.saveMany([first, second])` saves several instances in order.
+
+See the [relationship pages](/orm/relationships/) for creating related records, such as `post.comments().create(...)` and `post.tags().attach(...)`.
+
+## Write without events
+
+Each write has a `Quietly` version that skips [model events and observers](/orm/observers):
+
+```ts
+await Post.createQuietly({ title: 'Imported', body: '...', user_id: 1 })
+await Post.createManyQuietly(rows)
+await post.saveQuietly()
+await post.deleteQuietly()
+await post.restoreQuietly()
+await post.forceDeleteQuietly()
+```
+
+To silence events for every model inside a block, use `withoutEvents()`. It covers everything that runs inside the callback, including awaited calls, and nothing outside it:
+
+```ts
+await Post.withoutEvents(async () => {
+  await importLegacyPosts()
 })
 ```
 
-On update, pass the current primary key with `ignore` so the row can keep its own slug:
+## Write guarded columns
+
+Mass assignment rules from `fillable` and `guarded` apply to every write. Writing a blocked column throws a `SecurityError`:
 
 ```ts
-const post = await Post.findOrFail(id)
-
-await post.update({
-  title: input.title,
-  slug: await uniqueSlug(Post, input.title, { ignore: id }),
-})
+await User.create({ name: 'Ada', is_admin: true })
+// SecurityError: Column "is_admin" is not writable on model "User".
 ```
 
-By default `uniqueSlug(...)` writes for the model's `slug` column. If the model uses another string
-column, pass `column`; TypeScript infers the allowed column names from the model:
+When trusted server code must set a protected column, wrap the write in `unguarded()`:
 
 ```ts
-await uniqueSlug(Post, input.title, { column: 'public_slug' })
-```
-
-You can also change the separator or fallback base:
-
-```ts
-await uniqueSlug(Post, input.title, {
-  separator: '_',
-  fallback: 'post',
-})
-```
-
-## Mass Assignment
-
-Mass assignment controls which attributes are writable through `create(...)`, `update(...)`, and query-driven model updates.
-
-### Allowlist Writes With `fillable`
-
-```ts
-export default defineModel('users', {
-  fillable: ['name', 'email'],
-})
-```
-
-With this model:
-
-```ts
-await User.create({
-  name: 'Amina',
-  email: 'amina@example.com',
-})
-```
-
-works, but:
-
-```ts
-await User.create({
-  role: 'admin',
-})
-```
-
-fails because `role` is not writable.
-
-### Block Specific Attributes With `guarded`
-
-```ts
-export default defineModel('users', {
-  fillable: ['name', 'email', 'role'],
-  guarded: ['role'],
-})
-```
-
-Use this when a field exists on the model but should never be mass assigned from ordinary application input.
-
-### Explicitly Block All Mass Assignment
-
-```ts
-export default defineModel('users', {
-  fillable: [],
-})
-```
-
-An explicit empty `fillable` array means no attribute is mass assignable.
-
-That blocks:
-
-```ts
-await User.create({
-  name: 'Amina',
-})
-```
-
-until the write goes through a trusted path.
-
-### Open Models
-
-If `fillable` is omitted, Holo-JS falls back to the open-model behavior and only `guarded` restrictions apply.
-
-Use that only when the model is not being written from broad request input.
-
-## Trusted Write Paths
-
-Sometimes application code needs to write internal fields that should not be mass assignable from normal input.
-
-### `unguarded(...)`
-
-Use `unguarded(...)` for a narrow trusted block:
-
-```ts
-await User.unguarded(() => User.create({
-  name: 'Root',
-  role: 'admin',
+const admin = await User.unguarded(() => User.create({
+  name: 'Ada',
+  email: 'ada@example.com',
+  is_admin: true,
 }))
 ```
 
-Keep this scoped and explicit. It is for framework-internal or highly trusted application paths.
+Inside the callback, mass assignment rules are off for every model, not only `User`. Code running outside the callback, including other requests, is unaffected.
 
-### `forceFill(...)`
+::: danger
+Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
+:::
 
-Use `forceFill(...)` on an entity when you need a trusted assignment on that one instance:
+## Method reference
 
-```ts
-const user = User.make({
-  name: 'Amina',
-})
+### create()
 
-user.forceFill({
-  role: 'admin',
-})
-
-await user.save()
-```
-
-This is useful when:
-
-- a record starts from normal writable input
-- one or two protected fields are added by trusted server logic
-- you do not want to disable guards for the whole callback
-
-## Recommended Pattern
-
-For route input:
+Inserts one row and returns the saved model. Model events fire, and generated IDs and timestamps are filled in.
 
 ```ts
-export default defineModel('users', {
-  fillable: ['name', 'email'],
-})
+const post = await Post.create({ title: 'Hello', body: '...', user_id: 1 })
 ```
+
+### createMany()
+
+Inserts each row in order and returns a [collection](/orm/collections) of the saved models.
 
 ```ts
-const user = await User.create({
-  name: body.name,
-  email: body.email,
-})
+const tags = await Tag.createMany([{ name: 'News' }, { name: 'Release' }])
 ```
 
-For internal server-side fields:
+### createQuietly()
+
+Like `create()`, but no model events or observers run.
 
 ```ts
-const user = User.make({
-  name: body.name,
-  email: body.email,
-})
-
-user.forceFill({
-  role: 'member',
-})
-
-await user.save()
+await Post.createQuietly({ title: 'Imported', body: '...', user_id: 1 })
 ```
 
-That keeps request-facing input narrow without blocking trusted application logic.
+### createManyQuietly()
+
+Like `createMany()`, but no model events or observers run.
+
+```ts
+await Post.createManyQuietly(rows)
+```
+
+### make()
+
+Builds an unsaved model with the model's `pendingAttributes` applied. Call `save()` to insert it.
+
+```ts
+const post = Post.make({ title: 'Draft', user_id: 1 })
+await post.save()
+```
+
+### firstOrCreate()
+
+Returns the first row that matches the first argument. If none matches, creates a row from both arguments. If a unique index rejects a concurrent insert, it returns the row the other request created.
+
+```ts
+const tag = await Tag.firstOrCreate({ slug: 'typescript' }, { name: 'TypeScript' })
+```
+
+### firstOrNew()
+
+Returns the first matching row, or an unsaved model built from both arguments. Nothing is written until you call `save()`.
+
+```ts
+const tag = await Tag.firstOrNew({ slug: 'typescript' }, { name: 'TypeScript' })
+```
+
+### updateOrCreate()
+
+Updates the first row that matches the first argument with the second argument, or creates a new row when nothing matches.
+
+```ts
+await Subscription.updateOrCreate({ user_id: user.id }, { plan: 'pro' })
+```
+
+### upsert()
+
+On a model, this is an alias of `updateOrCreate()`. On a query, it's a bulk insert-or-update that takes the rows, the unique columns, and the columns to update on conflict. See [bulk upserts](#bulk-upserts).
+
+```ts
+await Subscription.upsert({ user_id: user.id }, { plan: 'pro' })
+
+await Product.query().upsert(rows, ['sku'], ['name', 'price'])
+```
+
+### update()
+
+On the model, `update(id, values)` loads the row, fills it, and saves it. It throws when the key doesn't exist. On an instance, `update(values)` fills and saves. On a query, `update(values)` runs one SQL statement and skips model events. See [update records](#update-records).
+
+```ts
+await Post.update(1, { status: 'archived' })
+await post.update({ status: 'published' })
+await Post.where('status', 'draft').update({ status: 'archived' })
+```
+
+### updateJson()
+
+On a query, updates one key inside a JSON column using a `->` path. See [update JSON columns](#update-json-columns).
+
+```ts
+await User.where('id', user.id).updateJson('settings->theme', 'dark')
+```
+
+### increment()
+
+Adds to a numeric column. On a query, it runs one SQL statement. The optional third argument updates other columns in the same statement.
+
+```ts
+await Post.where('id', post.id).increment('views', 10)
+```
+
+### decrement()
+
+Subtracts from a numeric column. It takes the same arguments as `increment()`.
+
+```ts
+await Product.where('id', productId).decrement('stock', 1)
+```
+
+### fill()
+
+Assigns several attributes on an instance without saving. Mass assignment rules are checked when you save.
+
+```ts
+post.fill({ title: 'New title', excerpt: 'Short summary' })
+await post.save()
+```
+
+### forceFill()
+
+Assigns attributes the same way as `fill()`. Holo still checks writable columns when you save, so this doesn't bypass guards.
+
+```ts
+post.forceFill({ views: 0 })
+```
+
+### set()
+
+Assigns one attribute on an instance. It's the same as assigning the property directly.
+
+```ts
+post.set('status', 'review')
+```
+
+### save()
+
+Saves an instance. A new instance is inserted. A loaded instance updates only its changed columns, and does nothing when nothing changed. Events fire for inserts and updates, not for an empty save.
+
+```ts
+post.title = 'Renamed'
+await post.save()
+```
+
+### push()
+
+Saves the instance, its `belongsTo` parents, and any loaded child relations that hold model instances. Parents save first, then the instance, then children. See [save with relationships](#save-a-model-with-its-relationships).
+
+```ts
+await post.push()
+```
+
+### saveQuietly()
+
+Like `save()`, but no model events or observers run.
+
+```ts
+await post.saveQuietly()
+```
+
+### saveMany()
+
+On the model, saves each instance in order and returns a collection of the saved models.
+
+```ts
+await Post.saveMany([first, second])
+```
+
+### delete()
+
+On an instance, deletes the row, or soft deletes it when the model has soft deletes. On the model, `delete(id)` loads the row first and throws when the key doesn't exist. On a query, `delete()` runs one statement and skips model events. See [delete records](#delete-records).
+
+```ts
+await post.delete()
+await Post.delete(1)
+await Session.where('expires_at', '<', new Date()).delete()
+```
+
+### deleteQuietly()
+
+Like an instance `delete()`, but no model events or observers run.
+
+```ts
+await post.deleteQuietly()
+```
+
+### destroy()
+
+Deletes the rows with the given keys and returns how many were deleted. Missing keys are skipped without an error.
+
+```ts
+const deleted = await Post.destroy([2, 3, 4])
+```
+
+### prune()
+
+Deletes the rows that the model's `prunable` option selects, and returns how many were removed. It throws when the model has no `prunable` option. See [pruning old records](/orm/#pruning-old-records).
+
+```ts
+await Post.prune()
+```
+
+### forceDelete()
+
+Permanently deletes a row, including soft-deleted ones. On the model, `forceDelete(id)` throws when the key doesn't exist. On an instance, it fires the force-delete events. On a query, it permanently deletes every matching row, trashed or not, and returns how many it removed.
+
+```ts
+await post.forceDelete()
+await Post.forceDelete(1)
+```
+
+### forceDeleteQuietly()
+
+Like an instance `forceDelete()`, but no model events or observers run.
+
+```ts
+await post.forceDeleteQuietly()
+```
+
+### restore()
+
+Brings back a soft-deleted row. On the model, `restore(id)` throws when the key doesn't exist. On an instance, it fires the restore events. On a query, it restores the rows the query matches, so chain it with `onlyTrashed()`. It returns how many it restored.
+
+```ts
+await post.restore()
+await Post.restore(1)
+```
+
+### restoreQuietly()
+
+Like an instance `restore()`, but no model events or observers run.
+
+```ts
+await post.restoreQuietly()
+```
+
+### replicate()
+
+Returns an unsaved copy without the primary key, generated unique IDs, timestamps, or the deleted-at column. Pass column names to skip more. Columns in `replicationExcludes` are always skipped.
+
+```ts
+const copy = post.replicate(['views'])
+await copy.save()
+```
+
+### uniqueSlug()
+
+Returns a slug for the text that isn't used by another row in the table. See [unique slugs](#unique-slugs) for options.
+
+```ts
+const slug = await uniqueSlug(Post, 'Hello World')
+```
+
+### isDirty()
+
+Returns `true` when any attribute, or the attribute you name, differs from the saved value.
+
+```ts
+post.isDirty('title')
+```
+
+### isClean()
+
+Returns `true` when no attribute differs from the saved value. It's the reverse of `isDirty()`.
+
+```ts
+if (post.isClean()) {
+  // nothing to save
+}
+```
+
+### getDirty()
+
+Returns an object with only the attributes that differ from the saved values.
+
+```ts
+post.getDirty()
+// { title: 'Renamed' }
+```
+
+### getChanges()
+
+Returns the attributes the last save wrote.
+
+```ts
+await post.save()
+post.getChanges()
+```
+
+### wasChanged()
+
+Returns `true` when the last save wrote any attribute, or the attribute you name.
+
+```ts
+post.wasChanged('title')
+```
+
+### syncOriginal()
+
+Treats the current attributes as the saved values, so they are no longer dirty.
+
+```ts
+post.syncOriginal()
+```
+
+### syncChanges()
+
+Records the current unsaved changes as the last changes, so `getChanges()` and `wasChanged()` report them.
+
+```ts
+post.syncChanges()
+```
+
+### withoutEvents()
+
+Runs a callback with model events and observers turned off for every model. Writes inside the callback, including awaited ones, skip events. See [write without events](#write-without-events).
+
+```ts
+await Post.withoutEvents(() => importLegacyPosts())
+```
+
+### unguarded()
+
+Runs a callback with mass assignment rules turned off. Use it only for trusted server code. See [write guarded columns](#write-guarded-columns).
+
+```ts
+await User.unguarded(() => User.create({ name: 'Ada', is_admin: true }))
+```
+
+### associate()
+
+On an instance, sets the foreign key of a `belongsTo` or `morphTo` relation from a saved related model. Pass `null` to clear it. Call `save()` afterward to store the change.
+
+```ts
+post.associate('author', user)
+await post.save()
+```
+
+### dissociate()
+
+Clears the foreign key of a `belongsTo` or `morphTo` relation. Call `save()` afterward to store the change.
+
+```ts
+post.dissociate('author')
+await post.save()
+```
+
+## Next steps
+
+- [Observers and model events](/orm/observers)
+- [Casts and mutators](/orm/casts)
+- [Transactions](/database/transactions)
+- [Relationships](/orm/relationships/)

@@ -1,0 +1,190 @@
+# Drivers and Config
+
+Broadcasting settings live in `config/broadcast.ts`. You list named connections, each with a driver, and pick one as the default. The `worker` section configures the WebSocket server started by `npx holo broadcast:work`.
+
+## Default config
+
+`npx holo install broadcast` writes this file:
+
+```ts [config/broadcast.ts]
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { env } from '@holo-js/config'
+
+const broadcastScheme = env('BROADCAST_SCHEME') === 'https' ? 'https' : 'http'
+
+export default defineBroadcastConfig({
+  default: env('BROADCAST_CONNECTION', 'holo'),
+  worker: {
+    allowedOrigins: [env('APP_URL', 'http://localhost:3000')],
+  },
+  connections: {
+    holo: {
+      driver: 'holo',
+      appId: env('BROADCAST_APP_ID', 'app-id'),
+      key: env('BROADCAST_APP_KEY', 'app-key'),
+      secret: env('BROADCAST_APP_SECRET', 'app-secret'),
+      options: {
+        host: env('BROADCAST_HOST', '127.0.0.1'),
+        port: env('BROADCAST_PORT', 8080),
+        scheme: broadcastScheme,
+        useTLS: broadcastScheme === 'https',
+      },
+      clientOptions: {
+        authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`,
+      },
+    },
+    log: {
+      driver: 'log',
+    },
+    null: {
+      driver: 'null',
+    },
+  },
+})
+```
+
+The `clientOptions.authEndpoint` block is only added when [auth](/auth/) is installed.
+
+This works locally as-is. Before you deploy, set real values for the app ID, key, and secret.
+
+::: danger
+`BROADCAST_APP_SECRET` signs channel authorizations and publish requests. Use a long random value in production and never expose it to the browser. The fallback values `app-key` and `app-secret` are for local development only.
+:::
+
+## Environment variables
+
+| Variable | Default | Used for |
+| --- | --- | --- |
+| `BROADCAST_CONNECTION` | `holo` | Which connection `broadcast(...)` uses by default. |
+| `BROADCAST_APP_ID` | `app-id` | Identifies your app on the worker. |
+| `BROADCAST_APP_KEY` | `app-key` | Public key. Browsers connect with it. |
+| `BROADCAST_APP_SECRET` | `app-secret` | Private secret for signing. |
+| `BROADCAST_HOST` | `127.0.0.1` | Host where your app server reaches the worker. Browsers use it too unless you set `worker.publicHost`. |
+| `BROADCAST_PORT` | `8080` | Worker port. |
+| `BROADCAST_SCHEME` | `http` | `https` turns on TLS for the connection. |
+| `APP_URL` | `http://localhost:3000` | Allowed browser origin and auth endpoint base. |
+
+## Drivers
+
+| Driver | What it does |
+| --- | --- |
+| `holo` | Sends events to the Holo WebSocket worker you run with `npx holo broadcast:work`. This is the only driver the built-in Flux client connects to. |
+| `pusher` | Sends events to Pusher's HTTP API. |
+| `log` | Logs the event name and channels with `console.warn`. Nothing is delivered. Useful while building. |
+| `null` | Drops every event. Useful in tests or when you want broadcasting off. |
+
+Switch drivers without editing code by changing `BROADCAST_CONNECTION`:
+
+```bash
+BROADCAST_CONNECTION=log
+```
+
+When there is no `config/broadcast.ts`, the default connection is `null` and nothing is sent.
+
+### `holo`
+
+The self-hosted driver. Your app server signs each event and posts it to the worker at `options.host` and `options.port`. The worker then delivers it to connected browsers.
+
+| Option | Description |
+| --- | --- |
+| `appId`, `key`, `secret` | Required. |
+| `options.host` | Worker host. Defaults to `127.0.0.1`. |
+| `options.port` | Worker port. The worker listens on this port too, unless `worker.port` is set. |
+| `options.scheme` | `http` or `https`. |
+| `options.useTLS` | Defaults to `true` when the scheme is `https`. |
+| `clientOptions.authEndpoint` | URL Flux uses to authorize private and presence channels. Only the path is sent to the browser. |
+
+The browser reads the default connection's settings from `/broadcasting/config`. That endpoint needs the **default** connection to use the `holo` driver.
+
+### `pusher`
+
+```ts [config/broadcast.ts]
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { env } from '@holo-js/config'
+
+export default defineBroadcastConfig({
+  default: env('BROADCAST_CONNECTION', 'pusher'),
+  connections: {
+    pusher: {
+      driver: 'pusher',
+      appId: env('PUSHER_APP_ID'),
+      key: env('PUSHER_APP_KEY'),
+      secret: env('PUSHER_APP_SECRET'),
+      options: {
+        cluster: env('PUSHER_APP_CLUSTER', 'mt1'),
+      },
+    },
+  },
+})
+```
+
+With a `cluster`, Holo posts to `api-<cluster>.pusher.com`. Without one, it uses `api-mt1.pusher.com`. Set `options.host`, `options.port`, and `options.scheme` to target a different Pusher-compatible API.
+
+::: warning
+The `pusher` driver only covers sending from your server. Flux connects to the Holo worker, and `/broadcasting/config` only serves `holo` connections, so the `useFlux` helpers won't receive Pusher events out of the box.
+:::
+
+## Use several connections
+
+Define as many connections as you need and pick one per broadcast with `.using(...)`:
+
+```ts [config/broadcast.ts]
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { env } from '@holo-js/config'
+
+export default defineBroadcastConfig({
+  default: 'holo',
+  connections: {
+    holo: {
+      driver: 'holo',
+      appId: env('BROADCAST_APP_ID'),
+      key: env('BROADCAST_APP_KEY'),
+      secret: env('BROADCAST_APP_SECRET'),
+      options: { host: '127.0.0.1', port: 8080, scheme: 'http' },
+    },
+    audit: {
+      driver: 'log',
+    },
+  },
+})
+```
+
+```ts
+import { broadcast } from '@holo-js/broadcast'
+
+await broadcast(shipmentUpdated(order.id, 'shipped')).using('audit')
+```
+
+Holo throws when it loads the config if `default` names a connection that doesn't exist.
+
+## Worker settings
+
+The `worker` section configures `npx holo broadcast:work`. You only need it to change ports, allowed origins, or limits.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `host` | `0.0.0.0` | Interface the worker listens on. |
+| `port` | The default `holo` connection's port, else `8080` | Port the worker listens on. |
+| `path` | `/app` | WebSocket path prefix. Browsers connect to `<path>/<key>`. |
+| `publicHost` | none | Host browsers connect to, when it differs from `options.host`. |
+| `publicPort` | none | Port browsers connect to, used with `publicHost`. |
+| `publicScheme` | The connection's scheme | `http` or `https` for browser connections. |
+| `allowedOrigins` | The public origin | Browser origins allowed to open a WebSocket. Use exact origins such as `https://example.com`. `['*']` allows any origin. |
+| `maxRequestBytes` | `1048576` (1 MB) | Largest publish request the worker accepts. Larger requests get `413`. |
+| `maxMessageBytes` | `65536` (64 KB) | Largest WebSocket message. Larger messages close the socket with code `1009`. |
+| `healthPath` | `/health` | Health check URL. Always on. |
+| `statsPath` | `/stats` | Statistics URL. |
+| `statsEnabled` | `false` | Serve statistics at `statsPath`. Returns `404` when off. |
+| `scaling` | `false` | `{ driver: 'redis', connection: 'default' }` to share state across several workers. |
+
+See [Scaling in production](/broadcasting/production) for `publicHost`, origins, and Redis scaling.
+
+## Custom drivers
+
+A [plugin](/advanced/plugins) can contribute broadcast drivers. Give the connection that driver name in `config/broadcast.ts`. Holo throws if a connection uses a driver that isn't registered. You can register one yourself with [registerBroadcastDriver](/broadcasting/events-and-channels#registerbroadcastdriver).
+
+## Next steps
+
+- [Scaling in production](/broadcasting/production)
+- [Events and channels](/broadcasting/events-and-channels)
+- [Environment variables](/reference/environment)

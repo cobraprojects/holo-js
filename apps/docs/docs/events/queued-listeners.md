@@ -1,68 +1,106 @@
 # Queued Listeners
 
-Queued listeners are listener definitions with `queue: true`.
-If the selected queue connection uses an async driver, production needs a supervised queue worker. See
-[Deployment](/deployment) for host selection and [Queue Workers](/queue/workers) for worker commands.
+A queued listener runs in a [queue worker](/queue/workers) instead of during the request that dispatched the event. Use it for slow work, such as sending email or calling an external API, so your response isn't held up.
 
-```ts
+```ts [server/listeners/user/send-welcome-email.ts]
 import { defineListener } from '@holo-js/events'
-import UserRegistered from '../events/user/registered'
+import UserRegistered from '../../events/user/registered'
 
 export default defineListener({
   listensTo: [UserRegistered],
   queue: true,
   queueName: 'emails',
   async handle(event) {
-    await mailer.sendWelcome(event.payload.email)
+    console.log(`Send a welcome email to ${event.payload.email}`)
   },
 })
 ```
 
-## Connection and queue resolution
+Dispatching the event works the same as for any listener. Holo sends this listener to the queue as a job, and a worker runs `handle()` later.
 
-Priority order:
+## Requirements
 
-1. dispatch overrides (`.onConnection(...)`, `.onQueue(...)`, `.delay(...)`)
-2. listener defaults (`connection`, `queueName`, `delay`)
-3. queue connection defaults from `config/queue.ts`
+Queued listeners need [queue support](/queue/) in your project. If it isn't installed, run:
 
-## Serialization requirements
+```bash
+npx holo install queue
+```
 
-If any queued listeners are selected for a dispatch, event payload must be JSON-serializable.
+Without `@holo-js/queue` installed, Holo throws `Queued listeners require @holo-js/queue to be installed.` when it loads a queued listener.
 
-Good payloads:
+With the `sync` queue driver, queued listeners run right away in the same process. That works for local development. With an async driver like `database` or `redis`, you must run a worker:
 
-- ids
-- strings
-- numbers
-- booleans
-- arrays
-- plain objects
+```bash
+npx holo queue:work
+```
 
-Avoid:
+See [Running Workers](/queue/workers) for production setup and [Drivers and Tables](/queue/drivers) for driver configuration.
 
-- class instances
-- functions
-- symbols
-- circular references
-- model instances
+## Choose the connection, queue, and delay
 
-## Retry and failure behavior
+Set defaults on the listener:
 
-Queued listeners inherit queue retry/failure behavior because they run inside queue jobs.
+```ts [server/listeners/billing/sync-invoice.ts]
+import { defineListener } from '@holo-js/events'
+import InvoicePaid from '../../events/billing/invoice-paid'
 
-- retries follow queue driver and worker behavior
-- failures are treated as queue job failures
-- failed-job tooling (`queue:failed`, `queue:retry`, `queue:forget`, `queue:flush`) applies to queued listeners too
+export default defineListener({
+  listensTo: [InvoicePaid],
+  queue: true,
+  connection: 'redis',
+  queueName: 'billing',
+  delay: 30,
+  async handle(event) {
+    console.log(`Sync invoice ${event.payload.invoiceId}`)
+  },
+})
+```
 
-## Relation to queue jobs
+`delay` is a number of seconds, or a `Date` to run at.
 
-Use queue jobs when you are modeling an executable job explicitly.
+You can override these per dispatch:
 
-Use queued listeners when work is a reaction to events and you want event fan-out semantics.
+```ts [server/lib/billing.ts]
+import InvoicePaid from '../events/billing/invoice-paid'
 
-## Continue
+await InvoicePaid.dispatch({ invoiceId: 'inv_1', amountCents: 4200 })
+  .onConnection('database')
+  .onQueue('priority')
+  .delay(new Date(Date.now() + 60_000))
+```
 
-- [Queue Getting Started](/queue/)
-- [Queue Jobs](/queue/jobs)
-- [Transactions And After Commit](/events/transactions-after-commit)
+Holo picks each value in this order:
+
+1. The dispatch option (`.onConnection()`, `.onQueue()`, `.delay()`).
+2. The listener option (`connection`, `queueName`, `delay`).
+3. The defaults in `config/queue.ts`.
+
+Dispatch options apply to every queued listener of that dispatch. Sync listeners ignore them.
+
+## Payloads must be JSON
+
+A queued job is stored as JSON, so the event payload must be JSON-serializable whenever at least one queued listener is registered for the event. Holo checks this before running any listener and throws a `TypeError` that names the bad path, such as `Event payload at "payload.user" must be a plain JSON object, array, or primitive for queued listeners.`
+
+Allowed: strings, finite numbers, booleans, `null`, arrays, and plain objects of these.
+
+Not allowed: `undefined`, functions, symbols, `BigInt`, `NaN` or `Infinity`, class instances (including `Date` and model instances), and circular references.
+
+::: tip
+Send IDs instead of records. Load the record inside `handle()` so the listener sees current data. If the record is saved in a transaction, use [`afterCommit`](/events/after-commit) so the worker doesn't run before the row exists.
+:::
+
+## Retries and failures
+
+A queued listener runs as a regular queue job named `holo.events.invoke-listener`. Everything about queue jobs applies:
+
+- It gets one attempt by default. Raise this with `npx holo queue:work --tries 3`.
+- When it fails for good, it shows up in `npx holo queue:failed` and you can retry it with the other [failed job commands](/queue/failed-jobs).
+
+The job stores the listener's ID. If you rename or delete a listener while its jobs are still waiting in the queue, those jobs fail with `Queued listener "<id>" is not registered.` Give long-lived queued listeners an explicit [`name`](/events/listeners#listener-names) so moving the file doesn't change the ID.
+
+## Next steps
+
+- [After-Commit Events](/events/after-commit)
+- [Running Workers](/queue/workers)
+- [Failed Jobs](/queue/failed-jobs)
+- [Choosing a Pattern](/events/choosing-patterns)

@@ -1,64 +1,104 @@
 # Defining Events
 
-Define events with `defineEvent(...)` from `@holo-js/events`.
+An event is a named signal with a typed payload. You define it once with `defineEvent()` and then dispatch it from anywhere in your server code.
 
-## Recommended: explicit event names
+## Create an event
 
-Use explicit `name` values for stability:
+```bash
+npx holo make:event billing/invoice-paid
+```
 
-```ts
+This creates `server/events/billing/invoice-paid.ts`:
+
+```ts [server/events/billing/invoice-paid.ts]
 import { defineEvent } from '@holo-js/events'
 
-export default defineEvent<{
-  userId: string
-  email: string
-}>({
-  name: 'user.registered',
+export default defineEvent<Record<string, unknown>>({
+  name: 'billing.invoice-paid',
 })
 ```
 
-Event names are normalized by trimming surrounding whitespace.
+Replace `Record<string, unknown>` with the shape of your payload:
 
-The returned event definition exposes a typed `dispatch(payload)` method using the payload shape from
-`defineEvent<...>()`.
-
-## Path-derived fallback names
-
-Discovered app events can omit `name`. In that case, Holo-JS derives the name from the file path under
-`server/events`.
-
-Example:
-
-- `server/events/billing/invoice-paid.ts` -> `billing.invoice-paid`
-
-```ts
+```ts [server/events/billing/invoice-paid.ts]
 import { defineEvent } from '@holo-js/events'
 
 export default defineEvent<{
   invoiceId: string
-}>({})
+  amountCents: number
+}>({
+  name: 'billing.invoice-paid',
+})
 ```
 
-Fallback names are convenience only. Explicit names are preferred for long-term contracts.
+The type parameter is the payload type. Every dispatch and every listener for this event uses it.
 
-## Name collisions
+## Named and default exports
 
-Event registration identity is the final normalized event name. If two discovered events resolve to the
-same final name, discovery fails with a duplicate event error.
+An event file can use a default export, a named export, or both:
 
-This includes collisions between:
+```ts [server/events/blog/post-saved.ts]
+import { defineEvent } from '@holo-js/events'
 
-- explicit names
-- path-derived names
-- explicit and path-derived names
+export const PostSaved = defineEvent<{
+  action: 'created' | 'updated' | 'deleted'
+  postId: number
+}>({
+  name: 'blog.post.saved',
+})
 
-## Naming guidance
+export default PostSaved
+```
 
-- use domain-style names: `user.registered`, `invoice.paid`, `subscription.canceled`
-- avoid implementation or path-only names
-- keep names stable even if files move
+## Naming events
 
-## Continue
+Give every event an explicit `name`. Use domain-style names that describe what happened:
 
-- [Defining Listeners](/events/defining-listeners)
-- [Dispatching Events](/events/dispatching-events)
+- `user.registered`
+- `billing.invoice-paid`
+- `subscription.canceled`
+
+The name identifies the event in listeners, in queued jobs, and in failed-job records. Keep it stable even if you move the file. Surrounding whitespace is trimmed.
+
+### Literal name types for multi-event listeners
+
+To let TypeScript narrow on `event.name` in a [listener that handles several events](/events/listeners#listen-to-several-events), pass the name as a second type parameter:
+
+```ts [server/events/user/deleted.ts]
+import { defineEvent } from '@holo-js/events'
+
+export default defineEvent<{ userId: string }, 'user.deleted'>({
+  name: 'user.deleted',
+})
+```
+
+Without it, `event.name` is typed as `string`.
+
+## Names derived from the file path
+
+If you leave out `name`, Holo derives one from the file path under `server/events`. Folders and the file name are joined with dots:
+
+| File | Event name |
+| --- | --- |
+| `server/events/billing/invoice-paid.ts` | `billing.invoice-paid` |
+| `server/events/user/registered.ts` | `user.registered` |
+
+::: warning
+An event without an explicit `name` can't be dispatched through its definition. `InvoicePaid.dispatch(...)` throws `Dispatching an event definition requires an explicit event name.` You would have to dispatch it by string with `dispatchEvent('billing.invoice-paid', payload)`. Set `name` to avoid this.
+:::
+
+## Duplicate names
+
+Each event name must be unique. If two files resolve to the same name, whether explicit or derived from the path, discovery fails with a duplicate event error. Rename one of them.
+
+## Payloads
+
+Keep payloads small and made of plain data: IDs, strings, numbers, booleans, arrays, and plain objects. Sync listeners accept any value, but as soon as one listener for the event is [queued](/events/queued-listeners), the payload must be JSON-serializable.
+
+Pass a model's ID rather than the model itself, and load fresh data in the listener.
+
+## Next steps
+
+- [Listeners](/events/listeners)
+- [Dispatching Events](/events/dispatching)
+- [API Reference](/events/api-reference)

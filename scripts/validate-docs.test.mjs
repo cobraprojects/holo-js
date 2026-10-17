@@ -22,6 +22,18 @@ test('documentation validator rejects old config imports and missing routes', as
   assert.match(failures, /missing route \/missing/)
 })
 
+test('documentation validator accepts upgrade diffs that show a removed config import', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-docs-'))
+  await writeFile(join(root, 'index.md'), [
+    '```ts',
+    "import { defineDatabaseConfig, env } from '@holo-js/config' // [!code --]",
+    "import { env } from '@holo-js/config' // [!code ++]",
+    "import { defineDatabaseConfig } from '@holo-js/db' // [!code ++]",
+    '```',
+  ].join('\n'))
+  assert.deepEqual(validateDocs(root), [])
+})
+
 test('documentation validator syntax-checks TypeScript examples and accepts object fragments', async () => {
   const root = await mkdtemp(join(tmpdir(), 'holo-docs-'))
   await writeFile(join(root, 'index.md'), [

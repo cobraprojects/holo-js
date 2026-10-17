@@ -1,25 +1,13 @@
 # Email Verification
 
-Email verification lets an application require a verified address while Holo handles token creation, delivery, and
-verification-link generation.
+Email verification makes users confirm they own their email address. Holo creates the token, emails the link, and marks the user as verified. You build the page the link opens.
 
-## Introduction
+## Turn it on
 
-When email verification is enabled, the framework owns the token lifecycle and the application owns the HTTP routes and
-pages that users interact with.
-
-The usual flow is:
-
-- `register(...)` creates the user and sends the first verification email automatically
-- `login(...)` can still succeed for unverified users
-- the login result tells the route when the user should be sent to the verification page
-- the emailed link is built from `APP_URL` plus the configured verification route
-
-Enable it in `config/auth.ts`:
-
-```ts
+```ts [config/auth.ts]
 import { defineAuthConfig } from '@holo-js/auth'
 import { env } from '@holo-js/config'
+
 export default defineAuthConfig({
   emailVerification: {
     required: true,
@@ -28,256 +16,269 @@ export default defineAuthConfig({
 })
 ```
 
-The local user model should have an `email_verified_at` column.
+`emailVerification: true` is the same as `{ required: true, route: '/verify-email' }`.
 
-## Environment
+Set `APP_URL` so Holo can build the link in the email:
 
-Set the application URL and optional route override:
-
-```dotenv
+```dotenv [.env]
 APP_URL=http://localhost:3000
 AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email
 ```
 
-`APP_URL` is used when the framework builds the email link. Applications should not manually construct the
-verification URL in normal usage.
+The emailed link is `APP_URL` + `route` + `?token=...`, for example `http://localhost:3000/verify-email?token=...`. Users need an `email_verified_at` column; the auth migrations already add it.
 
-The application owns the page and API routes. The framework owns token storage, delivery, and the generated email link.
+## What changes when it's on
 
-## Form Schemas
+- `register()` sends the verification email automatically.
+- `login()` and `loginUsing()` still sign unverified users in. The result has `emailVerificationRequired: true` and an `emailVerificationRoute` like `/verify-email?email=ava%40example.com`. Redirect there, as the [login examples](/auth/local-auth#log-a-user-in) do.
+- [Social login](/auth/social-login) refuses new users whose provider doesn't report a verified email.
 
-Use form schemas for request payloads so route handlers receive typed, validated data before calling auth:
+::: warning
+Verification doesn't block any page by itself. Check `email_verified_at` wherever an unverified user shouldn't get in. See [Require a verified email](#require-a-verified-email).
+:::
 
-```ts
+## Verify the token
+
+The link opens your verification page with `?token=` in the URL. Pass that token to `verifyEmail()`:
+
+::: code-group
+
+```ts [Next.js]
+// app/api/verify-email/route.ts
+import { verifyEmail } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { verifyEmailForm } from '@/lib/schemas/auth'
+
+export async function POST(request: Request) {
+  const input = await validate(request, verifyEmailForm)
+
+  await verifyEmail(input.token)
+
+  return Response.json({ ok: true, status: 200, data: { redirectTo: '/dashboard' } })
+}
+```
+
+```ts [Nuxt]
+// server/api/verify-email.post.ts
+import { verifyEmail } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { verifyEmailForm } from '#shared/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const input = await validate(event, verifyEmailForm)
+
+  await verifyEmail(input.token)
+
+  return { ok: true, status: 200, data: { redirectTo: '/dashboard' } }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/verify-email/+page.server.ts
+import { fail, redirect } from '@sveltejs/kit'
+import { verifyEmail } from '@holo-js/auth'
+import type { Actions } from './$types'
+
+export const actions = {
+  default: async ({ url }) => {
+    const token = url.searchParams.get('token')?.trim()
+    if (!token) {
+      return fail(422, { verificationError: 'Verification token is required.' })
+    }
+
+    await verifyEmail(token)
+
+    redirect(303, '/dashboard')
+  },
+} satisfies Actions
+```
+
+:::
+
+```ts [lib/schemas/auth.ts]
 import { field, schema } from '@holo-js/validation'
 
 export const verifyEmailForm = schema({
   token: field.string().required('Verification token is required.'),
 })
-
-export const resendEmailVerificationForm = schema({
-  email: field.string().required('Email is required.').email('Enter a valid email address.'),
-})
 ```
 
-## Registration Flow
+On the page, read `token` from the URL and submit it, either automatically on load or with a "Verify my email" button. A button is safer, because some email scanners open links before the user does.
 
-Registration automatically starts email verification when `emailVerification.required` is `true`. Validate the request,
-then pass the typed form data to `register(...)`:
+`verifyEmail()` returns the updated user. Each token works once; a second request with the same token fails.
 
-```ts
-import { loginUsing, register } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+## Resend the email
 
-import { registerForm } from '@/lib/schemas/auth'
+The `emailVerificationRoute` from login includes the user's email, so your page can offer a "Send again" button that posts it:
 
-export async function POST(request: Request) {
-  const data = await validate(request, registerForm)
+::: code-group
 
-  const created = await register(data)
-  const session = await loginUsing(created)
-
-  return Response.json({
-    ok: true,
-    message: session.emailVerificationRequired
-      ? 'Account created. Check your email to verify your address.'
-      : 'Account created.',
-    redirectTo: session.emailVerificationRequired
-      ? session.emailVerificationRoute ?? '/verify-email'
-      : '/admin',
-  })
-}
-```
-
-Expected registration failures throw a `ValidationException`. On success, the local user is created and the
-verification message is delivered automatically through the configured auth delivery integration. `loginUsing(created)`
-establishes the session used to continue the signed-in registration flow.
-
-::: tip Automatic verification email
-Applications do not need to send the first verification email manually after registration. When
-`emailVerification.required` is enabled, a successful `register(...)` call starts the verification delivery flow.
-:::
-
-## Login Flow
-
-Unverified users can still sign in. Validate the login payload, then inspect the returned session:
-
-```ts
-import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
-
-import { loginForm } from '@/lib/schemas/auth'
-
-export async function POST(request: Request) {
-  const data = await validate(request, loginForm)
-
-  const session = await login(data)
-
-  return Response.json({
-    ok: true,
-    message: session.emailVerificationRequired
-      ? 'Signed in. Verify your email address to continue.'
-      : 'Signed in successfully.',
-    redirectTo: session.emailVerificationRequired
-      ? session.emailVerificationRoute ?? '/verify-email'
-      : '/admin',
-  })
-}
-```
-
-When verification is still required, successful login includes:
-
-- `emailVerificationRequired: true`
-- `emailVerificationRoute: '/verify-email?email=ava%40example.com'`
-
-That lets the app redirect the signed-in user to the verify page instead of rejecting the login attempt.
-
-## Consuming Verification Tokens
-
-Verification pages submit the token from the emailed link. Validate the payload, then call `verifyEmail(token)`:
-
-```ts
-import { verifyEmail } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
-
-import { verifyEmailForm } from '@/lib/schemas/auth'
-
-export async function POST(request: Request) {
-  const data = await validate(request, verifyEmailForm)
-
-  const verifiedUser = await verifyEmail(data.token)
-
-  return Response.json({
-    ok: true,
-    message: 'Email verified.',
-    user: verifiedUser,
-  })
-}
-```
-
-The verification flow marks the local user as verified and invalidates the token.
-
-## Single-use Redemption
-
-Verification claims the exact unused token before changing the user. Overlapping requests for the same token have one winner; stale records and tokens that expire before the claim are rejected. The secret is validated before claiming.
-
-Core coordinates the claim and native user update in one write transaction when both participate in the same actual database context. A failed participating update rolls back both. External providers and users on a different database context consume the claim before updating the user; a failed update requires a fresh verification token. Matching connection names alone do not establish shared persistence. Database rollback does not undo external effects performed by hooks or observers.
-
-Custom `EmailVerificationTokenStore` implementations retain `create`, `findById`, `delete`, and `deleteByUserId`, and must implement:
-
-```ts
-redeem<TResult>(
-  record: EmailVerificationTokenRecord,
-  operation: () => Promise<TResult>,
-): Promise<TResult | null>
-```
-
-The store must atomically claim only the matching unused, unexpired record, including its identity and secret hash. It invokes `operation` only after winning the claim and preserves the callback's inferred result. Return `null` when the record has changed, expired, or already been claimed. Lookup followed by unconditional deletion cannot provide this guarantee.
-
-## Resending Verification Emails
-
-The verify page can submit an email address to request a fresh verification email. Validate the resend payload, then pass
-the typed email string to `resendEmailVerification(email)`:
-
-```ts
+```ts [Next.js]
+// app/api/verify-email/resend/route.ts
 import { resendEmailVerification } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-
+import { isValidationException } from '@holo-js/validation'
 import { resendEmailVerificationForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
-  const data = await validate(request, resendEmailVerificationForm)
-
-  await resendEmailVerification(data.email)
-
-  return Response.json({
-    ok: true,
-    message: 'A fresh verification email has been sent.',
+  const input = await validate(request, resendEmailVerificationForm, {
+    throttle: 'emailVerificationResend',
   })
+
+  try {
+    await resendEmailVerification(input.email)
+  } catch (error) {
+    if (!isValidationException(error)) throw error
+  }
+
+  return Response.json({ ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } })
 }
 ```
 
-This is the intended verify-page flow when the user lands on `/verify-email?email=...` after login. The route receives
-validated form data, so it can pass `data.email` directly to auth without manual body parsing.
+```ts [Nuxt]
+// server/api/verify-email/resend.post.ts
+import { resendEmailVerification } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { isValidationException } from '@holo-js/validation'
+import { resendEmailVerificationForm } from '#shared/schemas/auth'
 
-When the route is not specifically a resend action, use the same parameter shape with the send-oriented name:
+export default defineEventHandler(async (event) => {
+  const input = await validate(event, resendEmailVerificationForm, {
+    throttle: 'emailVerificationResend',
+  })
+
+  try {
+    await resendEmailVerification(input.email)
+  } catch (error) {
+    if (!isValidationException(error)) throw error
+  }
+
+  return { ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/api/verify-email/resend/+server.ts
+import { json } from '@sveltejs/kit'
+import { resendEmailVerification } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { isValidationException } from '@holo-js/validation'
+import { resendEmailVerificationForm } from '$lib/schemas/auth'
+
+export async function POST({ request }: { request: Request }) {
+  const input = await validate(request, resendEmailVerificationForm, {
+    throttle: 'emailVerificationResend',
+  })
+
+  try {
+    await resendEmailVerification(input.email)
+  } catch (error) {
+    if (!isValidationException(error)) throw error
+  }
+
+  return json({ ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } })
+}
+```
+
+:::
+
+These routes always answer the same way, so nobody can use them to find out which emails have accounts. They also need an `emailVerificationResend` rate limiter in `config/security.ts`, which the installer doesn't add:
+
+```ts [config/security.ts]
+import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  // ...csrf and the rest of rateLimit stay as they are
+  rateLimit: {
+    limiters: {
+      login: limit.perMinute(5).define(),
+      register: limit.perHour(10).define(),
+      emailVerificationResend: limit.perMinute(1).by(({ request, values }) => {
+        const email = typeof values?.email === 'string' ? values.email.trim().toLowerCase() : 'unknown'
+        return `email:${email}|client:${ip(request, true)}`
+      }),
+    },
+  },
+})
+```
+
+See [Rate Limiting](/basics/security/rate-limiting) for limiter options.
+
+Call `resendEmailVerification()` with no arguments to send to the signed-in user. `sendEmailVerification()` does exactly the same thing; use whichever name reads better.
+
+Each new link is valid for one hour. Pass `{ expiresAt }` as the second argument to change that:
 
 ```ts
-import { sendEmailVerification } from '@holo-js/auth'
-
-await sendEmailVerification(email)
+await sendEmailVerification(undefined, { expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
 ```
 
-Expected resend failures throw a `ValidationException`, for example:
+## Require a verified email
 
-- `email_verification_user_missing`
-- `email_already_verified`
+Check `email_verified_at` before sensitive actions:
 
-## Delivery
+```ts [app/api/billing/route.ts]
+import { user } from '@holo-js/auth'
 
-Verification delivery is automatic once auth delivery is available.
+export async function POST() {
+  const currentUser = await user()
+  if (!currentUser?.email_verified_at) {
+    return Response.json({ message: 'Verify your email address first.' }, { status: 403 })
+  }
 
-- if `@holo-js/notifications` is installed with mail support, core routes auth delivery through notifications
-- if notifications are absent but `@holo-js/mail` is installed, core sends directly through mail
-- if no delivery integration is installed, auth creates the token and logs the skipped delivery
-
-When auth and notifications are scaffolded together, Holo creates editable notification files:
-
-```txt
-server/notifications/auth/email-verification.ts
-server/notifications/auth/password-reset.ts
+  return Response.json({ ok: true })
+}
 ```
 
-Existing applications can publish those files later:
+For page-level rules, an [authorization policy](/authorization/policies) can check the same field.
+
+## Customize the email
+
+Holo sends the email through [notifications](/notifications/) when `@holo-js/notifications` and a mailer are installed, or directly through [mail](/mail/) when only `@holo-js/mail` is installed. With neither, Holo still creates the token but only logs a warning instead of sending.
+
+To change the subject, text, or queueing, publish the notification files:
 
 ```bash
 npx holo auth:notifications:publish
 ```
 
-The published verification notification is a normal `defineNotification(...)` file. Its email builder receives a small
-app-facing data with `email`, optional `name`, generated `url`, and `expiresAt`. Edit the file to change the subject,
-body, action text, queue settings, or delay behavior.
+This creates `server/notifications/auth/email-verification.ts` and `server/notifications/auth/password-reset.ts`. They are normal notifications, and Holo uses them automatically. The email builder receives:
 
-::: warning Delivery package required
-Publishing notification files only gives the application editable message definitions. Email delivery still needs
-`@holo-js/mail` or another configured notification mailer. Without delivery, auth creates the verification token and
-logs that the email was skipped.
-:::
+| Field | Description |
+| --- | --- |
+| `email` | The recipient address |
+| `name` | The user's name, if set |
+| `url` | The full verification link |
+| `expiresAt` | When the link expires |
 
-The default verification email includes:
+Holo sends verification email the same way the rest of your app sends mail. If your mailer or notification is queued, so is this email.
 
-- an HTML body
-- a text fallback
-- a link built from `APP_URL`
-- the configured verification route
-- the signed verification token
+## Errors
 
-Applications do not need to manually compose `https://app.test/verify-email?token=...` links in normal usage.
+These throw a `ValidationException`, so they show up in forms like any validation error:
 
-Verification emails are queued only when the configured notifications or mail runtime is queued. Auth itself does not
-force queueing.
+| Code | When | Field | Status |
+| --- | --- | --- | --- |
+| `email_verification_token_invalid` | The token is wrong or already used | `token` | 422 |
+| `email_verification_token_expired` | The link expired | `token` | 422 |
+| `email_verification_user_missing` | Resend found no user | `_root` | 401 |
+| `email_already_verified` | Resend for a verified user | `_root` | 409 |
 
-## Protecting Application Routes
+## Lower-level API
 
-Route protection still belongs to the application. Email verification does not automatically block arbitrary pages.
+`verification` from `@holo-js/auth` gives direct access to tokens, for example to send a link for a user you just imported:
 
 ```ts
-import { user } from '@holo-js/auth'
+import { verification } from '@holo-js/auth'
 
-const current = await user()
-if (!current?.email_verified_at) {
-  return Response.json({ message: 'Email verification required.' }, { status: 403 })
-}
+await verification.create(user)
+await verification.resend({ email: 'ava@example.com' })
+await verification.consume(token)
 ```
 
-Verification and password-reset redemption for external providers or different database contexts must
-run outside a caller-owned token-storage transaction. Core rejects such redemption before claiming
-the token, revoking reset siblings, or invoking the provider; Auth propagates the existing
-native `TransactionError`. The token remains available for a later attempt outside the
-transaction. Proven shared native persistence still participates in the enclosing transaction and
-rolls the claim and user mutation back together on failure.
+`create()` and `resend()` accept `{ guard, expiresAt }`, and both replace the user's previous link and send the email. `consume()` is what `verifyEmail()` calls.
 
-## Related Guides
+## Next steps
 
-- [Local Authentication](/auth/local-auth)
 - [Password Reset](/auth/password-reset)
+- [Login and Registration](/auth/local-auth)
+- [Writing Notifications](/notifications/writing)

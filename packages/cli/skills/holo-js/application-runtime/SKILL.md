@@ -3,12 +3,12 @@ name: holo-application-runtime
 description: Configure and boot Holo-JS applications, resolve runtime services, use cache and locks, follow host-framework routing, or author Holo plugins.
 metadata:
   type: focused
-  source: https://docs.holo-js.com/architecture
+  source: https://docs.holo-js.com/advanced/architecture
 ---
 
 # Application runtime
 
-Read [architecture](https://docs.holo-js.com/architecture), [configuration](https://docs.holo-js.com/configuration), [runtime services](https://docs.holo-js.com/runtime-services), [routing](https://docs.holo-js.com/routing), [cache](https://docs.holo-js.com/cache/), and [plugin authoring](https://docs.holo-js.com/plugins).
+Read [architecture](https://docs.holo-js.com/advanced/architecture), [configuration](https://docs.holo-js.com/getting-started/configuration), [runtime services](https://docs.holo-js.com/basics/services), [routing](https://docs.holo-js.com/basics/routing), [cache](https://docs.holo-js.com/cache/), and [plugin authoring](https://docs.holo-js.com/advanced/plugins).
 
 ## Ownership
 

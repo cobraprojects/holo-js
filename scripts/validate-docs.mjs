@@ -2,12 +2,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import { workspaceSourceCondition } from './release-manifests.mjs'
 
 const docsImportCompilerOptions = {
-  module: ts.ModuleKind.NodeNext,
-  moduleResolution: ts.ModuleResolutionKind.NodeNext,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
   target: ts.ScriptTarget.ES2022,
   skipLibCheck: true,
+  customConditions: [workspaceSourceCondition],
 }
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
@@ -23,14 +25,14 @@ const packageExportCache = new Map()
 function resolveExportTarget(value) {
   if (typeof value === 'string') return value
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  for (const condition of ['types', 'import', 'default', 'node']) {
+  for (const condition of [workspaceSourceCondition, 'types', 'import', 'default', 'node']) {
     const resolved = resolveExportTarget(value[condition])
     if (resolved) return resolved
   }
   return undefined
 }
 
-function resolveWorkspacePackageDeclaration(specifier) {
+function resolveWorkspacePackageSource(specifier) {
   const workspacePackage = workspacePackages
     .filter(entry => specifier === entry.manifest.name || specifier.startsWith(`${entry.manifest.name}/`))
     .sort((left, right) => right.manifest.name.length - left.manifest.name.length)[0]
@@ -45,13 +47,8 @@ function resolveWorkspacePackageDeclaration(specifier) {
       ?? (exportKey === '.' ? workspacePackage.manifest.types : undefined)
   if (!target) return undefined
 
-  const declarationPath = resolve(workspacePackage.directory, target)
-  if (existsSync(declarationPath)) return declarationPath
-  if (declarationPath.endsWith('.mjs')) {
-    const dtsPath = declarationPath.replace(/\.mjs$/, '.d.ts')
-    if (existsSync(dtsPath)) return dtsPath
-  }
-  return undefined
+  const sourcePath = resolve(workspacePackage.directory, target)
+  return existsSync(sourcePath) ? sourcePath : undefined
 }
 
 function validateHoloImports(source, file, line, failures) {
@@ -63,7 +60,7 @@ function validateHoloImports(source, file, line, failures) {
     const specifier = statement.moduleSpecifier.text
     if (!specifier.startsWith('@holo-js/')) continue
 
-    const resolvedFileName = resolveWorkspacePackageDeclaration(specifier)
+    const resolvedFileName = resolveWorkspacePackageSource(specifier)
       ?? ts.resolveModuleName(
         specifier,
         containingFile,
@@ -125,10 +122,14 @@ function routeExists(docsRoot, route) {
   return existsSync(join(docsRoot, `${relativeRoute}.md`)) || existsSync(join(docsRoot, relativeRoute, 'index.md'))
 }
 
+function withoutRemovedDiffLines(source) {
+  return source.split('\n').map(line => line.includes('// [!code --]') ? '' : line).join('\n')
+}
+
 export function validateDocs(docsRoot) {
   const failures = []
   for (const file of markdownFiles(docsRoot)) {
-    const source = readFileSync(file, 'utf8')
+    const source = withoutRemovedDiffLines(readFileSync(file, 'utf8'))
     if (/import \{[^}]*define(?:Auth|Broadcast|Cache|Cors|Database|Mail|Media|Notifications|Queue|Redis|Security|Session|Storage)Config[^}]*\} from '@holo-js\/config'/.test(source)) {
       failures.push(`${file} uses a feature config helper from @holo-js/config.`)
     }

@@ -1,22 +1,161 @@
 # Password Reset
 
-Password reset tokens let the application issue one-time credentials for resetting local passwords.
+Password reset lets users who forgot their password choose a new one through an emailed link. You build two pages, "forgot password" and "reset password"; Holo creates the token, sends the email, and updates the password.
 
-Verification and password-reset redemption for external providers or different database contexts must
-run outside a caller-owned token-storage transaction. Core rejects such redemption before claiming
-the token, revoking reset siblings, or invoking the provider; Auth propagates the existing
-native `TransactionError`. The token remains available for a later attempt outside the
-transaction. Proven shared native persistence still participates in the enclosing transaction and
-rolls the claim and user mutation back together on failure.
+## Request a reset link
 
-## Introduction
+The forgot-password route calls `requestPasswordReset()` with the submitted email:
 
-Password reset uses the configured broker and local provider:
+::: code-group
 
-```ts
+```ts [Next.js]
+// app/api/forgot-password/route.ts
+import { requestPasswordReset } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { forgotPasswordForm } from '@/lib/schemas/auth'
+
+export async function POST(request: Request) {
+  const input = await validate(request, forgotPasswordForm)
+
+  await requestPasswordReset(input)
+
+  return Response.json({
+    ok: true,
+    status: 200,
+    data: { message: 'If an account exists for that email, a reset link has been sent.' },
+  })
+}
+```
+
+```ts [Nuxt]
+// server/api/forgot-password.post.ts
+import { requestPasswordReset } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { forgotPasswordForm } from '#shared/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const input = await validate(event, forgotPasswordForm)
+
+  await requestPasswordReset(input)
+
+  return {
+    ok: true,
+    status: 200,
+    data: { message: 'If an account exists for that email, a reset link has been sent.' },
+  }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/api/forgot-password/+server.ts
+import { json } from '@sveltejs/kit'
+import { requestPasswordReset } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { forgotPasswordForm } from '$lib/schemas/auth'
+
+export async function POST({ request }: { request: Request }) {
+  const input = await validate(request, forgotPasswordForm)
+
+  await requestPasswordReset(input)
+
+  return json({
+    ok: true,
+    status: 200,
+    data: { message: 'If an account exists for that email, a reset link has been sent.' },
+  })
+}
+```
+
+:::
+
+```ts [lib/schemas/auth.ts]
+import { field, schema } from '@holo-js/validation'
+
+export const forgotPasswordForm = schema({
+  email: field.string().required().email(),
+})
+
+export const resetPasswordForm = schema({
+  token: field.string().required(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
+})
+```
+
+`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time.
+
+When a user is found, Holo deletes their older reset links, creates a new one, and emails it.
+
+## Reset the password
+
+The email links to `APP_URL` + the broker's `route` + `?token=...`, for example `http://localhost:3000/reset-password?token=...`. Put the token from the URL in a hidden field and submit it with the new password:
+
+::: code-group
+
+```ts [Next.js]
+// app/api/reset-password/route.ts
+import { resetPassword } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { resetPasswordForm } from '@/lib/schemas/auth'
+
+export async function POST(request: Request) {
+  const input = await validate(request, resetPasswordForm)
+
+  await resetPassword(input)
+
+  return Response.json({ ok: true, status: 200, data: { redirectTo: '/login' } })
+}
+```
+
+```ts [Nuxt]
+// server/api/reset-password.post.ts
+import { resetPassword } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { resetPasswordForm } from '#shared/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const input = await validate(event, resetPasswordForm)
+
+  await resetPassword(input)
+
+  return { ok: true, status: 200, data: { redirectTo: '/login' } }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/api/reset-password/+server.ts
+import { json } from '@sveltejs/kit'
+import { resetPassword } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { resetPasswordForm } from '$lib/schemas/auth'
+
+export async function POST({ request }: { request: Request }) {
+  const input = await validate(request, resetPasswordForm)
+
+  await resetPassword(input)
+
+  return json({ ok: true, status: 200, data: { redirectTo: '/login' } })
+}
+```
+
+:::
+
+`resetPassword()` hashes and saves the new password and returns the user. It doesn't sign the user in; send them to the login page, or call [`loginUsing()`](/auth/local-auth#sign-in-a-user-you-already-trust) with the returned user if you want to.
+
+A link works once. After a successful reset, every other reset link for that email stops working too.
+
+## Configure the broker
+
+A broker is a set of reset settings for one user provider. The installer creates a `users` broker:
+
+```ts [config/auth.ts]
 import { defineAuthConfig } from '@holo-js/auth'
 import { env } from '@holo-js/config'
+
 export default defineAuthConfig({
+  defaults: {
+    passwords: 'users',
+  },
   passwords: {
     users: {
       provider: 'users',
@@ -29,141 +168,53 @@ export default defineAuthConfig({
 })
 ```
 
-Set the route and base app URL in the environment:
+| Option | Default | Description |
+| --- | --- | --- |
+| `provider` | `'users'` | Which users this broker resets |
+| `table` | `'password_reset_tokens'` | Where tokens are stored |
+| `expire` | `60` | Minutes a link stays valid |
+| `throttle` | `60` | Minutes before the same email can get another link. `0` turns it off |
+| `route` | `'/reset-password'` | The path of your reset page |
 
-```dotenv
-APP_URL=http://localhost:3000
-AUTH_PASSWORD_RESET_ROUTE=/reset-password
+Set `APP_URL` in `.env` so the link points at your site.
+
+### Reset passwords for admins
+
+Add a broker per provider and pass its name:
+
+```ts [config/auth.ts]
+passwords: {
+  users: { provider: 'users' },
+  admins: { provider: 'admins', route: '/admin/reset-password' },
+},
 ```
-
-The framework-generated reset email uses `APP_URL` plus the configured broker route automatically.
-
-The application still owns the reset page and the route that calls `resetPassword(...)`. The framework owns the
-generated link target and delivery URL composition.
-
-## Requesting A Reset Token
 
 ```ts
-import { requestPasswordReset } from '@holo-js/auth'
-
-await requestPasswordReset({
-  email: 'ava@example.com',
-})
+await requestPasswordReset({ email }, { broker: 'admins' })
 ```
 
-If the request fails for an expected auth reason, it throws a `ValidationException`. Its serialized payload contains
-the status and field errors:
+`requestPasswordReset()` also accepts `expiresAt` in that options object, to override `expire` for one link.
 
-```ts
-{
-  ok: false,
-  status: 422,
-  valid: false,
-  errors: {
-    email: ['Email is required to request a password reset.'],
-  },
-}
-```
+## Customize the email
 
-The flow:
+Reset emails are sent the same way as verification emails: through notifications, through mail, or only logged if neither is installed. Run `npx holo auth:notifications:publish` to get an editable `server/notifications/auth/password-reset.ts`. Its email builder receives `email`, `url`, and `expiresAt`. See [Customize the email](/auth/email-verification#customize-the-email).
 
-- looks up the user through the configured broker provider
-- invalidates older tokens for that email
-- creates a new hashed reset token
-- sends the reset email through the configured delivery hook
+## Errors
 
-## Resetting The Password
+These throw a `ValidationException`, so they show up in your form:
 
-```ts
-import { resetPassword } from '@holo-js/auth'
+| Code | When | Field | Status |
+| --- | --- | --- | --- |
+| `password_reset_email_required` | The email is blank | `email` | 422 |
+| `password_reset_token_invalid` | The token is wrong | `token` | 422 |
+| `password_reset_token_expired` | The link expired or was already used | `token` | 422 |
+| `password_reset_user_missing` | The user was deleted | `token` | 422 |
+| `password_confirmation_mismatch` | The passwords differ | `password`, `passwordConfirmation` | 422 |
 
-const resetUser = await resetPassword({
-  token: body.token,
-  password: body.password,
-  passwordConfirmation: body.passwordConfirmation,
-})
-```
+A missing broker name throws an `AuthError` with code `password_broker_not_configured`.
 
-The thrown `ValidationException` targets the submitted auth fields directly, such as `token`, `password`, and
-`passwordConfirmation`. Successful calls return the updated user.
+## Next steps
 
-The reset flow validates the secret and claims the exact unused token while it is still unexpired. Only one
-concurrent request can use a token. Before updating the user, it revokes sibling tokens for the same provider and
-email in that broker's configured table. Other providers, emails, and broker tables remain unaffected.
-
-When Core proves that the native user repository and token store share the same database context, the claim,
-sibling revocation, and password mutation run in one transaction. A failed mutation rolls them all back, allowing
-the valid token to be retried. A repository factory resolves once for that operation and retains its own lifetime
-across separate operations.
-
-With an external provider or a different database context, the claim and sibling revocation finish before the
-password update. If that update fails, the tokens remain consumed: request a fresh reset token. A failed claim or
-sibling revocation never invokes the password mutation. Different reset tokens do not hold an account-wide lock
-across external provider updates.
-
-## Custom Token Stores
-
-Custom `PasswordResetTokenStore` implementations retain `create`, `findById`, `findLatestByEmail`, `delete`, and
-`deleteByEmail`, and must implement:
-
-```ts
-redeem<TResult>(
-  record: PasswordResetTokenRecord,
-  operation: () => Promise<TResult>,
-): Promise<TResult | null>
-```
-
-Validate the supplied record's identity, provider, email, broker table, hash, timestamps, and unused state when
-claiming it, including expiry at mutation time. Return `null` when no matching claim is available; invoke the
-asynchronous operation only for the winning claim and preserve its inferred result. Never substitute a lookup
-followed by unconditional deletion. Auth revokes siblings within the operation before updating the user. Shared
-transaction participation requires actual persistence wiring; the callback alone does not make an external
-provider transactional. These single-use rules do not apply to personal access tokens or browser sessions.
-
-## Broker Selection
-
-Use a non-default broker when needed:
-
-```ts
-await requestPasswordReset({
-  email: 'admin@example.com',
-}, {
-  broker: 'admins',
-})
-```
-
-## Delivery
-
-Password reset delivery works the same way as email verification:
-
-- auth creates the token
-- core builds the reset URL automatically from `APP_URL` and the configured broker route
-- notifications or direct mail deliver the message when those integrations are installed
-
-If `@holo-js/auth` and `@holo-js/notifications` are both installed with mail support, core bridges auth delivery
-through notifications automatically. If notifications are absent but `@holo-js/mail` is installed, core falls back
-to direct mail delivery.
-
-When auth and notifications are scaffolded together, Holo creates editable notification files:
-
-```txt
-server/notifications/auth/email-verification.ts
-server/notifications/auth/password-reset.ts
-```
-
-Existing applications can publish those files later:
-
-```bash
-npx holo auth:notifications:publish
-```
-
-The published password reset notification is a normal `defineNotification(...)` file. Its email builder receives a
-small app-facing data with `email`, generated `url`, and `expiresAt`.
-
-::: warning Delivery package required
-Publishing notification files only gives the application editable message definitions. Email delivery still needs
-`@holo-js/mail` or another configured notification mailer. Without delivery, auth creates the reset token and logs that
-the email was skipped.
-:::
-
-Applications do not need to manually create `reset-password?token=...` URLs in normal usage.
+- [Email Verification](/auth/email-verification)
+- [Login and Registration](/auth/local-auth)
+- [Rate Limiting](/basics/security/rate-limiting)

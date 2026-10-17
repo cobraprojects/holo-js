@@ -1,54 +1,66 @@
 # Abilities
 
-Abilities handle named authorization decisions that are not tied to a single model instance.
+An ability is a named rule that isn't about one model: exporting a report, viewing the billing dashboard, running a bulk import. Put each ability in `server/abilities`, and Holo picks it up automatically. For rules about a model or record, use a [policy](/authorization/policies) instead.
 
-## Ability shape
+## Write an ability
 
-```ts
-import { defineAbility, allow, deny } from '@holo-js/authorization'
+```ts [server/abilities/exportReports.ts]
+import { allow, defineAbility, deny } from '@holo-js/authorization'
 
-export default defineAbility('reports.export', (context, input: {
+export default defineAbility('reports.export', ({ user }, input: {
   reportId: string
   format: 'csv' | 'pdf'
 }) => {
-  if (!context.user) {
-    return deny('You must be signed in to export reports.')
+  if (!user) {
+    return deny('Sign in to export reports.')
   }
 
-  if (context.user.role === 'admin') {
+  if (user.role === 'admin') {
     return allow()
   }
 
   return input.format === 'csv'
     ? allow()
-    : deny('Only CSV export is allowed.')
+    : deny('Only admins can export PDFs.')
 })
 ```
 
-The ability name is the registry key. Holo uses it to generate typed discovery output and autocomplete.
+`defineAbility()` takes a unique name and a handler. The handler gets the same context as a policy rule (`user`, `authenticated`, and sometimes `guard`) plus an input you define. It returns the same values as a policy rule: `true`, `false`, `allow()`, `deny()`, or `denyAsNotFound()`, directly or from a promise.
 
-## When to use abilities
+Export one ability per file, as the default export.
 
-Use abilities when the action is not naturally a policy on a record.
+## Check an ability
 
-Examples:
+Select the ability with `.ability(name)`, then call `authorize()`, `can()`, `cannot()`, or `inspect()` with the input:
 
-- report exports
-- publishing workflows
-- batch operations
-- custom business actions
+```ts
+import authorization from '@holo-js/authorization'
 
-If you are checking a model instance, use a policy instead.
+await authorization.forUser(user).ability('reports.export').authorize({
+  reportId: 'rpt_42',
+  format: 'pdf',
+})
+```
 
-## Typed inputs
+With [auth](/auth/) installed, use `authorization.guard()` to check the signed-in user of a guard:
 
-Ability inputs are inferred from the handler. That means the payload you pass into `authorize(...)`, `can(...)`, or
-`inspect(...)` stays safe and autocompleted.
+```ts
+const allowed = await authorization.guard('web').ability('reports.export').can({
+  reportId: 'rpt_42',
+  format: 'csv',
+})
+```
+
+The input type comes from your handler, so the object you pass is type-checked and autocompleted once Holo has generated types. Run `npx holo prepare` if a new ability doesn't autocomplete yet.
+
+## Use the decision
+
+`inspect()` returns the decision instead of throwing, which is handy for showing or hiding a button:
 
 ```ts
 const decision = await authorization.forUser(user).ability('reports.export').inspect({
-  reportId: 'rpt-1',
-  format: 'csv',
+  reportId: 'rpt_42',
+  format: 'pdf',
 })
 
 if (!decision.allowed) {
@@ -56,16 +68,12 @@ if (!decision.allowed) {
 }
 ```
 
-## Discovery and typing
+## Name abilities
 
-Ability files belong in `server/abilities`. The CLI discovers them, generates typed registry artifacts, and gives
-you autocomplete for:
+Ability names are plain strings. A `area.action` pattern such as `reports.export` or `billing.view` keeps them easy to scan. Checking a name that doesn't exist throws `AuthorizationAbilityNotFoundError`.
 
-- ability names
-- ability input shapes
-
-## Continue
+## Next steps
 
 - [Policies](/authorization/policies)
-- [Standalone Mode](/authorization/standalone-mode)
-- [Auth Integration](/authorization/auth-integrated-mode)
+- [Using with Auth](/authorization/with-auth)
+- [Denied Responses (403 vs 404)](/authorization/errors)

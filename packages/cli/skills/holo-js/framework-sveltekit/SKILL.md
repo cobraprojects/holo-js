@@ -3,12 +3,12 @@ name: holo-framework-sveltekit
 description: Integrate Holo-JS with SvelteKit hooks, locals, load functions, form actions, auth, validation, redirects, and Svelte Flux state.
 metadata:
   type: focused
-  source: https://docs.holo-js.com/runtime-services
+  source: https://docs.holo-js.com/basics/services
 ---
 
 # SvelteKit integration
 
-Use `@holo-js/adapter-sveltekit`. Read [runtime services](https://docs.holo-js.com/runtime-services), [routing](https://docs.holo-js.com/routing), [form framework integration](https://docs.holo-js.com/forms/framework-integration), and [current auth client](https://docs.holo-js.com/auth/current-auth-client).
+Use `@holo-js/adapter-sveltekit`. Read [runtime services](https://docs.holo-js.com/basics/services), [routing](https://docs.holo-js.com/basics/routing), [form framework integration](https://docs.holo-js.com/basics/forms/frameworks), and [current auth client](https://docs.holo-js.com/auth/current-user).
 
 ## Integration rules
 

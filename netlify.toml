@@ -6,3 +6,328 @@
 [build.environment]
   BUN_VERSION = "1.3.9"
   BUN_FLAGS = "--ignore-scripts"
+
+[[redirects]]
+  from = "/architecture"
+  to = "/advanced/architecture"
+  status = 301
+
+[[redirects]]
+  from = "/auth/current-auth-client"
+  to = "/auth/current-user"
+  status = 301
+
+[[redirects]]
+  from = "/auth/multi-factor-authentication"
+  to = "/auth/multi-factor"
+  status = 301
+
+[[redirects]]
+  from = "/auth/personal-access-tokens"
+  to = "/auth/api-tokens"
+  status = 301
+
+[[redirects]]
+  from = "/authorization/auth-integrated-mode"
+  to = "/authorization/with-auth"
+  status = 301
+
+[[redirects]]
+  from = "/authorization/standalone-mode"
+  to = "/authorization/standalone"
+  status = 301
+
+[[redirects]]
+  from = "/broadcast"
+  to = "/broadcasting/"
+  status = 301
+
+[[redirects]]
+  from = "/broadcast/config-and-drivers"
+  to = "/broadcasting/drivers"
+  status = 301
+
+[[redirects]]
+  from = "/broadcast/defining-events-and-channels"
+  to = "/broadcasting/events-and-channels"
+  status = 301
+
+[[redirects]]
+  from = "/broadcast/deployment-and-scaling"
+  to = "/broadcasting/production"
+  status = 301
+
+[[redirects]]
+  from = "/broadcast/flux-and-frameworks"
+  to = "/broadcasting/client"
+  status = 301
+
+[[redirects]]
+  from = "/broadcast/setup-and-cli"
+  to = "/broadcasting/"
+  status = 301
+
+[[redirects]]
+  from = "/cache/config-and-drivers"
+  to = "/cache/drivers"
+  status = 301
+
+[[redirects]]
+  from = "/cache/runtime-and-query-caching"
+  to = "/cache/usage"
+  status = 301
+
+[[redirects]]
+  from = "/cache/setup-and-cli"
+  to = "/cache/"
+  status = 301
+
+[[redirects]]
+  from = "/cli/agents-install"
+  to = "/getting-started/ai-agents"
+  status = 301
+
+[[redirects]]
+  from = "/configuration"
+  to = "/getting-started/configuration"
+  status = 301
+
+[[redirects]]
+  from = "/database/commands"
+  to = "/reference/cli"
+  status = 301
+
+[[redirects]]
+  from = "/database/query-builder/writes-pagination-and-chunking"
+  to = "/database/query-builder/writes"
+  status = 301
+
+[[redirects]]
+  from = "/development"
+  to = "/getting-started/quick-start"
+  status = 301
+
+[[redirects]]
+  from = "/development/contributing"
+  to = "/advanced/contributing"
+  status = 301
+
+[[redirects]]
+  from = "/development/workflow"
+  to = "/getting-started/quick-start"
+  status = 301
+
+[[redirects]]
+  from = "/directory-structure"
+  to = "/getting-started/project-structure"
+  status = 301
+
+[[redirects]]
+  from = "/events/defining-listeners"
+  to = "/events/listeners"
+  status = 301
+
+[[redirects]]
+  from = "/events/dispatching-events"
+  to = "/events/dispatching"
+  status = 301
+
+[[redirects]]
+  from = "/events/multi-event-listeners"
+  to = "/events/listeners"
+  status = 301
+
+[[redirects]]
+  from = "/events/setup-and-cli"
+  to = "/events/"
+  status = 301
+
+[[redirects]]
+  from = "/events/transactions-after-commit"
+  to = "/events/after-commit"
+  status = 301
+
+[[redirects]]
+  from = "/forms"
+  to = "/basics/forms/"
+  status = 301
+
+[[redirects]]
+  from = "/forms/client-usage"
+  to = "/basics/forms/client"
+  status = 301
+
+[[redirects]]
+  from = "/forms/framework-integration"
+  to = "/basics/forms/frameworks"
+  status = 301
+
+[[redirects]]
+  from = "/forms/server-validation"
+  to = "/basics/forms/server"
+  status = 301
+
+[[redirects]]
+  from = "/installation"
+  to = "/getting-started/installation"
+  status = 301
+
+[[redirects]]
+  from = "/learn/blog-app"
+  to = "/tutorial/"
+  status = 301
+
+[[redirects]]
+  from = "/learn/blog-app/*"
+  to = "/tutorial/:splat"
+  status = 301
+
+[[redirects]]
+  from = "/mail/attachments-and-drivers"
+  to = "/mail/attachments"
+  status = 301
+
+[[redirects]]
+  from = "/mail/creating-mails"
+  to = "/mail/writing-mail"
+  status = 301
+
+[[redirects]]
+  from = "/mail/defining-mail"
+  to = "/mail/writing-mail"
+  status = 301
+
+[[redirects]]
+  from = "/mail/markdown-mails"
+  to = "/mail/markdown"
+  status = 301
+
+[[redirects]]
+  from = "/mail/notifications"
+  to = "/notifications/"
+  status = 301
+
+[[redirects]]
+  from = "/mail/previewing-mails"
+  to = "/mail/previewing"
+  status = 301
+
+[[redirects]]
+  from = "/mail/queueing-mail"
+  to = "/mail/queueing"
+  status = 301
+
+[[redirects]]
+  from = "/mail/sending-and-preview"
+  to = "/mail/sending"
+  status = 301
+
+[[redirects]]
+  from = "/mail/sending-mails"
+  to = "/mail/sending"
+  status = 301
+
+[[redirects]]
+  from = "/mail/setup-and-cli"
+  to = "/mail/"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/creating-notifications"
+  to = "/notifications/writing"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/defining-notifications"
+  to = "/notifications/writing"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/notification-channels"
+  to = "/notifications/channels"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/notification-events"
+  to = "/notifications/events"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/notification-storage"
+  to = "/notifications/database"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/on-demand-notifications"
+  to = "/notifications/sending"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/queueing-notifications"
+  to = "/notifications/queueing"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/sending-notifications"
+  to = "/notifications/sending"
+  status = 301
+
+[[redirects]]
+  from = "/notifications/setup-and-cli"
+  to = "/notifications/"
+  status = 301
+
+[[redirects]]
+  from = "/orm/mutators-casts"
+  to = "/orm/casts"
+  status = 301
+
+[[redirects]]
+  from = "/orm/relationships/loading-and-aggregates"
+  to = "/orm/relationships/loading"
+  status = 301
+
+[[redirects]]
+  from = "/plugins"
+  to = "/advanced/plugins"
+  status = 301
+
+[[redirects]]
+  from = "/queue/database"
+  to = "/queue/drivers"
+  status = 301
+
+[[redirects]]
+  from = "/queue/media"
+  to = "/media/conversions"
+  status = 301
+
+[[redirects]]
+  from = "/routing"
+  to = "/basics/routing"
+  status = 301
+
+[[redirects]]
+  from = "/runtime-services"
+  to = "/basics/services"
+  status = 301
+
+[[redirects]]
+  from = "/security"
+  to = "/basics/security/"
+  status = 301
+
+[[redirects]]
+  from = "/upgrade-architecture"
+  to = "/getting-started/upgrading"
+  status = 301
+
+[[redirects]]
+  from = "/validation"
+  to = "/basics/validation/"
+  status = 301
+
+[[redirects]]
+  from = "/validation/rules-and-errors"
+  to = "/basics/validation/rules"
+  status = 301

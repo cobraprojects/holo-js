@@ -1,50 +1,76 @@
-# Queue
+# Queues
 
-Holo-JS ships queue support as a first-class server subsystem. New projects already scaffold
-`config/queue.ts`, create `server/jobs`, and default to the `sync` driver so dispatch works on day one.
+A queue lets you move slow work out of the request, such as sending email, resizing images, or calling a third-party API. Your route puts a job on the queue and responds right away. A separate worker process runs the job in the background.
 
-## Existing projects
+## Quick example
 
-Install queue support into an existing Holo-JS app with:
+Create a job:
+
+```bash
+npx holo make:job emails/send-welcome
+```
+
+Fill in what the job does:
+
+```ts [server/jobs/emails/send-welcome.ts]
+import { defineJob } from '@holo-js/queue'
+
+export default defineJob<{
+  userId: number
+}>({
+  async handle(payload) {
+    console.log(`Sending welcome email to user ${payload.userId}`)
+  },
+})
+```
+
+Dispatch it from any server code:
+
+```ts [server/lib/users.ts]
+import SendWelcome from '../jobs/emails/send-welcome'
+
+export async function onUserRegistered(userId: number) {
+  await SendWelcome.dispatch({ userId })
+}
+```
+
+With the default `sync` driver, the job runs immediately inside `dispatch()`. No worker is needed. When you switch to the `database` or `redis` driver, the same code puts the job on a queue and a worker runs it.
+
+## Install queue support
+
+New projects created with the queue package already have `config/queue.ts` and a `server/jobs` folder. To add queues to an existing project, run:
 
 ```bash
 npx holo install queue
 ```
 
-Pick a starting driver during install when needed:
+Pick a driver up front with `--driver`:
 
 ```bash
-npx holo install queue --driver redis
 npx holo install queue --driver database
 ```
 
-## What queue owns
+The supported values are `sync` (the default), `database`, and `redis`. The installer:
 
-The queue subsystem gives you:
+- creates `config/queue.ts` if it doesn't exist
+- creates the `server/jobs` folder
+- adds `@holo-js/queue` to `package.json`, plus `@holo-js/queue-db` or `@holo-js/queue-redis` when the driver needs it
+- adds `QUEUE_CONNECTION` to `.env` and `.env.example`
+- for `redis`, creates `config/redis.ts` and adds the `REDIS_*` variables
 
-- a typed `config/queue.ts`
-- auto-discovered jobs under `server/jobs`
-- dispatch helpers
-- long-lived worker commands for async drivers
-- failed-job management
-- first-party media integration for queued conversions
+If `config/queue.ts` already exists, the installer leaves it alone and only adds missing packages.
 
-Queue does not own event contracts. Event contracts and listener orchestration are documented under
-[Events](/events/). Queued listeners use queue internally.
+## Configure the queue
 
-## Queue config
+The installer writes a config like this for the `sync` driver:
 
-New apps start with `sync`:
-
-```ts
+```ts [config/queue.ts]
 import { defineQueueConfig } from '@holo-js/queue'
+import { env } from '@holo-js/config'
+
 export default defineQueueConfig({
-  default: 'sync',
-  failed: {
-    driver: 'database',
-    connection: 'default',
-    table: 'failed_jobs',
-  },
+  default: env('QUEUE_CONNECTION', 'sync'),
+  failed: false,
   connections: {
     sync: {
       driver: 'sync',
@@ -54,204 +80,46 @@ export default defineQueueConfig({
 })
 ```
 
-`sync` runs the job inline. It is the simplest default and needs no worker process.
-Async drivers need a separate worker runtime in production. See [Deployment](/deployment) for host selection
-and [Workers](/queue/workers) for worker commands.
+| Key | What it does |
+| --- | --- |
+| `default` | The connection jobs use unless they pick another one. Defaults to the first connection. |
+| `connections` | Named connections. Each has a `driver` (`sync`, `database`, or `redis`) and driver options. |
+| `failed` | Where jobs that fail on a worker are stored, or `false` to not store them. See [Failed jobs](/queue/failed-jobs). |
 
-## End-to-end driver examples
+## Connections and queue names
 
-### Sync
+A **connection** picks the backend: `sync`, `database`, or `redis`. A **queue name** splits work inside one connection, such as `default`, `emails`, or `media`.
 
-Use `sync` when you want immediate execution in local development, tests, or low-volume app flows.
-
-```ts
-import SendDigest from '../jobs/reports/send-digest'
-
-await SendDigest.dispatch({
-  reportId: 'daily-summary',
-})
-```
-
-No worker process is required.
-
-### Redis
-
-Use `redis` for normal asynchronous work:
-
-```ts
-// config/redis.ts
-import { env } from '@holo-js/config'
-import { defineRedisConfig } from '@holo-js/kernel'
-
-export default defineRedisConfig({
-  default: 'cache',
-  connections: {
-    cache: {
-      url: env('REDIS_URL') || undefined,
-      host: env('REDIS_HOST', '127.0.0.1'),
-      port: env('REDIS_PORT', 6379),
-      username: env('REDIS_USERNAME'),
-      password: env('REDIS_PASSWORD'),
-      db: env('REDIS_DB', 0),
-    },
-  },
-})
-```
-
-```ts
-// config/queue.ts
-import { defineQueueConfig } from '@holo-js/queue'
-export default defineQueueConfig({
-  default: 'redis',
-  failed: {
-    driver: 'database',
-    connection: 'default',
-    table: 'failed_jobs',
-  },
-  connections: {
-    redis: {
-      driver: 'redis',
-      connection: 'cache',
-      queue: 'default',
-      retryAfter: 90,
-      blockFor: 5,
-    },
-  },
-})
-```
-
-Queue only needs the shared Redis connection name.
-The actual Redis target lives in `config/redis.ts`.
-
-Shared Redis connections resolve in this order:
-
-1. `url`
-2. `clusters`
-3. `host`
-
-See [Configuration](/configuration) for examples of all three connection styles.
-
-Run a worker:
+You can run one worker per queue name so slow work doesn't hold up fast work:
 
 ```bash
-npx holo queue:work --connection redis
+npx holo queue:work --queue emails
+npx holo queue:work --queue media
 ```
 
-### Database
+A job runs on, in order of priority:
 
-Use `database` when you want queue portability and are comfortable polling from your app database:
+1. the connection or queue you pass when dispatching
+2. the `connection` or `queue` set on the job
+3. the default connection, and that connection's `queue` (or `default`)
 
-```ts
-import { defineQueueConfig } from '@holo-js/queue'
-export default defineQueueConfig({
-  default: 'database',
-  failed: {
-    driver: 'database',
-    connection: 'default',
-    table: 'failed_jobs',
-  },
-  connections: {
-    database: {
-      driver: 'database',
-      connection: 'default',
-      table: 'jobs',
-      queue: 'default',
-      retryAfter: 90,
-      sleep: 1,
-    },
-  },
-})
-```
+## Go to production
 
-Generate the required tables and migrate:
+The `sync` driver is fine for development, tests, and small apps. It runs jobs inside the request, so a slow job slows the response, and a failing job fails the request.
 
-```bash
-npx holo queue:table
-npx holo queue:failed-table
-npx holo migrate
-```
+For background processing:
 
-Then run a worker:
+1. Switch to the [`database` or `redis` driver](/queue/drivers).
+2. Run [`queue:work`](/queue/workers) as a long-running process next to your web server.
+3. Turn on the [failed jobs table](/queue/failed-jobs) so you can inspect and retry failures.
 
-```bash
-npx holo queue:work --connection database
-```
+::: warning Payloads must be JSON
+Job payloads are stored as JSON, so pass IDs and plain values, not model instances, `Date` objects, class instances, or functions. Holo rejects payloads that aren't plain JSON when you dispatch. Load the record again inside the job.
+:::
 
-## Queue names and connections
+## Next steps
 
-- A connection selects the backend driver configuration such as `sync`, `redis`, or `database`.
-- A queue name lets you partition work inside that connection, such as `default`, `emails`, or `media`.
-- Jobs can set defaults, and dispatch can override them per call.
-
-## Dispatch overview
-
-Use the job definition for typed queued execution:
-
-```ts
-import SendDigest from '../jobs/reports/send-digest'
-
-await SendDigest.dispatch({
-  reportId: 'daily-summary',
-})
-  .onConnection('redis')
-  .onQueue('emails')
-  .delay(60)
-  .onComplete((result) => {
-    console.log(result.jobId)
-  })
-  .onFailed((error) => {
-    console.error(error)
-  })
-```
-
-Use the string-based dispatch helper when the job name is dynamic or when you prefer dispatching by name:
-
-```ts
-import { dispatch } from '@holo-js/queue'
-
-await dispatch('reports.send-digest', {
-  reportId: 'daily-summary',
-})
-  .onConnection('redis')
-  .onQueue('emails')
-```
-
-If dispatch must wait for a successful database commit, compose that explicitly with `DB.afterCommit()` from `@holo-js/db`.
-
-Use `dispatchSync()` when the current code path must execute the job immediately:
-
-```ts
-import SendDigest from '../jobs/reports/send-digest'
-import { dispatchSync } from '@holo-js/queue'
-
-await SendDigest.dispatchSync({
-  reportId: 'daily-summary',
-})
-
-await dispatchSync('reports.send-digest', {
-  reportId: 'daily-summary',
-})
-```
-
-## Server-only rules
-
-Queue jobs are backend code. Keep them in server-owned files and pass only JSON-serializable payloads:
-
-- IDs
-- strings
-- numbers
-- booleans
-- arrays
-- plain objects
-
-Do not queue model instances, functions, streams, or browser-only objects.
-
-## Continue
-
-- [Jobs](/queue/jobs)
-- [Workers](/queue/workers)
-- [Failed Jobs](/queue/failed-jobs)
-- [Database Tables](/queue/database)
-- [Media Integration](/queue/media)
-- [Events](/events/)
-- [Queued Listeners](/events/queued-listeners)
+- [Writing jobs](/queue/jobs): retries, backoff, timeouts, and dispatch options
+- [Running workers](/queue/workers)
+- [Drivers and tables](/queue/drivers)
+- [Events](/events/): fan out one action to several reactions

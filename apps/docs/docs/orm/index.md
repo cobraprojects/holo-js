@@ -1,680 +1,357 @@
-# ORM: Getting Started
+# Defining Models
 
-Holo-JS models are the application-facing record layer. They are directly queryable, relation-aware, and
-typed from the generated schema metadata refreshed by `npx holo migrate`.
+A model is a typed object for one database table. You use it to query rows, create and update records, and load relationships, with autocomplete for every column name.
 
-## Introduction
-
-Use the ORM when the query belongs to a domain record and should bring behavior with it: relations,
-casts, scopes, lifecycle hooks, serialization rules, or factory support.
-
-## Defining Models
-
-Put model files under `server/models`. This is server-side application code.
-
-```text
-server/models/User.ts
-```
-
-The fastest way to start is:
-
-```bash
-npx holo make:model User
-npx holo make:model courses/Course --migration --observer --factory --seeder
-```
-
-Use `make:model` when you want the model scaffold and optional companion files created together. Nested
-model folders are supported.
-
-```ts
+```ts [server/models/Post.ts]
 import { defineModel } from '@holo-js/db'
 
-const User = defineModel('users', {
-  timestamps: true,
+export default defineModel('posts', {
+  fillable: ['title', 'slug', 'body', 'status', 'user_id'],
+})
+```
+
+```ts
+import Post from '../models/Post'
+
+const post = await Post.findOrFail(1)
+post.title
+//   ^? string
+
+const drafts = await Post.where('status', 'draft').latest().get()
+```
+
+## Create a model
+
+Generate a model with the CLI:
+
+```bash
+npx holo make:model Post
+```
+
+This writes `server/models/Post.ts` for the `posts` table. Add companion files with flags:
+
+```bash
+npx holo make:model Post --migration --factory --seeder --observer
+```
+
+| Flag | Short | Creates |
+| --- | --- | --- |
+| `--migration` | `-m` | A `create_posts_table` migration |
+| `--factory` | `-f` | A `PostFactory` factory |
+| `--seeder` | `-s` | A `PostSeeder` seeder |
+| `--observer` | `-o` | A `PostObserver` observer, already wired into the model |
+| `--table <name>` | | Uses a custom table name instead of the inferred one |
+
+Nested names create nested folders: `npx holo make:model billing/Invoice` writes `server/models/billing/Invoice.ts`.
+
+When you run `make:model` without flags in a terminal, Holo asks which companion files you want.
+
+::: warning
+The generated model starts with `fillable: []`, which blocks every column from `create()` and `update()`. List the columns you want to write before you use it. See [mass assignment](#mass-assignment).
+:::
+
+## Where the types come from
+
+You don't declare columns in the model. Holo reads them from your [migrations](/database/migrations):
+
+1. You write a migration that creates or changes the `posts` table.
+2. You run `npx holo migrate`.
+3. Holo regenerates `.holo-js/generated/schema.generated.ts` with every table's columns. Don't edit this file.
+4. `defineModel('posts')` picks up those column types.
+
+After a migration, every model method knows your columns:
+
+```ts
+await Post.where('status', 'published').get()
+await Post.orderBy('published_at', 'desc').first()
+await Post.pluck('title')
+//    ^? Promise<string[]>
+
+await Post.where('titel', 'Hello')
+//               ^ TypeScript error: 'titel' is not a column of posts
+```
+
+Records are typed too. A `text().nullable()` column reads as `string | null`, a `timestamp()` as `Date`, and `create()` requires every column that has no default.
+
+::: tip
+If autocomplete shows stale columns, run `npx holo migrate` again. A model whose table isn't in the generated schema throws `Model "posts" is not present in the generated schema registry` at runtime.
+:::
+
+## Conventions
+
+### Model names
+
+Holo infers the model name from the table name by singularizing it and converting it to PascalCase:
+
+| Table | Model name |
+| --- | --- |
+| `users` | `User` |
+| `blog_posts` | `BlogPost` |
+| `people` | `Person` |
+
+The name appears in error messages and is how string relation targets like `belongsTo('User', ...)` find the model. Override it with `name`:
+
+```ts [server/models/Person.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('people', {
+  name: 'Member',
+})
+```
+
+### Primary keys
+
+Holo uses the column your migration marked as the primary key, usually `table.id()`. Set `primaryKey` only when you want a different column:
+
+```ts
+export default defineModel('countries', {
+  primaryKey: 'code',
+})
+```
+
+### Timestamps
+
+If the table has `created_at` and `updated_at` columns, Holo fills them on create and refreshes `updated_at` on every save. Add both columns in a migration with `table.timestamps()`.
+
+Turn this off, or rename the columns:
+
+```ts
+export default defineModel('audit_logs', {
+  timestamps: false,
+})
+
+export default defineModel('articles', {
+  createdAtColumn: 'published_on',
+  updatedAtColumn: 'edited_on',
+})
+```
+
+### Connections
+
+Models use the default connection. Point a model at another named connection with `connectionName`:
+
+```ts
+export default defineModel('events', {
+  connectionName: 'analytics',
+})
+```
+
+See [multiple connections](/database/connections) for configuring named connections.
+
+## Mass assignment
+
+`create()`, `update()`, `make()`, and `save()` only write columns you allow. Writing any other column throws a `SecurityError`, so unexpected request fields never reach the database.
+
+List allowed columns with `fillable`:
+
+```ts
+export default defineModel('users', {
+  fillable: ['name', 'email', 'password'],
+})
+```
+
+Or block specific columns with `guarded`, and allow the rest:
+
+```ts
+export default defineModel('users', {
+  guarded: ['is_admin'],
+})
+```
+
+| Setting | What can be written |
+| --- | --- |
+| No `fillable` or `guarded` | Every column |
+| `fillable: ['name', 'email']` | Only `name` and `email` |
+| `fillable: []` | Nothing |
+| `fillable: ['*']` | Every column except `guarded` ones |
+| `guarded: ['is_admin']` | Every column except `is_admin` |
+| `guarded: ['*']` | Nothing |
+
+Timestamp and generated ID columns are always written by Holo, even when they aren't fillable. To write a protected column from trusted code, see [writing guarded columns](/orm/writes#write-guarded-columns).
+
+## Soft deletes
+
+Soft-deleted rows stay in the table with a `deleted_at` timestamp and are hidden from normal queries. Add the column in a migration with `table.softDeletes()`, then enable it on the model:
+
+```ts [server/models/Post.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('posts', {
   softDeletes: true,
-  fillable: ['name', 'email', 'settings', 'active'],
-  casts: {
-    settings: 'json',
-    active: 'boolean',
-  },
 })
 ```
 
-In practice, the file split should look like this:
+Use `deletedAtColumn` if the column has a different name. If the column is missing, the model throws a `SchemaError` the first time you use it.
 
-```text
-server/models/User.ts
-server/api/users/index.get.ts
-```
+See [querying soft-deleted models](/orm/querying#soft-deleted-models) and [deleting and restoring](/orm/writes#soft-delete-and-restore).
 
-The flow is:
+## UUID, ULID, and Snowflake keys
 
-1. migrations define or change the table
-2. `npx holo migrate` refreshes the internal generated schema metadata under `.holo-js/generated`
-3. model files define behavior
-4. API routes or server services call the model
+Give the model a unique ID trait and Holo generates the key when you create a record. If you pass a key yourself, Holo keeps it.
 
-For writes, mass assignment, and trusted write paths, see [ORM Writes](/orm/writes).
+```ts [server/models/Order.ts]
+import { defineModel, HasUuids } from '@holo-js/db'
 
-## Model Conventions
-
-### Table Names
-
-The table name is the first argument to `defineModel(...)`.
-
-### Model Names
-
-Model names are inferred from the table name and used by string-based relation targets.
-
-- `defineModel('users', ...)` becomes `User`
-- `defineModel('blog_posts', ...)` becomes `BlogPost`
-- `defineModel('people', ...)` becomes `Person`
-- `defineModel('children', ...)` becomes `Child`
-- `defineModel('blue_lot_of_things', ...)` becomes `BlueLotOfThing`
-
-If the inferred name is not the public API you want, set it explicitly and use that exact name in
-relations:
-
-```ts
-const Person = defineModel('people', {
-  name: 'Person',
-})
-```
-
-### Primary Keys
-
-Primary key truth comes from migrations and the generated schema artifact. The model reads it from the
-generated table metadata instead of redefining it.
-
-### UUID and ULID Keys
-
-Unique ID strategies are supported through model configuration and the schema type system:
-
-- UUID
-- ULID
-- Snowflake
-- auto-increment integer IDs
-
-Use the matching migration column type, then apply the matching trait when the model should generate new
-identifiers automatically:
-
-```ts
-import { HasSnowflakes, HasUlids, HasUuids, defineModel } from '@holo-js/db'
-
-export const ApiUser = defineModel('api_users', {
+export default defineModel('orders', {
   traits: [HasUuids()],
 })
-
-export const Session = defineModel('sessions', {
-  traits: [HasUlids()],
-})
-
-export const AuditActor = defineModel('audit_actors', {
-  primaryKey: 'snowflake_id',
-  traits: [HasSnowflakes()],
-})
 ```
 
-Use the matching foreign-key helper in related migrations:
-
 ```ts
-export const ApiToken = defineModel('api_tokens', {
-  timestamps: true,
-  softDeletes: true,
-})
+const order = await Order.create({ total: 4999 })
+order.id
+// '01920c4e-7b1a-7c3e-9f00-2d5a1b7c9e10'
 ```
 
-With that setup, the application and the database both use `created_at`, `updated_at`, and `deleted_at`.
+| Trait | Generates | Migration column |
+| --- | --- | --- |
+| `HasUuids()` | UUID v7 | `table.uuid('id').primaryKey()` |
+| `HasUlids()` | ULID | `table.ulid('id').primaryKey()` |
+| `HasSnowflakes()` | Snowflake ID string | `table.snowflake('id').primaryKey()` |
+| `HasUniqueIds()` | Your own generator | Any string column |
 
-If you need non-standard lifecycle columns, set `createdAtColumn`, `updatedAtColumn`, or
-`deletedAtColumn` on the model and point them at the exact declared keys.
-
-### Database Connections
-
-Models can target named connections with `connectionName`.
-
-### Default Attribute Values
-
-Use `pendingAttributes` when new model instances should start with a stable baseline before they are
-persisted.
-
-## Configuring ORM Strictness
-
-Runtime strictness controls include:
-
-- `preventLazyLoading(...)`
-- `preventAccessingMissingAttributes(...)`
-- automatic eager loading controls
-
-Use these when the application should fail fast instead of hiding accidental data access patterns. They are
-most useful in larger codebases where silent lazy loads or partially loaded entities become difficult to
-spot in code review.
-
-## Retrieving Models
-
-### Common Entry Points
+Generate IDs for a column other than the primary key with `columns`. The column must be the primary key or unique:
 
 ```ts
-const user = await User.findOrFail(1)
-const latest = await User.latest().first()
-const page = await User.where('active', true).paginate(15)
-```
+import { defineModel, HasUlids } from '@holo-js/db'
 
-Other common entry points include:
-
-- `find(...)`
-- `findOrFail(...)`
-- `first(...)`
-- `firstOrFail(...)`
-- `firstOrCreate(...)`
-- `firstOrNew(...)`
-- `create(...)`
-- `destroy(...)`
-- `newQuery()` and `newModelQuery()`
-
-These entry points are usually called from:
-
-- `server/api/**` route handlers
-- server services
-- background jobs
-- seeders and factories
-
-They are not meant for direct browser-side usage.
-
-### Collections
-
-Queries returning many rows produce model-aware collections with relation loading, visibility shaping, and
-query continuation helpers.
-
-Use collections when the result set still needs ORM behavior after retrieval. If you only need raw mapping
-or reduction, convert at the edge of the application.
-
-### Chunking Results
-
-- `chunk(...)`
-- `chunkById(...)`
-
-Use chunking for background processing and large maintenance jobs, not for user-facing pagination.
-
-### Chunking Using Lazy Iteration
-
-- `lazy()`
-- `cursor()`
-
-Use lazy iteration when the workflow should stream rows instead of loading the entire result set at once.
-
-## Retrieving Single Models / Aggregates
-
-- `sole(...)`
-- `valueOrFail(...)`
-- aggregate helpers through the builder surface
-
-Use these helpers when the application expects exactly one answer or one scalar value and should fail
-clearly when that expectation is wrong.
-
-### Not Found Exceptions
-
-Methods ending in `OrFail` throw a `ModelNotFoundException` when no matching record exists:
-
-- `findOrFail(id)` — find by primary key or throw
-- `firstOrFail()` — take the first result or throw
-- `sole()` — expect exactly one result, throw if zero or more than one
-- `valueOrFail(column)` — retrieve a single column value or throw
-
-```ts
-import { ModelNotFoundException } from '@holo-js/db'
-
-try {
-  const user = await User.findOrFail(42)
-} catch (error) {
-  if (error instanceof ModelNotFoundException) {
-    console.log(error.message)    // "User not found."
-    console.log(error.model)      // "User"
-    console.log(error.statusCode) // 404
-  }
-}
-```
-
-`ModelNotFoundException` extends `DatabaseError` and carries:
-
-| Property     | Type     | Description                                    |
-| ------------ | -------- | ---------------------------------------------- |
-| `message`    | `string` | Human-readable message, e.g. `"User not found."` |
-| `model`      | `string` | The model name that was queried                 |
-| `statusCode` | `number` | Always `404`                                    |
-| `code`       | `string` | Always `"MODEL_NOT_FOUND"`                      |
-
-Because it is a regular thrown exception, it breaks execution immediately and rolls back any active
-`DB.transaction`:
-
-```ts
-await DB.transaction(async () => {
-  await AuditLog.create({ action: 'attempt' })
-
-  // This throws ModelNotFoundException — the entire transaction rolls back,
-  // including the AuditLog row above.
-  const user = await User.where('email', 'ghost@example.com').firstOrFail()
+export default defineModel('invoices', {
+  traits: [HasUlids({ columns: ['public_id'] })],
 })
 ```
 
-The `statusCode: 404` property is a convention that framework error handlers can use to produce the
-correct HTTP response. How that mapping happens depends on the framework:
-
-- **Nuxt / Nitro**: H3 reads `statusCode` from any thrown error automatically, so API routes return a
-  `404` JSON response without extra handling.
-- **Next.js / SvelteKit**: Catch the error in your route handler or error boundary and use
-  `error.statusCode` to set the HTTP status.
-
-## Vector Search
-
-Use vector search when the model stores embeddings and the application needs nearest-neighbor style
-retrieval.
-
-### Define the vector column
+Use `HasUniqueIds` with `newUniqueId` for a custom format:
 
 ```ts
-await schema.createTable('documents', (table) => {
-  table.id()
-  table.vector('embedding', { dimensions: 1536 })
-  table.timestamps()
+import { randomUUID } from 'node:crypto'
+import { defineModel, HasUniqueIds } from '@holo-js/db'
+
+export default defineModel('tickets', {
+  traits: [HasUniqueIds({ columns: ['reference'] })],
+  newUniqueId: () => `TCK-${randomUUID().slice(0, 8)}`,
 })
 ```
 
-### Query by similarity
+A model can use only one unique ID trait.
+
+## Default attribute values
+
+`pendingAttributes` sets starting values for new records. Values you pass to `create()` or `make()` win.
 
 ```ts
-const matches = await Document
-  .whereVectorSimilarTo('embedding', embedding, 0.4)
-  .limit(10)
-  .get()
-```
-
-How it works:
-
-- `embedding` is the vector column
-- the second argument is the probe vector
-- the optional third argument is the minimum similarity threshold
-- lower-level SQL is compiler-generated for the active Postgres dialect
-
-Important constraints:
-
-- vector similarity search is Postgres-only right now
-- the probe vector length must match the declared dimensions
-- using `whereVectorSimilarTo(...)` on a non-vector column fails closed
-- using it on SQLite or MySQL fails closed at compile time
-
-## Inserting and Updating Models
-
-If you want the full write guide, use [ORM Writes](/orm/writes). That page covers `create(...)`,
-`make(...)`, `save()`, `update(...)`, `fillable`, `guarded`, `unguarded(...)`, and `forceFill(...)`.
-
-- `create(...)`
-- `save()`
-- `saveMany(...)`
-- `update(...)`
-- `upsert(...)`
-
-Example server-side workflow:
-
-```ts
-import { User } from '../models/User'
-
-export async function createUser(input: { name: string, email: string }) {
-  return await User.create({
-    name: input.name,
-    email: input.email,
-  })
-}
-```
-
-This is the normal pattern: server handlers and services call models, models call the repository layer,
-and the framework handles the configured request lifecycle.
-
-For slug fields, use `uniqueSlug(...)` from the ORM instead of hand-rolling route or app-local
-allocation logic:
-
-```ts
-import { uniqueSlug } from '@holo-js/db'
-import Category from '../models/Category'
-
-export async function createCategory(input: { name: string }) {
-  return await Category.create({
-    name: input.name,
-    slug: await uniqueSlug(Category, input.name),
-  })
-}
-
-export async function updateCategory(id: number, input: { name: string }) {
-  const category = await Category.findOrFail(id)
-
-  return await category.update({
-    name: input.name,
-    slug: await uniqueSlug(Category, input.name, { ignore: id }),
-  })
-}
-```
-
-`uniqueSlug(...)` defaults to the model's `slug` column. If your model uses another string column,
-pass it explicitly and TypeScript will infer the allowed column names from the model:
-
-```ts
-await uniqueSlug(Page, input.title, { column: 'public_slug' })
-```
-
-## Mass Assignment
-
-Use `fillable` and `guarded` to control write surfaces explicitly.
-
-Use mass assignment when route input maps directly to a known subset of model fields. Keep the allowed
-fields narrow so unexpected request input cannot widen the write surface.
-
-## Examining Attribute Changes
-
-Entity instances expose dirty-tracking helpers such as:
-
-- `isDirty()`
-- `wasChanged()`
-- `getChanges()`
-
-Use these when the application needs to react only to meaningful changes, especially in event hooks,
-observers, or audit logging.
-
-## Deleting Models
-
-Delete a loaded model instance when the record is already in hand:
-
-```ts
-const user = await User.findOrFail(1)
-
-await user.delete()
-```
-
-Delete by primary key when you already know the identifier:
-
-```ts
-await User.destroy(1)
-await User.destroy([2, 3, 4])
-```
-
-Delete through a model query when several rows should be removed by one condition:
-
-```ts
-await User.where('active', false).delete()
-```
-
-Use the instance form when model lifecycle behavior matters for that one entity. Use the query form when
-the deletion is set-based.
-
-## Soft Deleting
-
-Soft deletes let the application mark a record as deleted without immediately removing the row from the
-database.
-
-### Enable soft deletes
-
-Add the deleted-at column in the model definition:
-
-```ts
-export const User = defineModel('users', {
-  softDeletes: true,
-})
-```
-
-Use soft deletes when records should disappear from normal application queries but still remain available
-for recovery, audit review, or delayed cleanup.
-
-### Deleting soft-deletable models
-
-```ts
-const user = await User.findOrFail(1)
-
-await user.delete()
-```
-
-When soft deletes are enabled, `delete()` updates the deleted-at column instead of physically removing the
-row.
-
-### Querying soft deleted models
-
-Normal queries exclude trashed rows. Opt into them explicitly when the workflow needs them:
-
-```ts
-const allUsers = await User.withTrashed().get()
-const trashedUsers = await User.onlyTrashed().get()
-const activeUsers = await User.withoutTrashed().get()
-```
-
-Use `withTrashed()` for admin or audit screens. Use `onlyTrashed()` for restore flows. Use
-`withoutTrashed()` when you want the intent to stay explicit in the query.
-
-### Restoring soft deleted models
-
-```ts
-const user = await User.onlyTrashed().findOrFail(1)
-
-await user.restore()
-```
-
-Restore when the application wants the row to become visible to normal queries again.
-
-### Permanently deleting models
-
-Use `forceDelete()` when the row should actually be removed:
-
-```ts
-const user = await User.withTrashed().findOrFail(1)
-
-await user.forceDelete()
-```
-
-Set-based permanent deletion is also available through model queries:
-
-```ts
-await User.onlyTrashed().where('active', false).forceDelete()
-```
-
-Use force delete for cleanup workflows, data retention enforcement, or destructive admin actions where the
-row should no longer exist at all.
-
-## Query Scopes
-
-### Local scopes
-
-Use local scopes when one query pattern belongs to a model and is reused across routes or services.
-
-```ts
-export const User = defineModel('users', {
-  scopes: {
-    active: query => query.where('active', true),
-    staff: query => query.whereIn('role', ['admin', 'editor']),
-  },
-})
-```
-
-Then call them from the model query:
-
-```ts
-const staffUsers = await User.active().staff().get()
-```
-
-### Global scopes
-
-Use global scopes for stable application-wide rules such as visibility, publication state, or tenancy
-constraints.
-
-```ts
-export const Post = defineModel('posts', {
-  globalScopes: {
-    published: query => query.where('published', true),
-  },
-})
-```
-
-### Removing global scopes
-
-Remove a global scope when one query needs to bypass the default rule explicitly:
-
-```ts
-const allPosts = await Post.withoutGlobalScope('published').get()
-const allScoped = await Post.withoutGlobalScopes().get()
-```
-
-### Pending attributes
-
-Use `pendingAttributes` when newly created model instances should start with stable defaults before
-persistence:
-
-```ts
-export const User = defineModel('users', {
+export default defineModel('posts', {
+  fillable: ['title', 'body', 'status'],
   pendingAttributes: {
-    active: true,
-    locale: 'en',
+    status: 'draft',
   },
 })
 ```
 
-This is useful when new model instances should already look valid before a form or service fills the rest
-of the fields.
-
-## Comparing Models
-
-Entity comparison helpers such as `is(...)` and `isNot(...)` compare key, table, and connection
-identity.
-
-Use them when object identity matters more than a loose property comparison, especially when the same row
-may be loaded through different queries or connections.
-
-## Events
-
-Common lifecycle families include:
-
-- retrieved
-- creating / created
-- updating / updated
-- deleting / deleted
-- restoring / restored
-- trashed
-- forceDeleting / forceDeleted
-- replicating
-
-Use model events when a small persistence-side effect belongs directly to one model. If the lifecycle
-logic becomes large, move it into an observer.
-
-### Inline event callbacks
-
 ```ts
-export const User = defineModel('users', {
-  events: {
-    created: async user => {
-      // emit audit event
-    },
+const post = await Post.create({ title: 'Hello', body: '...' })
+post.status
+// 'draft'
+```
+
+## Touching parent timestamps
+
+`touches` updates the parent's `updated_at` whenever this model is created, saved, deleted, or restored. It's useful when a list sorts by "last activity".
+
+```ts [server/models/Comment.ts]
+import { belongsTo, defineModel } from '@holo-js/db'
+
+export default defineModel('comments', {
+  relations: {
+    post: belongsTo('Post', { foreignKey: 'post_id' }),
   },
+  touches: ['post'],
 })
 ```
 
-Use inline events when the lifecycle behavior is small and tightly coupled to the model.
+Only `belongsTo` and `morphTo` relations can be touched.
 
-## Observers
+## Pruning old records
 
-Models support `observers` in `defineModel(...)`. Observer classes or objects can implement lifecycle
-methods such as `created`, `updated`, `deleted`, `restored`, and `replicating`.
+Define `prunable` to describe which rows are safe to delete, then run `npx holo prune`:
 
-Put observer classes in a server-side file, usually under `server/db/observers`.
+```ts [server/models/LoginAttempt.ts]
+import { defineModel } from '@holo-js/db'
 
-```text
-server/db/observers/UserObserver.ts
-```
-
-Use `npx holo make:observer UserObserver` to scaffold the observer file. If you are creating a new model and
-want the observer wired automatically, use `npx holo make:model User --observer`.
-
-```ts
-class UserObserver {
-  created(user: Entity<ReturnType<typeof User>['definition']['table']>) {
-    // emit audit event
-  }
-
-  updated(user: Entity<ReturnType<typeof User>['definition']['table']>) {
-    // refresh derived state
-  }
-}
-
-const User = defineModel('users', {
-  observers: [UserObserver],
+export default defineModel('login_attempts', {
+  prunable: query => query.where('created_at', '<', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
 })
 ```
-
-Use observers when the persistence lifecycle logic is large enough that inline model events would make the
-model definition noisy.
-
-You do not call the observer manually. The model lifecycle calls it automatically when one of its methods
-matches the current event.
-
-### Muting events
-
-Use quiet operations when the write should skip lifecycle noise:
-
-```ts
-await User.createQuietly({
-  name: 'Demo User',
-  email: 'demo@example.com',
-})
-
-await user.saveQuietly()
-await user.deleteQuietly()
-```
-
-That is useful for bootstrap data, admin repair workflows, or controlled maintenance scripts.
-
-## Pruning Models
-
-Pruning is for records that should be removed automatically once they become old or irrelevant.
-
-```ts
-export const Session = defineModel('sessions', {
-  prunable: query => query.where('expires_at', '<', new Date().toISOString()),
-})
-```
-
-Call pruning from an explicit operational workflow:
-
-```ts
-const deletedCount = await Session.prune()
-```
-
-Or run it through the CLI:
 
 ```bash
 npx holo prune
-npx holo prune Session
+npx holo prune LoginAttempt
 ```
 
-`npx holo prune` with no arguments prunes every registered model that defines `prunable`. If you explicitly
-name a model that does not define `prunable`, the command fails instead of silently skipping it.
+Without arguments, `holo prune` prunes every model that defines `prunable`. You can also call `await LoginAttempt.prune()`, which returns the number of deleted rows.
 
-Use pruning when the cleanup rule belongs to the model itself and should stay repeatable.
+By default Holo loads and deletes each row so [model events](/orm/observers) fire, and permanently deletes soft-deleted models. Set `massPrunable: true` to delete with a single query instead. That's faster, but skips events.
 
-Mass pruning is also supported when you want set-based deletion without per-row lifecycle dispatch.
+## Strict mode
 
-## Replicating Models
-
-Replication creates a new unsaved copy of an existing model instance.
+Three options make the model throw instead of silently doing extra or wrong work. They're most useful in development and tests.
 
 ```ts
-const post = await Post.findOrFail(1)
-const duplicate = post.replicate()
-
-duplicate.slug = 'copied-post'
-await duplicate.save()
+export default defineModel('posts', {
+  preventLazyLoading: true,
+  preventAccessingMissingAttributes: true,
+})
 ```
 
-Use replication when most of the source attributes should be carried over, but the new row still needs its
-own identity and any workflow-specific adjustments.
+- `preventLazyLoading` throws when you access a relationship you didn't [eager load](/orm/relationships/loading).
+- `preventAccessingMissingAttributes` throws when you read a column that wasn't selected, instead of returning `undefined`.
+- `automaticEagerLoading` loads a relationship for the whole result set the first time you access it on one record.
 
-## Read Next
+You can also toggle them at runtime: `Post.preventLazyLoading()`, `Post.preventAccessingMissingAttributes()`, `Post.automaticallyEagerLoadRelationships()`. Each takes an optional boolean.
 
-- [Relationships](/orm/relationships)
-- [Collections](/orm/collections)
-- [Mutators / Casts](/orm/mutators-casts)
-- [Serialization](/orm/serialization)
-- [Factories](/orm/factories)
+## Model options reference
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `name` | `string` | Model name. Defaults to the singular PascalCase table name. |
+| `primaryKey` | column | Primary key column. Defaults to the migration's primary key. |
+| `connectionName` | `string` | Named database connection. |
+| `fillable` | column[] | Columns allowed in mass assignment. `'*'` allows all. |
+| `guarded` | column[] | Columns blocked from mass assignment. `'*'` blocks all. |
+| `timestamps` | `boolean` | Fill `created_at` and `updated_at` when those columns exist. Default `true`. |
+| `createdAtColumn` | column | Custom created-at column. |
+| `updatedAtColumn` | column | Custom updated-at column. |
+| `softDeletes` | `boolean` | Enable soft deletes. Default `false`. |
+| `deletedAtColumn` | column | Custom deleted-at column. Default `deleted_at`. |
+| `pendingAttributes` | object | Default values for new records. |
+| `traits` | array | Unique ID trait: `HasUuids()`, `HasUlids()`, `HasSnowflakes()`, `HasUniqueIds()`. |
+| `uniqueIds` | column[] | Columns that get generated IDs. Overrides the trait's `columns`. |
+| `newUniqueId` | `() => string` | Custom ID generator. |
+| `scopes` | object | [Local scopes](/orm/scopes). |
+| `globalScopes` | object | [Global scopes](/orm/scopes#global-scopes). |
+| `relations` | object | [Relationships](/orm/relationships/). |
+| `with` | `string[]` | Relationships to always eager load. |
+| `touches` | `string[]` | Parent relations whose `updated_at` to refresh. |
+| `casts` | object | [Attribute casts](/orm/casts). |
+| `accessors` | object | [Accessors](/orm/casts). |
+| `mutators` | object | [Mutators](/orm/casts). |
+| `hidden` | `string[]` | Attributes left out of JSON. See [serialization](/orm/serialization). |
+| `visible` | `string[]` | Only these attributes appear in JSON. |
+| `appended` | `string[]` | Accessors added to JSON. |
+| `serializeDate` | `(date: Date) => unknown` | How dates are written to JSON. |
+| `collection` | function | Custom [collection](/orm/collections) factory. |
+| `events` | object | Inline [model events](/orm/observers). |
+| `observers` | array | [Observers](/orm/observers). |
+| `prunable` | `(query) => query` | Rows that `prune()` deletes. |
+| `massPrunable` | `boolean` | Prune with one query, without events. |
+| `replicationExcludes` | `string[]` | Columns that `replicate()` never copies. |
+| `morphClass` | `string` | Type value stored in [polymorphic](/orm/relationships/through-and-polymorphic) columns. Defaults to the model name. |
+| `preventLazyLoading` | `boolean` | Throw on lazy relationship access. |
+| `preventAccessingMissingAttributes` | `boolean` | Throw when reading unselected columns. |
+| `automaticEagerLoading` | `boolean` | Load a relationship for the whole result set on first access. |
+
+## Next steps
+
+- [Querying models](/orm/querying)
+- [Creating and updating](/orm/writes)
+- [Scopes](/orm/scopes)
+- [Relationships](/orm/relationships/)

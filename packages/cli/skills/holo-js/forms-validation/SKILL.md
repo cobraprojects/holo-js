@@ -3,12 +3,12 @@ name: holo-forms-validation
 description: Implement or review Holo-JS schemas, request validation, form state, error handling, and framework form integration.
 metadata:
   type: focused
-  source: https://docs.holo-js.com/forms/framework-integration
+  source: https://docs.holo-js.com/basics/forms/frameworks
 ---
 
 # Forms and validation
 
-Use one shared Holo schema as the contract between the browser and server. Read [forms](https://docs.holo-js.com/forms/), [client usage](https://docs.holo-js.com/forms/client-usage), [server validation](https://docs.holo-js.com/forms/server-validation), and [framework integration](https://docs.holo-js.com/forms/framework-integration).
+Use one shared Holo schema as the contract between the browser and server. Read [forms](https://docs.holo-js.com/basics/forms/), [client usage](https://docs.holo-js.com/basics/forms/client), [server validation](https://docs.holo-js.com/basics/forms/server), and [framework integration](https://docs.holo-js.com/basics/forms/frameworks).
 
 ## Workflow
 

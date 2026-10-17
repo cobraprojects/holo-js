@@ -3,12 +3,12 @@ name: holo-broadcast-realtime
 description: Implement Holo-JS broadcast events, channel authorization, realtime servers, WebSockets, Flux synchronization, and framework client subscriptions.
 metadata:
   type: focused
-  source: https://docs.holo-js.com/broadcast/
+  source: https://docs.holo-js.com/broadcasting/
 ---
 
 # Broadcasting and realtime
 
-Use [broadcast event and channel definitions](https://docs.holo-js.com/broadcast/defining-events-and-channels), [drivers](https://docs.holo-js.com/broadcast/config-and-drivers), [Flux and framework clients](https://docs.holo-js.com/broadcast/flux-and-frameworks), [deployment and scaling](https://docs.holo-js.com/broadcast/deployment-and-scaling), and [realtime](https://docs.holo-js.com/realtime/).
+Use [broadcast event and channel definitions](https://docs.holo-js.com/broadcasting/events-and-channels), [drivers](https://docs.holo-js.com/broadcasting/drivers), [Flux and framework clients](https://docs.holo-js.com/broadcasting/client), [deployment and scaling](https://docs.holo-js.com/broadcasting/production), and [realtime](https://docs.holo-js.com/realtime/).
 
 ## Architecture
 

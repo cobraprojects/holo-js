@@ -1,185 +1,269 @@
 # Transactions
 
-Transactions use explicit runtime context and connection pinning so overlapping async work remains safe.
+A transaction groups several writes so they all succeed or all fail together. Wrap the work in `DB.transaction()`. If the callback throws, every change inside it is rolled back.
 
-That design matters in JavaScript runtimes where async work can interleave more easily than many backend
-developers expect. The framework pins transaction work to the active connection or session and keeps that
-context attached to repositories and entities created inside the transaction.
+## Quick example
 
-## Basic transaction
+```ts [server/lib/orders.ts]
+import { DB } from '@holo-js/db'
+import Order from '../models/Order'
+import Product from '../models/Product'
 
-```ts
-await DB.transaction(async (tx) => {
-  await tx.table('users').insert({ name: 'Ava' })
-  await tx.table('profiles').insert({ user_id: 1 })
-})
-```
+export async function placeOrder(userId: number, productId: number) {
+  return DB.transaction(async () => {
+    const product = await Product.findOrFail(productId)
 
-Transaction-scoped work is pinned to one leased connection or session for correctness.
+    if (product.stock < 1) {
+      throw new Error('Out of stock')
+    }
 
-Use a transaction when several writes must succeed or fail together.
+    await Product.where('id', productId).decrement('stock')
 
-## Returning values from a transaction
-
-```ts
-const user = await DB.transaction(async (tx) => {
-  const id = await tx.table('users').insertGetId({
-    name: 'Ava',
-    email: 'ava@example.com',
+    return Order.create({ user_id: userId, product_id: productId })
   })
+}
+```
 
-  return User.findOrFail(id)
+The callback's return value becomes the return value of `DB.transaction()`. The transaction commits when the callback resolves and rolls back when it throws.
+
+## Models join the transaction automatically
+
+Models, relationships, and `DB.table()` calls inside the callback use the open transaction. You don't pass anything around.
+
+```ts
+import { DB } from '@holo-js/db'
+import Post from '../models/Post'
+
+const post = await DB.transaction(async () => {
+  const post = await Post.create({ title: 'Hello', body: 'First post', user_id: authorId })
+  await post.tags().attach([1, 2])
+  return post
 })
 ```
 
-Return values from the transaction callback when the calling workflow needs the created record or some
-derived result. The transaction itself remains the boundary, not a side channel.
+This works across `await` calls and helper functions, because Holo tracks the active transaction for the whole async call chain.
 
-## Write transactions
+## Using the transaction object
 
-Use `DB.writeTransaction(...)` for read-then-write workflows where the operation is expected to modify data:
+The callback also receives the transaction connection. Use it for table queries when you want to be explicit:
 
 ```ts
-await DB.writeTransaction(async (tx) => {
-  const product = await tx.table('products')
-    .where('id', productId)
-    .first<{ id: number, quantity: number }>()
+import { DB } from '@holo-js/db'
 
-  if (!product || product.quantity < requestedQty) {
+await DB.transaction(async (tx) => {
+  const id = await tx.table('users').insertGetId({ name: 'Ava', email: 'ava@example.com' })
+  await tx.table('profiles').insert({ user_id: id, locale: 'en' })
+})
+```
+
+`tx.table(...)` and `DB.table(...)` behave the same inside the callback.
+
+## Nested transactions
+
+Calling `DB.transaction()` inside another transaction creates a savepoint. If the inner callback throws, only its changes are undone. The outer transaction keeps going.
+
+```ts
+import { DB } from '@holo-js/db'
+
+await DB.transaction(async (tx) => {
+  await tx.table('tenants').insert({ name: 'Acme' })
+
+  try {
+    await DB.transaction(async (nested) => {
+      await nested.table('tenant_settings').insert({ tenant_name: 'Acme', theme: 'dark' })
+      throw new Error('Settings failed')
+    })
+  } catch {
+    // tenant row is kept, settings row is undone
+  }
+})
+```
+
+If the outer transaction fails, everything is rolled back, including inner savepoints that succeeded. SQLite, PostgreSQL, and MySQL all support savepoints.
+
+## Run code after commit
+
+Use `DB.afterCommit()` for side effects that should only happen once the data is saved, like sending email or dispatching a job.
+
+```ts
+import { DB } from '@holo-js/db'
+import User from '../models/User'
+import { sendWelcomeEmail } from './mail'
+
+await DB.transaction(async () => {
+  const user = await User.create({ name: 'Ava', email: 'ava@example.com' })
+
+  DB.afterCommit(() => sendWelcomeEmail(user.email))
+})
+```
+
+If the transaction rolls back, the callback never runs. Use `DB.afterRollback()` to clean up after a failure:
+
+```ts
+DB.afterRollback(() => deleteUploadedFile(uploadedPath))
+```
+
+How the callbacks run:
+
+- `afterCommit` callbacks run in the order you registered them, after the outermost transaction commits.
+- Callbacks registered inside a nested transaction wait for the outer commit. If the nested transaction fails, its `afterCommit` callbacks are dropped and its `afterRollback` callbacks run right away.
+- `afterRollback` callbacks run in reverse order.
+- Callbacks run outside the transaction, so queries inside them see the committed data.
+- On transaction objects, the same methods exist as `tx.afterCommit()` and `tx.afterRollback()`.
+
+::: warning
+Calling `DB.afterCommit()` or `DB.afterRollback()` outside a transaction throws a `TransactionError`.
+
+If an `afterCommit` callback throws, the data stays committed, but `DB.transaction()` rejects with a `TransactionError` and the remaining `afterCommit` callbacks are skipped. Handle errors inside the callback if the caller shouldn't see them.
+:::
+
+## Write transactions on SQLite
+
+SQLite allows one writer at a time. For read-then-write work, use `DB.writeTransaction()`. On SQLite it reserves the writer as soon as the transaction starts, so two requests can't read the same row and then both try to write.
+
+```ts
+import { DB } from '@holo-js/db'
+
+await DB.writeTransaction(async (tx) => {
+  const stock = await tx.table('products').where('id', productId).value('stock')
+
+  if (typeof stock !== 'number' || stock < quantity) {
     throw new Error('Out of stock')
   }
 
-  await tx.table('products')
-    .where('id', productId)
-    .update({ quantity: product.quantity - requestedQty })
+  await tx.table('products').where('id', productId).update({ stock: stock - quantity })
 })
 ```
 
-On SQLite, `writeTransaction(...)` starts the transaction in write mode so competing write workflows coordinate
-earlier. On other drivers, it behaves like a normal transaction.
+On PostgreSQL and MySQL, `writeTransaction()` behaves like `transaction()`, so it is safe to use in code that runs on any driver.
 
-The same connection argument shape is available when you need a named connection:
+### SQLite transaction modes
 
-```ts
-await DB.writeTransaction(async (tx) => {
-  await tx.table('jobs').where('status', 'pending').update({ status: 'running' })
-}, 'primary')
-```
-
-## SQLite transaction modes
-
-SQLite transactions can receive an explicit mode:
+To choose the SQLite lock mode yourself, pass `mode`:
 
 ```ts
 await DB.transaction(async (tx) => {
-  await tx.table('accounts')
-    .where('id', accountId)
-    .update({ balance: newBalance })
+  await tx.table('accounts').where('id', accountId).update({ balance })
 }, { mode: 'immediate' })
 ```
 
-For a named connection, pass the mode after the connection name:
+| Mode | Behavior |
+| --- | --- |
+| `deferred` | SQLite's default. The write lock is taken at the first write |
+| `immediate` | Takes the write lock when the transaction starts. This is what `writeTransaction()` uses |
+| `exclusive` | Takes an exclusive lock when the transaction starts |
+
+`mode` only works on SQLite connections and only on the outermost transaction. Anywhere else it throws.
+
+## Locking rows
+
+On PostgreSQL and MySQL, lock the rows you read so another transaction can't change them until you commit:
+
+```ts
+import { DB } from '@holo-js/db'
+
+await DB.transaction(async (tx) => {
+  const account = await tx.table('accounts').where('id', accountId).lockForUpdate().first()
+
+  await tx.table('accounts').where('id', accountId).update({
+    balance: Number(account?.balance) - amount,
+  })
+})
+```
+
+Use `sharedLock()` to stop other transactions from writing the rows while still letting them read. Locks only apply inside a transaction. On SQLite they are ignored; use `writeTransaction()` instead.
+
+## Transactions on a named connection
+
+Pass the connection name after the callback, and options after that:
 
 ```ts
 await DB.transaction(async (tx) => {
-  await tx.table('accounts')
-    .where('id', accountId)
-    .update({ balance: newBalance })
-}, 'sqlite', { mode: 'immediate' })
+  await tx.table('page_views').insert({ path: '/pricing' })
+}, 'analytics')
+
+await DB.transaction(async (tx) => {
+  await tx.table('jobs').where('status', 'pending').update({ status: 'running' })
+}, 'main', { mode: 'immediate' })
 ```
 
-Available SQLite modes:
+`DB.afterCommit(callback, 'analytics')` registers a callback on that connection's transaction. See [multiple connections](/database/connections).
 
-- `deferred`: the default SQLite transaction behavior
-- `immediate`: reserve the writer when the transaction starts
-- `exclusive`: use an exclusive transaction when the workflow intentionally needs that stronger boundary
+## Timeouts and cancellation
 
-Use `writeTransaction(...)` when you simply want the recommended write workflow. Use `transaction(..., { mode })`
-when the SQLite mode itself is part of the application decision.
-
-Pass `mode` only to the outermost SQLite transaction. Nested workflows should keep using the active transaction
-boundary.
-
-## Model usage inside a transaction
-
-```ts
-await DB.transaction(async () => {
-  const user = await User.create({ name: 'Ava', email: 'ava@example.com' })
-  await user.profile().create({ locale: 'en' })
-})
-```
-
-Model repositories and entities created inside the transaction bind to the active transaction context.
-
-That means follow-up relation writes, scopes, and repository calls keep using the same pinned transaction
-instead of silently escaping to a root connection.
-
-This is one of the main reasons to use the model layer inside transactions: the runtime keeps the context
-bound for you.
-
-## Nested workflows
-
-```ts
-await DB.transaction(async () => {
-  const user = await User.create({ name: 'Ava', email: 'ava@example.com' })
-
-  await user.posts().createMany([
-    { title: 'First post' },
-    { title: 'Second post' },
-  ])
-})
-```
-
-This is the normal application pattern. A transaction wraps one business operation, and the nested model
-work stays inside it.
-
-## Savepoints and nested work
-
-Drivers expose savepoint hooks where supported. The runtime reuses the active transaction rather than
-silently opening unrelated root transactions.
-
-If a driver supports savepoints, nested workflows can participate without losing isolation. If it does
-not, the runtime still keeps the work inside the active transaction boundary instead of pretending nested
-transactions are independent.
-
-## Scheduler behavior
-
-Non-transactional work can be scheduled concurrently. Transaction-scoped work is serialized so pinned
-transaction queries do not overlap unsafely.
-
-PostgreSQL and MySQL pools can run independent transactions concurrently on separate leased connections.
-When an adapter uses a single injected client, independent transactions run one at a time on that client.
-
-## Abort and timeout control
-
-Transactions accept the same operation options as other runtime calls:
-
-- `signal` for cancellation
-- `timeoutMs` for bounded execution windows
-
-Use those when a request should not be allowed to wait indefinitely on the database.
-
-## Cancellation and timeout
-
-Database operations can receive `signal` and `timeoutMs` options. Aborts and timeouts are enforced by the
-runtime layer around query, execute, and transaction lifecycle calls.
+Pass `timeoutMs` or an `AbortSignal` to stop a transaction that takes too long:
 
 ```ts
 const controller = new AbortController()
 
-await DB.transaction(
-  async (tx) => {
-    await tx.table('users').where('active', true).update({ active: false })
-  },
-  { signal: controller.signal, timeoutMs: 5000 }
-)
+await DB.transaction(async (tx) => {
+  await tx.table('users').where('active', false).delete()
+}, { timeoutMs: 5000, signal: controller.signal })
 ```
 
-## Practical rules
+`timeoutMs` must be a positive integer. A timeout or abort rolls the transaction back and throws a `TransactionError`.
 
-- keep a transaction scoped to one business workflow
-- avoid long-running external I/O inside the transaction callback
-- return a value from the callback instead of mutating outer state when possible
-- use `writeTransaction(...)` for SQLite read-then-write workflows that should reserve the writer immediately
-- use model and relation helpers freely inside the transaction; they stay bound to the active context
-- do not wrap unrelated route work in one large transaction just because it is convenient
+## Concurrent transactions
+
+On PostgreSQL and MySQL, independent transactions run in parallel, each on its own pooled connection. On SQLite, transactions on the same connection run one at a time. Either way, queries inside one transaction never mix with another.
+
+::: tip
+Keep transactions short. Don't call external APIs or wait on user input inside the callback. Move that work into `DB.afterCommit()`.
+:::
+
+## Method reference
+
+### transaction()
+
+Runs `callback` in a transaction. Nested calls create savepoints. The callback receives the transaction connection.
+
+```ts
+await DB.transaction(async (tx) => {
+  await tx.table('users').insert({ name: 'Ava' })
+}, 'main', { timeoutMs: 5000 })
+```
+
+### writeTransaction()
+
+Same arguments as `transaction()`. On SQLite it defaults `mode` to `'immediate'` for the outermost transaction. On other drivers it behaves like `transaction()`. An explicit `mode` option overrides the default.
+
+```ts
+await DB.writeTransaction(async (tx) => {
+  await tx.table('products').where('id', productId).decrement('stock')
+}, { mode: 'exclusive' })
+```
+
+### afterCommit()
+
+Registers a callback that runs after the outermost transaction commits, in the order you registered them. Callbacks run outside the transaction. Call it on `DB` or on a transaction connection such as `tx`.
+
+```ts
+DB.afterCommit(() => sendWelcomeEmail(user.email))
+```
+
+### afterRollback()
+
+Registers a callback that runs when the transaction rolls back. When several are registered, they run in reverse order.
+
+```ts
+DB.afterRollback(() => deleteUploadedFile(uploadedPath))
+```
+
+## Transaction options
+
+Every transaction method accepts an options object as its last argument.
+
+| Option | Type | What it does |
+| --- | --- | --- |
+| `mode` | `'deferred' \| 'immediate' \| 'exclusive'` | SQLite lock mode. Other drivers throw a `CapabilityError` |
+| `timeoutMs` | positive integer | Rolls back and throws a `TransactionError` when the transaction runs longer |
+| `signal` | `AbortSignal` | Rolls back and throws a `TransactionError` when aborted |
+
+Pass the connection name before the options when you use a named connection, as shown in [Transactions on a named connection](#transactions-on-a-named-connection).
+
+## Next steps
+
+- [Inserts, updates, and deletes](/database/query-builder/writes)
+- [Creating and updating models](/orm/writes)
+- [Multiple connections](/database/connections)
+- [After-commit events](/events/after-commit)

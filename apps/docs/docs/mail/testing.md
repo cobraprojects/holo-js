@@ -1,63 +1,100 @@
-# Testing Mails
+# Testing Mail
 
-When testing your application, you can use the fake mail driver to inspect sent emails:
+Use the `fake` mailer in tests. It records every mail in memory instead of sending it, so you can assert who got what.
 
-## Configuration
-
-```ts
-// config/mail.ts (test environment)
-export default defineMailConfig({
-  default: 'fake'
-})
-```
-
-## Inspecting Sent Emails
-
-Then in your tests:
-
-```ts
+```ts [tests/registration.test.ts]
+import { afterEach, expect, it } from 'vitest'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
+import { registerUser } from '../server/lib/registration'
 
-test('sends welcome email when user registers', async () => {
-  // Perform user registration
-  await registerUser({ email: 'test@example.com' })
-  
-  // Get the sent emails
-  const sentMails = listFakeSentMails()
-  
-  // Assert emails were sent
-  expect(sentMails).toHaveLength(1)
-  expect(sentMails[0].mail.to).toContainEqual({
-    email: 'test@example.com'
-  })
-  expect(sentMails[0].mail.subject).toBe('Welcome!')
-
+afterEach(() => {
   resetFakeSentMails()
 })
-```
 
-## Fake Mail Data Structure
+it('sends a welcome email after registration', async () => {
+  await registerUser({ email: 'ava@example.com', name: 'Ava' })
 
-`listFakeSentMails()` returns immutable delivery records. The normalized message is available through each record's
-`mail` property, while `context` and `result` describe the driver execution.
+  const sent = listFakeSentMails()
 
-```ts
-type FakeSentMail = {
-  messageId: string
-  createdAt: Date
-  mail: ResolvedMail
-  context: MailDriverExecutionContext
-  result: MailSendResult
-}
-```
-
-## Testing with Different Drivers
-
-You can also test with other drivers by changing your test configuration:
-
-```ts
-// For logging emails during test
-export default defineMailConfig({
-  default: 'log'
+  expect(sent).toHaveLength(1)
+  expect(sent[0]?.mail.subject).toBe('Welcome, Ava')
+  expect(sent[0]?.mail.to).toEqual([{ email: 'ava@example.com' }])
 })
 ```
+
+## Use the fake mailer in tests
+
+Set the default mailer to `fake` in your test environment. With the scaffolded `config/mail.ts`, that's one variable:
+
+```ini [.env.test]
+MAIL_MAILER=fake
+```
+
+See [Testing your app](/testing/) for how test environments and env files are loaded.
+
+## Inspect sent mail
+
+`listFakeSentMails()` returns one record per sent mail, oldest first:
+
+| Field | Contents |
+| --- | --- |
+| `mail` | The rendered mail: `from`, `replyTo`, `to`, `cc`, `bcc`, `subject`, `html`, `text`, `attachments`, `headers`, `tags`, `metadata`, `priority`. |
+| `messageId` | The ID Holo generated for the send. |
+| `createdAt` | When the fake received it. |
+| `context` | The `mailer` and `driver` used, and whether it was `queued`. |
+| `result` | The value `sendMail()` resolved with. |
+
+Addresses are normalized: lowercased, with `name` only present when you set one.
+
+```ts
+const [welcome] = listFakeSentMails()
+
+expect(welcome?.mail.html).toContain('<h1>Welcome</h1>')
+expect(welcome?.mail.text).toContain('Your account is ready.')
+expect(welcome?.mail.attachments.map(file => file.name)).toEqual(['invoice.pdf'])
+```
+
+Call `resetFakeSentMails()` between tests so records from one test don't leak into the next.
+
+## Test a mail on its own
+
+To check a mail's content without running the code that sends it, render it with [`previewMail()`](/mail/previewing#preview-in-code):
+
+```ts
+import { expect, it } from 'vitest'
+import { previewMail } from '@holo-js/mail'
+import OrderShippedMail from '../server/mail/order-shipped'
+
+it('links to the tracking page', async () => {
+  const preview = await previewMail(OrderShippedMail({
+    to: 'ava@example.com',
+    orderNumber: 'A-1001',
+    trackingUrl: 'https://track.example.com/A-1001',
+  }))
+
+  expect(preview.subject).toBe('Order A-1001 has shipped')
+  expect(preview.html).toContain('href="https://track.example.com/A-1001"')
+})
+```
+
+## Queued mail in tests
+
+The fake records mail in the process that actually delivers it. Use the `sync` queue driver in tests so queued mail is delivered right away and shows up in `listFakeSentMails()`. With an async queue driver, the mail would be delivered later by a worker process and never reach the test's fake.
+
+## Notification emails
+
+Email [notifications](/notifications/) are delivered through mail, so they also appear in `listFakeSentMails()`. See [Testing notifications](/notifications/testing).
+
+## Helper reference
+
+| Helper | What it does |
+| --- | --- |
+| `listFakeSentMails()` | Returns every mail the `fake` mailer recorded, oldest first. |
+| `resetFakeSentMails()` | Clears the `fake` mailer's records. |
+| `listPreviewMailArtifacts()` | Returns every mail the `preview` mailer recorded in this process. See [Previewing mail](/mail/previewing#save-every-sent-email). |
+| `resetPreviewMailArtifacts()` | Clears the in-memory preview records. It doesn't delete the files. |
+
+## Next steps
+
+- [Faking services](/testing/fakes)
+- [Previewing mail](/mail/previewing)

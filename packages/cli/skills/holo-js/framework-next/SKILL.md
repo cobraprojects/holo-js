@@ -3,12 +3,12 @@ name: holo-framework-next
 description: Integrate Holo-JS with Next.js route handlers, server actions, request context, auth, validation, forms, redirects, and client Flux state.
 metadata:
   type: focused
-  source: https://docs.holo-js.com/runtime-services
+  source: https://docs.holo-js.com/basics/services
 ---
 
 # Next.js integration
 
-Use `@holo-js/adapter-next`. Read [runtime services](https://docs.holo-js.com/runtime-services), [routing](https://docs.holo-js.com/routing), [form framework integration](https://docs.holo-js.com/forms/framework-integration), and [current auth client](https://docs.holo-js.com/auth/current-auth-client).
+Use `@holo-js/adapter-next`. Read [runtime services](https://docs.holo-js.com/basics/services), [routing](https://docs.holo-js.com/basics/routing), [form framework integration](https://docs.holo-js.com/basics/forms/frameworks), and [current auth client](https://docs.holo-js.com/auth/current-user).
 
 ## Integration rules
 

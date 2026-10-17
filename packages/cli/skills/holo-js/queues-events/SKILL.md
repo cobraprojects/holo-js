@@ -8,7 +8,7 @@ metadata:
 
 # Queues and events
 
-Read [event pattern selection](https://docs.holo-js.com/events/choosing-patterns), [event definitions](https://docs.holo-js.com/events/defining-events), [listeners](https://docs.holo-js.com/events/defining-listeners), [queued listeners](https://docs.holo-js.com/events/queued-listeners), [after-commit dispatch](https://docs.holo-js.com/events/transactions-after-commit), [jobs](https://docs.holo-js.com/queue/jobs), [workers](https://docs.holo-js.com/queue/workers), and [failed jobs](https://docs.holo-js.com/queue/failed-jobs).
+Read [event pattern selection](https://docs.holo-js.com/events/choosing-patterns), [event definitions](https://docs.holo-js.com/events/defining-events), [listeners](https://docs.holo-js.com/events/listeners), [queued listeners](https://docs.holo-js.com/events/queued-listeners), [after-commit dispatch](https://docs.holo-js.com/events/after-commit), [jobs](https://docs.holo-js.com/queue/jobs), [workers](https://docs.holo-js.com/queue/workers), and [failed jobs](https://docs.holo-js.com/queue/failed-jobs).
 
 ## Choose the mechanism
 

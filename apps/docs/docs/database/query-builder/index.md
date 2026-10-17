@@ -1,375 +1,393 @@
 # Query Builder
 
-The query builder is Holo-JS's direct SQL-shaped database API. It is designed for precise table queries,
-reporting flows, operational jobs, and endpoints that need rows rather than entities.
+The query builder lets you write SQL queries in a fluent, chainable way. Use it when you want plain rows back — reports, dashboards, exports, background jobs — instead of [models](/orm/). Every value you pass is sent as a bound parameter, so you never build SQL strings by hand.
 
-## Introduction
+```ts [server/lib/posts.ts]
+import { DB } from '@holo-js/db'
 
-Use the query builder when:
+export async function recentPublishedPosts() {
+  return await DB.table('posts')
+    .select('id', 'title', 'published_at')
+    .where('status', 'published')
+    .orderBy('published_at', 'desc')
+    .limit(10)
+    .get()
+}
+```
 
-- you need direct table access
-- you want a projection instead of model entities
-- the query spans tables that do not belong to one model
-- you need joins, subqueries, aggregates, pagination, or locking without model behavior
+`DB` uses the connections from your `config/database.ts`. See [Database: Getting Started](/database/) for setup.
 
-If the query belongs to a domain record and should carry relations, casts, scopes, or serialization, use
-the ORM instead.
+## Available methods
 
-## Running Database Queries
+Every query builder method, grouped by what it does. Each name links to its entry.
+
+**Start and choose a connection**
+
+- [table()](/database/#table) on `DB`, then [from()](#from), [getTableName()](/database/query-builder/selects-and-filters#gettablename), [getConnectionName()](/database/query-builder/selects-and-filters#getconnectionname), [getConnection()](/database/query-builder/selects-and-filters#getconnection)
+
+**Select columns**
+
+- [select()](/database/query-builder/selects-and-filters#select), [addSelect()](/database/query-builder/selects-and-filters#addselect), [distinct()](/database/query-builder/selects-and-filters#distinct)
+- [selectCount()](/database/query-builder/selects-and-filters#selectcount), [addSelectCount()](/database/query-builder/selects-and-filters#addselectcount), [selectSum()](/database/query-builder/selects-and-filters#selectsum), [addSelectSum()](/database/query-builder/selects-and-filters#addselectsum), [selectAvg()](/database/query-builder/selects-and-filters#selectavg), [addSelectAvg()](/database/query-builder/selects-and-filters#addselectavg), [selectMin()](/database/query-builder/selects-and-filters#selectmin), [addSelectMin()](/database/query-builder/selects-and-filters#addselectmin), [selectMax()](/database/query-builder/selects-and-filters#selectmax), [addSelectMax()](/database/query-builder/selects-and-filters#addselectmax)
+- [selectSub()](/database/query-builder/joins-and-subqueries#selectsub), [addSelectSub()](/database/query-builder/joins-and-subqueries#addselectsub), [unsafeSelect()](/database/query-builder/joins-and-subqueries#unsafeselect), [addUnsafeSelect()](/database/query-builder/joins-and-subqueries#addunsafeselect)
+
+**Filter rows**
+
+- [where()](/database/query-builder/selects-and-filters#where), [orWhere()](/database/query-builder/selects-and-filters#orwhere), [whereNot()](/database/query-builder/selects-and-filters#wherenot), [orWhereNot()](/database/query-builder/selects-and-filters#orwherenot)
+- [whereNull()](/database/query-builder/selects-and-filters#wherenull), [orWhereNull()](/database/query-builder/selects-and-filters#orwherenull), [whereNotNull()](/database/query-builder/selects-and-filters#wherenotnull), [orWhereNotNull()](/database/query-builder/selects-and-filters#orwherenotnull), [withoutWhereNull()](/database/query-builder/selects-and-filters#withoutwherenull), [withoutWhereNotNull()](/database/query-builder/selects-and-filters#withoutwherenotnull)
+- [whereIn()](/database/query-builder/selects-and-filters#wherein), [whereNotIn()](/database/query-builder/selects-and-filters#wherenotin), [whereBetween()](/database/query-builder/selects-and-filters#wherebetween), [whereNotBetween()](/database/query-builder/selects-and-filters#wherenotbetween)
+- [whereLike()](/database/query-builder/selects-and-filters#wherelike), [orWhereLike()](/database/query-builder/selects-and-filters#orwherelike), [whereColumn()](/database/query-builder/selects-and-filters#wherecolumn)
+- [whereAny()](/database/query-builder/selects-and-filters#whereany), [whereAll()](/database/query-builder/selects-and-filters#whereall), [whereNone()](/database/query-builder/selects-and-filters#wherenone)
+- [whereDate()](/database/query-builder/selects-and-filters#wheredate), [whereMonth()](/database/query-builder/selects-and-filters#wheremonth), [whereDay()](/database/query-builder/selects-and-filters#whereday), [whereYear()](/database/query-builder/selects-and-filters#whereyear), [whereTime()](/database/query-builder/selects-and-filters#wheretime)
+- [whereJson()](/database/query-builder/selects-and-filters#wherejson), [orWhereJson()](/database/query-builder/selects-and-filters#orwherejson), [whereJsonContains()](/database/query-builder/selects-and-filters#wherejsoncontains), [orWhereJsonContains()](/database/query-builder/selects-and-filters#orwherejsoncontains), [whereJsonLength()](/database/query-builder/selects-and-filters#wherejsonlength), [orWhereJsonLength()](/database/query-builder/selects-and-filters#orwherejsonlength)
+- [whereFullText()](/database/query-builder/selects-and-filters#wherefulltext), [orWhereFullText()](/database/query-builder/selects-and-filters#orwherefulltext), [whereVectorSimilarTo()](/database/query-builder/selects-and-filters#wherevectorsimilarto), [orWhereVectorSimilarTo()](/database/query-builder/selects-and-filters#orwherevectorsimilarto)
+- [whereExists()](/database/query-builder/joins-and-subqueries#whereexists), [orWhereExists()](/database/query-builder/joins-and-subqueries#orwhereexists), [whereNotExists()](/database/query-builder/joins-and-subqueries#wherenotexists), [orWhereNotExists()](/database/query-builder/joins-and-subqueries#orwherenotexists)
+- [whereSub()](/database/query-builder/joins-and-subqueries#wheresub), [orWhereSub()](/database/query-builder/joins-and-subqueries#orwheresub), [whereInSub()](/database/query-builder/joins-and-subqueries#whereinsub), [whereNotInSub()](/database/query-builder/joins-and-subqueries#wherenotinsub)
+- [unsafeWhere()](/database/query-builder/joins-and-subqueries#unsafewhere), [orUnsafeWhere()](/database/query-builder/joins-and-subqueries#orunsafewhere)
+- [when()](/database/query-builder/selects-and-filters#when), [unless()](/database/query-builder/selects-and-filters#unless)
+
+**Join and combine queries**
+
+- [join()](/database/query-builder/joins-and-subqueries#join), [leftJoin()](/database/query-builder/joins-and-subqueries#leftjoin), [rightJoin()](/database/query-builder/joins-and-subqueries#rightjoin), [crossJoin()](/database/query-builder/joins-and-subqueries#crossjoin)
+- [joinSub()](/database/query-builder/joins-and-subqueries#joinsub), [leftJoinSub()](/database/query-builder/joins-and-subqueries#leftjoinsub), [rightJoinSub()](/database/query-builder/joins-and-subqueries#rightjoinsub)
+- [joinLateral()](/database/query-builder/joins-and-subqueries#joinlateral), [leftJoinLateral()](/database/query-builder/joins-and-subqueries#leftjoinlateral)
+- [union()](/database/query-builder/joins-and-subqueries#union), [unionAll()](/database/query-builder/joins-and-subqueries#unionall)
+
+**Group, order, and limit**
+
+- [groupBy()](/database/query-builder/selects-and-filters#groupby), [having()](/database/query-builder/selects-and-filters#having), [havingBetween()](/database/query-builder/selects-and-filters#havingbetween)
+- [orderBy()](/database/query-builder/selects-and-filters#orderby), [latest()](/database/query-builder/selects-and-filters#latest), [oldest()](/database/query-builder/selects-and-filters#oldest), [inRandomOrder()](/database/query-builder/selects-and-filters#inrandomorder), [reorder()](/database/query-builder/selects-and-filters#reorder), [orderByVectorSimilarity()](/database/query-builder/selects-and-filters#orderbyvectorsimilarity), [unsafeOrderBy()](/database/query-builder/joins-and-subqueries#unsafeorderby)
+- [limit()](/database/query-builder/selects-and-filters#limit), [offset()](/database/query-builder/selects-and-filters#offset), [skip()](/database/query-builder/selects-and-filters#skip), [take()](/database/query-builder/selects-and-filters#take), [forPage()](/database/query-builder/selects-and-filters#forpage)
+- [lock()](/database/query-builder/selects-and-filters#lock), [lockForUpdate()](/database/query-builder/selects-and-filters#lockforupdate), [sharedLock()](/database/query-builder/selects-and-filters#sharedlock)
+
+**Read rows**
+
+- [get()](#get), [first()](#first), [find()](#find), [sole()](#sole)
+- [value()](#value), [valueOrFail()](#valueorfail), [soleValue()](#solevalue), [pluck()](#pluck)
+- [exists()](#exists), [doesntExist()](#doesntexist)
+- [count()](#count), [sum()](#sum), [avg()](#avg), [min()](#min), [max()](#max)
+- [paginate()](/database/pagination#paginate), [simplePaginate()](/database/pagination#simplepaginate), [cursorPaginate()](/database/pagination#cursorpaginate)
+- [chunk()](/database/query-builder/chunking#chunk), [chunkById()](/database/query-builder/chunking#chunkbyid), [chunkByIdDesc()](/database/query-builder/chunking#chunkbyiddesc), [lazy()](/database/query-builder/chunking#lazy), [cursor()](/database/query-builder/chunking#cursor)
+
+**Write rows**
+
+- [insert()](/database/query-builder/writes#insert), [insertOrIgnore()](/database/query-builder/writes#insertorignore), [insertGetId()](/database/query-builder/writes#insertgetid), [upsert()](/database/query-builder/writes#upsert)
+- [update()](/database/query-builder/writes#update), [updateJson()](/database/query-builder/writes#updatejson), [increment()](/database/query-builder/writes#increment), [decrement()](/database/query-builder/writes#decrement), [delete()](/database/query-builder/writes#delete)
+
+**Debug, cache, and raw SQL**
+
+- [toSQL()](#tosql), [debug()](#debug), [dump()](#dump), [cache()](#cache)
+- [unsafeQuery()](/database/query-builder/joins-and-subqueries#unsafequery), [unsafeExecute()](/database/query-builder/joins-and-subqueries#unsafeexecute)
+
+## Start a query
+
+Call `DB.table()` with a table name. Each chained method returns a new query, so you can build a base query and reuse it safely.
 
 ```ts
-const users = await DB.table('users')
-  .select('id', 'name', 'email')
-  .where('active', true)
-  .orderBy('name')
+import { DB } from '@holo-js/db'
+
+const posts = DB.table('posts')
+
+const drafts = await posts.where('status', 'draft').get()
+const published = await posts.where('status', 'published').get()
+```
+
+You can alias the table with `as`:
+
+```ts
+const rows = await DB.table('posts as p')
+  .select('p.id', 'p.title')
   .get()
 ```
 
-Metadata-backed queries validate identifiers before execution, so invalid columns fail early instead of
-turning into broken SQL at the driver boundary.
-
-Use the query builder when the result should stay row-shaped. If the request needs model behavior after the
-query, use the ORM instead.
-
-### Chunking Results
+To run the query on a connection other than the default, pass its name as the second argument. See [Multiple Connections](/database/connections).
 
 ```ts
-await DB.table('users')
-  .orderBy('id')
-  .chunk(500, async (rows) => {
-    // process batch
-  })
+const events = await DB.table('events', 'analytics').get()
 ```
 
-Use `chunkById(...)` when stable primary-key paging is the safer fit for the workload.
+### from()
 
-This is mainly for background jobs, exports, and maintenance scripts, not normal user-facing pagination.
-
-### Streaming Results Lazily
+`from()` switches the query to a different table while keeping the connection and any clauses you already added.
 
 ```ts
-for await (const user of DB.table('users').orderBy('id').lazy()) {
-  // handle one row at a time
+const archived = await DB.table('posts').from('archived_posts').get()
+```
+
+## Get all rows
+
+### get()
+
+`get()` runs the query and returns an array of rows.
+
+```ts
+const users = await DB.table('users')
+  .where('active', true)
+  .get()
+
+for (const user of users) {
+  console.log(user.email)
 }
 ```
 
-`cursor()` and `lazy()` are the right tools when a result set is large enough that loading it eagerly
-would be wasteful.
+## Get a single row
 
-### Aggregates
+### first()
 
-```ts
-const total = await DB.table('users').count()
-const average = await DB.table('orders').avg('total')
-const maxScore = await DB.table('posts').max('score')
-```
-
-Use aggregate helpers when the application needs metadata, not the row payload itself.
-
-## Select Statements
-
-The builder supports:
-
-- `select(...)`
-- `addSelect(...)`
-- `selectSub(...)`
-- `addSelectSub(...)`
-- `distinct()`
-- `pluck(...)`
-- `value(...)`
-
-## Raw Expressions
-
-Unsafe SQL is supported, but it stays visibly separate from the safe query surface:
-
-Raw SQL is disabled by default. Enable it explicitly on each connection that needs it in `config/database.ts`:
+`first()` returns the first matching row, or `undefined` when nothing matches.
 
 ```ts
-import { defineDatabaseConfig } from '@holo-js/db'
-
-export default defineDatabaseConfig({
-  defaultConnection: 'main',
-  connections: {
-    main: {
-      driver: 'postgres',
-      url: process.env.DATABASE_URL,
-      security: { allowUnsafeRawSql: true },
-    },
-  },
-})
-```
-
-This setting applies to native app boot, migrations, and transactions on that connection. Omitted or `false` settings keep raw SQL disabled; the opt-in must be a boolean.
-
-```ts
-await DB.unsafeExecute(DB.raw('VACUUM'))
-```
-
-For PostgreSQL tenant context, bind the tenant ID and keep it transaction-local:
-
-```ts
-await DB.transaction(async tx => {
-  await tx.unsafeQuery(DB.raw("SELECT set_config('app.tenant_id', $1, true)", [tenantId]))
-  return await DB.table('records').get()
-})
-```
-
-The database's RLS policies enforce row access. The transaction-local setting clears after commit or rollback.
-
-Use raw SQL deliberately and sparingly. Most application queries should remain on the safe fluent path.
-
-If a query can be expressed with the normal builder, keep it there so validation, metadata checks, and
-policy enforcement stay active.
-
-## Joins
-
-The builder supports:
-
-- `join(...)`
-- `leftJoin(...)`
-- `rightJoin(...)`
-- `crossJoin(...)`
-- `joinSub(...)`
-- `leftJoinSub(...)`
-- `rightJoinSub(...)`
-- `joinLateral(...)`
-- `leftJoinLateral(...)`
-
-See [Joins & Subqueries](/database/query-builder/joins-and-subqueries) for worked examples.
-
-## Unions
-
-The builder supports:
-
-- `union(...)`
-- `unionAll(...)`
-
-## Basic Where Clauses
-
-The fluent surface covers:
-
-- `where(...)`
-- `orWhere(...)`
-- `whereNot(...)`
-- `orWhereNot(...)`
-- grouped `where(query => ...)`
-- `whereNull(...)`
-- `whereNotNull(...)`
-- `whereIn(...)`
-- `whereNotIn(...)`
-- `whereBetween(...)`
-- `whereNotBetween(...)`
-- `whereColumn(...)`
-- `whereLike(...)`
-- `orWhereLike(...)`
-
-### JSON Where Clauses
-
-- `whereJson(...)`
-- `orWhereJson(...)`
-- `whereJsonContains(...)`
-- `orWhereJsonContains(...)`
-- `whereJsonLength(...)`
-- `orWhereJsonLength(...)`
-
-### Additional Where Clauses
-
-- `whereDate(...)`
-- `whereMonth(...)`
-- `whereDay(...)`
-- `whereYear(...)`
-- `whereTime(...)`
-- `whereAny(...)`
-- `whereAll(...)`
-- `whereNone(...)`
-- `when(...)`
-- `unless(...)`
-
-Use these helpers to keep condition-heavy query code readable without falling back to raw fragments or
-string-built SQL.
-
-## Advanced Where Clauses
-
-### Where Exists Clauses
-
-- `whereExists(...)`
-- `orWhereExists(...)`
-- `whereNotExists(...)`
-- `orWhereNotExists(...)`
-
-### Subquery Where Clauses
-
-- `whereSub(...)`
-- `orWhereSub(...)`
-- `whereInSub(...)`
-- `whereNotInSub(...)`
-
-### Full Text Where Clauses
-
-- `whereFullText(...)`
-- `orWhereFullText(...)`
-
-## Ordering, Grouping, Limit, and Offset
-
-The builder supports:
-
-- `orderBy(...)`
-- `latest(...)`
-- `oldest(...)`
-- `reorder(...)`
-- `groupBy(...)`
-- `having(...)`
-- `havingBetween(...)`
-- `limit(...)`
-- `offset(...)`
-- `inRandomOrder()`
-
-Whenever pagination or chunking is involved, use deterministic ordering.
-
-## Conditional Clauses
-
-Use `when(...)` and `unless(...)` to apply query branches without breaking chain readability.
-
-## Insert Statements
-
-- `insert(...)`
-- `insertGetId(...)`
-- `insertOrIgnore(...)`
-
-## Update Statements
-
-- `update(...)`
-- nested JSON update paths such as `'settings->profile->region'`
-- `increment(...)`
-- `decrement(...)`
-
-## Upserts
-
-- `upsert(...)`
-
-## Delete Statements
-
-- `delete(...)`
-
-## Pessimistic Locking
-
-Use pessimistic locking when the workflow must coordinate concurrent transactions around the same rows.
-Typical examples are inventory reservation, balance transfers, queue claiming, and "read then write"
-flows where another transaction must not change the selected rows in the middle of the operation.
-
-Available methods:
-
-- `lockForUpdate()`: exclusive row lock for rows you intend to update
-- `sharedLock()`: shared read lock for rows that should stay stable while you inspect them
-- `lock('update' | 'share')`: explicit form when you want to choose the mode dynamically
-
-Dialect support:
-
-- PostgreSQL: `lockForUpdate()` compiles to `FOR UPDATE`, `sharedLock()` compiles to `FOR SHARE`
-- MySQL: `lockForUpdate()` compiles to `FOR UPDATE`, `sharedLock()` compiles to `LOCK IN SHARE MODE`
-- SQLite: the methods are accepted, but the lock clause degrades to a plain `SELECT` because SQLite does not expose
-  the same row-lock syntax as PostgreSQL or MySQL
-
-That means SQLite will not apply a pessimistic row lock for these methods. The query still runs, but the lock
-intent is ignored at the SQL level. For SQLite write coordination, use `DB.writeTransaction(...)` or pass
-`{ mode: 'immediate' }` to `DB.transaction(...)`.
-
-Use locks inside `DB.transaction(...)`. Outside a transaction they do not provide a durable concurrency boundary
-for application workflows.
-
-### `lockForUpdate()`
-
-Use `lockForUpdate()` when the current transaction plans to modify the selected rows:
-
-```ts
-await DB.transaction(async (tx) => {
-  const product = await tx.table('products')
-    .where('id', productId)
-    .lockForUpdate()
-    .first<{ id: number, quantity: number }>()
-
-  if (!product || product.quantity < requestedQty) {
-    throw new Error('Out of stock')
-  }
-
-  await tx.table('products')
-    .where('id', productId)
-    .update({ quantity: product.quantity - requestedQty })
-})
-```
-
-The important behavior is that another transaction trying to lock or update the same row will wait until the
-current transaction commits or rolls back.
-
-On SQLite, `lockForUpdate()` does not emit a row-lock clause and does not lock the selected rows. Use
-`DB.writeTransaction(...)` for read-then-write workflows, and prefer an atomic conditional write when that
-expresses the business rule directly.
-
-### `sharedLock()`
-
-Use `sharedLock()` when multiple transactions may read the same rows concurrently, but writers should wait until
-those readers finish:
-
-```ts
-await DB.transaction(async (tx) => {
-  const account = await tx.table('accounts')
-    .where('id', accountId)
-    .sharedLock()
-    .first<{ id: number, status: string }>()
-
-  if (!account || account.status !== 'active') {
-    throw new Error('Account is not active')
-  }
-
-  // perform follow-up reads that rely on the row staying stable for this transaction
-})
-```
-
-Use this more sparingly than `lockForUpdate()`. If the workflow will definitely write the row, prefer
-`lockForUpdate()`.
-
-On SQLite, `sharedLock()` also degrades to a normal `SELECT` and does not block concurrent writers.
-
-### Practical rules
-
-- Keep the lock scope small: select the fewest rows you actually need.
-- Keep the transaction short: do not perform network calls or slow external I/O while holding row locks.
-- Prefer deterministic predicates such as primary keys when locking.
-- Use a normal transaction with a conditional write when that solves the problem without a read-first lock step.
-- Use `DB.writeTransaction(...)` for SQLite write workflows instead of relying on row-lock methods.
-- Reach for cache locks only when you need cross-process coordination above the database layer; row locks are the
-  stronger source of truth for database-backed state.
-
-### When not to use pessimistic locking
-
-Do not add row locks just because a workflow writes data. Many operations are better expressed as one atomic write:
-
-```ts
-const result = await DB.table('products')
-  .where('id', productId)
-  .where('quantity', '>=', requestedQty)
-  .decrement('quantity', requestedQty)
-
-if ((result.affectedRows ?? 0) === 0) {
-  throw new Error('Out of stock')
+const user = await DB.table('users')
+  .where('email', 'ava@example.com')
+  .first()
+
+if (!user) {
+  throw new Error('User not found')
 }
 ```
 
-That pattern is often simpler and scales better than a read-lock-write sequence. Use pessimistic locking when the
-business rule genuinely requires a stable read set inside the transaction, not by default.
+### find()
 
-## Debugging
+`find()` looks up a row by its `id` column. Pass a second argument to search a different column.
 
-- `toSQL()`
-- `debug()`
-- `dump()`
+```ts
+const post = await DB.table('posts').find(42)
+const bySlug = await DB.table('posts').find('hello-world', 'slug')
+```
 
-`debug()` returns compiled statement metadata. Runtime logs still follow connection policy and may redact
-SQL text.
+### sole()
 
-## Continue
+`sole()` returns the only matching row. It throws if there are zero rows or more than one.
 
-- [Selects & Filters](/database/query-builder/selects-and-filters)
-- [Joins & Subqueries](/database/query-builder/joins-and-subqueries)
-- [Writes, Pagination & Chunking](/database/query-builder/writes-pagination-and-chunking)
+```ts
+const invoice = await DB.table('invoices')
+  .where('number', 'INV-1001')
+  .sole()
+```
+
+## Get a single value
+
+### value()
+
+`value()` returns one column from the first matching row, or `undefined`.
+
+```ts
+const email = await DB.table('users')
+  .where('id', 7)
+  .value('email')
+```
+
+### valueOrFail()
+
+`valueOrFail()` returns the column value, or throws when no row matches.
+
+```ts
+const apiKey = await DB.table('api_keys')
+  .where('user_id', 7)
+  .valueOrFail('secret')
+```
+
+### soleValue()
+
+`soleValue()` returns the column value of the only matching row. It throws when zero rows or more than one row match.
+
+```ts
+const plan = await DB.table('subscriptions')
+  .where('id', 'sub_123')
+  .soleValue('plan')
+```
+
+| Method | Returns | When nothing matches |
+| --- | --- | --- |
+| `value(column)` | the column value | `undefined` |
+| `valueOrFail(column)` | the column value | throws |
+| `soleValue(column)` | the column value of the only row | throws (also throws if more than one row matches) |
+
+## Get a list of column values
+
+### pluck()
+
+`pluck()` returns one column from every matching row as an array.
+
+```ts
+const titles = await DB.table('posts')
+  .where('status', 'published')
+  .pluck('title')
+// ['Hello World', 'Second Post', ...]
+```
+
+## Check if rows exist
+
+### exists()
+
+`exists()` returns `true` when at least one row matches.
+
+```ts
+const taken = await DB.table('users')
+  .where('email', 'ava@example.com')
+  .exists()
+```
+
+### doesntExist()
+
+`doesntExist()` is the opposite of `exists()`: it returns `true` when no row matches.
+
+```ts
+const isFree = await DB.table('users')
+  .where('email', 'ava@example.com')
+  .doesntExist()
+```
+
+## Aggregates
+
+The builder has methods for the common aggregate functions. They respect your `where` clauses.
+
+### count()
+
+`count()` returns the number of matching rows.
+
+```ts
+const userCount = await DB.table('users').count()
+```
+
+### sum()
+
+`sum()` adds up one numeric column across the matching rows.
+
+```ts
+const revenue = await DB.table('orders').where('status', 'paid').sum('total')
+```
+
+### avg()
+
+`avg()` returns the average of one column. It returns `null` when no rows match.
+
+```ts
+const averageOrder = await DB.table('orders').avg('total')
+```
+
+### min()
+
+`min()` returns the lowest value of one column. It returns `null` when no rows match.
+
+```ts
+const cheapest = await DB.table('products').min('price')
+```
+
+### max()
+
+`max()` returns the highest value of one column. It returns `null` when no rows match.
+
+```ts
+const priciest = await DB.table('products').max('price')
+```
+
+`count()` and `sum()` return a `number`. `avg()`, `min()`, and `max()` return `number | null`.
+
+To compute aggregates per group, select them as columns instead. See [Grouping](/database/query-builder/selects-and-filters#grouping-and-having).
+
+```ts
+const postsPerUser = await DB.table('posts')
+  .select('user_id')
+  .addSelectCount('post_count')
+  .groupBy('user_id')
+  .get()
+// [{ user_id: 1, post_count: 12 }, ...]
+```
+
+## Typed results
+
+When you pass a table **name**, rows are typed as `Record<string, unknown>`. You have two ways to get precise types.
+
+**Pass a table definition.** Holo generates a definition for every table in your migrations into `.holo-js/generated/schema.generated.ts` (Holo regenerates this file; don't edit it). Each table is exported in camelCase (`posts`, `postTags`, `users`). Pass one to `DB.table()` and column names autocomplete everywhere, and results carry the real column types:
+
+```ts [server/lib/posts.ts]
+import { DB } from '@holo-js/db'
+import { posts } from '../../.holo-js/generated/schema.generated'
+
+const rows = await DB.table(posts)
+  .select('id', 'title as heading')
+  .where('status', 'published')
+  .get()
+// rows: { id: number, heading: string }[]
+```
+
+With a table definition, `select()`, `where()`, `orderBy()`, `groupBy()`, `pluck()`, and `value()` only accept real column names, and `select('title as heading')` renames the key in the result type.
+
+**Or annotate the row type.** `get()`, `first()`, and `sole()` accept a row type:
+
+```ts
+type PostRow = { id: number, title: string }
+
+const rows = await DB.table('posts').select('id', 'title').get<PostRow>()
+```
+
+::: tip
+For queries that belong to a single domain record — with relationships, casts, and events — use a [model](/orm/) instead. Models are typed automatically.
+:::
+
+## Debug a query
+
+### toSQL()
+
+`toSQL()` returns the compiled SQL and bindings without running the query.
+
+```ts
+const query = DB.table('users').where('active', true).orderBy('name')
+
+console.log(query.toSQL())
+// { sql: 'SELECT * FROM "users" WHERE "active" = ? ORDER BY "name" ASC', bindings: [true], ... }
+```
+
+### debug()
+
+`debug()` returns the same output as `toSQL()`, plus the connection name and scheduling details. Sensitive bindings are redacted.
+
+```ts
+const details = DB.table('users').where('active', true).debug()
+console.log(details.connectionName)
+```
+
+### dump()
+
+`dump()` logs the `debug()` output and returns the same query, so you can keep chaining.
+
+```ts
+const users = await DB.table('users').where('active', true).dump().get()
+```
+
+## Cache query results
+
+### cache()
+
+`cache()` stores the result in the [cache](/cache/). Pass a TTL in seconds, a `Date` to expire at that time, or an options object with `ttl` or `flexible`, plus optional `key`, `driver`, and `invalidate`. See [Query Caching](/cache/query-caching) for keys, drivers, and invalidation.
+
+```ts
+const categories = await DB.table('categories')
+  .orderBy('name')
+  .cache(300)
+  .get()
+```
+
+## Reading methods reference
+
+| Method | Returns |
+| --- | --- |
+| `get()` | all rows |
+| `first()` | first row or `undefined` |
+| `find(value, column = 'id')` | matching row or `undefined` |
+| `sole()` | the only row; throws otherwise |
+| `value(column)` / `valueOrFail(column)` / `soleValue(column)` | one column value |
+| `pluck(column)` | array of one column's values |
+| `exists()` / `doesntExist()` | `boolean` |
+| `count()` / `sum(column)` | `number` |
+| `avg(column)` / `min(column)` / `max(column)` | `number \| null` |
+| `paginate()` / `simplePaginate()` / `cursorPaginate()` | a page of rows — see [Pagination](/database/pagination) |
+| `chunk()` / `chunkById()` / `lazy()` / `cursor()` | batches or a stream — see [Chunking](/database/query-builder/chunking) |
+
+## Next steps
+
+- [Selects and Filters](/database/query-builder/selects-and-filters)
+- [Joins and Subqueries](/database/query-builder/joins-and-subqueries)
+- [Inserts, Updates, Deletes](/database/query-builder/writes)
 - [Pagination](/database/pagination)

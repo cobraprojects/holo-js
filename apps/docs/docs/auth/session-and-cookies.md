@@ -1,654 +1,162 @@
-# Session And Cookies
+# Sessions and Cookies
 
-Session auth in Holo is powered by `@holo-js/session`.
+Browser login uses a session: Holo stores the signed-in user in a session store and gives the browser a cookie with the session ID. This page covers the session settings that matter for auth: where sessions live, cookie options, lifetimes, remember me, and signing out other devices.
 
-## Introduction
+## Default setup
 
-Session state stores the authenticated user for session guards and handles remember-me cookies and cookie
-serialization. The session package is public, so it can be used by auth or by your own application code directly.
+`npx holo install auth` creates `config/session.ts`. Every value can be changed from `.env`:
 
-Different browsers or devices may maintain independent sessions for the same user. Normal login and rotation affect the current browser's authentication rather than signing out other devices.
-
-## Approved Other-Device Logout
-
-::: info Durable revocation persistence
-Core automatically binds durable database revocation persistence when Auth is configured. Standalone auth supports injected durable revocation stores.
-:::
-
-Developers explicitly request logout of the current user's other browser authentication:
-
-```ts
-await auth.logoutOtherDevices()
-await auth.guard('web').logoutOtherDevices()
-```
-
-These are alternatives for the default session guard and a selected session guard. The operation requires a valid authenticated browser session and retains that browser's authentication. Applications control any recent-password or hosted reauthentication requirement before calling it. Registered token guards do not expose this method.
-
-Other browsers lose the selected provider/user identity on their next authenticated request, including remember-cookie restoration. Unrelated identities in a shared browser session remain valid. Personal access tokens remain valid too; their [other-token revocation](/auth/personal-access-tokens#revoking-other-tokens) is separate.
-
-For Clerk and WorkOS, this invalidates existing Holo sessions, not upstream provider sessions. A still-valid upstream session may authenticate again. The existing `logoutAll` continues to mean guards in the current request, not every device.
-
-### Durable revocation ownership
-
-Auth owns shared revocation state across database, file, and Redis session stores. A logical session identity survives physical session-ID rotation; revocation advances the user's authentication generation while retaining the current logical session. An already-revoked caller cannot make itself the survivor. Distinct identity checks are batched without scanning sessions. A memory auth context belongs to one request. Asynchronous auth contexts and framework wrappers preserving their native accessors reuse reads within each request and refresh them on the next request. Custom contexts without built-in request ownership perform fresh batched reads to avoid retaining another request's state.
-
-Core stores this state in `auth_session_revocations`, keyed by the composite primary key `(provider, user_id)`, with string identifiers, integer `generation`, and nullable string `retained_session_id`. New Auth scaffolds include its migration. Existing applications must apply the migration before deploying this Auth integration. The MySQL migration requires MySQL 8.0.17 or later and uses an exact binary collation so case or trailing-space differences never merge identities. Database persistence failures propagate explicitly, including a missing table. This applies equally to database, file, and Redis sessions.
-
-### Existing application rollout
-
-Add this migration using the existing migration workflow, then run `npx holo migrate` before deploying the updated application:
-
-```ts
-import { defineMigration } from '@holo-js/db'
-
-export default defineMigration({
-  async up({ db }) {
-    const stringType = db.getDialect().name === 'mysql'
-      ? 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin'
-      : 'VARCHAR(255)'
-    await db.executeCompiled({
-      sql: `CREATE TABLE auth_session_revocations (provider ${stringType} NOT NULL, user_id ${stringType} NOT NULL, generation INTEGER NOT NULL DEFAULT 0, retained_session_id ${stringType}, PRIMARY KEY (provider, user_id))`,
-      source: 'schema',
-    })
-  },
-  async down({ schema }) {
-    await schema.dropTable('auth_session_revocations')
-  },
-})
-```
-
-Users with authenticated browser or remember payloads from before adoption must sign in again. Core rejects missing revocation metadata and never infers a generation for an old authenticated payload. Personal access tokens remain valid. No session-store cleanup or enumeration is required for this rollout.
-
-When the adapter is enabled, older authenticated browser payloads without a logical session identity and generation require a fresh login, including those restored through remember cookies. Existing personal access tokens remain valid. After adoption, ordinary login and rotation continue to preserve authentication on other devices.
-
-Standalone auth accepts an optional `sessionRevocations` adapter in its runtime bindings. Requesting other-device logout without that adapter fails explicitly. See [Browser Session Revocation](/architecture#browser-session-revocation) for the related transition and failure rules.
-
-## Custom revocation adapters
-
-Inject an `AuthSessionRevocationStore` as `sessionRevocations` in `configureAuthRuntime`. Its state is durable and shared by every server handling the same users, independently of the selected session store.
-
-```ts
-interface AuthSessionIdentity {
-  readonly provider: string
-  readonly userId: string | number
-}
-
-interface AuthSessionRevocationState extends AuthSessionIdentity {
-  readonly generation: number
-  readonly retainedSessionId?: string
-}
-
-interface AuthSessionRevocationStore {
-  readMany(identities: readonly AuthSessionIdentity[]): Promise<readonly AuthSessionRevocationState[]>
-  revokeOthers(
-    identity: AuthSessionIdentity,
-    currentSession: { readonly id: string, readonly generation: number },
-  ): Promise<boolean>
-}
-```
-
-`readMany` returns the current state for each distinct requested identity. An absent durable row must return an explicit state with generation zero; omitting a requested identity fails authentication rather than assuming zero. `revokeOthers` atomically checks that the caller has the current generation or is the retained logical browser, then increments the generation and retains that browser. Return `false` for an invalid caller; failures reject. Never perform an unconditional upsert that permits an already-revoked caller to become the survivor.
-
-The `currentSession.id` is Auth's stable logical browser identity, which survives physical session rotation. Authentication accepts a payload with the current generation or the retained logical identity. Later legitimate login snapshots the current generation; it does not invalidate other browsers. Older payloads without this metadata fail authentication when the adapter is enabled. Without an adapter, ordinary session authentication continues and `logoutOtherDevices` fails explicitly.
-
-## Complete payload rotation
-
-Rotation accepts `data?: SessionRecord['data']` and `renewLifetime?: boolean`. Auth rotates with the complete next payload and lifetime renewal while preserving private flash state and current remember-token policy. Ordinary rotation retains its current defaults. Enabling lifetime renewal resets the session timestamps and clears its existing remember hash; Auth reissues a remember token when required by the transition.
-
-If a transition fails after persistence, its new session is invalidated and affected request identities cleared. The previous identifier remains invalidated, and other devices remain authenticated.
-
-## Configuration
-
-```ts
+```ts [config/session.ts]
 import { defineSessionConfig } from '@holo-js/session'
+import { env } from '@holo-js/config'
+
+const sessionSameSite = env('SESSION_SAME_SITE') === 'strict'
+  ? 'strict'
+  : env('SESSION_SAME_SITE') === 'none'
+    ? 'none'
+    : 'lax'
+
 export default defineSessionConfig({
-  driver: 'database',
+  driver: env('SESSION_DRIVER', 'file'),
   stores: {
     database: {
       driver: 'database',
-      connection: 'main',
+      connection: env('SESSION_CONNECTION', 'default'),
       table: 'sessions',
+    },
+    file: {
+      driver: 'file',
+      path: './storage/framework/sessions',
     },
   },
   cookie: {
-    name: 'holo_session',
-    path: '/',
-    secure: true,
+    name: env('SESSION_COOKIE', 'holo_session'),
+    path: env('SESSION_PATH', '/'),
+    domain: env('SESSION_DOMAIN'),
+    secure: env('SESSION_SECURE', false),
     httpOnly: true,
-    sameSite: 'lax',
-    domain: 'app.example.com',
+    sameSite: sessionSameSite,
   },
-  idleTimeout: 120,
-  absoluteLifetime: 120,
-  rememberMeLifetime: 43200,
+  idleTimeout: env('SESSION_IDLE_TIMEOUT', 120),
+  absoluteLifetime: env('SESSION_LIFETIME', 120),
+  rememberMeLifetime: env('SESSION_REMEMBER_ME_LIFETIME', 43200),
 })
 ```
 
-## Supported Session Stores
+You don't call the session API to log users in. `login()`, `loginUsing()`, and `logout()` create, rotate, and remove sessions and cookies for you.
 
-- `database`
-- `file`
+## Choose a session store
 
-If you need a custom backing store such as Redis, configure `@holo-js/session` directly with your own store adapter
-instead of relying on the portable runtime bootstrap.
+`driver` picks one of the named `stores`.
 
-The default driver must reference one of the configured stores.
+| Store driver | Options | Use it when |
+| --- | --- | --- |
+| `file` | `path` | One server, local development |
+| `database` | `connection`, `table` | Several servers sharing one database. Uses the `sessions` table from the auth migrations |
+| `redis` | `connection`, `prefix` | Several servers with Redis. Requires the `ioredis` package and a Redis connection in your config |
 
-## Cookie Configuration
-
-Cookie behavior is fully configurable:
-
-- `name`
-- `path`
-- `domain`
-- `secure`
-- `httpOnly`
-- `sameSite`
-- `partitioned`
-- `maxAge`
-
-These settings control how session cookies and remember-me cookies are serialized.
-
-`SameSite=None`, `Partitioned`, and `__Secure-` cookies require `secure: true`. `__Host-` cookies additionally require
-`path: '/'` and no domain. Invalid paths, domains, or incompatible attributes fail before a response is emitted.
-
-## How Sessions Persist Between Routes
-
-For browser-based requests, the normal session flow is:
-
-1. the server creates a session record
-2. the server sends a `Set-Cookie` header containing the session key
-3. the browser stores that cookie
-4. the browser sends the cookie back on later requests
-5. the server reads the cookie value and loads the session record
-
-The cookie preserves the session key between routes. The session payload itself remains in your configured session
-store.
-
-The file store writes session records atomically with private directory and file permissions. Use the database or
-Redis store when multiple hosts need to share sessions.
-
-## Browser Cookies Vs Server Sessions
-
-A browser cookie and a server-side session are related, but they are not the same thing.
-
-- The cookie lives in the browser.
-- The session record lives in your session store.
-
-The cookie usually contains the session key. The server uses that key to read the session record.
-
-That means both layers must still be valid:
-
-- if the browser no longer sends the cookie, the server cannot locate the session
-- if the session record expired or was deleted, the cookie points to a missing session
-
-## Public Session API
-
-The package exposes direct helpers:
-
-```ts
-import {
-  cookie,
-  consumeRememberMeToken,
-  cookies,
-  createSession,
-  flashSession,
-  invalidateSession,
-  issueRememberMeToken,
-  parseCookieHeader,
-  readSession,
-  rememberMeCookie,
-  rotateSession,
-  sessionCookie,
-  touchSession,
-  takeSession,
-} from '@holo-js/session'
+```dotenv [.env]
+SESSION_DRIVER=database
 ```
 
-One practical use case is a checkout flow that stores temporary state by cart id:
+::: warning
+With more than one server, use `database` or `redis`. File sessions live on one machine, so users would be signed out whenever a request hits another server.
+:::
+
+## Cookie options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `name` | `'holo_session'` | Cookie name |
+| `path` | `'/'` | Cookie path |
+| `domain` | none | Set to `.example.com` to share the session across subdomains |
+| `secure` | `false` | Send only over HTTPS. Turn on in production |
+| `httpOnly` | `true` | Hide the cookie from browser JavaScript |
+| `sameSite` | `'lax'` | `'lax'`, `'strict'`, or `'none'` |
+| `partitioned` | `false` | Adds the `Partitioned` attribute |
+| `maxAge` | `absoluteLifetime` | Cookie lifetime in minutes |
+
+Holo rejects cookie settings that browsers would ignore:
+
+- `sameSite: 'none'` and `partitioned: true` need `secure: true`.
+- Names starting with `__Secure-` need `secure: true`.
+- Names starting with `__Host-` need `secure: true`, `path: '/'`, and no `domain`.
+
+If your frontend runs on a different origin than your API, see [CORS and Proxies](/basics/security/cors-and-proxies).
+
+## Session lifetime
+
+All lifetimes are in minutes.
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `idleTimeout` | `120` | The session ends after this long without a request |
+| `absoluteLifetime` | `120` | The session ends this long after it started, even if active |
+| `rememberMeLifetime` | `43200` (30 days) | How long a remember-me cookie can restore a session |
+
+Holo extends the idle window on each request, up to the absolute lifetime.
+
+## Remember me
+
+When you pass `remember: true` to `login()` or `loginUsing()`, Holo also sets a remember-me cookie. When the session expires, the next request uses that cookie to start a fresh session, so the user stays signed in for up to `rememberMeLifetime`.
 
 ```ts
-import session, { readSession } from '@holo-js/session'
-
-await session({
-  name: `checkout:${cartId}`,
-  value: {
-    step: 'shipping',
-    coupon: 'WELCOME10',
-  },
-})
-
-const checkoutSession = await readSession(`checkout:${cartId}`)
+await login({ email, password, remember: true })
 ```
 
-The created session record looks like:
+`logout()` clears both cookies.
+
+## Log out other devices
+
+Each browser has its own session. Logging in on a phone doesn't sign out the laptop. To sign out everywhere else, for example after a password change, call `logoutOtherDevices()`:
 
 ```ts
-{
-  id: `checkout:${cartId}`,
-  store: 'database',
-  data: {
-    step: 'shipping',
-    coupon: 'WELCOME10',
-  },
-  createdAt: new Date('2026-01-01T12:00:00Z'),
-  lastActivityAt: new Date('2026-01-01T12:05:00Z'),
-  expiresAt: new Date('2026-01-01T14:00:00Z'),
-}
+import auth, { logoutOtherDevices } from '@holo-js/auth'
+
+await logoutOtherDevices()
+await auth.guard('admin').logoutOtherDevices()
 ```
 
-This pattern is useful when the application can derive the same key later, such as:
+The current browser stays signed in. Every other browser signed in as this user loses the session on its next request, including remember-me cookies.
 
-- `checkout:${cartId}`
-- `oauth:${state}`
-- `draft:${draftId}`
+- Only session guards have this method. To revoke API tokens, use `tokens.revokeOthers()` from [API Tokens](/auth/api-tokens#revoke-tokens).
+- For [WorkOS](/auth/workos) and [Clerk](/auth/clerk) users, it ends their Holo sessions but not their session at the hosted provider.
+- Ask for the password again before calling it if the action is sensitive. Holo doesn't do that for you.
 
-These helpers exist because not every application wants session handling to be hidden entirely behind auth. You may
-need to create or rotate sessions for your own features, emit cookies manually from framework responses, or inspect
-cookies before handing control to another runtime layer.
+This feature uses the `auth_session_revocations` table, which the auth migrations create.
 
-## Helper Reference
+## Flash a message to the next request
 
-### `createSession(...)`
-
-Creates a new session record in the configured store.
-
-Use this when:
-
-- you need session state outside auth
-- you want to store request-local or user-local data
-- you are implementing your own login or onboarding flow
+Session guards can store a value for the next request only, which is handy for "Saved!" messages after a redirect:
 
 ```ts
-const session = await createSession({
-  name: 'checkout',
-  value: {
-    cartId: 'cart_123',
-    flow: 'checkout',
-  },
-})
+import { flash, take } from '@holo-js/auth'
+
+await flash('profile.updated', { message: 'Profile saved' })
+
+const notice = await take<{ message: string }>('profile.updated')
 ```
 
-`name` is the session key you choose yourself. It should be stable and meaningful for the flow you are implementing.
-`value` is the stored payload.
-If you omit `name`, Holo generates a random session id for you.
+`take()` returns the value once and removes it, or `undefined` if there is none. Keys start with a letter and use up to 128 letters, digits, dots, colons, dashes, or underscores. Values must be JSON-safe and at most 64 KiB.
 
-Returned value:
+## Several guards, one browser
 
-```ts
-{
-  id: 'checkout',
-  store: 'database',
-  data: {
-    cartId: 'cart_123',
-    flow: 'checkout',
-  },
-  createdAt: new Date('2026-01-01T12:00:00Z'),
-  lastActivityAt: new Date('2026-01-01T12:05:00Z'),
-  expiresAt: new Date('2026-01-01T14:00:00Z'),
-}
-```
-
-### `readSession(...)`
-
-Loads an existing session by key.
-
-Use this when:
-
-- a framework route has already extracted the session id
-- you need to inspect custom session data
-- you are debugging or extending session-backed flows
-
-If you create a named application session yourself, read it back by that same derived key:
-
-```ts
-await createSession({
-  name: `checkout:${cartId}`,
-  value: {
-    step: 'shipping',
-    coupon: 'WELCOME10',
-  },
-})
-
-const checkoutSession = await readSession(`checkout:${cartId}`)
-```
-
-If you are using browser session auth, the session key usually comes from the configured session cookie, not from an
-arbitrary request field. In most applications, the flow is:
-
-1. read the incoming `Cookie` header
-2. parse it
-3. read the configured session cookie name
-4. load that session id from the store
-
-```ts
-import { parseCookieHeader, readSession } from '@holo-js/session'
-
-const cookies = parseCookieHeader(request.headers.get('cookie') ?? '')
-const sessionName = cookies.holo_session
-const session = sessionName ? await readSession(sessionName) : null
-```
-
-If the configured session cookie name is not `holo_session`, read the cookie name you configured in
-`config/session.ts`.
-
-### `touchSession(...)`
-
-Refreshes session activity and lifetime without changing the session id.
-
-Use this when:
-
-- a request should keep the session alive
-- your application has long-running browser flows
-- you want to extend activity windows on custom routes
-
-```ts
-await touchSession(sessionId)
-```
-
-### `rotateSession(...)`
-
-Creates a replacement session id while preserving session data.
-
-Use this when:
-
-- login succeeds
-- privilege level changes
-- you want to reduce session fixation risk
-
-```ts
-const rotated = await rotateSession(sessionId)
-```
-
-### `flashSession(...)` and `takeSession(...)`
-
-Use flash data for a value that should be available to the next request only, such as a success message after a
-redirect. `takeSession()` returns the value and removes it. It returns `undefined` when the key does not exist.
-
-```ts
-await flashSession(sessionId, 'checkout.completed', {
-  orderId: 'order_123',
-})
-
-const completed = await takeSession<{ orderId: string }>(
-  sessionId,
-  'checkout.completed',
-)
-```
-
-Session-capable auth guards provide the same operation without exposing the session id:
+A browser can be signed in to more than one guard at once, for example `web` and `admin`. Each guard keeps its own user. `logout()` on one guard leaves the others signed in.
 
 ```ts
 import auth from '@holo-js/auth'
 
-await auth.guard('web').flash('profile.updated', {
-  message: 'Profile saved',
-})
-
-const feedback = await auth.guard('web').take<{ message: string }>(
-  'profile.updated',
-)
+await auth.guard('admin').logout()
+const siteUser = await auth.user()
 ```
 
-Use keys of at most 128 characters. Values must be JSON-safe, use only finite numbers, and serialize to no more than
-64 KiB.
+## Use sessions for your own data
 
-### `invalidateSession(...)`
+`@holo-js/session` also works on its own for carts, wizards, and other per-visitor state. See [Sessions](/basics/session).
 
-Deletes a session from the configured store.
+## Next steps
 
-Use this when:
-
-- a user logs out
-- a session is compromised
-- you want to terminate stale server-side state
-
-```ts
-await invalidateSession(sessionId)
-```
-
-### `issueRememberMeToken(...)`
-
-Creates the remember-me token tied to a session.
-
-Use this when:
-
-- the user selected a remember-me option
-- your application needs a durable login cookie
-
-```ts
-const rememberToken = await issueRememberMeToken(sessionId)
-```
-
-### `consumeRememberMeToken(...)`
-
-Resolves a remember-me token back to its session when the token is valid.
-
-Use this when:
-
-- a request arrives without an active session id
-- a remember-me cookie should restore the login state
-
-```ts
-const session = await consumeRememberMeToken(rememberToken)
-```
-
-### `cookie(name, value, options?)`
-
-Serializes a general-purpose cookie string.
-
-Use this when:
-
-- you need a non-session cookie
-- your framework response API expects a raw `Set-Cookie` header value
-
-```ts
-const header = cookie('theme', 'dark', {
-  path: '/',
-  httpOnly: false,
-})
-```
-
-Set a cookie for one day:
-
-```ts
-const header = cookie('promo_banner', 'seen', {
-  maxAge: 60 * 60 * 24,
-})
-```
-
-`maxAge` is in seconds, so one day is `86400`.
-
-### `sessionCookie(value, options?)`
-
-Serializes the main session cookie using the configured session cookie defaults.
-
-Use this when:
-
-- you want to emit the active session id into the response
-- your route manages `Set-Cookie` headers directly
-
-The cookie name is defined in `config/session.ts`. The value is the session id returned from `createSession(...)` or
-`rotateSession(...)`.
-
-```ts
-const header = sessionCookie(session.id)
-```
-
-Set the session cookie for one day:
-
-```ts
-const header = sessionCookie(session.id, {
-  maxAge: 60 * 60 * 24,
-})
-```
-
-### `rememberMeCookie(value, options?)`
-
-Serializes the remember-me cookie using remember-me defaults.
-
-Use this when:
-
-- you issue remember-me state manually
-- your route owns the cookie response handling
-
-```ts
-const header = rememberMeCookie(rememberToken)
-```
-
-Use an absolute expiration date instead:
-
-```ts
-const header = rememberMeCookie(rememberToken, {
-  expires: new Date(Date.now() + 24 * 60 * 60 * 1000),
-})
-```
-
-### `cookies(...)`
-
-Creates multiple serialized cookies together.
-
-Use this when:
-
-- a response needs to set more than one cookie
-- you want to return session and remember-me cookies at the same time
-
-```ts
-const headers = cookies([
-  sessionCookie(session.id),
-  rememberMeCookie(rememberToken),
-])
-```
-
-### `parseCookieHeader(...)`
-
-Parses the incoming request cookie header into key/value pairs.
-
-Use this when:
-
-- your framework gives you the raw `Cookie` header
-- you need to extract the session or remember-me cookie before calling the runtime
-
-```ts
-const parsed = parseCookieHeader(request.headers.get('cookie') ?? '')
-const sessionId = parsed.holo_session
-```
-
-If you changed the configured session cookie name, read that cookie key instead of `holo_session`.
-
-## What Happens If The Same Name Is Used Twice
-
-### Sessions
-
-If you create a session with the same key twice, the later write replaces the earlier stored value:
-
-```ts
-await createSession({
-  name: `checkout:${cartId}`,
-  value: { step: 'shipping' },
-})
-
-await createSession({
-  name: `checkout:${cartId}`,
-  value: { step: 'payment' },
-})
-```
-
-Reading `checkout:${cartId}` after that returns the latest stored payload.
-
-### Cookies
-
-If you set the same cookie name again with the same scope, the later value replaces the earlier one in normal browser
-behavior.
-
-Cookie scope depends on:
-
-- name
-- domain
-- path
-
-So the simple rule is:
-
-- same name and same scope: latest value wins
-- same name and different scope: both may exist
-
-## Expiration
-
-Expiration has two layers.
-
-### Cookie Expiration
-
-Cookie expiration controls whether the browser keeps sending the cookie.
-
-You control that with:
-
-- `maxAge`
-- `expires`
-
-### Session Expiration
-
-Session expiration controls whether the server still accepts the session key.
-
-The session runtime uses:
-
-- `idleTimeout`
-- `absoluteLifetime`
-- `rememberMeLifetime`
-
-So a browser may still send a cookie whose server-side session has expired, and the server may still have a session
-record whose cookie is no longer stored by the browser.
-
-Both layers must still be valid for the request to restore session state.
-
-## Reading Cookies On The Server
-
-Server routes read cookies from the incoming `Cookie` header:
-
-```ts
-import { parseCookieHeader, readSession } from '@holo-js/session'
-
-export async function GET(request: Request) {
-  const parsed = parseCookieHeader(request.headers.get('cookie') ?? '')
-  const sessionId = parsed.holo_session
-  const session = sessionId ? await readSession(sessionId) : null
-
-  return Response.json({ session })
-}
-```
-
-If the client is not a browser, it must preserve and resend cookies itself, or use token auth instead.
-
-## Remember-Me Cookies
-
-Remember-me tokens are issued through the session runtime and reused by session guards when `remember: true` is passed
-during login.
-
-Remember-me behavior depends on:
-
-- `rememberMeLifetime`
-- cookie serialization settings
-- the selected session store
-
-## Session Auth Integration
-
-When a session guard logs a user in, the auth runtime:
-
-- creates a session record
-- writes the current auth payload into session data
-- updates the guard context with the active session id
-- optionally issues a remember-me token
-
-When the user logs out, the active session is invalidated for that guard.
-
-## Why Use The Session Package Directly
-
-Use `@holo-js/session` directly when:
-
-- you need session storage outside auth
-- your framework route builds the `Set-Cookie` headers itself
-- you want full control over session creation, rotation, and invalidation
-- you are building flows such as carts, onboarding state, checkout progress, or temporary wizard state
-
-Use `@holo-js/auth` on top of it when the concern is user authentication rather than raw session management.
-
-Auth requires a native store `rotate` operation for complete payload transitions and rejects unsupported stores before mutation. Framework adapters own native request isolation and cookie transport. Persistence and browser cookies are not one transaction, and file stores do not guarantee crash atomicity across multiple files. If invalidation also fails, the thrown aggregate preserves both failures and request authentication is still cleared.
+- [Login and Registration](/auth/local-auth)
+- [Guards and Providers](/auth/guards-and-providers)
+- [CSRF Protection](/basics/security/csrf)
+- [Sessions](/basics/session)

@@ -1,458 +1,538 @@
-# Local Authentication
+# Login and Registration
 
-This guide covers local auth backed by your application-owned models and database tables.
+This page shows how to build email-and-password auth: a register route, a login route, a logout route, and protected pages. You write the routes; Holo checks passwords, creates sessions, and sets cookies.
 
-## Introduction
+## Register a user
 
-Local auth is the default auth flow for self-hosted applications. It provides:
+`register()` creates the user and hashes the password. It does not sign the user in, so call `loginUsing()` with the new user, then redirect.
 
-- a local `User` model and migration story
-- session-based authentication
-- personal access tokens
-- remember-me support
-- local password hashing and verification
-- optional email verification and password reset flows
+::: code-group
 
-The package does not require hardcoded request fields such as `email`. The credentials you pass to `login()` and
-`register()` are matched against the provider's configured `identifiers`.
+```ts [Next.js]
+// app/register/actions.ts
+'use server'
 
-## Configuration
+import { loginUsing, register } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
+import { registerForm } from '@/lib/schemas/auth'
 
-Define a session guard and a provider:
+export async function registerAction(formData: FormData) {
+  const input = await validate(formData, registerForm, { throttle: 'register' })
 
-```ts
-import { defineAuthConfig } from '@holo-js/auth'
-import { env } from '@holo-js/config'
-export default defineAuthConfig({
-  defaults: {
-    guard: 'web',
-    passwords: 'users',
-  },
-  guards: {
-    web: {
-      driver: 'session',
-      provider: 'users',
+  const created = await register(input)
+  const session = await loginUsing(created)
+
+  revalidatePath('/', 'layout')
+  redirect(session.emailVerificationRequired
+    ? session.emailVerificationRoute ?? '/verify-email'
+    : '/dashboard')
+}
+```
+
+```ts [Nuxt]
+// server/api/register.post.ts
+import { loginUsing, register } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { registerForm } from '#shared/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const input = await validate(event, registerForm, { throttle: 'register' })
+
+  const created = await register(input)
+  const session = await loginUsing(created)
+
+  setResponseStatus(event, 201)
+  return {
+    ok: true,
+    status: 201,
+    data: {
+      redirectTo: session.emailVerificationRequired
+        ? session.emailVerificationRoute ?? '/verify-email'
+        : '/dashboard',
     },
-    api: {
-      driver: 'token',
-      provider: 'users',
-    },
-  },
-  providers: {
-    users: {
-      model: 'User',
-      identifiers: ['email'],
-    },
-  },
-  emailVerification: {
-    required: true,
-    route: env('AUTH_EMAIL_VERIFICATION_ROUTE', '/verify-email'),
-  },
-  passwords: {
-    users: {
-      provider: 'users',
-      table: 'password_reset_tokens',
-      expire: 60,
-      throttle: 60,
-      route: env('AUTH_PASSWORD_RESET_ROUTE', '/reset-password'),
-    },
-  },
+  }
 })
 ```
 
-Related environment values:
+```ts [SvelteKit]
+// src/routes/register/+page.server.ts
+import { redirect } from '@sveltejs/kit'
+import { loginUsing, register } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { registerForm } from '$lib/schemas/auth'
+import type { Actions } from './$types'
 
-```dotenv
-APP_URL=http://localhost:3000
-AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email
-AUTH_PASSWORD_RESET_ROUTE=/reset-password
+export const actions = {
+  default: async ({ request }) => {
+    const input = await validate(request, registerForm, { throttle: 'register' })
+
+    const created = await register(input)
+    const session = await loginUsing(created)
+
+    redirect(303, session.emailVerificationRequired
+      ? session.emailVerificationRoute ?? '/verify-email'
+      : '/dashboard')
+  },
+} satisfies Actions
 ```
 
-## Identifiers
+:::
 
-Identifiers are the fields auth uses to find and de-duplicate users.
+The schema needs a `password` and a `passwordConfirmation` field. Any extra fields, like `name`, are saved on the user:
 
-Examples of identifiers:
+```ts [lib/schemas/auth.ts]
+import { field, schema } from '@holo-js/validation'
 
-- `email`
-- `phone`
-- `username`
+export const registerForm = schema({
+  name: field.string().required().min(3),
+  email: field.string().required().email(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
+})
 
-Examples of fields that are usually not identifiers:
+export const loginForm = schema({
+  email: field.string().required().email(),
+  password: field.password().required(),
+  remember: field.boolean().default(false),
+})
+```
 
-- `name`
-- `country`
-- `dob`
-- `avatar`
+The `throttle` option uses the `login` and `register` limiters from `config/security.ts`. See [Rate Limiting](/basics/security/rate-limiting).
 
-If your users sign in with either email or phone, configure both:
+If [email verification](/auth/email-verification) is required, `register()` also sends the verification email.
+
+## Log a user in
+
+`login()` checks the credentials, starts a new session, and sets the session cookie.
+
+::: code-group
+
+```ts [Next.js]
+// app/login/actions.ts
+'use server'
+
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
+import { loginForm } from '@/lib/schemas/auth'
+
+export async function loginAction(formData: FormData) {
+  const input = await validate(formData, loginForm, { throttle: 'login' })
+
+  const session = await login(input)
+
+  revalidatePath('/', 'layout')
+  redirect(session.emailVerificationRequired
+    ? session.emailVerificationRoute ?? '/verify-email'
+    : '/dashboard')
+}
+```
+
+```ts [Nuxt]
+// server/api/login.post.ts
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { loginForm } from '#shared/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const input = await validate(event, loginForm, { throttle: 'login' })
+
+  const session = await login(input)
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      redirectTo: session.emailVerificationRequired
+        ? session.emailVerificationRoute ?? '/verify-email'
+        : '/dashboard',
+    },
+  }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/login/+page.server.ts
+import { redirect } from '@sveltejs/kit'
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { loginForm } from '$lib/schemas/auth'
+import type { Actions } from './$types'
+
+export const actions = {
+  default: async ({ request }) => {
+    const input = await validate(request, loginForm, { throttle: 'login' })
+
+    const session = await login(input)
+
+    redirect(303, session.emailVerificationRequired
+      ? session.emailVerificationRoute ?? '/verify-email'
+      : '/dashboard')
+  },
+} satisfies Actions
+```
+
+:::
+
+In Nuxt, the page submits to the API route and navigates with `navigateTo()`. Call `refreshUser()` first so the navigation bar shows the new user:
+
+```vue [app/pages/login.vue]
+<script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
+import { useForm } from '@holo-js/adapter-nuxt/client'
+import { loginForm } from '#shared/schemas/auth'
+
+const { refreshUser } = await useAuth()
+const form = useForm(loginForm, {
+  async submitter({ formData }) {
+    const submission = await $fetch('/api/login', { method: 'POST', body: formData })
+    if (submission?.ok === true) {
+      await refreshUser()
+      await navigateTo(submission.data.redirectTo)
+    }
+    return submission
+  },
+})
+</script>
+```
+
+See [Client-Side Forms](/basics/forms/client) for rendering fields and errors with `useForm()`.
+
+### What `login()` returns
+
+| Field | Description |
+| --- | --- |
+| `user` | The signed-in user |
+| `guard` | The guard used, such as `'web'` |
+| `provider` | The user provider, such as `'users'` |
+| `sessionId` | The new session ID |
+| `cookies` | The `Set-Cookie` values Holo already added to the response |
+| `emailVerificationRequired` | `true` when verification is required and the user is not verified yet |
+| `emailVerificationRoute` | Where to send the user, for example `/verify-email?email=ava%40example.com` |
+| `multiFactorChallenge` | Set when the user has two-factor auth on. See [Multi-Factor Auth](/auth/multi-factor) |
+
+### When login or registration fails
+
+Expected failures throw a `ValidationException`, so your form shows them like any other [validation error](/basics/validation/errors):
+
+| Situation | Field | Message | Status |
+| --- | --- | --- | --- |
+| Wrong email or password | `email` | These credentials do not match our records. | 422 |
+| Identifier already registered | `email` | A user with this email already exists. | 422 |
+| `password` and `passwordConfirmation` differ | both fields | | 422 |
+
+## Remember the user
+
+Pass `remember: true` to keep the user signed in after the browser closes. The `loginForm` above already sends it from a checkbox.
 
 ```ts
+await login({ email, password, remember: true })
+await loginUsing(user, { remember: true })
+```
+
+The remember-me cookie lasts for `rememberMeLifetime` minutes from `config/session.ts` (30 days by default). See [Sessions and Cookies](/auth/session-and-cookies).
+
+## Log the user out
+
+`logout()` ends the session and clears the auth cookies.
+
+::: code-group
+
+```ts [Next.js]
+// app/logout/actions.ts
+'use server'
+
+import { logout } from '@holo-js/auth'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
+
+export async function logoutAction() {
+  await logout()
+
+  revalidatePath('/', 'layout')
+  redirect('/')
+}
+```
+
+```ts [Nuxt]
+// server/api/logout.post.ts
+import { logout } from '@holo-js/auth'
+
+export default defineEventHandler(async () => {
+  await logout()
+
+  return { ok: true }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/logout/+server.ts
+import { redirect } from '@sveltejs/kit'
+import { logout } from '@holo-js/auth'
+
+export async function POST() {
+  await logout()
+
+  redirect(303, '/')
+}
+```
+
+:::
+
+Use a `POST` form or request for logout, so a link or prefetch can't sign the user out. In Nuxt, call the route from the page, then refresh and navigate:
+
+```ts
+await $fetch('/api/logout', { method: 'POST' })
+await refreshUser()
+await navigateTo('/')
+```
+
+## Protect pages
+
+Use `authOnly()` to send guests to the login page, and `guestOnly()` to send signed-in users away from pages like `/login`. Each framework has its own entry point.
+
+::: code-group
+
+```ts [Next.js]
+// proxy.ts
+import { authOnly, guestOnly, protectRoutes } from '@holo-js/auth/next/server'
+
+export const proxy = protectRoutes(
+  guestOnly({
+    routes: ['/login', '/register', '/forgot-password', '/reset-password'],
+    redirectTo: '/dashboard',
+  }),
+  authOnly({
+    routes: ['/dashboard/*'],
+    redirectTo: '/login',
+  }),
+)
+
+export const config = {
+  matcher: ['/login', '/register', '/forgot-password', '/reset-password', '/dashboard/:path*'],
+}
+```
+
+```ts [Nuxt]
+// app/middleware/auth.global.ts
+import { authOnly } from '@holo-js/auth/nuxt/server'
+
+export default authOnly({
+  routes: ['/dashboard/*'],
+  redirectTo: '/login',
+})
+```
+
+```ts [SvelteKit]
+// src/hooks.server.ts
+import { sequence } from '@sveltejs/kit/hooks'
+import { authOnly, guestOnly } from '@holo-js/auth/sveltekit/server'
+
+export const handle = sequence(
+  guestOnly({
+    routes: ['/login', '/register', '/forgot-password', '/reset-password'],
+    redirectTo: '/dashboard',
+  }),
+  authOnly({
+    routes: ['/dashboard/*'],
+    redirectTo: '/login',
+  }),
+)
+```
+
+:::
+
+In Nuxt, add a second global middleware file for `guestOnly()`, or drop the `.global` suffix and the `routes` option to use it as named middleware on specific pages:
+
+```ts [app/middleware/guest.ts]
+import { guestOnly } from '@holo-js/auth/nuxt/server'
+
+export default guestOnly({ redirectTo: '/dashboard' })
+```
+
+```vue [app/pages/login.vue]
+<script setup lang="ts">
+definePageMeta({ middleware: 'guest' })
+</script>
+```
+
+In Next.js, `protectRoutes()` runs each check in order and returns the first redirect. Put your own functions in the list too; return a `Response` to stop the request or nothing to continue.
+
+### Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `redirectTo` | required | Where to send the visitor |
+| `routes` | every route | Paths to check. Supports exact paths (`'/login'`), prefixes (`'/dashboard/*'`, which also matches `/dashboard`), `RegExp`, and `(pathname) => boolean` |
+| `guard` | default guard | Check a different guard, such as `'admin'` |
+| `status` | `303` | Redirect status: `301`, `302`, `303`, `307`, or `308` |
+
+A check never redirects to the page the visitor is already on.
+
+### Check the user inside a page or action
+
+Route protection covers navigation. Server actions and API routes still need their own check, because they can be called directly.
+
+::: code-group
+
+```ts [Next.js]
+// app/dashboard/actions.ts
+'use server'
+
+import { redirect } from 'next/navigation'
+import { auth } from '@holo-js/auth/next/server'
+
+export async function saveSettingsAction(formData: FormData) {
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated) {
+    redirect('/login')
+  }
+
+  // currentAuth.user is the signed-in user
+}
+```
+
+```ts [Nuxt]
+// server/api/settings.post.ts
+import { user } from '@holo-js/auth'
+
+export default defineEventHandler(async (event) => {
+  const currentUser = await user()
+  if (!currentUser) {
+    throw createError({ statusCode: 401, statusMessage: 'Unauthenticated.' })
+  }
+
+  return { ok: true }
+})
+```
+
+```ts [SvelteKit]
+// src/routes/dashboard/+page.server.ts
+import { redirect } from '@sveltejs/kit'
+import { auth } from '@holo-js/auth/sveltekit/server'
+import type { PageServerLoad } from './$types'
+
+export const load = (async () => {
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated) {
+    redirect(303, '/login')
+  }
+
+  return { user: currentAuth.user }
+}) satisfies PageServerLoad
+```
+
+:::
+
+For JSON APIs, return a `401`:
+
+```ts [app/api/orders/route.ts]
+import { check } from '@holo-js/auth'
+
+export async function GET() {
+  if (!(await check())) {
+    return Response.json({ message: 'Unauthenticated.' }, { status: 401 })
+  }
+
+  return Response.json({ ok: true })
+}
+```
+
+## Sign in with email or phone
+
+`identifiers` lists the fields a user can sign in with. Holo looks the user up by whichever identifier the input contains, and `register()` rejects duplicates on every identifier.
+
+```ts [config/auth.ts]
 providers: {
   users: {
     model: 'User',
     identifiers: ['email', 'phone'],
   },
-}
+},
 ```
-
-That means:
-
-- `login({ email, password })` looks up by email
-- `login({ phone, password })` looks up by phone
-- `register(...)` checks for duplicates on `email` and `phone`
-- profile fields like `country` and `dob` are stored on the user record but are not used as auth identifiers
-
-## Database Preparation
-
-The local model should have at least:
-
-- a primary key
-- a password column
-- a unique constraint or unique index for every configured identifier column
-- an `email_verified_at` column when email verification is enabled
-
-If you configure:
 
 ```ts
-identifiers: ['email', 'phone']
+await login({ phone: '+201234567890', password })
 ```
 
-then both `email` and `phone` should be unique in your database schema.
+Give every identifier column a unique index in your migration. Other fields, like `name` or `country`, are stored on the user but never used to find them.
 
-The installer generates the related auth tables:
+## Sign in a user you already trust
 
-- `users`
-- `sessions`
-- `auth_identities`
-- `personal_access_tokens`
-- `password_reset_tokens`
-- `email_verification_tokens`
-
-## Registering Users
-
-Use `register()` inside your route after validation succeeds:
-
-```ts
-import { register } from '@holo-js/auth'
-
-const created = await register({
-  name: body.name,
-  email: body.email,
-  phone: body.phone,
-  country: body.country,
-  dob: body.dob,
-  password: body.password,
-  passwordConfirmation: body.passwordConfirmation,
-})
-```
-
-Successful registration returns the created user directly. Expected registration failures throw a
-`ValidationException` with a status and field errors. For example, a duplicate identifier produces a serialized
-validation payload like:
-
-```ts
-{
-  ok: false,
-  status: 422,
-  valid: false,
-  errors: {
-    email: ['A user with this email already exists.'],
-  },
-}
-```
-
-The local provider creates the model record and hashes the password before it is stored. Extra fields like `country`
-and `dob` are saved as attributes, but they are not treated as auth identifiers unless you explicitly add them to the
-provider's `identifiers`.
-
-When `emailVerification.required` is `true`, successful registration also starts the verification flow automatically.
-Applications do not need to manually send the first verification email.
-
-If your application uses another identifier, pass that identifier instead:
-
-```ts
-const created = await register({
-  phone: body.phone,
-  country: body.country,
-  password: body.password,
-  passwordConfirmation: body.passwordConfirmation,
-})
-```
-
-## Logging In Users
-
-These APIs are server-side APIs from `@holo-js/auth`. They are not available from `@holo-js/auth/client`.
-
-```ts
-import { login } from '@holo-js/auth'
-
-const session = await login({
-  email: body.email,
-  password: body.password,
-  remember: body.remember === true,
-})
-```
-
-On successful login, the session guard:
-
-- invalidates the previous active session for that guard
-- creates a new session
-- stores the authenticated user payload in session state
-- optionally issues a remember-me token
-
-When email verification is enabled and the user is still unverified, successful login also includes:
-
-- `emailVerificationRequired: true`
-- `emailVerificationRoute: '/verify-email?email=...'`
-
-That lets the route redirect the user to the verification page while keeping them signed in.
-
-## Signing In Trusted Users
-
-Use trusted login when your application has already resolved the user and should establish a local session without
-password verification.
-
-This is a server-only capability. It changes authenticated state and writes session cookies, so it belongs in trusted
-backend code only.
+`loginUsing()` and `loginUsingId()` start a session without a password. Use them after registration, a magic link, an invite link, or a social login callback.
 
 ```ts
 import auth, { loginUsing, loginUsingId } from '@holo-js/auth'
 
 await loginUsing(user, { remember: true })
-await loginUsingId(user.id)
-await auth.guard('admin').loginUsing(adminUser)
-await auth.guard('web').loginUsingId(invitedUserId)
+await loginUsingId(42)
+await auth.guard('admin').loginUsing(admin)
 ```
 
-This is the right fit for:
+::: danger
+`loginUsing()` skips password and email-verification checks. Only call it after your own code has proved who the user is.
+:::
 
-- social or hosted identity callbacks
-- magic-link or invite flows
-- admin-created accounts that should be signed in immediately
-- impersonation features where an already trusted actor may assume another local session
+## Hash and check passwords yourself
 
-`loginUsing()` and `loginUsingId()` trust the user resolution you already performed. They do not verify a password or
-enforce email verification checks on their own.
-
-That distinction matters:
-
-- use `login()` when the user is proving identity with credentials now
-- use `loginUsing()` when your application already proved identity some other way
-
-Examples of `loginUsing()`:
-
-- after a social provider callback already resolved the local user
-- after a magic-link token or invite token was validated
-- after an admin created a user and intentionally wants to sign them in
-- inside an impersonation flow where an authenticated actor is allowed to assume another session
-
-## Password Helpers
-
-Use the public password helpers when you need to hash or verify passwords outside the built-in register and reset
-flows.
-
-These are also server-only helpers. They use your configured auth password hasher.
+Use these when you import users, build a "change password" form, or keep a password history. They use the same hasher as `register()`.
 
 ```ts
 import { hashPassword, needsPasswordRehash, verifyPassword } from '@holo-js/auth'
 
-const digest = await hashPassword(body.password)
-const matches = await verifyPassword(body.password, digest)
-const rotateHash = await needsPasswordRehash(digest)
+const digest = await hashPassword('new-password')
+const matches = await verifyPassword('current-password', user.password)
+const outdated = await needsPasswordRehash(user.password)
 ```
 
-This is useful when:
+`needsPasswordRehash()` tells you a hash was made with older settings. When it returns `true` after a successful `verifyPassword()`, hash the plain password again and save it.
 
-- seeding or importing local users manually
-- storing password history rows in another table
-- validating custom password change flows before saving a new digest
+## Impersonate a user
 
-### `hashPassword(password)`
-
-Use this when you need a password digest but you are not going through `register()` or `resetPassword()`.
-
-Typical cases:
-
-- importing users from another system into your local `users` table
-- writing your own admin-only “create user” flow
-- storing a new password digest in a password-history table
-
-### `verifyPassword(password, digest)`
-
-Use this when you need to check a plaintext password against an existing stored digest.
-
-Typical cases:
-
-- custom password change forms that require the current password first
-- checking a new password against rows in `password_history`
-- validating imported or manually-created password digests
-
-### `needsPasswordRehash(digest)`
-
-This helper answers one question:
-
-"Was this password hash created with old hashing settings, so it should be replaced the next time the user proves
-their password?"
-
-Today the default hasher returns `false`, but the helper is still important because custom or future hashers may decide
-that an older digest should be upgraded.
-
-Why that matters:
-
-- you may increase hashing cost later
-- you may change hash format or parameters later
-- you may migrate from one algorithm policy to another without forcing every user to reset their password
-
-The usual pattern is:
-
-1. call `verifyPassword(plain, digest)`
-2. if it succeeds, call `needsPasswordRehash(digest)`
-3. if that returns `true`, hash the plaintext again with `hashPassword(plain)` and store the new digest
-
-That lets you upgrade password hashes gradually on successful login or password confirmation instead of doing a risky
-one-time migration.
-
-Example:
+Impersonation lets a signed-in admin act as another user, then switch back. Check that the admin is allowed with [authorization](/authorization/) first.
 
 ```ts
-const currentDigest = account.password
-const matches = await verifyPassword(body.currentPassword, currentDigest)
+import auth, { impersonation, stopImpersonating } from '@holo-js/auth'
 
-if (!matches) {
-  throw new Error('Current password is invalid.')
-}
-
-if (await needsPasswordRehash(currentDigest)) {
-  account.password = await hashPassword(body.currentPassword)
-  await account.save()
-}
-```
-
-## Impersonating Users
-
-Impersonation establishes a trusted local session for another user while remembering who the actor was.
-
-This is a server-only admin capability. It should be protected by your own authorization rules before calling it.
-
-```ts
-import auth, { impersonate, impersonateById, impersonation, stopImpersonating } from '@holo-js/auth'
-
-await impersonate(user)
-await impersonateById(user.id)
-await auth.guard('web').impersonateById(user.id, { actorGuard: 'admin' })
+await auth.guard('web').impersonateById(userId, { actorGuard: 'admin' })
 
 const active = await impersonation()
+// active?.actor is the admin, active?.user is the impersonated user
+
 await stopImpersonating()
 ```
 
-Use `actorGuard` when the authenticated actor lives on a different guard than the user being impersonated, such as an
-admin on `admin` impersonating an application user on `web`.
+`actorGuard` is the guard the admin is signed in on. It defaults to the guard you call `impersonate()` on. You can't start impersonating while already impersonating. `stopImpersonating()` restores the previous user on that guard, or signs the guard out if there was none.
 
-What each helper is for:
+## Reference
 
-- `impersonate(user)`:
-  You already resolved the target model.
-- `impersonateById(id)`:
-  You only have the target primary key.
-- `impersonation()`:
-  Inspect whether the current guard is impersonating and who the actor/original user are.
-- `stopImpersonating()`:
-  Return to the original session when one existed, or clear the impersonated guard when it did not.
+All functions come from `@holo-js/auth` and use the default guard. Call them on `auth.guard(name)` to use another guard.
 
-Typical flow:
+| Function | Returns |
+| --- | --- |
+| `register(input)` | The created user |
+| `login(credentials)` | The new session |
+| `loginUsing(user, { remember? })` | The new session |
+| `loginUsingId(id, { remember? })` | The new session |
+| `logout()` | `{ guard, cookies }` |
+| `check()` | `true` if a user is signed in |
+| `user()` | The signed-in user or `null` |
+| `refreshUser()` | The user, re-read from the database |
+| `id()` | The user's ID or `null` |
+| `provider()` | `'users'`, `'workos'`, `'clerk'`, or `null` |
+| `findUserById(id)` | A user from the guard's provider, or `null` |
+| `impersonate(user, options?)` / `impersonateById(id, options?)` | The new session |
+| `impersonation()` | `{ guard, actorGuard, user, actor, originalUser, startedAt }` or `null` |
+| `stopImpersonating()` | The restored user or `null` |
+| `hashPassword(password)` / `verifyPassword(password, digest)` / `needsPasswordRehash(digest)` | Password helpers |
 
-1. authenticate an admin on `admin`
-2. authorize that admin to impersonate users
-3. call `auth.guard('web').impersonateById(userId, { actorGuard: 'admin' })`
-4. show an impersonation banner in your app using `impersonation()`
-5. call `stopImpersonating()` to restore the previous state
+## Next steps
 
-## Remembering Users
-
-Set `remember: true` during login:
-
-```ts
-const session = await login({
-  email: body.email,
-  password: body.password,
-  remember: true,
-})
-```
-
-Remember-me lifetime is controlled by the session config.
-
-## Retrieving User State
-
-```ts
-import auth, { check, id, refreshUser, user } from '@holo-js/auth'
-
-await check()
-await user()
-await refreshUser()
-await id()
-await auth.guard('admin').user()
-```
-
-Use `refreshUser()` when the local model may have changed during the request lifecycle and you need a fresh record.
-
-## Logging Out
-
-```ts
-import { logout } from '@holo-js/auth'
-
-const signedOut = await logout()
-```
-
-Or for another guard:
-
-```ts
-import auth from '@holo-js/auth'
-
-const signedOut = await auth.guard('admin').logout()
-```
-
-`logout()` is server-only for the same reason `login()` is server-only: it changes authenticated state and emits cookie
-headers. The returned `signedOut.cookies` array contains serialized forget-cookie headers for the route layer when it
-needs them.
-
-If the selected guard is associated with Clerk or WorkOS, `logout()` also clears that provider's configured session
-cookie behind the same API. Applications do not need a separate `logoutFromClerk()` or `logoutFromWorkos()` helper.
-
-## Route Integration
-
-Your framework route owns parsing and response formatting. The auth package only performs auth operations.
-
-```ts
-import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
-import { field, schema } from '@holo-js/validation'
-
-const loginForm = schema({
-  email: field.string().required().email(),
-  password: field.password().required(),
-})
-
-export async function POST(request: Request) {
-  const data = await validate(request, loginForm)
-
-  const session = await login(data)
-
-  return Response.json({
-    ok: true,
-    data: {
-      redirectTo: session.emailVerificationRequired
-        ? session.emailVerificationRoute ?? '/verify-email'
-        : '/admin',
-    },
-  })
-}
-```
-
-## Related Guides
-
-- [Session And Cookies](/auth/session-and-cookies)
-- [Guards And Providers](/auth/guards-and-providers)
-- [Personal Access Tokens](/auth/personal-access-tokens)
+- [Sessions and Cookies](/auth/session-and-cookies)
+- [Current User on the Client](/auth/current-user)
 - [Email Verification](/auth/email-verification)
 - [Password Reset](/auth/password-reset)
+- [Guards and Providers](/auth/guards-and-providers)

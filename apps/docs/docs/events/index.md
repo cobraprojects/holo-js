@@ -1,71 +1,123 @@
 # Events
 
-Holo-JS events are domain signals. They let one code path announce that something happened while other code
-subscribes through listeners.
+Events let one part of your app announce that something happened, such as "a user registered", while other parts react to it. The code that dispatches the event doesn't need to know who is listening.
 
-Use events when you want fan-out orchestration with clear boundaries between producer and side effects.
+Use events when one action should trigger several independent side effects: send a welcome email, record analytics, refresh a search index.
 
-## What events own
+## Quick example
 
-The `@holo-js/events` package owns:
+Define an event:
 
-- event definitions (`defineEvent(...)`)
-- listener definitions (`defineListener(...)`)
-- event dispatch (`UserRegistered.dispatch(...)`, `Event.dispatch(...)`, `dispatchEvent(...)`)
-- listener fan-out (sync and queued listeners)
-- dispatch-level and listener-level `afterCommit` behavior
+```ts [server/events/user/registered.ts]
+import { defineEvent } from '@holo-js/events'
 
-Events do not replace queue jobs. Queued listeners are implemented through queue.
-
-## Events vs jobs
-
-- event: "something happened" signal
-- listener: reaction to one or more events
-- queue job: executable work unit
-
-Queued listeners become queue jobs internally, but users still author listeners, not event-specific jobs.
-
-## Quick start
-
-```ts
-import { defineEvent, defineListener } from '@holo-js/events'
-
-export const UserRegistered = defineEvent<{
+export default defineEvent<{
   userId: string
   email: string
 }>({
   name: 'user.registered',
 })
-
-export const SendWelcomeEmail = defineListener({
-  listensTo: [UserRegistered],
-  queue: true,
-  queueName: 'emails',
-  afterCommit: true,
-  async handle(event) {
-    await mailer.sendWelcome(event.payload.email)
-  },
-})
-
-await UserRegistered.dispatch({
-  userId: 'user_1',
-  email: 'ava@example.com',
-}).afterCommit()
 ```
 
-## Package boundaries
+Add a listener that reacts to it:
 
-- `@holo-js/events` owns event/listener contracts and dispatch orchestration.
-- `@holo-js/queue` owns queue runtime and worker behavior.
-- `@holo-js/db` owns transaction lifecycle and commit hooks.
-- `@holo-js/core` owns runtime boot registration for discovered events and listeners.
-- CLI owns scaffolding commands.
+```ts [server/listeners/user/send-welcome-email.ts]
+import { defineListener } from '@holo-js/events'
+import UserRegistered from '../../events/user/registered'
 
-## Continue
+export default defineListener({
+  listensTo: [UserRegistered],
+  async handle(event) {
+    console.log(`Send a welcome email to ${event.payload.email}`)
+  },
+})
+```
+
+Dispatch the event from your app code:
+
+```ts [server/lib/users.ts]
+import UserRegistered from '../events/user/registered'
+
+export async function registerUser(userId: string, email: string) {
+  await UserRegistered.dispatch({ userId, email })
+}
+```
+
+Every listener for `user.registered` runs when you `await` the dispatch. The payload is fully typed: passing a payload without `email` is a TypeScript error.
+
+## Install events
+
+New Holo projects can include events when you create them. To add events to an existing project, run:
+
+```bash
+npx holo install events
+```
+
+This adds the `@holo-js/events` package and creates the `server/events` and `server/listeners` folders.
+
+In an interactive terminal, the installer also asks whether to enable queued listeners. Choosing **Enable queued listeners** installs [queue](/queue/) support with the `sync` driver, creating `config/queue.ts` and `server/jobs`. You can skip this and run `npx holo install queue` later.
+
+## Where events and listeners live
+
+Holo finds events and listeners automatically. Put them anywhere inside these folders, including subfolders:
+
+| Folder | Contains |
+| --- | --- |
+| `server/events` | Event definitions (`defineEvent`) |
+| `server/listeners` | Listener definitions (`defineListener`) |
+
+```text
+server/
+  events/
+    user/registered.ts
+    billing/invoice-paid.ts
+  listeners/
+    user/send-welcome-email.ts
+    billing/sync-invoice-state.ts
+```
+
+Each file exports one event or one listener, either as the default export or as a named export.
+
+## Generate files with the CLI
+
+Create an event file:
+
+```bash
+npx holo make:event user/registered
+```
+
+This writes `server/events/user/registered.ts` with the name `user.registered`.
+
+Create a listener for that event:
+
+```bash
+npx holo make:listener user/send-welcome-email --event user.registered
+```
+
+The listener file imports the event for you. See [Listeners](/events/listeners) for listeners that handle several events.
+
+## Discovery and generated types
+
+When you run `npx holo dev` or `npx holo build`, Holo scans the event and listener folders and writes a registry plus TypeScript types under `.holo-js/generated`. Holo regenerates this folder; don't edit it.
+
+The `make:event` and `make:listener` commands refresh discovery for you. If you add files by hand and want the types updated without starting the dev server, run:
+
+```bash
+npx holo prepare
+```
+
+## Events, listeners, and jobs
+
+- An **event** is a signal that something happened. It carries a payload.
+- A **listener** is code that runs when one or more events are dispatched.
+- A **queued listener** is a listener that runs in a [queue worker](/queue/workers) instead of during the request.
+
+If you just need to run one piece of background work, write a [queue job](/queue/jobs) instead. See [Choosing a Pattern](/events/choosing-patterns).
+
+## Next steps
 
 - [Defining Events](/events/defining-events)
-- [Defining Listeners](/events/defining-listeners)
-- [Dispatching Events](/events/dispatching-events)
+- [Listeners](/events/listeners)
+- [Dispatching Events](/events/dispatching)
 - [Queued Listeners](/events/queued-listeners)
-- [Transactions And After Commit](/events/transactions-after-commit)
-- [API Reference](/events/api-reference)
+- [After-Commit Events](/events/after-commit)

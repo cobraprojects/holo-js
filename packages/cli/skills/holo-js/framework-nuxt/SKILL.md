@@ -3,12 +3,12 @@ name: holo-framework-nuxt
 description: Integrate Holo-JS with Nuxt and Nitro handlers, plugins, request context, auth, validation composables, navigation, and Vue Flux state.
 metadata:
   type: focused
-  source: https://docs.holo-js.com/runtime-services
+  source: https://docs.holo-js.com/basics/services
 ---
 
 # Nuxt integration
 
-Use `@holo-js/adapter-nuxt`. Read [runtime services](https://docs.holo-js.com/runtime-services), [routing](https://docs.holo-js.com/routing), [form framework integration](https://docs.holo-js.com/forms/framework-integration), and [current auth client](https://docs.holo-js.com/auth/current-auth-client).
+Use `@holo-js/adapter-nuxt`. Read [runtime services](https://docs.holo-js.com/basics/services), [routing](https://docs.holo-js.com/basics/routing), [form framework integration](https://docs.holo-js.com/basics/forms/frameworks), and [current auth client](https://docs.holo-js.com/auth/current-user).
 
 ## Integration rules
 

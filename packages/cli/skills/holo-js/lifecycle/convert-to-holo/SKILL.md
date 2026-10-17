@@ -3,12 +3,12 @@ name: holo-convert-to-holo
 description: Convert an existing application, custom framework layer, or legacy implementation to first-party Holo-JS architecture and remove superseded code completely.
 metadata:
   type: lifecycle
-  source: https://docs.holo-js.com/upgrade-architecture
+  source: https://docs.holo-js.com/getting-started/upgrading
 ---
 
 # Convert to Holo-JS
 
-Read [upgrade architecture](https://docs.holo-js.com/upgrade-architecture), [architecture](https://docs.holo-js.com/architecture), [directory structure](https://docs.holo-js.com/directory-structure), and the focused skill for every subsystem being converted.
+Read [upgrade architecture](https://docs.holo-js.com/getting-started/upgrading), [architecture](https://docs.holo-js.com/advanced/architecture), [directory structure](https://docs.holo-js.com/getting-started/project-structure), and the focused skill for every subsystem being converted.
 
 Read [high-risk conversion examples](../../references/conversion-examples.md) when the old application has validation registries, handwritten request types, repository wrappers, or cleanup residue.
 

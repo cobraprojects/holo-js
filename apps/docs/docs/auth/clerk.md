@@ -1,20 +1,59 @@
 # Clerk
 
-`@holo-js/auth-clerk` uses Clerk Account Portal as the hosted authentication UI, then syncs the authenticated Clerk user into your local Holo user model and logs that local user into the normal Holo session.
+The Clerk integration sends users to Clerk's hosted Account Portal to sign in or sign up. When they come back, Holo checks the Clerk session, saves the user in your own `users` table, and signs them in with a normal Holo session, so `user()`, guards, and [authorization](/authorization/) work as usual.
 
-## Configuration
-
-Install Clerk auth and enable the Clerk Account Portal in the Clerk Dashboard.
+## Install
 
 ```bash
 npx holo install auth --clerk
 ```
 
-The command wires the hosted-auth route scaffolding. Keep Account Portal enabled in Clerk so those routes can redirect to Clerk's hosted forms.
+This adds `@holo-js/auth-clerk`, a `clerk` section in `config/auth.ts`, `.env` keys, and four routes:
 
-```ts
+| Route | Purpose |
+| --- | --- |
+| `GET /api/auth/clerk/login` | Send the user to the Clerk sign-in page |
+| `GET /api/auth/clerk/register` | Send the user to the Clerk sign-up page |
+| `GET /api/auth/clerk/callback` | Finish sign-in and create the Holo session |
+| `POST /api/auth/clerk/logout` | Sign out of Holo and revoke the Clerk session |
+
+Fill in the keys from the Clerk dashboard:
+
+```dotenv [.env]
+CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+CLERK_API_URL=
+CLERK_FRONTEND_API=https://steady-newt-5.clerk.accounts.dev
+CLERK_REDIRECT_URI=http://localhost:3000/api/auth/clerk/callback
+CLERK_SESSION_COOKIE=__session
+```
+
+| Variable | Required | Value |
+| --- | --- | --- |
+| `CLERK_PUBLISHABLE_KEY` | yes | From the API keys page |
+| `CLERK_SECRET_KEY` | yes | From the API keys page. Also used to revoke sessions on logout |
+| `CLERK_FRONTEND_API` | yes | Your Frontend API URL, from the domains settings |
+| `CLERK_REDIRECT_URI` | yes | Your callback URL, as a full URL |
+| `CLERK_API_URL` | no | Only for a custom Clerk API base URL |
+| `CLERK_SESSION_COOKIE` | no | Clerk's session cookie name, if it isn't `__session` |
+
+In the Clerk dashboard, turn on the **Account Portal**. Holo builds the portal URL from `CLERK_FRONTEND_API` (for example `https://steady-newt-5.clerk.accounts.dev` becomes `https://steady-newt-5.accounts.dev`, and `https://clerk.example.com` becomes `https://accounts.example.com`). It opens `/sign-in` or `/sign-up` with `CLERK_REDIRECT_URI` as the return address, so you don't set a portal URL yourself.
+
+The Account Portal's own fallback redirects are only used when someone visits Clerk's pages directly.
+
+Then link to the routes from your login page:
+
+```html
+<a href="/api/auth/clerk/login">Continue with Clerk</a>
+<a href="/api/auth/clerk/register">Sign up with Clerk</a>
+```
+
+## Configuration
+
+```ts [config/auth.ts]
 import { defineAuthConfig } from '@holo-js/auth'
 import { env } from '@holo-js/config'
+
 export default defineAuthConfig({
   clerk: {
     provider: env('AUTH_CLERK_PROVIDER', 'app'),
@@ -24,43 +63,33 @@ export default defineAuthConfig({
       apiUrl: env('CLERK_API_URL'),
       frontendApi: env('CLERK_FRONTEND_API'),
       redirectUri: env('CLERK_REDIRECT_URI'),
+      sessionCookie: env('CLERK_SESSION_COOKIE', '__session'),
     },
   },
 })
 ```
 
-Use these environment variables:
+`app` is a name you choose. You can define several Clerk instances side by side; `provider` picks the default one, and every route function accepts `{ provider: 'name' }` to use another.
 
-| Variable | Required | Value |
+| Option | Default | Description |
 | --- | --- | --- |
-| `AUTH_CLERK_PROVIDER` | No | Clerk provider key from `defineAuthConfig({ clerk })`. Defaults to `app`; valid values are the configured provider keys such as `app` or `org`. |
-| `CLERK_PUBLISHABLE_KEY` | Yes | Clerk publishable key, usually `pk_test_...` or `pk_live_...`. |
-| `CLERK_SECRET_KEY` | Yes | Clerk secret key, usually `sk_test_...` or `sk_live_...`. |
-| `CLERK_FRONTEND_API` | Yes | Clerk Frontend API URL, for example `https://steady-newt-5.clerk.accounts.dev` in development or `https://clerk.example.com` in production. |
-| `CLERK_REDIRECT_URI` | Yes | Your Holo callback URL, for example `http://localhost:3000/api/auth/clerk/callback`. |
-| `CLERK_API_URL` | No | Clerk API base URL. Leave empty unless you are using a custom Clerk API base. |
-| `CLERK_SESSION_COOKIE` | No | Clerk session cookie name. Defaults to `__session`. |
+| `publishableKey`, `secretKey` | | Clerk API keys |
+| `frontendApi` | | Frontend API URL |
+| `redirectUri` | | Callback URL. Must be a full URL |
+| `apiUrl` | Clerk's API | Custom Backend API base URL |
+| `sessionCookie` | `'__session'` | Clerk session cookie name |
+| `authorizedParties` | `[]` | Extra origins allowed to have issued the Clerk session token. Your app's own origin is always allowed |
+| `guard` | default guard | Sign users in on this guard. Must be a `session` guard |
+| `mapToProvider` | the guard's provider | Save users with this user provider |
 
-`CLERK_FRONTEND_API` is not the Account Portal sign-in URL. Holo derives the matching Account Portal URL from it, appends `/sign-in` or `/sign-up`, and sends `CLERK_REDIRECT_URI` as Clerk's `redirect_url` query parameter. You do not configure a separate `CLERK_ACCOUNT_PORTAL_URL`.
+## The routes
 
-`CLERK_SESSION_COOKIE` is optional and defaults to `__session`; you only need to set it if your Clerk instance uses a different session cookie name.
+The login, register, and logout routes return a ready-made `Response`, so they're one line each:
 
-In the Clerk Dashboard:
+::: code-group
 
-1. Copy the publishable and secret keys from the API keys page.
-2. Copy the Frontend API URL from the Clerk-provided domain settings.
-3. Enable Account Portal.
-4. Set Account Portal fallback redirects to your app pages, such as `/dashboard` after sign-in and `/onboarding` after sign-up.
-
-The Account Portal fallback redirects are only used when users visit Clerk pages directly. Holo login and registration routes always pass `redirect_url`, so normal Holo sign-in returns to `CLERK_REDIRECT_URI`.
-
-If your Holo app requires email verification, Clerk users must have a verified email address. Phone-only Clerk sign-up works only when your Holo auth config does not require email verification, or when you map the Clerk profile to a local user shape that your app can persist without a real email address.
-
-## Routes
-
-Login redirects the browser to the hosted Clerk sign-in form:
-
-```ts
+```ts [Next.js]
+// app/api/auth/clerk/login/route.ts
 import { loginWithClerk } from '@holo-js/auth-clerk'
 
 export async function GET(request: Request) {
@@ -68,213 +97,159 @@ export async function GET(request: Request) {
 }
 ```
 
-Register redirects the browser to the hosted Clerk sign-up form:
+```ts [Nuxt]
+// server/api/auth/clerk/login.get.ts
+import { loginWithClerk } from '@holo-js/auth-clerk'
 
-```ts
-import { registerWithClerk } from '@holo-js/auth-clerk'
-
-export async function GET(request: Request) {
-  return await registerWithClerk(request)
-}
+export default defineEventHandler(async (event) => {
+  return await loginWithClerk(event)
+})
 ```
 
-The callback verifies the Clerk session on the request, syncs or creates the local user, links the Clerk identity, and logs the user into Holo:
+```ts [SvelteKit]
+// src/routes/api/auth/clerk/login/+server.ts
+import { loginWithClerk } from '@holo-js/auth-clerk'
+import type { RequestHandler } from './$types'
 
-```ts
+export const GET = (async (event) => {
+  return await loginWithClerk(event)
+}) satisfies RequestHandler
+```
+
+:::
+
+`registerWithClerk()` and `logoutWithClerk()` work the same way. The installed callback sends users to `/`; replace it with your own handler to choose where they land. (In Next.js, the installed `route.ts` files just re-export code from `.holo-js/generated`, so replace the file's contents rather than editing the generated file.)
+
+::: code-group
+
+```ts [Next.js]
+// app/api/auth/clerk/callback/route.ts
+import { redirect } from 'next/navigation'
 import { completeClerkAuth } from '@holo-js/auth-clerk'
 
 export async function GET(request: Request) {
   const { error } = await completeClerkAuth(request)
-
   if (error) {
-    return Response.redirect(new URL(`/login?error=${error.code}`, request.url))
+    redirect(`/login?error=${encodeURIComponent(error.code)}`)
   }
 
-  return Response.redirect(new URL('/', request.url))
+  redirect('/dashboard')
 }
 ```
 
-Logout clears the local Holo session, revokes the Clerk session through the Clerk Backend API, and returns the final redirect URL:
+```ts [Nuxt]
+// server/api/auth/clerk/callback.get.ts
+import { completeClerkAuth } from '@holo-js/auth-clerk'
+
+export default defineEventHandler(async (event) => {
+  const { error } = await completeClerkAuth(event)
+  if (error) {
+    return sendRedirect(event, `/login?error=${encodeURIComponent(error.code)}`, 303)
+  }
+
+  return sendRedirect(event, '/dashboard', 303)
+})
+```
+
+```ts [SvelteKit]
+// src/routes/api/auth/clerk/callback/+server.ts
+import { redirect, type RequestHandler } from '@sveltejs/kit'
+import { completeClerkAuth } from '@holo-js/auth-clerk'
+
+export const GET = (async (event) => {
+  const { error } = await completeClerkAuth(event)
+  if (error) {
+    redirect(303, `/login?error=${encodeURIComponent(error.code)}`)
+  }
+
+  redirect(303, '/dashboard')
+}) satisfies RequestHandler
+```
+
+:::
+
+`completeClerkAuth()` returns `{ data, error }`. On success, `data` has the local `user`, the `guard`, and a `status` of `'created'`, `'updated'`, `'linked'`, or `'relinked'`. On failure, `error` has a `code`, `message`, and `status`:
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `clerk_session_required` | 422 | The request has no active Clerk session |
+| `clerk_identity_conflict` | 409 | A local user already has this email (see below) |
+| `clerk_auth_failed` | 422 | Anything else |
+| Clerk's own `error` value | 422 | Clerk sent the user back with an error |
+
+## Log out
+
+`logoutWithClerk()` revokes the Clerk session through Clerk's Backend API, ends the Holo session, and redirects. By default it redirects to `/`; pass `returnTo` to pick another path on your own site:
 
 ```ts
-import { logoutWithClerk } from '@holo-js/auth-clerk'
-import { provider } from '@holo-js/auth'
-
-export async function POST(request: Request) {
-  if (await provider() !== 'clerk') {
-    return Response.redirect(new URL('/', request.url), 303)
-  }
-
-  const { data, error } = await logoutWithClerk(request, {
-    returnTo: '/login',
-  })
-
-  if (error) {
-    return Response.json({ data, error }, { status: error.status })
-  }
-
-  return Response.redirect(data.url, 303)
-}
+return await logoutWithClerk(request, { returnTo: '/login' })
 ```
 
-Use `provider()` on the server, or `useAuth().provider` in framework client code, to show the Clerk logout action only
-when the current Holo session was created by Clerk. Calling `logoutWithClerk()` for a local, WorkOS, or other session
-returns a typed failure because there is no Clerk session to revoke upstream.
+Addresses on other sites are ignored. If the current session didn't come from Clerk, it just redirects to `/`. Show the Clerk logout button only for Clerk users by checking `provider`:
 
-## Mapping Local Fields
+```tsx
+{auth.provider === 'clerk' && (
+  <form action="/api/auth/clerk/logout" method="post">
+    <button type="submit">Log out</button>
+  </form>
+)}
+```
 
-`completeClerkAuth()` passes a fully typed Clerk user to the optional mapper. Return any local user attributes you want Holo to save on create, update, or link.
+The regular `logout()` also works for Clerk users. It ends the Holo session and clears Clerk's session cookie, but doesn't revoke the session at Clerk.
+
+## Save extra user fields
+
+By default Holo saves `email` and `name` on the local user. Pass a `user` function to `completeClerkAuth()` to save more:
 
 ```ts
 const { error } = await completeClerkAuth(request, {
   user: (clerkUser) => ({
     email: clerkUser.email,
     name: clerkUser.name,
-    avatarUrl: clerkUser.imageUrl,
-    clerkUserId: clerkUser.id,
+    avatar: clerkUser.imageUrl ?? null,
   }),
 })
 ```
 
-The normalized `clerkUser` includes `email` and `name`, derived from Clerk identity data with stable fallbacks. If no mapper is provided, Holo saves `email` and `name` by default. If your mapper omits either field, Holo still fills the missing `email` or `name` before writing the local user.
+The function runs on every sign-in, and Holo updates the local user when a value changes. If you leave out `email` or `name`, Holo fills them in. Make sure each field is a column on your model.
 
-## Identity Store
+`clerkUser` has `id`, `email` (the primary address), `emailVerified`, `name` (from first and last name, falling back to the email), `firstName`, `lastName`, `imageUrl`, `primaryEmailAddressId`, `emailAddresses`, and `raw`.
 
-The default Holo runtime stores Clerk links in `auth_identities`. It uses the scaffolded unique index on `provider` and
-`provider_user_id` to claim a Clerk identity once, so two first sign-ins for the same Clerk user reuse the same local
-identity.
+## How users are matched
 
-Most apps should not configure an identity store:
+The first time a Clerk user signs in, Holo creates a local user and links the Clerk ID to it in `auth_identities`. Later sign-ins load that same user. If two first sign-ins for the same Clerk user happen at once, both end up on the same local user.
 
-```ts
-import { defineAuthConfig } from '@holo-js/auth'
-import { env } from '@holo-js/config'
+::: warning
+If a local user with the same verified email already exists and isn't linked to Clerk, Holo doesn't merge the accounts. The callback fails with `clerk_identity_conflict`. This stops someone from taking over a password account through a hosted provider.
+:::
+
+When [email verification](/auth/email-verification) is required, Clerk users must have a verified email, so phone-only Clerk sign-ups fail. Users without an email get a placeholder like `<clerk-id>@clerk.hosted.local` when verification isn't required.
+
+## Store links in your own table
+
+Holo keeps Clerk links in `auth_identities`. To use another table, pass an `identityStore` with `findByProviderUserId`, `findByUserId`, `save`, and optionally `claim`:
+
+```ts [config/auth.ts]
+import { defineAuthConfig, type AuthHostedIdentityStore } from '@holo-js/auth'
+import { externalIdentityStore } from '../server/lib/external-identities'
+
 export default defineAuthConfig({
   clerk: {
-    provider: env('AUTH_CLERK_PROVIDER', 'app'),
-    app: {
-      publishableKey: env('CLERK_PUBLISHABLE_KEY'),
-      secretKey: env('CLERK_SECRET_KEY'),
-      frontendApi: env('CLERK_FRONTEND_API'),
-      redirectUri: env('CLERK_REDIRECT_URI'),
-    },
+    provider: 'app',
+    identityStore: externalIdentityStore satisfies AuthHostedIdentityStore,
+    app: { /* ... */ },
   },
 })
 ```
 
-Add `identityStore` only when Clerk identities live outside the default `auth_identities` table. The key is optional and
-does not change the Clerk route API.
+Each method reads or writes an `AuthHostedIdentityRecord`: `provider`, `providerUserId`, `guard`, `authProvider`, `userId`, `email`, `emailVerified`, `profile`, `linkedAt`, and `updatedAt`. Holo calls `claim()` only when linking a new Clerk user; it should insert the record if no row exists for `(provider, providerUserId)` and return whichever record is stored. Give your table a unique index on those two columns. Without `claim()`, Holo uses `save()`.
 
-```ts
-import { defineAuthConfig, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/auth'
-import { env } from '@holo-js/config'
-import { DB } from '@holo-js/db'
+## Lower-level functions
 
-type ExternalIdentityRow = {
-  provider: string
-  provider_user_id: string
-  guard: string
-  auth_provider: string
-  user_id: string
-  email: string | null
-  email_verified: boolean | number
-  profile: string | Readonly<Record<string, unknown>>
-  created_at: Date | string
-  updated_at: Date | string
-}
+`@holo-js/auth-clerk` also exports `verifyRequest()`, `verifySession()`, `syncIdentity()`, and `authenticate()`. `authenticate(request)` verifies a Clerk session on any request, syncs the user, and creates the Holo session in one call, which is useful for API routes that receive a Clerk token in the `Authorization: Bearer` header.
 
-function toHostedIdentity(row: ExternalIdentityRow): AuthHostedIdentityRecord {
-  return {
-    provider: row.provider,
-    providerUserId: row.provider_user_id,
-    guard: row.guard,
-    authProvider: row.auth_provider,
-    userId: row.user_id,
-    email: row.email ?? undefined,
-    emailVerified: row.email_verified === true || row.email_verified === 1,
-    profile: typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile,
-    linkedAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
-  }
-}
+## Next steps
 
-function toExternalIdentityRow(record: AuthHostedIdentityRecord) {
-  return {
-    provider: record.provider,
-    provider_user_id: record.providerUserId,
-    guard: record.guard,
-    auth_provider: record.authProvider,
-    user_id: String(record.userId),
-    email: record.email ?? null,
-    email_verified: record.emailVerified ? 1 : 0,
-    profile: JSON.stringify(record.profile),
-    created_at: record.linkedAt.toISOString(),
-    updated_at: record.updatedAt.toISOString(),
-  }
-}
-
-async function findExternalIdentity(provider: string, providerUserId: string) {
-  const row = await DB.table('external_identities')
-    .where('provider', provider)
-    .where('provider_user_id', providerUserId)
-    .first<ExternalIdentityRow>()
-
-  return row ? toHostedIdentity(row) : null
-}
-
-const externalIdentityStore = {
-  async findByProviderUserId(provider, providerUserId) {
-    return await findExternalIdentity(provider, providerUserId)
-  },
-  async findByUserId(provider, authProvider, userId) {
-    const row = await DB.table('external_identities')
-      .where('provider', provider)
-      .where('auth_provider', authProvider)
-      .where('user_id', String(userId))
-      .first<ExternalIdentityRow>()
-
-    return row ? toHostedIdentity(row) : null
-  },
-  async claim(record) {
-    await DB.table('external_identities').insertOrIgnore(toExternalIdentityRow(record))
-
-    const claimed = await findExternalIdentity(record.provider, record.providerUserId)
-    if (!claimed) {
-      throw new Error('Clerk identity was not stored.')
-    }
-
-    return claimed
-  },
-  async save(record) {
-    await DB.table('external_identities')
-      .where('provider', record.provider)
-      .where('provider_user_id', record.providerUserId)
-      .update(toExternalIdentityRow(record))
-  },
-} satisfies AuthHostedIdentityStore
-
-export default defineAuthConfig({
-  clerk: {
-    provider: env('AUTH_CLERK_PROVIDER', 'app'),
-    identityStore: externalIdentityStore,
-    app: {
-      publishableKey: env('CLERK_PUBLISHABLE_KEY'),
-      secretKey: env('CLERK_SECRET_KEY'),
-      frontendApi: env('CLERK_FRONTEND_API'),
-      redirectUri: env('CLERK_REDIRECT_URI'),
-    },
-  },
-})
-```
-
-`toHostedIdentity()` should return Holo's hosted identity shape: `provider`, `providerUserId`, `guard`, `authProvider`,
-`userId`, optional `email`, `emailVerified`, `profile`, `linkedAt`, and `updatedAt`. `toExternalIdentityRow()` should
-persist the same data in your custom table's column names. If you provide `claim()`, make sure your custom table has a
-unique index on `(provider, provider_user_id)`. Holo calls `claim()` only when linking a new Clerk identity. It calls
-`save()` when refreshing an already-linked identity.
-
-## Lower-Level APIs
-
-Use `authenticate(request, provider)` when you already have a Clerk-authenticated request and want one call to verify the session, sync the identity, and create the Holo session.
-
-Use `verifyRequest()`, `verifySession()`, and `syncIdentity()` when your route needs lower-level control before creating local auth state.
+- [WorkOS](/auth/workos)
+- [Social Login](/auth/social-login)
+- [Current User on the Client](/auth/current-user)
