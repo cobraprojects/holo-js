@@ -24,8 +24,9 @@ async function uploadPostImage(page, { fixture, name, mimeType }) {
 }
 
 async function postIsListed(page, title) {
-  await page.goto('/admin/posts', { waitUntil: 'networkidle' })
-  return await page.getByText(title).count() > 0
+  const listing = await page.request.get('/admin/posts')
+  assert.equal(listing.status(), 200)
+  return (await listing.text()).includes(title)
 }
 
 export async function assertExampleAppImageUploadBrowserFlow({ baseUrl }) {

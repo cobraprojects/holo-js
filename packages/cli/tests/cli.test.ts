@@ -17,6 +17,7 @@ import {
   resolveInstalledDependencyRoot,
   symlinkPackageDependencySync,
 } from '../../../tests/support/published-package'
+import { startLocalPackageRegistry, type LocalPackageRegistry } from '../../../tests/support/local-package-registry'
 import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
@@ -223,6 +224,7 @@ import {
 } from '../src/metadata'
 
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
+const workspaceCatalog = (JSON.parse(readFileSync(join(workspaceRoot, 'package.json'), 'utf8')) as { workspaces: { catalog: Record<string, string> } }).workspaces.catalog
 type BuiltWorkspacePackages = {
   readonly root: string
   readonly adapterNextPackageRoot: string
@@ -256,6 +258,7 @@ type BuiltWorkspacePackages = {
   readonly validationPackageRoot: string
   readonly cliPackageRoot: string
   readonly cliBinPath: string
+  readonly packages: readonly { readonly name: string, readonly directory: string }[]
 }
 
 const tempBuildRoots: string[] = []
@@ -329,16 +332,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const validationPackageRoot = join(root, 'packages/validation')
   const cliPackageRoot = join(root, 'packages/cli')
 
-  const packages = stageWorkspacePackagesSync(workspaceRoot, join(root, 'packages'), [
-    '@holo-js/cli',
-    '@holo-js/adapter-next',
-    '@holo-js/flux-react',
-    '@holo-js/db-sqlite',
-    '@holo-js/db-postgres',
-    '@holo-js/db-mysql',
-    '@holo-js/cache-redis',
-    '@holo-js/storage-s3',
-  ])
+  const packages = stageWorkspacePackagesSync(
+    workspaceRoot,
+    join(root, 'packages'),
+    Object.keys(workspaceCatalog).filter(name => name.startsWith('@holo-js/')),
+  )
   for (const { name, directory } of packages) {
     const build = buildWorkspacePackageSync(name, join(directory, 'dist'))
     expect(build.status, build.stderr || build.stdout).toBe(0)
@@ -377,6 +375,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     validationPackageRoot,
     cliPackageRoot,
     cliBinPath: join(cliPackageRoot, 'dist/bin/holo.mjs'),
+    packages,
   }
 
   return builtWorkspacePackages
@@ -639,7 +638,7 @@ function createIo(projectRoot: string, options: { tty?: boolean, input?: string 
 
 async function createTempProject(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'holo-cli-test-'))
-  await writeFile(join(dir, '.npmrc'), 'prefer-offline=true\n')
+  await writeFile(join(dir, '.npmrc'), `prefer-offline=true\n${localRegistry.scope}:registry=${localRegistry.url}\n`)
   await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', private: true }, null, 2))
   await writeProjectFile(dir, 'config/app.ts', `
 import { defineAppConfig } from '@holo-js/config'
@@ -901,9 +900,13 @@ function linkNativeFramework(projectRoot: string, framework: 'nuxt' | 'sveltekit
 }
 
 const tempDirs: string[] = []
+let localRegistry: LocalPackageRegistry
+const inheritedBunCacheDirectory = process.env.BUN_INSTALL_CACHE_DIR
 
-beforeAll(() => {
-  ensureBuiltWorkspacePackagesSync()
+beforeAll(async () => {
+  const { packages } = ensureBuiltWorkspacePackagesSync()
+  localRegistry = await startLocalPackageRegistry({ scope: '@holo-js', catalog: workspaceCatalog, packages })
+  process.env.BUN_INSTALL_CACHE_DIR = localRegistry.env.BUN_INSTALL_CACHE_DIR
 }, 300_000)
 
 afterEach(async () => {
@@ -914,6 +917,9 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  if (inheritedBunCacheDirectory === undefined) delete process.env.BUN_INSTALL_CACHE_DIR
+  else process.env.BUN_INSTALL_CACHE_DIR = inheritedBunCacheDirectory
+  await localRegistry?.close()
   for (const root of tempBuildRoots.splice(0)) {
     await rm(root, { recursive: true, force: true })
   }
