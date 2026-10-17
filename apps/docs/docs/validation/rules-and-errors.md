@@ -479,6 +479,10 @@ decoding uses the optional `sharp` package; without it, validation reports an er
 install it. In the browser, `image()` inspects the file's contents and leaves full decoding to the
 server.
 
+```bash
+npm install sharp
+```
+
 ```ts
 field.file().image()
 ```
