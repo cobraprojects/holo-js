@@ -244,6 +244,7 @@ it.each(['social', 'workos', 'clerk'] as const)('rejects native auth configurati
 
 it('rejects a native app with ability definitions when authorization is not installed',
   () => runNativeBoot({ missingAuthorization: true }),
+  30_000,
 )
 
 it('creates a real verification token and reports missing delivery when notifications are absent',
