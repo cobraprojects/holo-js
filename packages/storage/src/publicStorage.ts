@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream'
-import { open, realpath, stat } from 'node:fs/promises'
-import { extname, resolve, sep } from 'node:path'
-import { inspectFileMimeType } from './mimeType'
+import { type FileHandle, open, realpath, stat } from 'node:fs/promises'
+import { resolve, sep } from 'node:path'
+import { type FileContentInspection, fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
@@ -57,39 +57,12 @@ function resolveAbsolutePath(projectRoot: string, disk: PublicLocalDisk, fileSeg
   return absolutePath
 }
 
-function resolveContentType(absolutePath: string): string {
-  switch (extname(absolutePath).toLowerCase()) {
-    case '.avif': return 'image/avif'
-    case '.css': return 'text/css; charset=utf-8'
-    case '.gif': return 'image/gif'
-    case '.jpeg':
-    case '.jpg': return 'image/jpeg'
-    case '.json': return 'application/json; charset=utf-8'
-    case '.mp3': return 'audio/mpeg'
-    case '.pdf': return 'application/pdf'
-    case '.png': return 'image/png'
-    case '.txt': return 'text/plain; charset=utf-8'
-    case '.webp': return 'image/webp'
-    case '.woff': return 'font/woff'
-    case '.woff2': return 'font/woff2'
-    default: return 'application/octet-stream'
-  }
+function withCharset(mimeType: string): string {
+  return mimeType.startsWith('text/') || mimeType === 'application/json' ? `${mimeType}; charset=utf-8` : mimeType
 }
 
-function isActiveContentPath(absolutePath: string): boolean {
-  switch (extname(absolutePath).toLowerCase()) {
-    case '.html':
-    case '.js':
-    case '.mjs':
-    case '.svg':
-      return true
-    default:
-      return false
-  }
-}
-
-function resolvePublicFileHeaders(absolutePath: string, mimeType: string): PublicStorageResponseHeaders {
-  if (isActiveContentPath(absolutePath)) {
+function resolvePublicFileHeaders({ mimeType, passive }: FileContentInspection): PublicStorageResponseHeaders {
+  if (!mimeType || !passive) {
     return {
       'content-disposition': 'attachment',
       'content-type': 'application/octet-stream',
@@ -98,9 +71,15 @@ function resolvePublicFileHeaders(absolutePath: string, mimeType: string): Publi
   }
 
   return {
-    'content-type': mimeType === 'application/octet-stream' ? resolveContentType(absolutePath) : mimeType,
+    'content-type': withCharset(mimeType),
     'x-content-type-options': 'nosniff',
   }
+}
+
+async function inspectLocalFile(file: FileHandle, path: string): Promise<FileContentInspection> {
+  const sample = new Uint8Array(fileContentSampleBytes)
+  const { bytesRead } = await file.read(sample, 0, sample.length, 0)
+  return inspectFileContent(sample.subarray(0, bytesRead), path)
 }
 
 function createMissingFileResponse(): Response {
@@ -136,7 +115,7 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
     if (path === root || !path.startsWith(`${root}${sep}`)) return null
     const resolvedFile = await stat(path)
     if (opened.dev !== resolvedFile.dev || opened.ino !== resolvedFile.ino || !opened.isFile()) return null
-    const headers = new Headers(resolvePublicFileHeaders(path, await inspectFileMimeType(file)))
+    const headers = new Headers(resolvePublicFileHeaders(await inspectLocalFile(file, path)))
     headers.set('accept-ranges', 'bytes')
     if (privateFile) headers.set('cache-control', 'private, no-store')
     const range = resolveByteRange(request, opened.size)

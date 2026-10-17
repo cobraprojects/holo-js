@@ -87,14 +87,15 @@ type StorageS3Module = {
 const MODEL_FILE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'])
 const HOLO_PACKAGE_SCOPE = '@holo-js/'
 const realtimeClientDefinitionPrefix = '\0holo-realtime-client:'
+const VALIDATION_CLIENT_DEPENDENCIES = ['valibot', 'file-type'] as const
 const CLIENT_OPTIMIZE_DEPS = [
   {
     packageName: `${HOLO_PACKAGE_SCOPE}forms`,
-    include: `${HOLO_PACKAGE_SCOPE}forms > ${HOLO_PACKAGE_SCOPE}validation > valibot`,
+    include: VALIDATION_CLIENT_DEPENDENCIES.map(dependency => `${HOLO_PACKAGE_SCOPE}forms > ${HOLO_PACKAGE_SCOPE}validation > ${dependency}`),
   },
   {
     packageName: `${HOLO_PACKAGE_SCOPE}validation`,
-    include: `${HOLO_PACKAGE_SCOPE}validation > valibot`,
+    include: VALIDATION_CLIENT_DEPENDENCIES.map(dependency => `${HOLO_PACKAGE_SCOPE}validation > ${dependency}`),
   },
 ] as const
 const NITRO_RUNTIME_TRACE_IMPORTS = [
@@ -402,7 +403,7 @@ function resolveClientOptimizeDeps(rootDir: string): string[] {
   for (const { packageName, include } of CLIENT_OPTIMIZE_DEPS) {
     try {
       projectRequire.resolve(packageName)
-      deps.push(include)
+      deps.push(...include)
     } catch (error) {
       /* v8 ignore next 3 -- unexpected resolver failures should fail module setup */
       if (!isModuleResolutionFailure(error)) {

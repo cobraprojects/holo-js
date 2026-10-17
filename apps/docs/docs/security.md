@@ -43,11 +43,18 @@ It returns a fresh `URL`, retaining the path and query without reading the reque
 hostname in the framework URL. Without Host, an absolute request URL supplies the origin; relative URLs default to HTTP
 and use `localhost` when no host is available.
 
-Forwarded host and protocol are used only when `HOLO_SECURITY_TRUST_PROXY` is explicitly enabled (`1`, `true`, `yes`, or
-`on`, case-insensitive). The resolver uses the first `X-Forwarded-Host` and `X-Forwarded-Proto` values, falling back to
-the first `Forwarded` entry's `host` and `proto` parameters. Configure trusted proxies to sanitize these headers before
-enabling this setting. Referer does not determine the request origin. Malformed hosts, non-HTTP protocols, and URL
-credentials are rejected.
+Forwarded host and protocol are used only when `HOLO_SECURITY_TRUST_PROXY` names the header family your proxy sets
+(case-insensitive):
+
+| Value | Trusted headers |
+| --- | --- |
+| `x-forwarded`, `true`, `1`, `yes`, `on` | The first `X-Forwarded-Host` and `X-Forwarded-Proto` values |
+| `forwarded` | The first RFC 7239 `Forwarded` entry's `host` and `proto` parameters |
+
+The two families are never mixed, so a client cannot supply the family your proxy does not set. Configure trusted
+proxies to overwrite the headers of the selected family before enabling this setting. Referer does not determine the
+request origin. Malformed hosts, non-HTTP protocols, and URL credentials are rejected, and the security middleware
+answers them with `400 Bad Request`.
 
 The forms request reconstruction and secure-cookie detection use the same resolver.
 
@@ -160,8 +167,9 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 - When a limiter uses `define()` instead of `by(...)`, the package uses its default key strategy.
 - The default key is `user:<id>` when the current Holo auth runtime can resolve an authenticated user.
 - Otherwise the default key falls back to `ip:<client-ip>` from the incoming request headers.
-- The runtime only reads `x-forwarded-for` and `x-real-ip` when `HOLO_SECURITY_TRUST_PROXY` is truthy.
-- The same trust setting controls `Forwarded` and `x-forwarded-proto` when determining secure requests and cookies.
+- The runtime only reads `x-forwarded-for` and `x-real-ip` when `HOLO_SECURITY_TRUST_PROXY` trusts `x-forwarded`, and
+  only reads the `Forwarded` entry's `for` parameter when it trusts `forwarded`.
+- The same trust setting selects the header family used when determining secure requests and cookies.
 - Security middleware rejects `TRACE` with `405`; enable unusual HTTP methods outside the security middleware only
   when the application deliberately owns their handling.
 - Without trusted proxy headers, guest requests can fall back to `ip:unknown`, which means multiple

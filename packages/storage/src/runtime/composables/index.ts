@@ -1,4 +1,5 @@
 import { createHmac, createHash } from 'node:crypto'
+import { fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
 import { createTemporaryLocalStorageUrl } from '../../temporaryLocalStorage'
 import type {
   RuntimeDiskConfig,
@@ -16,7 +17,7 @@ type StorageRuntimeConfigValue = {
 export interface StorageBackend {
   getItem<T = unknown>(key: string): Promise<T | null>
   getItemRaw(key: string): Promise<RawStorageValue>
-  getItemStat?(key: string): Promise<StorageFileMetadata | null>
+  getItemStat?(key: string, request: StorageFileSampleRequest): Promise<StorageFileSample | null>
   setItem(key: string, value: unknown): Promise<void>
   setItemRaw(key: string, value: Exclude<RawStorageValue, null>): Promise<void>
   hasItem(key: string): Promise<boolean>
@@ -50,6 +51,15 @@ export type StorageContent
     | Blob
 
 export type StorageByteStream = AsyncIterable<Uint8Array>
+
+export interface StorageFileSample {
+  readonly size: number
+  readonly sample: Uint8Array
+}
+
+export interface StorageFileSampleRequest {
+  readonly sampleBytes: number
+}
 
 export interface StorageFileMetadata {
   readonly size: number
@@ -651,16 +661,11 @@ function createDisk(diskName?: string): StorageInstance {
     },
 
     async stat(path) {
-      const hasControlCharacter = Array.from(path).some(character => {
-        const code = character.charCodeAt(0)
-        return code <= 31 || code === 127
-      })
-      if (!path.trim() || /^[\\/]/.test(path.trim()) || /^[a-z]:/i.test(path.trim()) || hasControlCharacter) {
-        throw new TypeError('[Holo Storage] File metadata requires a safe relative file path.')
-      }
-      const key = normalizeKey(path)
       if (!backend.getItemStat) throw new StorageMetadataUnsupportedError()
-      return backend.getItemStat(key)
+      const file = await backend.getItemStat(normalizeKey(path), { sampleBytes: fileContentSampleBytes })
+      if (!file) return null
+      const { mimeType } = await inspectFileContent(file.sample, path)
+      return { size: file.size, mimeType }
     },
 
     async readStream(path, options = {}) {

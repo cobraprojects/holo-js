@@ -2,7 +2,7 @@ import { protect } from '../index'
 import { cors } from '../cors'
 import { getSecurityRuntime } from '../runtime'
 import { prepareCsrfCookies } from '../cookie-issuance'
-import { SecurityCsrfError } from '../contracts'
+import { createSecurityRejectionResponse, isSecurityRejection } from '../rejection-response'
 
 type NextCsrfRequest = Request & {
   readonly nextUrl?: URL
@@ -33,15 +33,6 @@ type NextServerModule = {
 export type NextCsrfMiddleware = (
   request: NextCsrfRequest,
 ) => Response | undefined | Promise<Response | undefined>
-
-function createCsrfErrorResponse(error: SecurityCsrfError): Response {
-  return new Response(error.message, {
-    status: error.status,
-    headers: {
-      'content-type': 'text/plain; charset=utf-8',
-    },
-  })
-}
 
 function getRequestCookie(request: NextCsrfRequest, name: string): string | undefined {
   const cookie = request.cookies?.get(name)
@@ -106,17 +97,18 @@ export function csrfProtection(): NextCsrfMiddleware {
       })
     }
 
+    let response: Response | undefined
     try {
       await protect(await actionRequest(request))
+      response = await issueCsrfCookie(request)
     } catch (error) {
-      if (error instanceof SecurityCsrfError) {
-        return cors.apply(request, createCsrfErrorResponse(error))
+      if (isSecurityRejection(error)) {
+        return cors.apply(request, createSecurityRejectionResponse(error))
       }
 
       throw error
     }
 
-    const response = await issueCsrfCookie(request)
     if (response) return cors.apply(request, response)
     if ([...cors.headers(request)].length === 0) return undefined
     const { NextResponse } = await import('next/server.js') as NextServerModule

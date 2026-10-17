@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
 import { broadcast } from '@holo-js/broadcast'
+import { DB } from '@holo-js/db'
 import { csrf } from '@holo-js/security'
 
 import { deletePost, getAdminPostsData } from '$lib/server/blog'
@@ -24,8 +25,10 @@ export const actions = {
     const id = Number(formData.get('id'))
     const post = await Post.findOrFail(id)
     await authorize('delete', post)
-    await deletePost(id)
-    await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
+    await DB.transaction(async () => {
+      await deletePost(id)
+      await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
+    })
     await BlogPostSaved.dispatch({
       action: 'deleted',
       postId: post.id,

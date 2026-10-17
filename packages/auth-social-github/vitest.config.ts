@@ -1,14 +1,7 @@
-import { defineConfig } from 'vitest/config'
-import { resolve } from 'node:path'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-      '@holo-js/auth': resolve(import.meta.dirname, '../auth/src/index.ts'),
-      '@holo-js/auth-social': resolve(import.meta.dirname, '../auth-social/src/index.ts'),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/auth-social-github',
     include: ['tests/**/*.test.ts'],
@@ -17,4 +10,4 @@ export default defineConfig({
       include: ['src/**/*.ts'],
     },
   },
-})
+}))

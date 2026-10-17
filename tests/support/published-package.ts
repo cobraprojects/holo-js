@@ -147,7 +147,25 @@ export async function provisionTempPackage(sourcePackageDir: string, tempPackage
   })
 }
 
-export async function stagePublishedPackage(
+const publishedPackageStagings = new Map<string, Promise<void>>()
+
+export function stagePublishedPackage(
+  sourceDir: string,
+  targetDir: string,
+  distDir: string,
+): Promise<void> {
+  const stagingKey = resolve(targetDir)
+  const existingStaging = publishedPackageStagings.get(stagingKey)
+  if (existingStaging) {
+    return existingStaging
+  }
+
+  const staging = stagePublishedPackageContents(sourceDir, targetDir, distDir)
+  publishedPackageStagings.set(stagingKey, staging)
+  return staging
+}
+
+async function stagePublishedPackageContents(
   sourceDir: string,
   targetDir: string,
   distDir: string,

@@ -131,10 +131,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return Object.fromEntries(
       Object.entries(values).map(([key, value]) => {
         const normalized = this.applySchemaReadNormalization(key, value, source)
-        const cast = this.definition.table.columns[key]?.kind === 'json' && this.parseBuiltInCast(casts[key])?.name === 'json'
-          ? undefined
-          : casts[key]
-        return [key, this.applyCastGet(cast, normalized)]
+        return [key, this.isNativeJsonCast(key, casts[key]) ? normalized : this.applyCastGet(casts[key], normalized)]
       }),
     ) as Partial<ModelRecord<TTable>>
   }
@@ -165,10 +162,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     const mutator = this.definition.mutators[key]
     const mutated = mutator ? mutator(value) : value
     const cast = this.definition.casts[key]
-    const casted = this.definition.table.columns[key]?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
-      ? mutated
-      : this.applyCastSet(cast, mutated)
+    const casted = this.isNativeJsonCast(key, cast) ? mutated : this.applyCastSet(cast, mutated)
     return this.applySchemaWriteNormalization(key, casted)
+  }
+
+  private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {
+    return this.definition.table.columns[key]?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
   }
 
   private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database'): unknown {

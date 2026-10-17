@@ -1,13 +1,7 @@
-import { defineConfig } from 'vitest/config'
-import { fileURLToPath } from 'node:url'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/validation/internal/compiled': fileURLToPath(new URL('../validation/src/internal/compiled.ts', import.meta.url)),
-      '@holo-js/validation': fileURLToPath(new URL('../validation/src/index.ts', import.meta.url)),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/forms',
     environment: 'node',
@@ -21,4 +15,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

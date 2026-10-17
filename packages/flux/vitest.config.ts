@@ -1,13 +1,7 @@
-import { defineConfig } from 'vitest/config'
-import { fileURLToPath } from 'node:url'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/broadcast/client-config': fileURLToPath(new URL('../broadcast/src/client-config.ts', import.meta.url)),
-      '@holo-js/broadcast': fileURLToPath(new URL('../broadcast/src/index.ts', import.meta.url)),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/flux',
     environment: 'node',
@@ -17,4 +11,4 @@ export default defineConfig({
       include: ['src/**/*.ts'],
     },
   },
-})
+}))

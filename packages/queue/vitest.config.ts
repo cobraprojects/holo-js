@@ -1,16 +1,7 @@
-import { resolve } from 'node:path'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-      '@holo-js/config/registry': resolve(__dirname, '../config/src/registry.ts'),
-      '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
-      '@holo-js/media/config': resolve(__dirname, '../media/src/projectConfig.ts'),
-      '@holo-js/media': resolve(__dirname, '../media/src/index.ts'),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/queue',
     environment: 'node',
@@ -25,4 +16,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

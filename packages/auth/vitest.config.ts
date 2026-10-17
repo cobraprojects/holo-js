@@ -1,14 +1,7 @@
-import { resolve } from 'node:path'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/adapter-shared/sveltekit/request-context': resolve(__dirname, '../adapter-shared/src/sveltekit/request-context.ts'),
-      '@holo-js/adapter-shared/next/request-context': resolve(__dirname, '../adapter-shared/src/next/request-context.node.ts'),
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/auth',
     include: ['tests/**/*.test.ts'],
@@ -20,4 +13,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

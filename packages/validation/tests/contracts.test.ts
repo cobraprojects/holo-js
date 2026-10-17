@@ -19,6 +19,8 @@ import {
 import { normalizeFieldBuilder } from '../src/contracts-support'
 import { summarizeErrors } from '../src/contracts-runtime'
 
+const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+
 function objectPrototypeHas(key: string): boolean {
   return Object.prototype.hasOwnProperty.call(Object.prototype, key)
 }
@@ -444,7 +446,7 @@ describe('@holo-js/validation contracts', () => {
     const today = new Date()
     const yesterday = new Date(today.getTime() - 86400000)
     const tomorrow = new Date(today.getTime() + 86400000)
-    const image = new File(['image'], 'avatar.png', { type: 'image/png' })
+    const image = new File([pngPixel], 'avatar.png', { type: 'image/png' })
     const cases = [
       { validator: field.string().required(), value: 'add' },
       { validator: field.string().optional(), value: 'add' },
@@ -820,7 +822,7 @@ describe('@holo-js/validation contracts', () => {
       avatar: field.file().required().image().maxSize('1kb'),
     })
 
-    const image = new File([new Uint8Array(128)], 'avatar.png', { type: 'image/png' })
+    const image = new File([pngPixel], 'avatar.png', { type: 'image/png' })
     const text = new File([new Uint8Array(2048)], 'notes.txt', { type: 'text/plain' })
 
     const success = await safeParse({ avatar: image }, uploadAvatar)
@@ -831,6 +833,28 @@ describe('@holo-js/validation contracts', () => {
     if (!failure.valid) {
       expect(failure.errors.first('avatar')).toBe('The selected file must be an image.')
       expect(failure.errors.get('avatar')).toContain('The selected file must be 1 KB or smaller.')
+    }
+  })
+
+  it('accepts only uploads whose bytes are a raster image, whatever the client declares', async () => {
+    const contract = schema({ avatar: field.file().required().image() })
+    const accepted = [
+      new File([pngPixel], 'avatar.png', { type: 'image/png' }),
+      new File([pngPixel], 'avatar.upload', { type: 'application/octet-stream' }),
+    ]
+    const rejected = [
+      new File(['<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>'], 'avatar.png', { type: 'image/png' }),
+      new File(['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'], 'logo.svg', { type: 'image/svg+xml' }),
+      new File([new Uint8Array(128)], 'avatar.png', { type: 'image/png' }),
+    ]
+
+    for (const avatar of accepted) {
+      expect((await safeParse({ avatar }, contract)).valid, avatar.name).toBe(true)
+    }
+    for (const avatar of rejected) {
+      const result = await safeParse({ avatar }, contract)
+      expect(result.valid, avatar.name).toBe(false)
+      if (!result.valid) expect(result.errors.first('avatar')).toBe('The selected file must be an image.')
     }
   })
 
@@ -965,9 +989,9 @@ describe('@holo-js/validation contracts', () => {
 
     const zeroByteNamedFile = new File([], 'empty.png', { type: 'image/png' })
     const namedFile = await safeParse({ image: zeroByteNamedFile }, postSchema)
-    expect(namedFile.valid).toBe(true)
-    if (namedFile.valid) {
-      expect(namedFile.data.image).toBe(zeroByteNamedFile)
+    expect(namedFile.valid).toBe(false)
+    if (!namedFile.valid) {
+      expect(namedFile.errors.first('image')).toBe('The selected file must be an image.')
     }
   })
 

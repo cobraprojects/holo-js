@@ -6,22 +6,27 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/module.ts",
       "types": "./dist/types.d.mts",
       "import": "./dist/module.mjs"
     },
     "./client": {
+      "@holo-js/source": "./src/runtime/composables/forms.ts",
       "types": "./dist/runtime/composables/forms.d.ts",
       "import": "./dist/runtime/composables/forms.js"
     },
     "./runtime": {
+      "@holo-js/source": "./src/runtime/composables/index.ts",
       "types": "./dist/runtime/composables/index.d.ts",
       "import": "./dist/runtime/composables/index.js"
     },
     "./realtime": {
+      "@holo-js/source": "./src/runtime/composables/realtime.ts",
       "types": "./dist/runtime/composables/realtime.d.ts",
       "import": "./dist/runtime/composables/realtime.js"
     },
     "./storage": {
+      "@holo-js/source": "./src/runtime/composables/storage.ts",
       "types": "./dist/runtime/composables/storage.d.ts",
       "import": "./dist/runtime/composables/storage.js"
     }

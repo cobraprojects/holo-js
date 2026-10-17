@@ -317,7 +317,7 @@
       "dependencies": {
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
-        "@holo-js/kernel": "workspace:*",
+        "@holo-js/kernel": "catalog:",
         "@holo-js/validation": "catalog:",
       },
       "devDependencies": {
@@ -901,10 +901,20 @@
       "version": "0.3.27",
       "devDependencies": {
         "@types/node": "catalog:",
+        "file-type": "catalog:",
+        "sharp": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
+      "peerDependencies": {
+        "file-type": "catalog:",
+        "sharp": "catalog:",
+      },
+      "optionalPeers": [
+        "file-type",
+        "sharp",
+      ],
     },
     "packages/mail": {
       "name": "@holo-js/mail",
@@ -939,8 +949,10 @@
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
+        "@holo-js/kernel": "catalog:",
         "@holo-js/queue": "catalog:",
         "@holo-js/storage": "catalog:",
+        "file-type": "catalog:",
         "sharp": "catalog:",
       },
       "devDependencies": {
@@ -1100,6 +1112,7 @@
       "version": "0.3.27",
       "dependencies": {
         "@holo-js/config": "catalog:",
+        "@holo-js/kernel": "catalog:",
         "file-type": "catalog:",
       },
       "devDependencies": {
@@ -1113,16 +1126,22 @@
       "name": "@holo-js/storage-s3",
       "version": "0.3.27",
       "devDependencies": {
+        "@holo-js/storage": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@holo-js/storage": "catalog:",
       },
     },
     "packages/validation": {
       "name": "@holo-js/validation",
       "version": "0.3.27",
       "dependencies": {
+        "@holo-js/kernel": "catalog:",
+        "file-type": "catalog:",
         "valibot": "catalog:",
       },
       "devDependencies": {

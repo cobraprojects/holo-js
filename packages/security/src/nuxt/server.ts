@@ -13,7 +13,7 @@ import {
 import { protect } from '../index'
 import { cors } from '../cors'
 import { prepareCsrfCookies } from '../cookie-issuance'
-import { SecurityCsrfError } from '../contracts'
+import { isSecurityRejection } from '../rejection-response'
 
 function isSafeMethod(method: string): boolean {
   const normalized = method.trim().toUpperCase()
@@ -83,8 +83,9 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
 
     try {
       await protect(request)
+      await issueCsrfCookie(event, request)
     } catch (error) {
-      if (error instanceof SecurityCsrfError) {
+      if (isSecurityRejection(error)) {
         throw createError({
           statusCode: error.status,
           statusMessage: error.message,
@@ -95,7 +96,6 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
       throw error
     }
 
-    await issueCsrfCookie(event, request)
     return undefined
   })
 }

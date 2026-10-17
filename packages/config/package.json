@@ -6,10 +6,12 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
     "./registry": {
+      "@holo-js/source": "./src/registry.ts",
       "types": "./dist/registry.d.ts",
       "import": "./dist/registry.mjs"
     }

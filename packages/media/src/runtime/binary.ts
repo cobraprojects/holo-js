@@ -2,33 +2,6 @@ import { basename, extname } from 'node:path'
 import type { StorageContent } from '@holo-js/storage/runtime'
 import type { MediaConversionFormat } from '../definitions/conversions'
 
-export const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
-  avif: 'image/avif',
-  gif: 'image/gif',
-  jpeg: 'image/jpeg',
-  jpg: 'image/jpeg',
-  json: 'application/json',
-  pdf: 'application/pdf',
-  png: 'image/png',
-  svg: 'image/svg+xml',
-  txt: 'text/plain',
-  webp: 'image/webp',
-})
-
-const IMAGE_EXTENSIONS = new Set([
-  'avif',
-  'gif',
-  'heic',
-  'heif',
-  'jpeg',
-  'jpg',
-  'png',
-  'svg',
-  'tif',
-  'tiff',
-  'webp',
-])
-
 const SHARP_OUTPUT_FORMATS = new Set([
   'avif',
   'jpeg',
@@ -48,15 +21,6 @@ export function sanitizeFileName(value: string): string {
     .join('-')
 
   return sanitized || 'media.bin'
-}
-
-export function inferMimeType(fileName: string, explicit?: string): string | undefined {
-  if (explicit?.trim()) {
-    return explicit.trim()
-  }
-
-  const extension = extname(fileName).replace(/^\./, '').toLowerCase()
-  return MIME_TYPES[extension]
 }
 
 export function getExtension(fileName: string): string | undefined {
@@ -99,14 +63,6 @@ export function getContentSize(value: BinaryContent): number {
   }
 
   return (value as Blob).size
-}
-
-export function isImageSource(mimeType?: string | null, extension?: string | null): boolean {
-  if (mimeType?.trim().toLowerCase().startsWith('image/')) {
-    return true
-  }
-
-  return extension ? IMAGE_EXTENSIONS.has(extension.trim().toLowerCase()) : false
 }
 
 export function normalizeOutputFormat(

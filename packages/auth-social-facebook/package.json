@@ -6,6 +6,7 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"

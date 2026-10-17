@@ -241,6 +241,8 @@ export async function createPost(input: { title: string, excerpt?: string, body:
       await post.tags().attach(tagIds)
     }
 
+    await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
+
     return post
   })
 
@@ -253,7 +255,6 @@ export async function createPost(input: { title: string, excerpt?: string, body:
     }
   }
 
-  await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
   await BlogPostSaved.dispatch({
     action: 'created',
     postId: post.id,
@@ -284,6 +285,8 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
     const tagIds = parseTagIds(input.tagIds || '')
     await post.tags().sync(tagIds)
 
+    await broadcast(blogPostChanged('updated', post.id, post.title, post.status, post.slug))
+
     return post
   })
 
@@ -296,7 +299,6 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
     }
   }
 
-  await broadcast(blogPostChanged('updated', post.id, post.title, post.status, post.slug))
   await BlogPostSaved.dispatch({
     action: 'updated',
     postId: post.id,
@@ -309,10 +311,16 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
 }
 
 export async function deletePost(id: number) {
-  const post = await Post.find(id)
-  await Post.delete(id)
+  const post = await DB.transaction(async () => {
+    const post = await Post.find(id)
+    await Post.delete(id)
+    if (post) {
+      await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
+    }
+
+    return post
+  })
   if (post) {
-    await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
     await BlogPostSaved.dispatch({
       action: 'deleted',
       postId: post.id,

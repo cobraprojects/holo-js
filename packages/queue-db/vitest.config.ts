@@ -1,17 +1,7 @@
-import { resolve } from 'node:path'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/db': resolve(__dirname, '../db/src/index.ts'),
-      '@holo-js/db-mysql': resolve(__dirname, '../db-mysql/src/index.ts'),
-      '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),
-      '@holo-js/db-sqlite': resolve(__dirname, '../db-sqlite/src/index.ts'),
-      '@holo-js/queue': resolve(__dirname, '../queue/src/index.ts'),
-      '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/queue-db',
     environment: 'node',
@@ -25,4 +15,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

@@ -124,6 +124,7 @@ function createMockRateLimitStore(now = new Date('2026-04-16T12:00:00.000Z')): S
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   resetSecurityRuntime()
 })
 
@@ -421,6 +422,36 @@ describe('@holo-js/security package surface', () => {
     expect(() => limit.perMinute(0)).toThrow('greater than or equal to 1')
   })
 
+  it('keys guest rate limits by the client address from the trusted proxy header family', async () => {
+    configureSecurityRuntime({ config: defineSecurityConfig({}) })
+    const request = new Request('https://app.test/login', {
+      headers: {
+        forwarded: 'for="[2001:db8::7]:4711";proto=https, for=203.0.113.8',
+        'x-forwarded-for': '198.51.100.1',
+      },
+    })
+
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
+    await expect(defaultRateLimitKey(request)).resolves.toBe('ip:2001:db8::7')
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    await expect(defaultRateLimitKey(request)).resolves.toBe('ip:198.51.100.1')
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'false')
+    await expect(defaultRateLimitKey(request)).resolves.toBe('ip:unknown')
+  })
+
+  it.each([
+    ['for="[2001:db8::7]:4711"', 'ip:2001:db8::7'],
+    ['for=192.0.2.43:47011', 'ip:192.0.2.43'],
+    ['for=192.0.2.43', 'ip:192.0.2.43'],
+    ['for=unknown', 'ip:unknown'],
+    ['for=_hidden', 'ip:unknown'],
+    ['proto=https', 'ip:unknown'],
+  ])('keys Forwarded clients by bare address, ignoring ports and obfuscated identifiers: %s', async (forwarded, key) => {
+    configureSecurityRuntime({ config: defineSecurityConfig({}) })
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
+    await expect(defaultRateLimitKey(new Request('https://app.test/login', { headers: { forwarded } }))).resolves.toBe(key)
+  })
+
   it('normalizes numeric string limiter definitions before freezing them', () => {
     expect(defineRateLimiter({
       maxAttempts: '2',
@@ -574,14 +605,14 @@ describe('@holo-js/security csrf', () => {
         'x-forwarded-proto': 'https',
       },
     })
-    const previousTrustProxy = process.env.HOLO_SECURITY_TRUST_PROXY
-    delete process.env.HOLO_SECURITY_TRUST_PROXY
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', '')
     expect(isSecureRequest(proxiedRequest)).toBe(false)
-    process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
     expect(isSecureRequest(proxiedRequest)).toBe(true)
     expect(isSecureRequest(new Request('http://app.test/register'))).toBe(false)
     await expect(csrf.cookie(proxiedRequest, signedToken)).resolves.toBe(`XSRF-TOKEN=${encodeURIComponent(signedToken)}; Path=/; SameSite=Lax; Secure`)
 
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
     expect(isSecureRequest(new Request('http://app.test/register', {
       headers: {
         forwarded: 'for=203.0.113.10;proto="https";host=app.test',
@@ -592,11 +623,6 @@ describe('@holo-js/security csrf', () => {
         forwarded: 'for=203.0.113.10;host=app.test',
       },
     }))).toBe(false)
-    if (typeof previousTrustProxy === 'undefined') {
-      delete process.env.HOLO_SECURITY_TRUST_PROXY
-    } else {
-      process.env.HOLO_SECURITY_TRUST_PROXY = previousTrustProxy
-    }
   })
 
   it('generates tokens when no cookie is present', async () => {

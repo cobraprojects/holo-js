@@ -1,13 +1,12 @@
 import type { NormalizedSecurityLimiterConfig } from './config'
 import {
   SecurityRateLimitError,
-  ip,
   type SecurityClearRateLimitOptions,
   type SecurityRateLimitCallOptions,
   type SecurityRateLimitHitResult,
 } from './contracts'
 import { getSecurityRuntime } from './runtime'
-import { shouldTrustProxyHeaders } from './proxy'
+import { resolveTrustedClientIp } from './proxy'
 
 function encodeBucketPart(value: string): string {
   return encodeURIComponent(value)
@@ -60,7 +59,7 @@ export async function defaultRateLimitKey(request: Request): Promise<string> {
     return normalizeResolvedLimiterKey(runtimeDefaultKey, 'Default rate limiter key resolver')
   }
 
-  return `ip:${ip(request, shouldTrustProxyHeaders())}`
+  return `ip:${resolveTrustedClientIp(request)}`
 }
 
 async function resolveLimiterKey(

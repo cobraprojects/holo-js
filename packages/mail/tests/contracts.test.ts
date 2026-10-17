@@ -217,6 +217,10 @@ describe('@holo-js/mail contracts', () => {
     expect(inferMimeTypeFromName('hello.txt')).toBe('text/plain')
     expect(inferMimeTypeFromName('report.')).toBeUndefined()
     expect(inferMimeTypeFromName('archive.unknown')).toBeUndefined()
+    expect(inferMimeTypeFromName('poster.avif')).toBe('image/avif')
+    expect(inferMimeTypeFromName('theme.css')).toBe('text/css')
+    expect(inferMimeTypeFromName('song.MP3')).toBe('audio/mpeg')
+    expect(inferMimeTypeFromName('font.woff2')).toBe('font/woff2')
     expect(createAttachmentMetadata({
       path: '/tmp/logo.png',
       disposition: 'inline',

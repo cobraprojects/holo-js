@@ -1,4 +1,5 @@
 import { createHash, createHmac } from 'node:crypto'
+import type { StorageBackend } from '@holo-js/storage/runtime'
 
 type DriverValue = string | Uint8Array | ArrayBuffer
 const storedValueMarker = '__holo_storage_s3_value_v1'
@@ -295,20 +296,16 @@ function parseContinuationToken(xml: string): string | null {
   return token ? decodeXmlEntity(token) : null
 }
 
-function deserializeStoredValue<T>(value: string): T | string {
+function deserializeStoredValue<T>(value: string): T {
   let parsed: unknown
 
   try {
     parsed = JSON.parse(value) as unknown
   } catch {
-    return value
+    return value as T
   }
 
-  if (isStoredValueEnvelope(parsed)) {
-    return parsed.value as T
-  }
-
-  return value
+  return (isStoredValueEnvelope(parsed) ? parsed.value : value) as T
 }
 
 function isStoredValueEnvelope(value: unknown): value is { readonly value?: unknown } {
@@ -480,16 +477,60 @@ async function conditionallyPutEmptyObject(
   if (!response.ok) throw createDriverError('Stream upload failed.')
 }
 
+async function withMetadataFailure<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
+  try {
+    return await operation()
+  } catch {
+    throw createDriverError('File metadata request failed.')
+  }
+}
+
+function parseObjectSize(value: string | null): number {
+  const size = Number(value)
+  if (value === null || !/^\d+$/u.test(value) || !Number.isSafeInteger(size)) {
+    throw createDriverError('File metadata response has an invalid content length.')
+  }
+  return size
+}
+
+async function readEmptyObjectStat(
+  options: ResolvedS3DriverOptions,
+  url: URL,
+): Promise<{ readonly size: number, readonly sample: Uint8Array } | null> {
+  const response = await withMetadataFailure(() => s3Fetch(options, 'HEAD', url))
+  return response ? { size: parseObjectSize(response.headers.get('content-length')), sample: new Uint8Array() } : null
+}
+
+async function readLeadingBytes(response: Response, limit: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader()
+  if (!reader) return new Uint8Array()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (size < limit) {
+      const result = await reader.read()
+      if (result.done) break
+      const chunk = result.value.subarray(0, limit - size)
+      chunks.push(chunk)
+      size += chunk.byteLength
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+    reader.releaseLock()
+  }
+  return concatenateChunks(chunks, size)
+}
+
 export default function createS3Driver(input: S3DriverOptions) {
   let resolvedOptions: ResolvedS3DriverOptions | undefined
   const getOptions = (): ResolvedS3DriverOptions => resolvedOptions ??= resolveDriverOptions(input)
 
-  return {
+  const driver = {
     name: 's3',
     get options() {
       return getOptions()
     },
-    async getItem<T = unknown>(key: string) {
+    async getItem<T = unknown>(key: string): Promise<T | null> {
       const options = getOptions()
       const response = await s3Fetch(options, 'GET', resolveObjectUrl(options, key))
       if (!response) {
@@ -503,22 +544,18 @@ export default function createS3Driver(input: S3DriverOptions) {
       const response = await s3Fetch(options, 'GET', resolveObjectUrl(options, key))
       return response ? response.arrayBuffer() : null
     },
-    async getItemStat(key: string): Promise<{ readonly size: number, readonly mimeType: string | null } | null> {
+    async getItemStat(key: string, request: { readonly sampleBytes: number }): Promise<{ readonly size: number, readonly sample: Uint8Array } | null> {
       const options = getOptions()
       const url = resolveObjectUrl(options, key)
-      let response: Response | null
-      try {
-        response = await s3Fetch(options, 'HEAD', url)
-      } catch {
-        throw createDriverError('File metadata request failed.')
-      }
-      if (!response) return null
-      const contentLength = response.headers.get('content-length')
-      const size = Number(contentLength)
-      if (contentLength === null || !/^\d+$/.test(contentLength) || !Number.isSafeInteger(size)) {
-        throw createDriverError('File metadata response has an invalid content length.')
-      }
-      return { size, mimeType: response.headers.get('content-type') }
+      const response = await withMetadataFailure(() => fetch(createSignedRequest(options, 'GET', url, undefined, { range: `bytes=0-${request.sampleBytes - 1}` })))
+      if (response.status === 404 || response.status === 416 || !response.ok) await response.body?.cancel()
+      if (response.status === 404) return null
+      if (response.status === 416) return await readEmptyObjectStat(options, url)
+      if (!response.ok) throw createDriverError('File metadata request failed.')
+      const size = response.status === 206
+        ? parseObjectSize(/^bytes \d+-\d+\/(\d+)$/u.exec(response.headers.get('content-range') ?? '')?.[1] ?? null)
+        : parseObjectSize(response.headers.get('content-length'))
+      return { size, sample: await withMetadataFailure(() => readLeadingBytes(response, request.sampleBytes)) }
     },
     async getItemStream(
       key: string,
@@ -615,7 +652,7 @@ export default function createS3Driver(input: S3DriverOptions) {
         throw createDriverError('Stream write failed.')
       }
     },
-    async getMeta(key: string) {
+    async getMeta<T = Record<string, string>>(key: string): Promise<T | null> {
       const options = getOptions()
       const response = await s3Fetch(options, 'HEAD', resolveObjectUrl(options, key))
       if (!response) {
@@ -630,7 +667,7 @@ export default function createS3Driver(input: S3DriverOptions) {
         }
       }
 
-      return metaHeaders
+      return metaHeaders as T
     },
     async hasItem(key: string) {
       const options = getOptions()
@@ -700,4 +737,6 @@ export default function createS3Driver(input: S3DriverOptions) {
       await Promise.all(keys.map((key: string) => this.removeItem(key)))
     },
   }
+
+  return driver satisfies StorageBackend
 }

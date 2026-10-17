@@ -2,7 +2,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { createApp, defineEventHandler, getResponseHeader, readRawBody, toNodeListener, toWebHandler } from 'h3'
 import { NextRequest } from 'next/server.js'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } from '../src'
 import { csrfProtection as nextCsrfProtection } from '../src/next/server'
 import { csrfProtection as nuxtCsrfProtection } from '../src/nuxt/server'
@@ -14,7 +14,10 @@ function configureSecurity(enabled = true): void {
   })
 }
 
-afterEach(resetSecurityRuntime)
+afterEach(() => {
+  vi.unstubAllEnvs()
+  resetSecurityRuntime()
+})
 
 describe('native csrf middleware', () => {
   it('preserves web request bodies for handlers after Nuxt CSRF validation', async () => {
@@ -64,6 +67,23 @@ describe('native csrf middleware', () => {
       headers: { Origin: 'https://untrusted.test', 'Access-Control-Request-Method': 'POST' },
     }))
     expect(untrusted?.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
+  it.each([
+    { 'x-forwarded-proto': 'wss' },
+    { 'x-forwarded-host': 'a b' },
+  ])('answers malformed trusted proxy headers %j with a bad request', async (headers) => {
+    configureSecurity()
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    for (const method of ['GET', 'HEAD']) {
+      const nextResponse = await nextCsrfProtection()(new NextRequest('https://app.test/page', { method, headers }))
+      expect(nextResponse?.status).toBe(400)
+      const app = createApp()
+      app.use(nuxtCsrfProtection())
+      app.use(defineEventHandler(() => 'handled'))
+      const nuxtResponse = await toWebHandler(app)(new Request('https://app.test/page', { method, headers }))
+      expect(nuxtResponse.status).toBe(400)
+    }
   })
 
   it('uses Next native cookies and continuation responses', async () => {

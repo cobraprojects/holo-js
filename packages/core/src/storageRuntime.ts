@@ -1,87 +1,17 @@
 import { randomUUID } from 'node:crypto'
-import { type FileHandle, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
+import type * as StorageFeature from '@holo-js/storage'
+import type { RuntimeDiskConfig } from '@holo-js/storage'
+import type * as StorageRuntimeFeature from '@holo-js/storage/runtime'
+import type { StorageBackend } from '@holo-js/storage/runtime'
 import { importOptionalRuntimeModule } from './runtimeModule'
 
-type StorageBackend = {
-  getItem<T = unknown>(key: string): Promise<T | null>
-  getItemRaw(key: string): Promise<string | Uint8Array | ArrayBuffer | Buffer | null>
-  getItemStat?(key: string): Promise<{ readonly size: number, readonly mimeType: string | null } | null>
-  setItem(key: string, value: unknown): Promise<void>
-  setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void>
-  hasItem(key: string): Promise<boolean>
-  removeItem(key: string): Promise<void>
-  getKeys(base?: string): Promise<string[]>
-  getKeysPage?(base: string | undefined, request: {
-    readonly cursor: string | null
-    readonly limit: number
-  }): Promise<{
-    readonly nextCursor: string | null
-    readonly paths: readonly string[]
-  }>
-  getItemStream?(key: string, options: {
-    readonly chunkBytes?: number
-  }): Promise<AsyncIterable<Uint8Array> | null>
-  setItemStream?(key: string, source: AsyncIterable<Uint8Array>, options: {
-    readonly overwrite: boolean
-  }): Promise<void>
-  getMeta<T = unknown>(key: string): Promise<T | null>
-  setMeta?(key: string, value: unknown): Promise<void>
-  removeMeta?(key: string): Promise<void>
-  clear(base?: string): Promise<void>
-}
-
-type RuntimeDiskConfig = {
-  name: string
-  driver: 'local' | 'public' | 's3'
-  visibility: 'private' | 'public'
-  root?: string
-  bucket?: string
-  region?: string
-  endpoint?: string
-  accessKeyId?: string
-  secretAccessKey?: string
-  sessionToken?: string
-  forcePathStyleEndpoint?: boolean
-}
-
-type StorageModule = {
-  storageRuntimeInternals: {
-    inspectFileMimeType(file: FileHandle): Promise<string>
-  }
-  normalizeModuleOptions(options: {
-    defaultDisk?: string
-    routePrefix?: string
-    disks?: Record<string, unknown>
-  }): {
-    defaultDisk: string | undefined
-    routePrefix: string
-    disks: Record<string, RuntimeDiskConfig>
-  }
-}
-
-type StorageRuntimeModule = {
-  configureStorageRuntime(options: {
-    getRuntimeConfig(): {
-      holoStorage: unknown
-      holo: { appUrl: string, appKey: string | undefined }
-    }
-    getStorage(base: string): StorageBackend | Promise<StorageBackend>
-  }): void
-  resetStorageRuntime(): void
-}
-
+type StorageModule = typeof StorageFeature
+type StorageRuntimeModule = typeof StorageRuntimeFeature
 type StorageS3Module = {
-  default(options: {
-    bucket?: string
-    region?: string
-    endpoint?: string
-    accessKeyId?: string
-    secretAccessKey?: string
-    sessionToken?: string
-    forcePathStyleEndpoint?: boolean
-  }): StorageBackend
+  default(options: Pick<RuntimeDiskConfig, 'bucket' | 'region' | 'endpoint' | 'accessKeyId' | 'secretAccessKey' | 'sessionToken' | 'forcePathStyleEndpoint'>): StorageBackend
 }
 
 async function importOptionalModule<TModule>(specifier: string, projectRoot?: string): Promise<TModule | undefined> {
@@ -286,7 +216,7 @@ function createFileStorageBackend(root: string): StorageBackend {
       }
     },
 
-    async getItemStat(key: string) {
+    async getItemStat(key, request) {
       try {
         const targetPath = await resolveStorageReadPath(root, key)
         if (!targetPath) return null
@@ -294,10 +224,9 @@ function createFileStorageBackend(root: string): StorageBackend {
         try {
           const metadata = await file.stat()
           if (!metadata.isFile()) return null
-          const storage = await importOptionalModule<StorageModule>('@holo-js/storage')
-          if (!storage) throw new Error('[Holo Storage] Storage runtime is unavailable.')
-          const mimeType = await storage.storageRuntimeInternals.inspectFileMimeType(file)
-          return { size: metadata.size, mimeType: mimeType === 'application/octet-stream' ? null : mimeType }
+          const sample = new Uint8Array(Math.min(request.sampleBytes, metadata.size))
+          const { bytesRead } = await file.read(sample, 0, sample.length, 0)
+          return { size: metadata.size, sample: sample.subarray(0, bytesRead) }
         } finally {
           await file.close()
         }

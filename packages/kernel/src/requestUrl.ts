@@ -21,11 +21,15 @@ export type HoloRequestInput = RequestUrlParts & {
   readonly web?: { readonly request?: RequestUrlParts }
 }
 
-function shouldTrustProxyHeaders(): boolean {
+export type HoloTrustedProxyHeaders = 'x-forwarded' | 'forwarded'
+
+function resolveTrustedProxyHeaders(): HoloTrustedProxyHeaders | null {
   const value = typeof process === 'undefined'
     ? undefined
     : process.env.HOLO_SECURITY_TRUST_PROXY?.trim().toLowerCase()
-  return value === '1' || value === 'true' || value === 'yes' || value === 'on'
+  if (value === 'forwarded') return 'forwarded'
+  if (value === 'x-forwarded' || value === '1' || value === 'true' || value === 'yes' || value === 'on') return 'x-forwarded'
+  return null
 }
 
 function isHeaderTuples(headers: HoloRequestHeaders): headers is ReadonlyArray<readonly [string, string]> {
@@ -63,15 +67,75 @@ function firstForwardedValue(value: string | undefined): string | undefined {
   return value?.split(',', 1)[0]?.trim().replace(/^"|"$/g, '')
 }
 
-function readForwardedParameter(headers: HoloRequestHeaders | undefined, name: string): string | undefined {
-  const forwarded = readHeader(headers, 'forwarded')?.split(',', 1)[0]
-  for (const segment of forwarded?.split(';') ?? []) {
-    const separator = segment.indexOf('=')
-    if (segment.slice(0, separator).trim().toLowerCase() === name) {
-      return segment.slice(separator + 1).trim().replace(/^"|"$/g, '')
+function firstForwardedElement(value: string): ReadonlyMap<string, string> {
+  const pairs = new Map<string, string>()
+  let key = ''
+  let current = ''
+  let readingValue = false
+  let quoted = false
+  let escaped = false
+  const commit = () => {
+    const name = key.trim().toLowerCase()
+    if (readingValue && name && !pairs.has(name)) pairs.set(name, current.trim())
+    key = ''
+    current = ''
+    readingValue = false
+  }
+  for (const character of value) {
+    if (escaped) {
+      current += character
+      escaped = false
+    } else if (quoted) {
+      if (character === '\\') escaped = true
+      else if (character === '"') quoted = false
+      else current += character
+    } else if (character === ',') {
+      break
+    } else if (character === ';') {
+      commit()
+    } else if (character === '=' && !readingValue) {
+      readingValue = true
+    } else if (character === '"' && readingValue) {
+      quoted = true
+    } else if (readingValue) {
+      current += character
+    } else {
+      key += character
     }
   }
+  commit()
+  return pairs
+}
+
+function readForwardedParameter(headers: HoloRequestHeaders | undefined, name: string): string | undefined {
+  const forwarded = readHeader(headers, 'forwarded')
+  return forwarded === undefined ? undefined : firstForwardedElement(forwarded).get(name)
+}
+
+function readTrustedProxyValue(
+  headers: HoloRequestHeaders | undefined,
+  trustedProxyHeaders: HoloTrustedProxyHeaders | null,
+  name: 'proto' | 'host',
+): string | undefined {
+  if (trustedProxyHeaders === 'forwarded') return readForwardedParameter(headers, name)
+  if (trustedProxyHeaders === 'x-forwarded') return firstForwardedValue(readHeader(headers, `x-forwarded-${name}`))
   return undefined
+}
+
+export class HoloRequestUrlError extends TypeError {
+  readonly status = 400
+
+  constructor(message: string) {
+    super(`[@holo-js/kernel] ${message}`)
+    this.name = 'HoloRequestUrlError'
+  }
+}
+
+const invalidRequestHostMessage = 'Request hosts must be a valid hostname and optional port.'
+
+function parseRequestUrl(value: string | URL, invalidMessage: string): URL {
+  if (!URL.canParse(String(value), 'http://localhost')) throw new HoloRequestUrlError(invalidMessage)
+  return new URL(value, 'http://localhost')
 }
 
 export function resolveRequestUrl(input: HoloRequestInput): URL {
@@ -80,26 +144,23 @@ export function resolveRequestUrl(input: HoloRequestInput): URL {
     : input.request ?? input.web?.request ?? input.req ?? input.node?.req
   const headers = input.headers ?? nested?.headers
   const value = input.url ?? nested?.url ?? input.path ?? (nested && 'path' in nested ? nested.path : undefined) ?? '/'
-  const url = new URL(value, 'http://localhost')
+  const invalidUrlMessage = 'Request URLs must use http or https without credentials.'
+  const url = parseRequestUrl(value, invalidUrlMessage)
   if (url.username || url.password || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-    throw new TypeError('[@holo-js/kernel] Request URLs must use http or https without credentials.')
+    throw new HoloRequestUrlError(invalidUrlMessage)
   }
-  const trustProxy = shouldTrustProxyHeaders()
-  const protocol = (trustProxy
-    ? firstForwardedValue(readHeader(headers, 'x-forwarded-proto')) ?? readForwardedParameter(headers, 'proto') ?? url.protocol.slice(0, -1)
-    : url.protocol.slice(0, -1)).toLowerCase()
+  const trustedProxyHeaders = resolveTrustedProxyHeaders()
+  const protocol = (readTrustedProxyValue(headers, trustedProxyHeaders, 'proto') ?? url.protocol.slice(0, -1)).toLowerCase()
   if (protocol !== 'http' && protocol !== 'https') {
-    throw new TypeError('[@holo-js/kernel] Request protocols must be http or https.')
+    throw new HoloRequestUrlError('Request protocols must be http or https.')
   }
-  const host = (trustProxy
-    ? firstForwardedValue(readHeader(headers, 'x-forwarded-host')) ?? readForwardedParameter(headers, 'host') ?? readHeader(headers, 'host')
-    : readHeader(headers, 'host')) ?? url.host
+  const host = readTrustedProxyValue(headers, trustedProxyHeaders, 'host') ?? readHeader(headers, 'host') ?? url.host
   if (!host || /[\s,/@\\?#]/u.test(host)) {
-    throw new TypeError('[@holo-js/kernel] Request hosts must be a valid hostname and optional port.')
+    throw new HoloRequestUrlError(invalidRequestHostMessage)
   }
-  const origin = new URL(`${protocol}://${host}`)
+  const origin = parseRequestUrl(`${protocol}://${host}`, invalidRequestHostMessage)
   if (origin.pathname !== '/' || origin.username || origin.password || origin.search || origin.hash) {
-    throw new TypeError('[@holo-js/kernel] Request hosts must be a valid hostname and optional port.')
+    throw new HoloRequestUrlError(invalidRequestHostMessage)
   }
   url.protocol = origin.protocol
   url.host = origin.host
@@ -107,4 +168,4 @@ export function resolveRequestUrl(input: HoloRequestInput): URL {
   return url
 }
 
-export const requestUrlInternals = Object.freeze({ shouldTrustProxyHeaders })
+export const requestUrlInternals = Object.freeze({ readForwardedParameter, resolveTrustedProxyHeaders })

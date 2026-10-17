@@ -6,11 +6,13 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./config": {
+      "@holo-js/source": "./src/projectConfig.ts",
       "types": "./dist/projectConfig.d.ts",
       "import": "./dist/projectConfig.mjs",
       "default": "./dist/projectConfig.mjs"
@@ -30,8 +32,10 @@
   "dependencies": {
     "@holo-js/config": "catalog:",
     "@holo-js/db": "catalog:",
+    "@holo-js/kernel": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/storage": "catalog:",
+    "file-type": "catalog:",
     "sharp": "catalog:"
   },
   "devDependencies": {

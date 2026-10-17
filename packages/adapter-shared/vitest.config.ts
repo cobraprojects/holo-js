@@ -1,13 +1,7 @@
-import { defineConfig } from 'vitest/config'
-import { resolve } from 'node:path'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/kernel/http-errors': resolve(__dirname, '../kernel/src/httpErrors.ts'),
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/adapter-shared',
     environment: 'node',
@@ -17,4 +11,4 @@ export default defineConfig({
       include: ['src/**/*.ts'],
     },
   },
-})
+}))

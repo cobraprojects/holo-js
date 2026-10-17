@@ -86,6 +86,7 @@ import {
   type MailStorageAttachmentHelperOptions,
   type ResolvedMailAttachment,
 } from './contracts-types'
+import { mimeTypeFromFileName } from '@holo-js/kernel/file-content'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -349,34 +350,8 @@ function inferAttachmentName(value: MailAttachmentInput): string | undefined {
   return undefined
 }
 
-const ATTACHMENT_MIME_TYPES = Object.freeze({
-  csv: 'text/csv',
-  gif: 'image/gif',
-  htm: 'text/html',
-  html: 'text/html',
-  jpeg: 'image/jpeg',
-  jpg: 'image/jpeg',
-  json: 'application/json',
-  md: 'text/markdown',
-  pdf: 'application/pdf',
-  png: 'image/png',
-  svg: 'image/svg+xml',
-  txt: 'text/plain',
-  webp: 'image/webp',
-  xml: 'application/xml',
-} satisfies Record<string, string>)
-
 export function inferMimeTypeFromName(name: string | undefined): string | undefined {
-  if (!name) {
-    return undefined
-  }
-
-  const extension = name.split('.').pop()?.trim().toLowerCase()
-  if (!extension) {
-    return undefined
-  }
-
-  return ATTACHMENT_MIME_TYPES[extension as keyof typeof ATTACHMENT_MIME_TYPES]
+  return name ? mimeTypeFromFileName(name) ?? undefined : undefined
 }
 
 function inferAttachmentSource(value: MailAttachmentInput): MailAttachmentMetadata['source'] {

@@ -1,58 +1,10 @@
 import { resolve } from 'node:path'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
+export default mergeConfig(workspaceTestConfig, defineConfig({
   resolve: {
     alias: {
-      '@holo-js/adapter-shared/server-errors': resolve(__dirname, '../adapter-shared/src/server-errors.ts'),
-      '@holo-js/adapter-shared/client': resolve(__dirname, '../adapter-shared/src/client.ts'),
-      '@holo-js/adapter-shared/build': resolve(__dirname, '../adapter-shared/src/build.ts'),
-      '@holo-js/adapter-shared': resolve(__dirname, '../adapter-shared/src/index.ts'),
-      '@holo-js/auth/config': resolve(__dirname, '../auth/src/config.ts'),
-      '@holo-js/broadcast/config': resolve(__dirname, '../broadcast/src/config.ts'),
-      '@holo-js/cache/config': resolve(__dirname, '../cache/src/config.ts'),
-      '@holo-js/db/config': resolve(__dirname, '../db/src/databaseConfig.ts'),
-      '@holo-js/mail/config': resolve(__dirname, '../mail/src/config.ts'),
-      '@holo-js/notifications/config': resolve(__dirname, '../notifications/src/config.ts'),
-      '@holo-js/queue/config': resolve(__dirname, '../queue/src/config.ts'),
-      '@holo-js/security/config': resolve(__dirname, '../security/src/config.ts'),
-      '@holo-js/session/config': resolve(__dirname, '../session/src/config.ts'),
-      '@holo-js/storage/config': resolve(__dirname, '../storage/src/config.ts'),
-      '@holo-js/kernel/http-errors': resolve(__dirname, '../kernel/src/httpErrors.ts'),
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-      '@holo-js/core/runtime': resolve(__dirname, '../core/src/portable/index.ts'),
-      '@holo-js/storage/runtime': resolve(__dirname, '../storage/src/runtime/composables/index.ts'),
-      '@holo-js/config/registry': resolve(__dirname, '../config/src/registry.ts'),
-      '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
-      '@holo-js/auth': resolve(__dirname, '../auth/src/index.ts'),
-      '@holo-js/broadcast/auth': resolve(__dirname, '../broadcast/src/auth.ts'),
-      '@holo-js/broadcast/client-config': resolve(__dirname, '../broadcast/src/client-config.ts'),
-      '@holo-js/broadcast': resolve(__dirname, '../broadcast/src/index.ts'),
-      '@holo-js/cache': resolve(__dirname, '../cache/src/index.ts'),
-      '@holo-js/mail': resolve(__dirname, '../mail/src/index.ts'),
-      '@holo-js/notifications': resolve(__dirname, '../notifications/src/index.ts'),
-      '@holo-js/security': resolve(__dirname, '../security/src/index.ts'),
-      '@holo-js/media/config': resolve(__dirname, '../media/src/projectConfig.ts'),
-      '@holo-js/media': resolve(__dirname, '../media/src/index.ts'),
-      '@holo-js/core/errors': resolve(__dirname, '../core/src/errors.ts'),
-      '@holo-js/core': resolve(__dirname, '../core/src/index.ts'),
-      '@holo-js/db': resolve(__dirname, '../db/src/index.ts'),
-      '@holo-js/db-mysql': resolve(__dirname, '../db-mysql/src/index.ts'),
-      '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),
-      '@holo-js/db-sqlite': resolve(__dirname, '../db-sqlite/src/index.ts'),
-      '@holo-js/forms/internal/client': resolve(__dirname, '../forms/src/internal/client.ts'),
-      '@holo-js/forms': resolve(__dirname, '../forms/src/index.ts'),
-      '@holo-js/realtime/client': resolve(__dirname, '../realtime/src/client.ts'),
-      '@holo-js/realtime/server': resolve(__dirname, '../realtime/src/server.ts'),
-      '@holo-js/realtime': resolve(__dirname, '../realtime/src/index.ts'),
-      '@holo-js/queue': resolve(__dirname, '../queue/src/index.ts'),
-      '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
-      '@holo-js/queue-db': resolve(__dirname, '../queue-db/src/index.ts'),
-      '@holo-js/session': resolve(__dirname, '../session/src/index.ts'),
-      '@holo-js/storage': resolve(__dirname, '../storage/src/index.ts'),
-      '@holo-js/storage-s3': resolve(__dirname, '../storage-s3/src/index.ts'),
-      '@holo-js/validation/internal/compiled': resolve(__dirname, '../validation/src/internal/compiled.ts'),
-      '@holo-js/validation': resolve(__dirname, '../validation/src/index.ts'),
       '#app': resolve(__dirname, 'tests/fixtures/nuxt-app.ts'),
     },
   },
@@ -72,4 +24,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

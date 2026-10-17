@@ -38,7 +38,7 @@ describe('createPublicStorageResponse', () => {
 
   it('serves encoded media with native byte ranges independent of its extension', async () => {
     const { projectRoot, publicRoot } = await createProject()
-    const contents = await readFile(new URL('../../media/tests/fixtures/mime/sample.wav', import.meta.url))
+    const contents = await readFile(new URL('../../kernel/tests/fixtures/mime/sample.wav', import.meta.url))
     await writeFile(join(publicRoot, 'audio.bin'), contents)
     const config = storageConfig('./storage/app/public')
     const url = 'https://app.test/storage/audio.bin'
@@ -119,6 +119,25 @@ describe('createPublicStorageResponse', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
   })
 
+  it('downloads script-capable content disguised behind a passive extension', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await writeFile(
+      join(publicRoot, 'avatar.png'),
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>',
+    )
+
+    const response = await createPublicStorageResponse(
+      projectRoot,
+      storageConfig('./storage/app/public'),
+      new Request('https://app.test/storage/avatar.png'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/octet-stream')
+    expect(response.headers.get('content-disposition')).toBe('attachment')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
   it('returns public file information on HEAD without a response body and refuses other methods', async () => {
     const { projectRoot, publicRoot } = await createProject()
     const contents = 'Stored file information'
@@ -154,43 +173,33 @@ describe('createPublicStorageResponse', () => {
     await expect(response.text()).resolves.toBe('Storage file not found.')
   })
 
-  it('serves passive content types and downloads every active content type', async () => {
+  it('serves text formats inline by name, binary formats only when their bytes match, and downloads the rest', async () => {
     const { projectRoot, publicRoot } = await createProject()
-    const contentTypes = {
-      avif: 'image/avif',
-      css: 'text/css; charset=utf-8',
-      gif: 'image/gif',
-      jpeg: 'image/jpeg',
-      jpg: 'image/jpeg',
-      json: 'application/json; charset=utf-8',
-      mp3: 'audio/mpeg',
-      pdf: 'application/pdf',
-      png: 'image/png',
-      txt: 'text/plain; charset=utf-8',
-      webp: 'image/webp',
-      woff: 'font/woff',
-      woff2: 'font/woff2',
-      bin: 'application/octet-stream',
+    const respond = (name: string) => createPublicStorageResponse(
+      projectRoot,
+      storageConfig('./storage/app/public'),
+      new Request(`https://app.test/storage/${name}`),
+    )
+    const inline = {
+      'asset.css': 'text/css; charset=utf-8',
+      'asset.csv': 'text/csv; charset=utf-8',
+      'asset.json': 'application/json; charset=utf-8',
+      'asset.md': 'text/markdown; charset=utf-8',
+      'asset.txt': 'text/plain; charset=utf-8',
     } as const
-
-    for (const [extension, contentType] of Object.entries(contentTypes)) {
-      await writeFile(join(publicRoot, `asset.${extension}`), 'content')
-      const response = await createPublicStorageResponse(
-        projectRoot,
-        storageConfig('./storage/app/public'),
-        new Request(`https://app.test/storage/asset.${extension}`),
-      )
+    for (const [name, contentType] of Object.entries(inline)) {
+      await writeFile(join(publicRoot, name), 'content')
+      const response = await respond(name)
       expect(response.status).toBe(200)
       expect(response.headers.get('content-type')).toBe(contentType)
+      expect(response.headers.get('content-disposition')).toBeNull()
     }
 
-    for (const extension of ['html', 'js', 'mjs', 'svg']) {
-      await writeFile(join(publicRoot, `active.${extension}`), 'active')
-      const response = await createPublicStorageResponse(
-        projectRoot,
-        storageConfig('./storage/app/public'),
-        new Request(`https://app.test/storage/active.${extension}`),
-      )
+    for (const name of ['forged.png', 'forged.pdf', 'forged.mp3', 'forged.woff2', 'asset.bin', 'active.html', 'active.js', 'active.mjs', 'active.svg', 'active.xml']) {
+      await writeFile(join(publicRoot, name), 'content')
+      const response = await respond(name)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('application/octet-stream')
       expect(response.headers.get('content-disposition')).toBe('attachment')
     }
   })

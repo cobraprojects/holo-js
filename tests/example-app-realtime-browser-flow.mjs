@@ -231,6 +231,33 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
   }
 }
 
+async function assertPostCreationSavesNothingWithoutWorker(baseUrl) {
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext({ baseURL: baseUrl })
+  const title = `Unsaved while worker is unreachable ${Date.now()}`
+  try {
+    const page = await context.newPage()
+    await page.goto('/login', { waitUntil: 'networkidle' })
+    await page.locator('[name="email"]').fill('editor@example.com')
+    await page.locator('[name="password"]').fill('secret-secret')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await page.waitForURL(url => url.pathname === '/admin', { timeout: 20000 })
+
+    await page.goto('/admin/posts/new', { waitUntil: 'networkidle' })
+    await page.locator('[name="title"]').fill(title)
+    await page.locator('[name="excerpt"]').fill('Post creation must fail as a whole when realtime delivery is unavailable.')
+    await page.locator('[name="body"]').fill('This post must not be stored, because its change notification cannot reach the broadcast worker.')
+    const submission = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.startsWith('/admin/posts'))
+    await page.getByRole('button', { name: 'Create post', exact: true }).click()
+    assert.equal((await submission).status(), 500, 'Expected post creation to fail because the broadcast worker is unreachable.')
+
+    await page.goto('/admin/posts', { waitUntil: 'networkidle' })
+    assert.equal(await page.getByText(title).count(), 0, 'Expected a failed post creation to leave no saved post behind.')
+  } finally {
+    await context.close()
+  }
+}
+
 export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, cookieHeader, appName }) {
   const browser = await getExampleAppBrowser()
   const context = await browser.newContext({ baseURL: baseUrl })
@@ -264,6 +291,7 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     await page.locator(postSelector).first().waitFor({ timeout: 20000 })
 
     assert.deepEqual(result.failures, [])
+    await assertPostCreationSavesNothingWithoutWorker(baseUrl)
     if (appName === 'blog-next') await assertNextRealtimeQueryAfterLogout(baseUrl)
   } finally {
     await context.close()

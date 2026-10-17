@@ -1,21 +1,9 @@
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-const rootDir = fileURLToPath(new URL('.', import.meta.url))
 const runRedisIntegration = process.env.HOLO_REDIS_INTEGRATION === '1'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-      '@holo-js/cache': resolve(rootDir, '../cache/src/index.ts'),
-      '@holo-js/config/registry': resolve(rootDir, '../config/src/registry.ts'),
-      '@holo-js/config': resolve(rootDir, '../config/src/index.ts'),
-      '@holo-js/media/config': resolve(rootDir, '../media/src/projectConfig.ts'),
-      '@holo-js/media': resolve(rootDir, '../media/src/index.ts'),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/cache-redis',
     environment: 'node',
@@ -31,4 +19,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

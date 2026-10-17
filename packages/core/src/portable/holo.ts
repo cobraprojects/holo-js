@@ -800,7 +800,7 @@ function createCoreBroadcastPublisher(
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`[@holo-js/core] Broadcast publish request timed out after ${BROADCAST_PUBLISH_TIMEOUT_MS}ms.`)
       }
-      throw error
+      throw new Error(`[@holo-js/core] Broadcast publish request could not reach the broadcast worker at ${url.origin}.`, { cause: error })
     } finally {
       clearTimeout(timeout)
     }

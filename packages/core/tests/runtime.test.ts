@@ -2449,7 +2449,10 @@ export default defineSessionConfig({
         if (appId === 'second') {
           await worker.stop()
           workers.splice(workers.indexOf(worker), 1)
-          await expect(broadcastRaw({ event: 'invoice.paid', channels: ['invoices'], payload: { invoiceId: 'closed' } })).rejects.toMatchObject({ cause: { code: 'ECONNREFUSED' } })
+          await expect(broadcastRaw({ event: 'invoice.paid', channels: ['invoices'], payload: { invoiceId: 'closed' } })).rejects.toMatchObject({
+            message: `[@holo-js/core] Broadcast publish request could not reach the broadcast worker at http://127.0.0.1:${worker.port}.`,
+            cause: { cause: { code: 'ECONNREFUSED' } },
+          })
         }
         await runtime.shutdown()
         if (appId === 'first') configureBroadcastRuntime(bindings)

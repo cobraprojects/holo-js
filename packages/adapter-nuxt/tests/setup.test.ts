@@ -433,8 +433,13 @@ describe('@holo-js/adapter-nuxt module setup', () => {
 
   it.each([
     { packages: [], expected: [] },
-    { packages: ['validation'], expected: ['@holo-js/validation > valibot'] },
-    { packages: ['forms', 'validation'], expected: ['@holo-js/forms > @holo-js/validation > valibot', '@holo-js/validation > valibot'] },
+    { packages: ['validation'], expected: ['@holo-js/validation > valibot', '@holo-js/validation > file-type'] },
+    { packages: ['forms', 'validation'], expected: [
+      '@holo-js/forms > @holo-js/validation > valibot',
+      '@holo-js/forms > @holo-js/validation > file-type',
+      '@holo-js/validation > valibot',
+      '@holo-js/validation > file-type',
+    ] },
   ])('configures native Vite dependencies for installed packages $packages', async ({ packages, expected }) => {
     const root = await createProject()
     for (const name of packages) await linkHoloPackage(root, name)
@@ -471,6 +476,8 @@ describe('@holo-js/adapter-nuxt module setup', () => {
       'vue',
       '@holo-js/validation > valibot',
       '@holo-js/forms > @holo-js/validation > valibot',
+      '@holo-js/forms > @holo-js/validation > file-type',
+      '@holo-js/validation > file-type',
     ])
     expect(nuxt.options.vite.optimizeDeps?.exclude).toEqual(['vue-demi'])
   }, 30000)

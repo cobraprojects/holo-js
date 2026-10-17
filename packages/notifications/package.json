@@ -6,16 +6,19 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./config": {
+      "@holo-js/source": "./src/config.ts",
       "types": "./dist/config.d.ts",
       "import": "./dist/config.mjs",
       "default": "./dist/config.mjs"
     },
     "./contracts": {
+      "@holo-js/source": "./src/contracts.ts",
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.mjs",
       "default": "./dist/contracts.mjs"

@@ -1,7 +1,8 @@
 import { resolve } from 'node:path'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: 'create-holo-js',
     environment: 'node',
@@ -11,4 +12,4 @@ export default defineConfig({
       reportsDirectory: resolve(__dirname, '../../coverage/create-holo-js'),
     },
   },
-})
+}))

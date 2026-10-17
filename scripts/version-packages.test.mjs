@@ -75,6 +75,20 @@ test('versioning resolves catalog ranges and preserves versioned manifests', asy
   assert.equal(rootManifest.workspaces.catalog['@holo-js/core'], '^0.2.7')
 })
 
+test('versioning keeps workspace source export conditions in repository manifests', async () => {
+  const root = await createTempRepo()
+  const exportsMap = {
+    '.': { '@holo-js/source': './src/index.ts', types: './dist/index.d.ts', import: './dist/index.mjs' },
+  }
+  const appPath = join(root, 'packages/app/package.json')
+  const appManifest = JSON.parse(await readFile(appPath, 'utf8'))
+  await writeFile(appPath, `${JSON.stringify({ ...appManifest, exports: exportsMap }, null, 2)}\n`, 'utf8')
+
+  await versionPackages({ root, runChangeset: async () => {} })
+
+  assert.deepEqual(JSON.parse(await readFile(appPath, 'utf8')).exports, exportsMap)
+})
+
 test('versioning restores package manifests when Changesets fails', async () => {
   const root = await createTempRepo()
   const appPath = join(root, 'packages/app/package.json')

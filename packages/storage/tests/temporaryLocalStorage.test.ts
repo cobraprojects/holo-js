@@ -39,7 +39,7 @@ afterEach(async () => {
 describe('private local storage URLs', () => {
   it('serves ranges only after validating the signed URL', async () => {
     const { root, config, runtime, disk } = await fixture()
-    const contents = await readFile(new URL('../../media/tests/fixtures/mime/sample.wav', import.meta.url))
+    const contents = await readFile(new URL('../../kernel/tests/fixtures/mime/sample.wav', import.meta.url))
     await writeFile(join(root, 'private', 'sound.bin'), contents)
     const url = createTemporaryLocalStorageUrl(disk, 'sound.bin', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)
     const range = { range: 'bytes=4-11' }
@@ -79,7 +79,8 @@ describe('private local storage URLs', () => {
     const result = await response()
     expect(result.status).toBe(200)
     expect(result.headers.get('cache-control')).toBe('private, no-store')
-    expect(result.headers.get('content-type')).toBe('image/png')
+    expect(result.headers.get('content-type')).toBe('application/octet-stream')
+    expect(result.headers.get('content-disposition')).toBe('attachment')
     await expect(result.text()).resolves.toBe('private-image')
     const head = await response(url, 'HEAD')
     expect(head.status).toBe(200)

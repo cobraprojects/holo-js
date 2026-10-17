@@ -18,6 +18,7 @@ import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppFormsBrowserFlow } from '../../../tests/example-app-forms-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
+import { assertExampleAppRequestSecurity } from '../../../tests/example-app-request-security.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -84,6 +85,7 @@ const pngPixel = Uint8Array.from([
   0x42, 0x60, 0x82,
 ])
 const oversizedImage = new Uint8Array((2 * 1024 * 1024) + 1)
+oversizedImage.set(pngPixel)
 let capturedOutput = ''
 
 function createChildEnv(overrides = {}) {
@@ -521,6 +523,7 @@ try {
   await assertSuperAdminLoginUsesVerificationRedirect(`http://localhost:${port}`)
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
+  await assertExampleAppRequestSecurity({ cwd, baseUrl: `http://localhost:${port}` })
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertAdminApiRequiresAuthentication(`http://localhost:${port}`)
   await assertExampleAppAuthFlow({

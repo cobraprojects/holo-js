@@ -1,16 +1,7 @@
-import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/broadcast/client-config': fileURLToPath(new URL('../broadcast/src/client-config.ts', import.meta.url)),
-      '@holo-js/auth': fileURLToPath(new URL('../auth/src/index.ts', import.meta.url)),
-      '@holo-js/db': fileURLToPath(new URL('../db/src/index.ts', import.meta.url)),
-      '@holo-js/db-sqlite': fileURLToPath(new URL('../db-sqlite/src/index.ts', import.meta.url)),
-      '@holo-js/validation': fileURLToPath(new URL('../validation/src/index.ts', import.meta.url)),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/realtime',
     environment: 'node',
@@ -20,4 +11,4 @@ export default defineConfig({
       include: ['src/**/*.ts'],
     },
   },
-})
+}))

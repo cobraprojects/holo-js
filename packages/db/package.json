@@ -6,11 +6,13 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./config": {
+      "@holo-js/source": "./src/databaseConfig.ts",
       "types": "./dist/config.d.ts",
       "import": "./dist/config.mjs",
       "default": "./dist/config.mjs"

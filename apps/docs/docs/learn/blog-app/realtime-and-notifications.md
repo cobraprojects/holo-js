@@ -26,13 +26,24 @@ app/admin/broadcast-feed.tsx
 
 The finished example uses those same files under `apps/blog-next`.
 
-## Broadcast after writes
+## Broadcast inside the write
+
+Send the broadcast as the last step inside the post's transaction:
 
 ```ts
-await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
+const post = await DB.transaction(async () => {
+  const post = await Post.create({ /* ... */ })
+  await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
+  return post
+})
 ```
 
+If the broadcast worker cannot be reached, `broadcast()` throws and the transaction rolls back, so
+the user sees the error and no half-finished post is left behind.
+
 ## Dispatch domain events
+
+Dispatch the event after the transaction commits, so the indexing job only ever sees saved posts:
 
 ```ts
 await BlogPostSaved.dispatch({

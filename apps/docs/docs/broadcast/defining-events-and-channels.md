@@ -35,6 +35,23 @@ await broadcast(orderShipmentUpdated(order.id, order.status))
   .afterCommit()
 ```
 
+## When the Broadcast Worker Is Unreachable
+
+A broadcast that is not queued is published during the request. If the broadcast worker cannot be
+reached, `broadcast()` throws `[@holo-js/core] Broadcast publish request could not reach the
+broadcast worker at <origin>.` with the network error as its `cause`; a worker that does not answer
+within 10 seconds throws a timeout error.
+
+Send the broadcast as the last step inside the write's transaction so the throw rolls the write
+back, or queue it with `.onQueue(...)` so the write succeeds while the worker is down:
+
+```ts
+await DB.transaction(async () => {
+  await order.update({ status: 'shipped' })
+  await broadcast(orderShipmentUpdated(order.id, 'shipped'))
+})
+```
+
 ## Broadcast Dispatch Options
 
 Available options on `broadcast(...)`:

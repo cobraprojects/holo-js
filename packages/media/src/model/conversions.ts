@@ -1,3 +1,4 @@
+import { mimeTypeFromFileName } from '@holo-js/kernel/file-content'
 import { Storage } from '@holo-js/storage/runtime'
 import type { Entity, TableDefinition } from '@holo-js/db'
 import {
@@ -9,7 +10,6 @@ import {
   type StoredMediaConversion,
 } from '../registry'
 import {
-  inferMimeType,
   getContentSize,
   sanitizeFileName,
   toBinaryContent,
@@ -172,7 +172,7 @@ export async function generateStoredConversions(options: {
       generatedFileName,
     })
     const targetDisk = generated.disk ?? options.conversionsDisk
-    const conversionMimeType = inferMimeType(generatedFileName, generated.mimeType)
+    const conversionMimeType = generated.mimeType?.trim() || mimeTypeFromFileName(generatedFileName) || undefined
     const conversionContents = await toBinaryContent(generated.contents)
 
     await options.mutation.put(targetDisk, conversionPath, conversionContents)

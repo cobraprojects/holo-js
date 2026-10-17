@@ -1,7 +1,5 @@
-import { storageRuntimeInternals } from '@holo-js/storage'
+import { mimeTypeFromFileName } from '@holo-js/kernel/file-content'
 import {
-  inferMimeType,
-  isImageSource,
   normalizeOutputFormat,
   replaceFileExtension,
   toBuffer,
@@ -42,7 +40,7 @@ function resolveFit(mode?: string): FitMode {
 export function createDefaultMediaConversionExecutor(): MediaConversionExecutor {
   return {
     async generate({ source, conversion }) {
-      if (!isImageSource(source.mimeType, source.extension)) {
+      if (!source.mimeType?.toLowerCase().startsWith('image/')) {
         return null
       }
 
@@ -98,7 +96,7 @@ export function createDefaultMediaConversionExecutor(): MediaConversionExecutor 
         return {
           contents,
           fileName,
-          mimeType: inferMimeType(fileName),
+          mimeType: mimeTypeFromFileName(fileName) ?? undefined,
         }
       } catch (error) {
         throw new Error(
@@ -110,39 +108,3 @@ export function createDefaultMediaConversionExecutor(): MediaConversionExecutor 
 }
 
 export const defaultMediaConversionExecutor = createDefaultMediaConversionExecutor()
-
-interface MediaImageInspection {
-  readonly mimeType: 'image/gif' | 'image/jpeg' | 'image/png' | 'image/webp'
-  readonly width: number
-  readonly height: number
-  readonly pages: number
-}
-
-const imageMimeTypes = {
-  gif: 'image/gif',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-} as const
-
-export const mediaRuntimeInternals = Object.freeze({
-  async inspectMimeType(contents: Uint8Array): Promise<string> {
-    return storageRuntimeInternals.inspectMimeType(contents)
-  },
-  async inspectImage(contents: Uint8Array, maximumPixels = 40_000_000): Promise<MediaImageInspection> {
-    if (!Number.isSafeInteger(maximumPixels) || maximumPixels < 1) throw new TypeError('[Holo Media] Image pixel limits require a positive integer.')
-    const factory = await loadSharp()
-    try {
-      const image = factory(Buffer.from(contents), { animated: true, failOn: 'warning', limitInputPixels: maximumPixels })
-      const metadata = await image.metadata()
-      const { width, height } = metadata
-      const format = metadata.format
-      if (format !== 'gif' && format !== 'jpeg' && format !== 'png' && format !== 'webp') throw new Error('[Holo Media] Unsupported raster image format.')
-      if (!width || !height || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width * height > maximumPixels) throw new Error('[Holo Media] Image exceeds the pixel limit.')
-      await image.stats()
-      return { mimeType: imageMimeTypes[format], width, height: metadata.pageHeight ?? height, pages: metadata.pages ?? 1 }
-    } catch (error) {
-      throw new Error('[Holo Media] Image could not be decoded.', { cause: error })
-    }
-  },
-})

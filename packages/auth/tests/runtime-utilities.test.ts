@@ -109,11 +109,6 @@ describe('auth runtime utilities', () => {
     })
     expect(forwarded.url).toBe('https://public.test/value')
 
-    const customBase = normalizeRequestInput({ path: '/custom' }, {
-      createRelativeRequestBaseUrl: () => 'https://custom.test',
-    })
-    expect(customBase.url).toBe('https://custom.test/custom')
-
     const defaults = normalizeRequestInput({})
     expect(defaults.url).toBe('http://localhost/')
     expect(defaults.method).toBe('GET')

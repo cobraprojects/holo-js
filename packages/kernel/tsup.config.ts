@@ -6,7 +6,12 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     'http-errors': 'src/httpErrors.ts',
+    'file-content': 'src/fileContent.ts',
+    'image-decoding': 'src/imageDecoding.ts',
+    'image-decoding.browser': 'src/imageDecoding.browser.ts',
+    'image-decoding.node': 'src/imageDecoding.node.ts',
   },
+  external: ['sharp'],
   format: ['esm'],
   dts: true,
   clean: true,

@@ -6,11 +6,13 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./internal/client": {
+      "@holo-js/source": "./src/internal/client.ts",
       "types": "./dist/internal/client.d.ts",
       "import": "./dist/internal/client.mjs",
       "default": "./dist/internal/client.mjs"

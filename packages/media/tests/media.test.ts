@@ -76,6 +76,7 @@ import type {
 import { getContentSize } from '../src/runtime/binary'
 import { mediaAdderInternals } from '../src/model/adder'
 
+const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 type RuntimeMediaEntity = {
   getMedia(collectionName?: string): Promise<unknown[]>
   getMediaUrls(collectionName?: string, conversionName?: string): Promise<string[]>
@@ -838,7 +839,7 @@ describe('@holo-js/media', () => {
           .disk('public')
           .acceptsExtensions(['png'])
           .acceptsMimeTypes(['image/png'])
-          .maxSize(2),
+          .maxSize(100),
       ],
     })
 
@@ -849,52 +850,75 @@ describe('@holo-js/media', () => {
 
     const post = await Post.create({ title: 'Live' })
     const maxSizeResult = await post.addMedia({
-      contents: Buffer.from('toolarge'),
+      contents: Buffer.alloc(101),
       fileName: 'hero.png',
-      mimeType: 'image/png',
     }).toMediaCollection('images')
     expect(maxSizeResult.data).toBeNull()
     expect(maxSizeResult.error?.code).toBe('max_size_exceeded')
     expect(maxSizeResult.error?.collection).toBe('images')
     expect(maxSizeResult.error?.fileName).toBe('hero.png')
-    expect(maxSizeResult.error?.maxSize).toBe(2)
-    expect(maxSizeResult.error?.actualSize).toBe(8)
+    expect(maxSizeResult.error?.maxSize).toBe(100)
+    expect(maxSizeResult.error?.actualSize).toBe(101)
     expect(maxSizeResult.error?.status).toBe(422)
-    expect(maxSizeResult.error?.message).toBe('The selected file must be 2 bytes or smaller.')
+    expect(maxSizeResult.error?.message).toBe('The selected file must be 100 bytes or smaller.')
 
     const invalidMimeResult = await post.addMedia({
       contents: Buffer.from('ok'),
-      fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
+      fileName: 'hero.png',
     }).toMediaCollection('images')
     expect(invalidMimeResult.data).toBeNull()
     expect(invalidMimeResult.error?.code).toBe('invalid_mime_type')
     expect(invalidMimeResult.error?.acceptedMimeTypes).toEqual(['image/png'])
 
     const invalidExtensionResult = await post.addMedia({
-      contents: Buffer.from('ok'),
+      contents: pngPixel,
       fileName: 'hero.jpg',
-      mimeType: 'image/png',
     }).toMediaCollection('images')
     expect(invalidExtensionResult.data).toBeNull()
     expect(invalidExtensionResult.error?.code).toBe('invalid_extension')
     expect(invalidExtensionResult.error?.acceptedExtensions).toEqual(['png'])
 
     const success = await post.addMedia({
-      contents: Buffer.from('ok'),
+      contents: pngPixel,
       fileName: 'hero.png',
-      mimeType: 'image/png',
     }).toMediaCollection('images')
     expect(success.error).toBeNull()
     expect(success.data).toBeInstanceOf(MediaItem)
 
     const storedFileCount = (await storageFiles('public')).length
     await expect(post.addMedia({
-      contents: Buffer.from('ok'),
+      contents: pngPixel,
       fileName: 'hero.png',
-      mimeType: 'image/png',
     }).toMediaCollection('iamges' as never)).rejects.toThrow('Unknown media collection "iamges"')
     expect((await storageFiles('public')).length).toBe(storedFileCount)
+  })
+
+  it('records and validates the type detected from file contents instead of names or declarations', async () => {
+    const Post = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+      collections: [
+        collection('images').disk('public').acceptsMimeTypes(['image/png']),
+        collection('spreadsheets').disk('public').acceptsMimeTypes(['text/csv']),
+      ],
+    })
+    const post = await Post.create({ title: 'Detected types' })
+
+    const renamedImage = await post.addMedia({ contents: pngPixel, fileName: 'upload.bin' }).toMediaCollection('images')
+    expect(renamedImage.error).toBeNull()
+    expect(renamedImage.data?.mimeType).toBe('image/png')
+
+    const spreadsheet = await post.addMedia({ contents: Buffer.from('id,name\n1,Ava'), fileName: 'people.csv' }).toMediaCollection('spreadsheets')
+    expect(spreadsheet.error).toBeNull()
+    expect(spreadsheet.data?.mimeType).toBe('text/csv')
+
+    for (const [fileName, contents] of [
+      ['hero.png', 'not really a picture'],
+      ['hero.png', '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>'],
+      ['logo.svg', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'],
+    ] as const) {
+      const rejected = await post.addMedia(new File([contents], fileName, { type: 'image/png' })).toMediaCollection('images')
+      expect(rejected.data, fileName).toBeNull()
+      expect(rejected.error?.code, fileName).toBe('invalid_mime_type')
+    }
   })
 
   it('accepts MIME types case-insensitively during validation', async () => {
@@ -914,9 +938,8 @@ describe('@holo-js/media', () => {
     const post = await Post.create({ title: 'Case Insensitive' })
 
     const result = await post.addMedia({
-      contents: Buffer.from('ok'),
+      contents: pngPixel,
       fileName: 'hero.png',
-      mimeType: 'IMAGE/PNG',
     }).toMediaCollection('images')
     expect(result.data).toBeInstanceOf(MediaItem)
     expect(result.error).toBeNull()
@@ -957,20 +980,12 @@ describe('@holo-js/media', () => {
         .toMediaCollection('uploads')
 
       const fromBlob = await post
-        .addMedia({
-          contents: {
-            size: 3,
-            async arrayBuffer() {
-              return Buffer.from('png').buffer.slice(0)
-            },
-          } as unknown as Blob,
-          mimeType: 'image/png',
-        })
+        .addMedia({ contents: new Blob([pngPixel]) })
         .usingFileName('blob.png')
         .toMediaCollection('uploads')
 
       const fromFile = await post
-        .addMedia(new File([Buffer.from('file')], 'avatar.png', { type: 'image/png' }))
+        .addMedia(new File([pngPixel], 'avatar.png', { type: 'image/png' }))
         .toMediaCollection('uploads')
 
       expect(fromStringPath.record.name).toBe('Custom Name')
@@ -980,10 +995,10 @@ describe('@holo-js/media', () => {
       expect(fromPathObject.fileName).toBe('notes.txt')
       expect(fromArrayBuffer.fileName).toBe('array.txt')
       expect(fromBlob.mimeType).toBe('image/png')
-      expect(fromBlob.size).toBe(3)
+      expect(fromBlob.size).toBe(pngPixel.length)
       expect(fromFile.fileName).toBe('avatar.png')
       expect(fromFile.mimeType).toBe('image/png')
-      expect(fromFile.size).toBe(4)
+      expect(fromFile.size).toBe(pngPixel.length)
       expect(await post.getMedia('uploads')).toHaveLength(5)
     } finally {
       await rm(path.slice(0, path.lastIndexOf('/')), { recursive: true, force: true })
@@ -1115,7 +1130,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer('png'),
       fileName: 'hero.png',
-      mimeType: 'image/png',
     }).toMediaCollection('images')
 
     expect(getMediaConversionExecutor()).toBeDefined()
@@ -1160,7 +1174,6 @@ describe('@holo-js/media', () => {
     await expect(post.addMedia({
       contents: Buffer.from('image'),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')).rejects.toThrow('conversion failed')
 
     expect((await storageFiles('public')).length).toBe(0)
@@ -1197,7 +1210,7 @@ describe('@holo-js/media', () => {
           uuid: `source-${format}`,
           fileName: 'hero.jpg',
           extension: 'jpg',
-          mimeType: format === 'jpg' ? undefined : 'image/jpeg',
+          mimeType: 'image/jpeg',
           size: image.byteLength,
           contents: format === 'jpg' ? new Uint8Array(image) : image,
         },
@@ -1731,7 +1744,6 @@ describe('@holo-js/media', () => {
     await expect(post.addMedia({
       contents: Buffer.from('orphan'),
       fileName: 'orphan.txt',
-      mimeType: 'text/plain',
     }).toMediaCollection('uploads')).rejects.toThrow('conversion failed')
 
     expect((await storageFiles('public')).length).toBe(0)
@@ -1770,7 +1782,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: Buffer.from('original'),
       fileName: 'image.txt',
-      mimeType: 'text/plain',
     }).toMediaCollection('images')
 
     expect(media.getUrl('skip' as never)).toBeNull()
@@ -1931,22 +1942,19 @@ describe('@holo-js/media', () => {
 
       await expect(post.addMediaFromUrl('%%%%').toMediaCollection('downloads')).rejects.toThrow('valid absolute URLs')
 
-      const mimeOverride = await post
-        .addMedia({
-          url: 'https://example.test/override',
-          mimeType: 'image/png',
-        })
+      const renamedRemoteImage = await post
+        .addMedia({ url: 'https://example.test/override' })
         .usingFileName('override.png')
         .toMediaCollection('downloads')
 
-      expect(mimeOverride.mimeType).toBe('image/png')
+      expect(renamedRemoteImage.mimeType).toBe('image/jpeg')
 
-      const noHeader = await post
+      const headerless = await post
         .addMediaFromUrl('https://example.test/no-header')
         .usingFileName('headerless.bin')
         .toMediaCollection('downloads')
 
-      expect(noHeader.mimeType).toBeNull()
+      expect(headerless.mimeType).toBe('image/jpeg')
 
       revision = 'v4'
       await media.regenerate()
@@ -2202,7 +2210,7 @@ describe('@holo-js/media', () => {
       const media = await post.addMediaFromUrl('https://example.test/streamed.jpg').toMediaCollection('images')
 
       expect(media.size).toBe(2)
-      expect(media.mimeType).toBe('image/jpeg')
+      expect(media.mimeType).toBeNull()
       expect(Array.from(await Storage.disk(media.record.disk).getBytes(media.record.path) ?? [])).toEqual([1, 2])
     } finally {
       vi.unstubAllGlobals()
@@ -2243,7 +2251,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
 
     expect(media.getAvailableConversions()).toEqual(['card'])
@@ -2276,7 +2283,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
     expect(media.getAvailableConversions()).toEqual(['card', 'thumb'])
     for (const name of ['card', 'thumb']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
@@ -2309,7 +2315,6 @@ describe('@holo-js/media', () => {
       return await post.addMedia({
         contents: await createImageBuffer(),
         fileName: 'hero.jpg',
-        mimeType: 'image/jpeg',
       }).toMediaCollection('images')
     })
     expect(media.getAvailableConversions()).toEqual(['card', 'thumb'])
@@ -2351,7 +2356,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
     expect(media.getAvailableConversions()).toEqual(['card'])
     for (const name of ['card']) await assertNativeImageConversion(media.record.generated_conversions[name]?.path)
@@ -2421,7 +2425,6 @@ describe('@holo-js/media', () => {
       return await post.addMedia({
         contents: await createImageBuffer(),
         fileName: 'hero.jpg',
-        mimeType: 'image/jpeg',
       }).toMediaCollection('images')
     })
     expect(media.getAvailableConversions()).toEqual(['card'])
@@ -2466,7 +2469,6 @@ describe('@holo-js/media', () => {
       return await post.addMedia({
         contents: await createImageBuffer(),
         fileName: 'hero.jpg',
-        mimeType: 'image/jpeg',
       }).toMediaCollection('images')
     })).rejects.toThrow('committed')
 
@@ -2513,7 +2515,6 @@ describe('@holo-js/media', () => {
       const media = await post.addMedia({
         contents: await createImageBuffer(),
         fileName: 'hero.jpg',
-        mimeType: 'image/jpeg',
       }).toMediaCollection('images')
       originalPath = media.record.path
       conversionPath = media.record.generated_conversions.card?.path
@@ -2562,7 +2563,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
     await queueHarness.clear()
     const failures: Error[] = []
@@ -2632,7 +2632,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
     const generatedConversions = media.record.generated_conversions
 
@@ -2681,7 +2680,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
 
     expect(await queueHarness.jobs()).toHaveLength(1)
@@ -2739,7 +2737,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: await createImageBuffer(),
       fileName: 'hero.jpg',
-      mimeType: 'image/jpeg',
     }).toMediaCollection('images')
 
     expect(await queueHarness.jobs()).toHaveLength(1)
@@ -2879,7 +2876,6 @@ describe('@holo-js/media', () => {
     const media = await post.addMedia({
       contents: Buffer.from('original'),
       fileName: 'image.txt',
-      mimeType: 'text/plain',
     }).toMediaCollection('images')
 
     const thumbPath = media.record.generated_conversions.thumb?.path

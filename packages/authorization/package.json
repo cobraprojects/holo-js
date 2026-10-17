@@ -11,11 +11,13 @@
   },
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./contracts": {
+      "@holo-js/source": "./src/contracts.ts",
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.mjs",
       "default": "./dist/contracts.mjs"

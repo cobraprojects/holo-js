@@ -18,6 +18,7 @@ import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppFormsBrowserFlow } from '../../../tests/example-app-forms-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
+import { assertExampleAppRequestSecurity } from '../../../tests/example-app-request-security.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -39,6 +40,7 @@ const pngPixel = Uint8Array.from([
   0x42, 0x60, 0x82,
 ])
 const oversizedImage = new Uint8Array((2 * 1024 * 1024) + 1)
+oversizedImage.set(pngPixel)
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
   server.once('error', reject)
@@ -664,6 +666,7 @@ try {
   await assertExampleAppDevelopmentReload({ cwd, baseUrl: devUrl })
   await startBroadcastWorker(devUrl)
   await assertCacheBackedHttpBehavior(devUrl)
+  await assertExampleAppRequestSecurity({ cwd, baseUrl: devUrl })
   await waitForRedirect(`${devUrl}/admin/posts`, '/login')
   await assertExampleAppFormsBrowserFlow({ baseUrl: devUrl, framework: 'sveltekit' })
   await assertResetPasswordApiValidation(devUrl)

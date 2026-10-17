@@ -6,6 +6,7 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
@@ -22,7 +23,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },
+  "peerDependencies": {
+    "@holo-js/storage": "catalog:"
+  },
   "devDependencies": {
+    "@holo-js/storage": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

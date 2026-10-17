@@ -469,7 +469,15 @@ field.string().customAsync(async (value) => {
 
 ### `image(message?)`
 
-Requires an uploaded file to be an image.
+Requires an uploaded file whose contents are a complete JPEG, PNG, GIF, WebP, AVIF, or TIFF image.
+The file name and the type reported by the browser are ignored, and SVG is rejected because it
+can contain scripts.
+
+On the server the whole image is decoded, including every animation frame. Damaged or truncated
+files fail, as do images over 40,000,000 decoded pixels in total or over 1,000 frames. Server-side
+decoding uses the optional `sharp` package; without it, validation reports an error asking you to
+install it. In the browser, `image()` inspects the file's contents and leaves full decoding to the
+server.
 
 ```ts
 field.file().image()

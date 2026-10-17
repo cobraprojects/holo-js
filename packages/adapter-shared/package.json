@@ -6,34 +6,54 @@
   "license": "MIT",
   "exports": {
     "./server-errors": {
+      "@holo-js/source": "./src/server-errors.ts",
       "types": "./dist/server-errors.d.ts",
       "import": "./dist/server-errors.mjs",
       "default": "./dist/server-errors.mjs"
     },
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./client": {
+      "@holo-js/source": "./src/client.ts",
       "types": "./dist/client.d.ts",
       "import": "./dist/client.mjs",
       "default": "./dist/client.mjs"
     },
     "./build": {
+      "@holo-js/source": "./src/build.ts",
       "types": "./dist/build.d.ts",
       "import": "./dist/build.mjs",
       "default": "./dist/build.mjs"
     },
     "./next/request-context": {
       "types": "./dist/next/request-context.d.ts",
-      "browser": "./dist/next/request-context.mjs",
-      "edge-light": "./dist/next/request-context.mjs",
-      "node": "./dist/next/request-context.node.mjs",
-      "import": "./dist/next/request-context.mjs",
-      "default": "./dist/next/request-context.mjs"
+      "browser": {
+        "@holo-js/source": "./src/next/request-context.ts",
+        "default": "./dist/next/request-context.mjs"
+      },
+      "edge-light": {
+        "@holo-js/source": "./src/next/request-context.ts",
+        "default": "./dist/next/request-context.mjs"
+      },
+      "node": {
+        "@holo-js/source": "./src/next/request-context.node.ts",
+        "default": "./dist/next/request-context.node.mjs"
+      },
+      "import": {
+        "@holo-js/source": "./src/next/request-context.ts",
+        "default": "./dist/next/request-context.mjs"
+      },
+      "default": {
+        "@holo-js/source": "./src/next/request-context.ts",
+        "default": "./dist/next/request-context.mjs"
+      }
     },
     "./sveltekit/request-context": {
+      "@holo-js/source": "./src/sveltekit/request-context.ts",
       "types": "./dist/sveltekit/request-context.d.ts",
       "import": "./dist/sveltekit/request-context.mjs",
       "default": "./dist/sveltekit/request-context.mjs"

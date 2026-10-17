@@ -6,16 +6,19 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./config": {
+      "@holo-js/source": "./src/config.ts",
       "types": "./dist/config.d.ts",
       "import": "./dist/config.mjs",
       "default": "./dist/config.mjs"
     },
     "./runtime": {
+      "@holo-js/source": "./src/runtime/composables/index.ts",
       "types": "./dist/runtime/composables/index.d.ts",
       "import": "./dist/runtime/composables/index.mjs",
       "default": "./dist/runtime/composables/index.mjs"
@@ -34,6 +37,7 @@
   },
   "dependencies": {
     "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:",
     "file-type": "catalog:"
   },
   "devDependencies": {

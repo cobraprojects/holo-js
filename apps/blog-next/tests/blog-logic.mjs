@@ -7,6 +7,8 @@ import assert from 'node:assert/strict'
 import authorization, { AuthorizationError } from '@holo-js/authorization'
 import cache from '@holo-js/cache'
 import { assertExampleAppCacheBehavior } from '../../../tests/example-app-cache.mjs'
+import { assertExampleAppStorageMetadata } from '../../../tests/example-app-storage-metadata.mjs'
+import { Storage } from '@holo-js/storage/runtime'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { DB, createSchemaService } from '@holo-js/db'
 import { isValidationException } from '@holo-js/validation'
@@ -114,6 +116,7 @@ try {
   assert.equal(frameworkArchive.posts.length, 2)
 
   await assertExampleAppCacheBehavior(cache, Category)
+  await assertExampleAppStorageMetadata(Storage)
   assert.equal((await getPublishedPosts()).length, 2)
   assert.equal((await getNavigationCategories()).length, 2)
 

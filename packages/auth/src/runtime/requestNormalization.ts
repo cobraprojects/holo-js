@@ -26,10 +26,6 @@ export type AuthRuntimeRequestLike = {
 }
 
 export type AuthRuntimeRequestInput = Request | AuthRuntimeRequestLike
-export type NormalizeRequestInputOptions = {
-  readonly createRelativeRequestBaseUrl?: (headers: Headers) => string
-}
-
 const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'forwarded', 'x-forwarded-host', 'x-forwarded-proto'] as const
 
 function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
@@ -122,21 +118,17 @@ function getRequestLikeMethod(input: AuthRuntimeRequestLike): string {
     ?? 'GET'
 }
 
-function getRequestLikeUrl(input: AuthRuntimeRequestLike, headers: Headers, options: NormalizeRequestInputOptions): string {
+function getRequestLikeUrl(input: AuthRuntimeRequestLike, headers: Headers): string {
   const url = (typeof input.url === 'string' ? input.url : input.url?.toString())
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
     ?? input.node?.req?.url
     ?? input.path
     ?? '/'
 
-  const baseUrl = URL.canParse(url) ? undefined : options.createRelativeRequestBaseUrl?.(headers)
-  return resolveRequestUrl({
-    url: baseUrl ? new URL(url, baseUrl) : url,
-    headers,
-  }).href
+  return resolveRequestUrl({ url, headers }).href
 }
 
-export function normalizeRequestInput(input: AuthRuntimeRequestInput, options: NormalizeRequestInputOptions = {}): Request {
+export function normalizeRequestInput(input: AuthRuntimeRequestInput): Request {
   if (input instanceof Request) {
     return input
   }
@@ -147,7 +139,7 @@ export function normalizeRequestInput(input: AuthRuntimeRequestInput, options: N
   }
 
   const headers = normalizeRequestHeaders(getRequestLikeHeaders(input))
-  return new Request(getRequestLikeUrl(input, headers, options), {
+  return new Request(getRequestLikeUrl(input, headers), {
     method: getRequestLikeMethod(input),
     headers,
   })

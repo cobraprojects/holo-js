@@ -6,16 +6,19 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./errors": {
+      "@holo-js/source": "./src/errors.ts",
       "types": "./dist/errors.d.ts",
       "import": "./dist/errors.mjs",
       "default": "./dist/errors.mjs"
     },
     "./runtime": {
+      "@holo-js/source": "./src/portable/index.ts",
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.mjs",
       "default": "./dist/runtime/index.mjs"

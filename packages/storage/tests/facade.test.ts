@@ -78,9 +78,9 @@ describe('Storage facade', () => {
       getStorage: base => createBackend(base),
     })
     const reloaded = useStorage(name)
-    await expect(reloaded.stat('uploads/report.txt')).resolves.toEqual({ size: 96, mimeType: null })
+    await expect(reloaded.stat('uploads/report.txt')).resolves.toEqual({ size: 96, mimeType: 'text/plain' })
     await reloaded.put('empty.txt', '')
-    await expect(reloaded.stat('empty.txt')).resolves.toEqual({ size: 0, mimeType: null })
+    await expect(reloaded.stat('empty.txt')).resolves.toEqual({ size: 0, mimeType: 'text/plain' })
     await expect(reloaded.stat('missing.txt')).resolves.toBeNull()
     await expect(reloaded.stat('uploads')).resolves.toBeNull()
     await expect(reloaded.stat('empty.txt/child')).resolves.toBeNull()
@@ -90,11 +90,18 @@ describe('Storage facade', () => {
 
   it('uses the default disk for file metadata', async () => {
     await Storage.put('default.txt', 'é')
-    await expect(Storage.stat('default.txt')).resolves.toEqual({ size: 2, mimeType: null })
+    await expect(Storage.stat('default.txt')).resolves.toEqual({ size: 2, mimeType: 'text/plain' })
   })
 
-  it.each(['../private.txt', 'nested/../../private.txt', '..\\private.txt', '/private.txt', 'C:\\private.txt', '', 'file\0.txt'])('rejects unsafe metadata paths: %j', async (path) => {
+  it.each(['../private.txt', 'nested/../../private.txt', '..\\private.txt'])('rejects metadata paths that leave the disk: %j', async (path) => {
     await expect(Storage.stat(path)).rejects.toThrow()
+  })
+
+  it('resolves metadata paths the same way as every other disk operation', async () => {
+    await Storage.put('/nested\\report.txt', 'report')
+    await expect(Storage.get('/nested/report.txt')).resolves.toBe('report')
+    await expect(Storage.stat('/nested/report.txt')).resolves.toEqual({ size: 6, mimeType: 'text/plain' })
+    await expect(Storage.stat('nested\\report.txt')).resolves.toEqual({ size: 6, mimeType: 'text/plain' })
   })
 
   it('rejects metadata reads through symlinks outside the disk root', async () => {

@@ -8,6 +8,7 @@ import { BlockList, isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
+import { inspectFileContent } from '@holo-js/kernel/file-content'
 import { Storage } from '@holo-js/storage/runtime'
 import type { Entity, ModelRecord, TableDefinition } from '@holo-js/db'
 import {
@@ -20,7 +21,6 @@ import {
   getContentSize,
   getDisplayName,
   getExtension,
-  inferMimeType,
   sanitizeFileName,
   toBinaryContent,
   type BinaryContent,
@@ -44,28 +44,28 @@ export type MediaSourceInput
     | {
       readonly url: string
       readonly fileName?: string
-      readonly mimeType?: string
       readonly name?: string
     }
     | {
       readonly contents: BinaryContent
       readonly fileName?: string
-      readonly mimeType?: string
       readonly name?: string
     }
 
-type ResolvedMediaSource = {
-  readonly contents: BinaryContent
+type ReadMediaSource = {
+  readonly contents: Uint8Array
   readonly fileName: string
-  readonly mimeType?: string
   readonly extension?: string
   readonly size: number
   readonly name: string
 }
 
+type ResolvedMediaSource = ReadMediaSource & {
+  readonly mimeType?: string
+}
+
 type NamedBinaryContent = BinaryContent & {
   readonly name?: string
-  readonly type?: string
 }
 
 const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
@@ -294,6 +294,20 @@ async function resolveMediaSource(
     readonly collectionName: string
   },
 ): Promise<ResolvedMediaSource> {
+  const source = await readMediaSource(input, overrideFileName, overrideName, options)
+  const { mimeType } = await inspectFileContent(source.contents, source.fileName)
+  return mimeType ? { ...source, mimeType } : source
+}
+
+async function readMediaSource(
+  input: MediaSourceInput,
+  overrideFileName: string | undefined,
+  overrideName: string | undefined,
+  options: {
+    readonly maxSize?: number
+    readonly collectionName: string
+  },
+): Promise<ReadMediaSource> {
   if (typeof input === 'string' && /^https?:\/\//i.test(input)) {
     return resolveRemoteMediaSource(
       { url: input },
@@ -321,7 +335,6 @@ async function resolveMediaSource(
     return {
       contents,
       fileName,
-      mimeType: inferMimeType(fileName),
       extension: getExtension(fileName),
       size: contents.byteLength,
       name: getDisplayName(fileName, overrideName),
@@ -334,7 +347,6 @@ async function resolveMediaSource(
     return {
       contents,
       fileName,
-      mimeType: inferMimeType(fileName, input.mimeType),
       extension: getExtension(fileName),
       size: getContentSize(contents),
       name: getDisplayName(fileName, overrideName ?? input.name),
@@ -347,7 +359,6 @@ async function resolveMediaSource(
   return {
     contents,
     fileName,
-    mimeType: inferMimeType(fileName, getBinaryMimeType(input)),
     extension: getExtension(fileName),
     size: getContentSize(contents),
     name: getDisplayName(fileName, overrideName),
@@ -357,11 +368,6 @@ async function resolveMediaSource(
 function getBinaryFileName(input: BinaryContent): string {
   const name = (input as NamedBinaryContent).name
   return typeof name === 'string' && name.trim() ? name : 'media.bin'
-}
-
-function getBinaryMimeType(input: BinaryContent): string | undefined {
-  const type = (input as NamedBinaryContent).type
-  return typeof type === 'string' && type.trim() ? type : undefined
 }
 
 function isPathInput(
@@ -375,7 +381,6 @@ function isUrlInput(
 ): input is {
   readonly url: string
   readonly fileName?: string
-  readonly mimeType?: string
   readonly name?: string
 } {
   return typeof input === 'object' && input !== null && 'url' in input
@@ -385,14 +390,13 @@ async function resolveRemoteMediaSource(
   input: {
     readonly url: string
     readonly fileName?: string
-    readonly mimeType?: string
     readonly name?: string
   },
   overrideFileName: string | undefined,
   overrideName: string | undefined,
   maxSize: number | undefined,
   collectionName: string,
-): Promise<ResolvedMediaSource> {
+): Promise<ReadMediaSource> {
   const remoteUrl = resolveRemoteMediaUrl(input.url)
   const response = await remoteMediaDownloader(remoteUrl)
   if (response.status >= 300 && response.status < 400) {
@@ -408,7 +412,6 @@ async function resolveRemoteMediaSource(
   const fileName = sanitizeFileName(
     overrideFileName ?? input.fileName ?? parseRemoteFileName(remoteUrl.toString()),
   )
-  const responseMimeType = response.headers.get('content-type')?.split(';')[0]
   const contentLengthHeader = response.headers.get('content-length')
   const contentLength = contentLengthHeader?.trim()
     ? Number(contentLengthHeader)
@@ -429,7 +432,6 @@ async function resolveRemoteMediaSource(
   return {
     contents,
     fileName,
-    mimeType: inferMimeType(fileName, input.mimeType ?? responseMimeType ?? undefined),
     extension: getExtension(fileName),
     size: contents.byteLength,
     name: getDisplayName(fileName, overrideName ?? input.name),

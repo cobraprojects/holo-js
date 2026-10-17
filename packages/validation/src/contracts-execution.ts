@@ -1,5 +1,6 @@
 import * as v from 'valibot'
-import type { FieldDefinition, FieldKind, FieldRule, WebFileLike } from './contracts-types'
+import { fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
+import type { FieldDefinition, FieldKind, FieldRule } from './contracts-types'
 import { isPlainObject } from './contracts-support'
 
 export type CompiledSchema = v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>>
@@ -34,6 +35,17 @@ export function resolveRuleMessage(rule: FieldRule | undefined, fallback: string
   return rule?.message ?? fallback
 }
 
+const decodableImageMimeTypes = new Set(['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/tiff', 'image/webp'])
+
+async function isRasterImage(value: unknown): Promise<boolean> {
+  if (!(value instanceof Blob)) return false
+  const sample = new Uint8Array(await value.slice(0, fileContentSampleBytes).arrayBuffer())
+  const { mimeType, passive } = await inspectFileContent(sample)
+  if (!passive || !mimeType || !decodableImageMimeTypes.has(mimeType)) return false
+  const { verifyDecodedImage } = await import('@holo-js/kernel/image-decoding')
+  return verifyDecodedImage(new Uint8Array(await value.arrayBuffer()), mimeType)
+}
+
 export async function executeCustomRule(field: FieldExecution, rule: FieldRule, value: unknown): Promise<void> {
   const validator = rule.args[0]
   if (typeof validator === 'function') {
@@ -45,12 +57,8 @@ export async function executeCustomRule(field: FieldExecution, rule: FieldRule, 
     } else if (typeof result === 'string' && result.trim()) {
       field.customIssues.set(rule, result)
     }
-  } else if (validator === 'image') {
-    const rawMimeType = (value as WebFileLike).type
-    const mimeType = typeof rawMimeType === 'string' ? rawMimeType : ''
-    if (!mimeType.toLowerCase().startsWith('image/')) {
-      field.customIssues.set(rule, resolveRuleMessage(rule, 'The selected file must be an image.'))
-    }
+  } else if (validator === 'image' && !await isRasterImage(value)) {
+    field.customIssues.set(rule, resolveRuleMessage(rule, 'The selected file must be an image.'))
   }
 }
 

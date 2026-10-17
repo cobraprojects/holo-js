@@ -1,4 +1,3 @@
-import { inspectFileMimeType, inspectMimeType } from './mimeType'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
 import type { ModuleOptions } from './config'
 
@@ -13,8 +12,6 @@ export function defineStorageConfig<TConfig extends ModuleOptions>(config: TConf
 export * from './config'
 export { createPublicStorageResponse } from './publicStorage'
 export const storageRuntimeInternals = Object.freeze({
-  inspectMimeType,
-  inspectFileMimeType,
   isTemporaryLocalStorageRequest,
   resolveTemporaryLocalStorageRequest,
 })

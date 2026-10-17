@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { assertExampleAppAuthFlow } from './example-app-auth-flow.mjs'
 import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
 import { assertExampleAppFormsBrowserFlow } from './example-app-forms-browser-flow.mjs'
+import { clearExampleAppRateLimitBuckets } from './example-app-rate-limit.mjs'
 import { assertExampleAppTokenAuthFlow } from './example-app-token-auth-flow.mjs'
 
 async function waitForProductionApp(baseUrl, expectedTitle, child, output) {
@@ -178,6 +179,7 @@ async function expectPageText(page, expectedText) {
 }
 
 async function assertFailedProductionInitialization(cwd, baseUrl, env, portArguments) {
+  await clearExampleAppRateLimitBuckets(cwd)
   let output = ''
   const child = spawn('bun', ['run', 'start', ...portArguments], {
     cwd,
@@ -237,6 +239,7 @@ export async function assertExampleAppProductionFlow({
   const portArguments = env.DB_DRIVER === 'postgres' ? [`--port=${port}`] : env.DB_DRIVER === 'mysql' ? ['--port', port] : []
   const serverEnv = portArguments.length > 0 ? { ...env, PORT: '1', NITRO_PORT: '1' } : env
   await assertFailedProductionInitialization(cwd, baseUrl, serverEnv, portArguments)
+  await clearExampleAppRateLimitBuckets(cwd)
   let output = ''
   const child = spawn('bun', ['run', 'start', ...portArguments], {
     cwd,

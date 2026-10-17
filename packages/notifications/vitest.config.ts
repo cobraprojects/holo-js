@@ -1,17 +1,7 @@
-import { resolve } from 'node:path'
-import { defineConfig } from 'vitest/config'
-import { fileURLToPath } from 'node:url'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
-      '@holo-js/config/registry': fileURLToPath(new URL('../config/src/registry.ts', import.meta.url)),
-      '@holo-js/config': fileURLToPath(new URL('../config/src/index.ts', import.meta.url)),
-      '@holo-js/media/config': fileURLToPath(new URL('../media/src/projectConfig.ts', import.meta.url)),
-      '@holo-js/media': fileURLToPath(new URL('../media/src/index.ts', import.meta.url)),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/notifications',
     environment: 'node',
@@ -25,4 +15,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

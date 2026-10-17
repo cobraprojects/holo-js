@@ -1,6 +1,7 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/events',
     environment: 'node',
@@ -14,4 +15,4 @@ export default defineConfig({
       ],
     },
   },
-})
+}))

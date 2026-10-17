@@ -200,6 +200,28 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
       `Expected the dashboard broadcast activity to show created: ${title}.`,
     )
 
+    const otherUser = await browser.newContext({ baseURL: baseUrl })
+    try {
+      const otherUserDashboard = await otherUser.newPage()
+      const otherUserFailures = observeExampleAppPage(otherUserDashboard).failures
+      await otherUserDashboard.goto('/login', { waitUntil: 'networkidle' })
+      await otherUserDashboard.locator('[name="email"]').fill('editor@example.com')
+      await otherUserDashboard.locator('[name="password"]').fill('secret-secret')
+      await otherUserDashboard.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await otherUserDashboard.waitForURL(url => url.pathname === adminPath, { timeout: 20000 })
+      const { activity: otherUserActivity, sockets: otherUserSockets } = await openSubscribedDashboard(otherUserDashboard, otherUserFailures)
+
+      const crossUserTitle = `Cross-user broadcast ${appName} ${Date.now()}`
+      await createPostThroughBrowser(createPage, crossUserTitle)
+      await waitFor(
+        async () => (await otherUserActivity.textContent())?.trim() === `created: ${crossUserTitle}`,
+        formatBroadcastFailure(`Expected another signed-in user's dashboard to show created: ${crossUserTitle}.`, otherUserSockets, otherUserFailures),
+      )
+      assert.deepEqual(otherUserFailures, [])
+    } finally {
+      await otherUser.close()
+    }
+
     const channels = ['private-blog.admin', 'presence-blog.admin.presence']
     const unsubscribes = channel => sockets.sentFrames.filter(frame => frame.includes('pusher:unsubscribe') && frame.includes(channel)).length
     const previousUnsubscribes = new Map(channels.map(channel => [channel, unsubscribes(channel)]))

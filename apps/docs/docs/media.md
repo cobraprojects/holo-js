@@ -113,9 +113,14 @@ Available collection options:
 - `conversionsDisk('s3')`
 - `singleFile()`
 - `onlyKeepLatest(5)`
-- `acceptsMimeTypes([...])`
+- `acceptsMimeTypes([...])`: compared against the type detected from the file's contents
 - `acceptsExtensions([...])`
 - `maxSize(bytes)`
+
+Media detects each file's type from its contents and stores that type, never the type reported by
+the browser or a remote server. Text formats without recognizable contents, such as CSV, JSON, and
+SVG, use the file extension. A file whose extension names a binary format its contents do not
+match, such as text saved as `photo.png`, has no type and fails `acceptsMimeTypes()`.
 
 Collection rules protect the media collection. Put upload rules in the form schema too, so invalid
 files become normal field validation errors before the media write runs:
@@ -202,7 +207,6 @@ Or attach from a structured input:
 await post.addMedia({
   contents: fileBuffer,
   fileName: 'avatar.png',
-  mimeType: 'image/png',
 }).toMediaCollection('images')
 ```
 

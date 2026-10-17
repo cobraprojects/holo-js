@@ -31,13 +31,18 @@ async function createSymlinkedStorageDirectory(): Promise<{
 }
 
 describe('@holo-js/core storage runtime optional imports', () => {
-  it('reports MIME metadata from the encoded local file instead of its name', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-mime-'))
+  it('reports the local file size with only the requested leading bytes for content inspection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-sample-'))
     tempDirs.push(root)
     const backend = storageRuntimeInternals.createFileStorageBackend(root)
-    const contents = await readFile(new URL('../../media/tests/fixtures/mime/sample.wav', import.meta.url))
+    const contents = await readFile(new URL('../../kernel/tests/fixtures/mime/sample.wav', import.meta.url))
     await backend.setItemRaw('spoofed.png', contents)
-    await expect(backend.getItemStat?.('spoofed.png')).resolves.toEqual({ size: contents.length, mimeType: 'audio/wav' })
+    await expect(backend.getItemStat?.('spoofed.png', { sampleBytes: 16 })).resolves.toEqual({
+      size: contents.length,
+      sample: new Uint8Array(contents.subarray(0, 16)),
+    })
+    await backend.setItemRaw('empty.bin', new Uint8Array())
+    await expect(backend.getItemStat?.('empty.bin', { sampleBytes: 16 })).resolves.toEqual({ size: 0, sample: new Uint8Array() })
   })
 
   it('serves private local files through facade URLs signed by the discovered application key', async () => {

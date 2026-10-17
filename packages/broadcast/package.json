@@ -6,31 +6,37 @@
   "license": "MIT",
   "exports": {
     ".": {
+      "@holo-js/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
     "./config": {
+      "@holo-js/source": "./src/config.ts",
       "types": "./dist/config.d.ts",
       "import": "./dist/config.mjs",
       "default": "./dist/config.mjs"
     },
     "./auth": {
+      "@holo-js/source": "./src/auth.ts",
       "types": "./dist/auth.d.ts",
       "import": "./dist/auth.mjs",
       "default": "./dist/auth.mjs"
     },
     "./client-config": {
+      "@holo-js/source": "./src/client-config.ts",
       "types": "./dist/client-config.d.ts",
       "import": "./dist/client-config.mjs",
       "default": "./dist/client-config.mjs"
     },
     "./contracts": {
+      "@holo-js/source": "./src/contracts.ts",
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.mjs",
       "default": "./dist/contracts.mjs"
     },
     "./runtime": {
+      "@holo-js/source": "./src/runtime.ts",
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.mjs",
       "default": "./dist/runtime.mjs"

@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resolveRequestUrl, type HoloRequestInput } from '../src/index'
+import { normalizeHoloHttpError, resolveRequestUrl, type HoloRequestInput } from '../src/index'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -76,10 +76,48 @@ describe('client-facing request URLs', () => {
         'x-forwarded-proto': 'https, http',
       },
     }).href).toBe('https://public.example:8443/login?next=%2Fadmin')
+  })
+
+  it('trusts only the RFC 7239 Forwarded header when proxy trust is "forwarded"', () => {
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
     expect(resolveRequestUrl({
       path: '/login',
       headers: [['Forwarded', 'for=192.0.2.1;proto="https";host="[::1]:8443"']],
     }).href).toBe('https://[::1]:8443/login')
+    expect(resolveRequestUrl({
+      path: '/login',
+      headers: {
+        host: 'app.test',
+        'x-forwarded-host': 'attacker.example',
+        'x-forwarded-proto': 'https',
+      },
+    }).href).toBe('http://app.test/login')
+  })
+
+  it('reads quoted Forwarded values whole, including separators inside quotes', () => {
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
+    expect(() => resolveRequestUrl({ path: '/login', headers: { forwarded: 'for=192.0.2.1;host="app.test,evil.test";proto=https' } })).toThrow('Request hosts must be a valid hostname')
+    expect(resolveRequestUrl({ path: '/login', headers: { forwarded: 'for="[2001:db8::1]:4711";host="app.test:8443";proto="https"' } }).href).toBe('https://app.test:8443/login')
+  })
+
+  it('ignores Forwarded segments without a value', () => {
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
+    expect(resolveRequestUrl({
+      path: '/login',
+      headers: { host: 'app.test', forwarded: 'hostx;protox' },
+    }).href).toBe('http://app.test/login')
+  })
+
+  it.each(['true', 'x-forwarded'])('trusts only X-Forwarded headers when proxy trust is %j', (trustProxy) => {
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', trustProxy)
+    expect(resolveRequestUrl({
+      url: 'http://localhost/login',
+      headers: {
+        host: 'app.test',
+        'x-forwarded-proto': 'https',
+        forwarded: 'proto=http;host=attacker.example',
+      },
+    }).href).toBe('https://app.test/login')
   })
 
   it('retains an absolute URL without Host and defaults relative requests to HTTP', () => {
@@ -105,6 +143,21 @@ describe('client-facing request URLs', () => {
       expect(() => resolveRequestUrl({ headers: { host } })).toThrow(TypeError)
     },
   )
+
+  it.each([
+    { 'x-forwarded-proto': 'wss' },
+    { 'x-forwarded-host': 'a b' },
+  ])('reports malformed trusted proxy headers %j as a bad request', (headers) => {
+    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    let thrown: unknown
+    try {
+      resolveRequestUrl({ headers: { host: 'app.test', ...headers } })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(TypeError)
+    expect(normalizeHoloHttpError(thrown)?.status).toBe(400)
+  })
 
   it('rejects unsafe protocols and URL credentials', () => {
     vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')

@@ -1,12 +1,7 @@
-import { defineConfig } from 'vitest/config'
-import { fileURLToPath } from 'node:url'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import { workspaceTestConfig } from '../../vitest.shared'
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@holo-js/flux': fileURLToPath(new URL('../flux/src/index.ts', import.meta.url)),
-    },
-  },
+export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/flux-vue',
     environment: 'node',
@@ -16,4 +11,4 @@ export default defineConfig({
       include: ['src/**/*.ts'],
     },
   },
-})
+}))

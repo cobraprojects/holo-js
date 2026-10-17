@@ -51,6 +51,8 @@ export const actions = {
         await post.tags().attach(data.tagIds)
       }
 
+      await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
+
       return post
     })
 
@@ -63,7 +65,6 @@ export const actions = {
       }
     }
 
-    await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
     await BlogPostSaved.dispatch({
       action: 'created',
       postId: post.id,

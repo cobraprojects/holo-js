@@ -1,7 +1,7 @@
 import { protect } from '../index'
 import { cors } from '../cors'
 import { prepareCsrfCookies } from '../cookie-issuance'
-import { SecurityCsrfError } from '../contracts'
+import { createSecurityRejectionResponse, isSecurityRejection } from '../rejection-response'
 
 type SvelteKitCookieOptions = {
   path: string
@@ -47,15 +47,6 @@ async function issueCsrfCookie(event: SvelteKitCsrfEvent): Promise<void> {
   }
 }
 
-function createCsrfErrorResponse(error: SecurityCsrfError): Response {
-  return new Response(error.message, {
-    status: error.status,
-    headers: {
-      'content-type': 'text/plain; charset=utf-8',
-    },
-  })
-}
-
 export function csrfProtection(): SvelteKitCsrfHandle {
   return async ({ event, resolve }) => {
     const preflight = cors.preflight(event.request)
@@ -70,15 +61,14 @@ export function csrfProtection(): SvelteKitCsrfHandle {
 
     try {
       await protect(event.request)
+      await issueCsrfCookie(event)
     } catch (error) {
-      if (error instanceof SecurityCsrfError) {
-        return cors.apply(event.request, createCsrfErrorResponse(error))
+      if (isSecurityRejection(error)) {
+        return cors.apply(event.request, createSecurityRejectionResponse(error))
       }
 
       throw error
     }
-
-    await issueCsrfCookie(event)
 
     return cors.apply(event.request, await resolve(event))
   }

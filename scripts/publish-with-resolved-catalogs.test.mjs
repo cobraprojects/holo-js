@@ -155,6 +155,36 @@ test('publishing resolves workspace ranges and restores original manifests', asy
 })
 
 
+test('published manifests expose only built files, never workspace source entries', async () => {
+  const original = `${JSON.stringify({
+    name: '@holo-js/example',
+    exports: {
+      '.': { '@holo-js/source': './src/index.ts', types: './dist/index.d.ts', import: './dist/index.mjs' },
+      './runtime': { '@holo-js/source': './src/runtime.ts', import: './dist/runtime.mjs' },
+      './context': {
+        types: './dist/context.d.ts',
+        node: { '@holo-js/source': './src/context.node.ts', default: './dist/context.node.mjs' },
+        default: { '@holo-js/source': './src/context.ts', default: './dist/context.mjs' },
+      },
+      './styles.css': './dist/styles.css',
+    },
+  })}\n`
+  const repoRoot = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{}}}'],
+    'packages/example/package.json': original.split('\n'),
+  })
+  await withResolvedCatalogManifests(async () => {
+    const manifest = JSON.parse(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'))
+    assert.deepEqual(manifest.exports, {
+      '.': { types: './dist/index.d.ts', import: './dist/index.mjs' },
+      './runtime': { import: './dist/runtime.mjs' },
+      './context': { types: './dist/context.d.ts', node: './dist/context.node.mjs', default: './dist/context.mjs' },
+      './styles.css': './dist/styles.css',
+    })
+  }, repoRoot)
+  assert.equal(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), original)
+})
+
 test('publishing restores every source manifest when preparation fails partway', async () => {
   const core = '{ "name": "@holo-js/core", "version": "0.3.16", "dependencies": { "external": "catalog:" } }\n'
   const consumer = '{ "name": "@holo-js/consumer", "dependencies": { "missing": "catalog:" } }\n'
