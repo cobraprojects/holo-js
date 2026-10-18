@@ -176,14 +176,16 @@ test('dependency policy requires framework runtimes to be peers of published pac
   const repoRoot = await createTestScaffold({
     'packages/adapter/package.json': ['{"name":"@holo-js/adapter","dependencies":{"svelte":"catalog:","h3":"catalog:","valibot":"catalog:"},"peerDependencies":{"nuxt":"catalog:"}}'],
     'packages/client/package.json': ['{"name":"@holo-js/client","peerDependencies":{"vue":"catalog:"},"devDependencies":{"vue":"catalog:"}}'],
+    'packages/optional/package.json': ['{"name":"@holo-js/optional","optionalDependencies":{"react":"catalog:"}}'],
   })
   await trackTestFiles(repoRoot)
 
   const failures = await collectFrameworkRuntimeDependencyFailures(repoRoot)
 
-  assert.equal(failures.length, 2)
+  assert.equal(failures.length, 3)
   assert.ok(failures.some(failure => failure.includes('dependencies.svelte') && failure.includes('peerDependencies')))
   assert.ok(failures.some(failure => failure.includes('dependencies.h3')))
+  assert.ok(failures.some(failure => failure.includes('optionalDependencies.react')))
 })
 
 test('dependency policy validator ignores nested fixture manifests', async () => {

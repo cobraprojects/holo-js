@@ -144,10 +144,12 @@ export async function collectFrameworkRuntimeDependencyFailures(root = repoRoot)
 
   for (const manifestPath of manifestPaths) {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-    const dependencies = isObject(manifest.dependencies) ? Object.keys(manifest.dependencies) : []
 
-    for (const packageName of dependencies.filter(name => frameworkRuntimePackages.has(name))) {
-      failures.push(`${manifestPath}: dependencies.${packageName} must be declared in peerDependencies so the application's framework runtime is shared.`)
+    for (const sectionName of ['dependencies', 'optionalDependencies']) {
+      const section = isObject(manifest[sectionName]) ? Object.keys(manifest[sectionName]) : []
+      for (const packageName of section.filter(name => frameworkRuntimePackages.has(name))) {
+        failures.push(`${manifestPath}: ${sectionName}.${packageName} must be declared in peerDependencies so the application's framework runtime is shared.`)
+      }
     }
   }
 
