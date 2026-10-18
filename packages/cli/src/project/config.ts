@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   configEvaluationInternals,
@@ -280,8 +280,7 @@ export async function ensureGeneratedSchemaPlaceholder(
     return filePath
   }
 
-  await mkdir(dirname(filePath), { recursive: true })
-  await writeFile(filePath, renderGeneratedSchemaPlaceholder(), 'utf8')
+  await writeTextFile(filePath, renderGeneratedSchemaPlaceholder())
   return filePath
 }
 

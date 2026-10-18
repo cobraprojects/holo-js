@@ -1,6 +1,6 @@
 import { spawn, type SpawnOptions } from 'node:child_process'
 import { existsSync, watch } from 'node:fs'
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { loadConfigDirectory, type LoadedHoloConfig } from '@holo-js/config'
@@ -39,6 +39,7 @@ import type {
 import type { LoadedProjectConfig, CommandFlagValue } from './types'
 import type { HoloRuntime } from '@holo-js/core'
 import type { QueueDriverFactory, QueueWorkerRunOptions } from '@holo-js/queue'
+import { writeTextFile } from './project/atomic-file'
 
 type QueueMaintenanceConnection = Awaited<ReturnType<typeof loadConfigDirectory>>['queue']['connections'][string]
 
@@ -291,8 +292,7 @@ export async function readQueueRestartSignal(projectRoot: string): Promise<numbe
 
 export async function writeQueueRestartSignal(projectRoot: string, timestamp = Date.now()): Promise<string> {
   const signalPath = resolveQueueRestartSignalPath(projectRoot)
-  await mkdir(dirname(signalPath), { recursive: true })
-  await writeFile(signalPath, `${timestamp}\n`, 'utf8')
+  await writeTextFile(signalPath, `${timestamp}\n`)
   return signalPath
 }
 
