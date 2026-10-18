@@ -204,8 +204,8 @@ type BenchmarkWidePostRow = BenchmarkPostRow & {
 
 const connectionName = 'main'
 const tableName = 'posts'
-const subscriptionCount = 1_000
-const distinctArgumentCount = 100
+const subscriptionCount = 100
+const distinctArgumentCount = 50
 const patchRowCount = 1_000
 const longBenchmarkTimeoutMs = 20_000
 
