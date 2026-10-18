@@ -65,6 +65,7 @@ In preparation, not yet released.
 
 ### Fixed
 
+- Holo CLI writes generated and updated project files, including `package.json`, through a temporary file and an atomic rename. Editors, watchers and package managers reading a file while `holo dev` or `holo install` updates it no longer see an empty or truncated file.
 - Next.js realtime queries call React `use()` on every render, so a query that suspends for its first result renders without React errors on Next.js 16.4.
 
 ## 0.3.13

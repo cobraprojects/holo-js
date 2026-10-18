@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
@@ -287,5 +288,12 @@ export async function readTextFile(path: string): Promise<string | undefined> {
 
 export async function writeTextFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, contents, 'utf8')
+  const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporaryPath, contents, 'utf8')
+    await rename(temporaryPath, path)
+  } catch (error) {
+    await rm(temporaryPath, { force: true })
+    throw error
+  }
 }
