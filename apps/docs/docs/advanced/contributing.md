@@ -46,8 +46,8 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 | `bun run --cwd packages/<name> test` | Run one package's tests while you work. |
 | `bun run test:libraries` | Run every library test suite against the real services. |
 | `bun run test:examples` | Run the Next.js, Nuxt, and SvelteKit example apps against SQLite, PostgreSQL, and MySQL. |
-| `bun run test:ci` | `test:libraries` plus `test:examples`, the same suites CI runs. |
-| `bun run test` | `test:ci` plus published-package, scaffold, and browser-bundle checks. |
+| `bun run test:ci` | `test:libraries` plus `test:examples`. |
+| `bun run test` | `test:ci` plus published-package, scaffold, and browser-bundle checks. Run it locally before a release and for changes to adapters, the CLI scaffold, or packaging. |
 | `bun run test:platform` | Native package loading and server lifecycle tests. |
 | `bun run test:coverage` | Coverage report, for finding untested behavior. |
 | `bun run check` | Typecheck, lint, and `test:ci`. |
@@ -56,7 +56,7 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI requires library and test typechecks, lint, published-package acceptance, scaffold acceptance, browser-bundle acceptance, and the full library and example-app suites on Node 22.14.0, 24, and 26. Native package loading and server lifecycle checks also run on Linux, Windows, and macOS.
+CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on Node 24, the runtime audit and dead-code gate, and native package loading and server lifecycle checks on Linux, Windows, and macOS with Node 22.14.0, 24, and 26. The example apps and the published-package, scaffold, and browser-bundle acceptance checks run locally with `bun run test`; run them under each supported Node version before a release.
 
 The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit.
 

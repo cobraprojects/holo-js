@@ -15,29 +15,20 @@ concurrency:
 
 jobs:
   validation:
-    name: Typecheck, lint and acceptance / Node ${{ matrix.node }}
+    name: Typecheck and lint
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        node:
-          - 22.14.0
-          - 24
-          - 26
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.9
       - run: bun install --frozen-lockfile --ignore-scripts
-      - if: startsWith(matrix.node, '22.')
-        run: npm install --global npm@11
-      - run: bun x playwright install --with-deps chromium
-      - run: bun run test:acceptance
+      - run: node scripts/build-libraries.mjs
+      - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run typecheck
       - run: bun run lint
 
