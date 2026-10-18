@@ -166,8 +166,10 @@ describe('@holo-js/cache package surface', () => {
     })
   })
 
-  it('returns stale flexible values and reports the failure when background refresh lock acquisition fails', async () => {
+  it('returns stale flexible values and reports a late background refresh failure to the reporter active when it started', async () => {
     const report = vi.fn()
+    const laterReport = vi.fn()
+    let failRefresh: (() => void) | undefined
     errorReportingInternals.configure({ report })
     onTestFinished(() => { errorReportingInternals.configure(undefined) })
     const lockError = new Error('lock failed')
@@ -179,14 +181,17 @@ describe('@holo-js/cache package surface', () => {
       refresh: async () => 'fresh',
       createLock: () => ({
         name: 'refresh',
-        get: async () => { throw lockError },
+        get: () => new Promise<boolean>((_resolve, reject) => { failRefresh = () => reject(lockError) }),
         release: async () => true,
         block: async () => false,
       }),
     })
+    errorReportingInternals.configure({ report: laterReport })
+    failRefresh?.()
 
     expect(value).toBe('stale')
     await vi.waitFor(() => expect(report).toHaveBeenCalledExactlyOnceWith(lockError, { capability: 'cache', operation: 'flexible.refresh' }))
+    expect(laterReport).not.toHaveBeenCalled()
   })
 
   it('forgets and flushes cache values without a dependency index', async () => {
@@ -2551,12 +2556,13 @@ export default new PluginCacheDriver()
     await expect(read).rejects.toThrow('load failed')
   })
 
-  it('continues disposing runtime drivers when one driver dispose hook throws', () => {
+  it('continues disposing runtime drivers and reports sync and async dispose failures', async () => {
     const disposeError = new Error('first dispose failed')
+    const asyncDisposeError = new Error('second dispose rejected')
     const firstDispose = vi.fn(() => {
       throw disposeError
     })
-    const secondDispose = vi.fn()
+    const secondDispose = vi.fn(() => Promise.reject(asyncDisposeError))
     const report = vi.fn()
     errorReportingInternals.configure({ report })
     const driver = {
@@ -2625,7 +2631,11 @@ export default new PluginCacheDriver()
       expect(() => resetCacheRuntime()).not.toThrow()
       expect(firstDispose).toHaveBeenCalledTimes(1)
       expect(secondDispose).toHaveBeenCalledTimes(1)
-      expect(report).toHaveBeenCalledExactlyOnceWith(disposeError, { capability: 'cache', operation: 'driver.dispose' })
+      await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(2))
+      expect(report.mock.calls).toEqual([
+        [disposeError, { capability: 'cache', operation: 'driver.dispose' }],
+        [asyncDisposeError, { capability: 'cache', operation: 'driver.dispose' }],
+      ])
     } finally {
       errorReportingInternals.configure(undefined)
     }
@@ -2645,7 +2655,7 @@ export default new PluginCacheDriver()
       disposeDriver: true,
       loadModule: () => new Promise<void>((resolve) => { finishLoading = resolve }),
       createDriver: () => Object.assign(createMemoryCacheDriver({ name: 'lazy' }), {
-        [cacheDriverDisposeSymbol]: () => { throw disposeError },
+        [cacheDriverDisposeSymbol]: () => Promise.reject(disposeError),
       }),
     })
     const read = lazyDriver.get('key')

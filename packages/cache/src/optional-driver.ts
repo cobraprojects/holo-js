@@ -1,4 +1,4 @@
-import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
+import { captureErrorReporter, type HoloErrorReporter } from '@holo-js/kernel/error-reporting'
 import {
   CacheOptionalPackageError,
   type CacheDriverContract,
@@ -9,7 +9,16 @@ import {
 export const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
 
 export type DisposableCacheDriver = CacheDriverContract & {
-  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void
+  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void | Promise<void>
+}
+
+export function disposeCacheDriver(driver: CacheDriverContract, report: HoloErrorReporter): void {
+  const reportFailure = (error: unknown): void => report(error, { capability: 'cache', operation: 'driver.dispose' })
+  try {
+    void Promise.resolve((driver as DisposableCacheDriver)[CACHE_DRIVER_DISPOSE_SYMBOL]?.()).catch(reportFailure)
+  } catch (error) {
+    reportFailure(error)
+  }
 }
 
 export type OptionalDriverModuleLoader<TModule> = () => Promise<TModule>
@@ -119,17 +128,13 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
     this.driverInstance = undefined
     this.pending = undefined
 
+    const report = captureErrorReporter()
     if (driverInstance) {
-      const disposable = driverInstance as DisposableCacheDriver
-      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
+      disposeCacheDriver(driverInstance, report)
       return
     }
 
-    const report = captureErrorReporter()
-    pending?.then((driver) => {
-      const disposable = driver as DisposableCacheDriver
-      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
-    }, () => undefined).catch(error => report(error, { capability: 'cache', operation: 'driver.dispose' }))
+    void pending?.then(driver => disposeCacheDriver(driver, report), () => undefined)
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {

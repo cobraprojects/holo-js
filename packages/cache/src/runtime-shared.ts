@@ -1,4 +1,5 @@
-import { reportError } from '@holo-js/kernel/error-reporting'
+import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
+import { disposeCacheDriver } from './optional-driver'
 import {
   holoCacheDefaults,
   normalizeCacheConfig,
@@ -35,28 +36,14 @@ type RuntimeCacheState = {
   bindings?: CacheRuntimeFacade
 }
 
-const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
-
-type DisposableCacheDriver = CacheDriverContract & {
-  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void
-}
-
-function disposeDriver(driver: CacheDriverContract): void {
-  const disposable = driver as DisposableCacheDriver
-  disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
-}
-
 export function disposeCacheRuntimeBindings(bindings: CacheRuntimeFacade | undefined): void {
   if (!bindings) {
     return
   }
 
+  const report = captureErrorReporter()
   for (const driver of bindings.drivers.values()) {
-    try {
-      disposeDriver(driver)
-    } catch (error) {
-      reportError(error, { capability: 'cache', operation: 'driver.dispose' })
-    }
+    disposeCacheDriver(driver, report)
   }
 }
 

@@ -188,7 +188,7 @@ export default defineAppConfig({
 | `app` | `report` (your own `report()` calls) |
 | `queue` | `job.onCompleted`, `job.onFailed`, `dispatch.onComplete`, `dispatch.onFailed`, `worker.onJobProcessed`, `worker.onJobReleased`, `worker.onJobFailed` |
 | `auth` | `passwordReset.clearReservation`, `multiFactor.clearRateLimit`, `multiFactor.clearEnrollment`, `next.resolveState`, `sveltekit.resolveState` |
-| `cache` | `flexible.refresh`, `driver.dispose`, `driver.disconnect` |
+| `cache` | `flexible.refresh`, `driver.dispose` |
 | `db` | `cache.invalidationListener` |
 | `broadcast` | `worker.socketMessage`, `worker.scalingMessage`, `worker.socketCleanup`, `worker.realtimeSubscriptionCleanup` |
 
