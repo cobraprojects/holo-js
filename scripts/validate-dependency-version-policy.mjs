@@ -12,6 +12,18 @@ const dependencySections = [
   'peerDependencies',
   'optionalDependencies',
 ]
+const frameworkRuntimePackages = new Set([
+  '@sveltejs/kit',
+  'h3',
+  'next',
+  'nitropack',
+  'nuxt',
+  'react',
+  'react-dom',
+  'svelte',
+  'vue',
+  'vue-router',
+])
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -120,6 +132,22 @@ export async function collectPackageManifestFailures(root = repoRoot) {
           failures.push(`${manifestPath}: ${sectionName}.${packageName} must use "catalog:" in package manifests, found "${version}".`)
         }
       }
+    }
+  }
+
+  return failures
+}
+
+export async function collectFrameworkRuntimeDependencyFailures(root = repoRoot) {
+  const manifestPaths = await listTrackedPackageManifests(root)
+  const failures = []
+
+  for (const manifestPath of manifestPaths) {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    const dependencies = isObject(manifest.dependencies) ? Object.keys(manifest.dependencies) : []
+
+    for (const packageName of dependencies.filter(name => frameworkRuntimePackages.has(name))) {
+      failures.push(`${manifestPath}: dependencies.${packageName} must be declared in peerDependencies so the application's framework runtime is shared.`)
     }
   }
 
@@ -455,6 +483,7 @@ export async function runDependencyVersionPolicyValidation(root = repoRoot) {
     ...(await collectRootManifestFailures(root)),
     ...(await collectAppManifestFailures(root)),
     ...(await collectPackageManifestFailures(root)),
+    ...(await collectFrameworkRuntimeDependencyFailures(root)),
     ...(await collectNodeEngineFailures(root)),
     ...(await collectCatalogPackageCoverageFailures(root)),
     ...(await collectScaffoldSourceFailures(root)),

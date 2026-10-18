@@ -1,4 +1,5 @@
-import { getHeaders, getRequestURL, readRawBody, type H3Event } from 'h3'
+import type { H3Event } from 'h3'
+import { getHeaders, getRequestURL, readRawBody } from '#imports'
 
 export async function createRealtimeRequest(event: H3Event): Promise<Request> {
   const headers = new Headers()

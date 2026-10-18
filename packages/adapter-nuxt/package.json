@@ -49,11 +49,10 @@
     "@holo-js/core": "catalog:",
     "@holo-js/db": "catalog:",
     "@holo-js/kernel": "catalog:",
-    "@holo-js/validation": "catalog:",
-    "h3": "catalog:",
-    "nitropack": "catalog:"
+    "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {
+    "nuxt": "catalog:",
     "vue": "catalog:",
     "@holo-js/broadcast": "catalog:",
     "@holo-js/forms": "catalog:",
@@ -88,7 +87,9 @@
     "nuxt": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "@nuxt/nitro-server": "catalog:"
+    "@nuxt/nitro-server": "catalog:",
+    "h3": "catalog:",
+    "@nuxt/schema": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

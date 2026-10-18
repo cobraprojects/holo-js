@@ -53,6 +53,14 @@ In preparation, not yet released.
 
 - Prepare the 0.3.x to 0.4.0 upgrade guide and mark Realtime and Broadcast as **Experimental** in the documentation and package READMEs. Production reliability work remains in the separate Realtime production readiness milestone; this label does not change runtime behavior.
 
+### Security
+
+- Raise dependency floors past published advisories: `ws` 8.21.0, `sharp` 0.35.5 and `mysql2` 3.22.0, with framework peers Next.js 16.3.8, Nuxt 4.5.1, SvelteKit 2.70.2 and Svelte 5.56.8.
+
+### Changed
+
+- Framework runtimes are peer dependencies. `@holo-js/adapter-nuxt` peers on `nuxt` and takes h3 and Nitro from Nuxt's `#imports` instead of depending on `h3` and `nitropack`. `@holo-js/adapter-sveltekit` peers on `svelte` (`^5.56.8`) instead of depending on an exact version. Applications share one framework runtime with Holo. See [framework peer dependencies](apps/docs/docs/getting-started/upgrading.md#framework-peer-dependencies).
+
 ## 0.3.13
 
 Prepared, not yet published.

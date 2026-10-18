@@ -10,3 +10,7 @@ export async function createNativeNuxt(rootDir: string, runtimeConfig: Record<st
   })
   return await loadNuxt({ cwd: rootDir, ready: false, dev: false, overrides: { modules: [], runtimeConfig } })
 }
+
+export function registeredServerPlugins(nuxt: Awaited<ReturnType<typeof loadNuxt>>): readonly string[] {
+  return nuxt.options._serverPlugins.map(entry => entry.plugin)
+}

@@ -20,6 +20,20 @@ Use the existing `withoutGlobalScope()` / `withoutGlobalScopes()` and `withTrash
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Framework peer dependencies
+
+Holo adapters now use your app's framework packages as peer dependencies instead of installing their own copies. Before you install 0.4.0, upgrade your framework to a release that fixes its published security advisories:
+
+| Adapter | Required in your app's `package.json` |
+| --- | --- |
+| `@holo-js/adapter-next` | `next` 16.3.8 or newer on the 16 line, and `react` |
+| `@holo-js/adapter-nuxt` | `nuxt` 4.5.1 or newer, and `vue` |
+| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 2.70.2 or newer, and `svelte` 5.56.8 or newer |
+
+`@holo-js/adapter-nuxt` no longer installs `h3` or `nitropack`. Its server routes and plugins use the h3 and Nitro that come with your Nuxt version. If your server code imports `h3` directly, list `h3` in your app's `package.json`. `@holo-js/adapter-sveltekit` no longer installs Svelte. It accepts any Svelte 5 release from 5.56.8 instead of one exact version.
+
+Holo's own dependencies now require patched releases too: `ws` 8.21.0, `sharp` 0.35.5, and `mysql2` 3.22.0 or newer. Your package manager installs these for you. If your lockfile pins older versions, refresh it after upgrading.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

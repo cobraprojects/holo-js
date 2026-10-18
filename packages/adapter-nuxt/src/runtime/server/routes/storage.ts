@@ -1,5 +1,5 @@
 import { createPublicStorageResponse } from '@holo-js/storage'
-import { defineEventHandler, sendWebResponse, toWebRequest } from 'h3'
+import { defineEventHandler, sendWebResponse, toWebRequest } from '#imports'
 import { holo } from '../../composables'
 
 export default defineEventHandler(async (event) => {

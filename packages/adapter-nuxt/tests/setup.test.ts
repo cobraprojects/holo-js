@@ -2,12 +2,12 @@ import type { ModuleOptions } from '../src/module'
 import type { TSReference, ViteConfig } from 'nuxt/schema'
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
-import { createNativeNuxt } from './support/nuxt'
+import { createNativeNuxt, registeredServerPlugins } from './support/nuxt'
 import {
   linkInstalledDependenciesForPackage,
   provisionTempPackage,
@@ -421,14 +421,16 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(output).toContain('Storage runtime is not configured')
   }, 60000)
 
-  it('publishes the init Nitro plugin with explicit Nitro runtime imports', async () => {
+  it('publishes Nitro runtime files that use the application Nitro and h3 through #imports', async () => {
     const build = await runAdapterStub()
+    const runtimeFiles = (await readdir(resolve(build.adapterOutDir, 'runtime'), { recursive: true }))
+      .filter(path => path.endsWith('.js'))
+    const sources = await Promise.all(runtimeFiles.map(path => readFile(resolve(build.adapterOutDir, 'runtime', path), 'utf8')))
 
-    const initPluginEntry = resolve(build.adapterOutDir, 'runtime/plugins/init.js')
-    const publishedPlugin = await readFile(initPluginEntry, 'utf8')
-
-    expect(publishedPlugin).toContain('from "nitropack/runtime/plugin"')
-    expect(publishedPlugin).toContain('from "nitropack/runtime/config"')
+    expect(await readFile(resolve(build.adapterOutDir, 'runtime/plugins/init.js'), 'utf8')).toContain('from "#imports"')
+    for (const source of sources) {
+      expect(source).not.toMatch(/(?:from|import\()\s*["'](?:h3|nitropack)(?:\/[^"']*)?["']/)
+    }
   }, 60000)
 
   it.each([
@@ -546,12 +548,12 @@ export default defineStorageConfig({
     expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/files')
     expect(nuxt.options.build.transpile).toContain(resolve(packageDir, 'src/runtime'))
     expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/files/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
-    expect(nuxt.options.nitro.plugins).toContain(resolve(packageDir, 'src/runtime/plugins/storage'))
-    expect(nuxt.options.nitro.plugins).toContain(resolve(packageDir, 'src/runtime/plugins/init'))
-    expect(nuxt.options.nitro.plugins).toContain(resolve(packageDir, 'src/runtime/plugins/forms'))
+    expect(registeredServerPlugins(nuxt)).toContain(resolve(packageDir, 'src/runtime/plugins/storage'))
+    expect(registeredServerPlugins(nuxt)).toContain(resolve(packageDir, 'src/runtime/plugins/init'))
+    expect(registeredServerPlugins(nuxt)).toContain(resolve(packageDir, 'src/runtime/plugins/forms'))
 
     const references: TSReference[] = []
-    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {} })
+    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], serverReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {}, serverTsConfig: {} })
     expect(references).toEqual([
       { types: '@holo-js/adapter-nuxt' },
       { path: join(root, '.holo-js/generated/auth.d.ts') },

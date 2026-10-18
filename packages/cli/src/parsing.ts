@@ -2,6 +2,7 @@ import { createInterface } from 'node:readline/promises'
 import {
   cancel as cancelPrompt,
   isCancel,
+  type CANCEL_SYMBOL,
   multiselect,
   select,
   text,
@@ -102,7 +103,7 @@ function promptOptions<TValue extends string>(
   })
 }
 
-function resolvePromptValue<TValue>(value: TValue | symbol): TValue {
+function resolvePromptValue<TValue>(value: TValue | typeof CANCEL_SYMBOL): TValue {
   if (isCancel(value)) {
     cancelPrompt('Command cancelled.')
     throw new Error('Command cancelled.')

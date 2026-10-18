@@ -7,6 +7,7 @@ import { afterEach, test } from 'node:test'
 import { promisify } from 'node:util'
 import {
   collectCatalogPackageCoverageFailures,
+  collectFrameworkRuntimeDependencyFailures,
   collectNodeEngineFailures,
   collectPackageManifestFailures,
   collectRootManifestFailures,
@@ -169,6 +170,20 @@ test('dependency policy validator requires package manifests to use catalog rang
   assert.equal(failures.length, 1)
   assert.match(failures[0], /@holo-js\/core/)
   assert.match(failures[0], /catalog:/)
+})
+
+test('dependency policy requires framework runtimes to be peers of published packages', async () => {
+  const repoRoot = await createTestScaffold({
+    'packages/adapter/package.json': ['{"name":"@holo-js/adapter","dependencies":{"svelte":"catalog:","h3":"catalog:","valibot":"catalog:"},"peerDependencies":{"nuxt":"catalog:"}}'],
+    'packages/client/package.json': ['{"name":"@holo-js/client","peerDependencies":{"vue":"catalog:"},"devDependencies":{"vue":"catalog:"}}'],
+  })
+  await trackTestFiles(repoRoot)
+
+  const failures = await collectFrameworkRuntimeDependencyFailures(repoRoot)
+
+  assert.equal(failures.length, 2)
+  assert.ok(failures.some(failure => failure.includes('dependencies.svelte') && failure.includes('peerDependencies')))
+  assert.ok(failures.some(failure => failure.includes('dependencies.h3')))
 })
 
 test('dependency policy validator ignores nested fixture manifests', async () => {

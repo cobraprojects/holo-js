@@ -1,4 +1,4 @@
-import { defineEventHandler } from 'h3'
+import { defineEventHandler } from '#imports'
 import { renderBroadcastClientConfigResponse } from '@holo-js/broadcast/client-config'
 import { holo } from '../../composables'
 

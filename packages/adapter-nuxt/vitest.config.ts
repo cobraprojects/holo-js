@@ -6,6 +6,7 @@ export default mergeConfig(workspaceTestConfig, defineConfig({
   resolve: {
     alias: {
       '#app': resolve(__dirname, 'tests/fixtures/nuxt-app.ts'),
+      '#imports': resolve(__dirname, 'tests/fixtures/nitro-imports.ts'),
     },
   },
   test: {

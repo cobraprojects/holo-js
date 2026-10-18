@@ -1,4 +1,4 @@
-import { defineNitroPlugin } from 'nitropack/runtime/plugin'
+import { defineNitroPlugin } from '#imports'
 import {
   applyFormFailureRedirect,
   getFormFailurePayload,

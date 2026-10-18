@@ -10,18 +10,6 @@
       "#imports": [
         "./src/runtime/shims.d.ts"
       ],
-      "nitropack/runtime/config": [
-        "./src/runtime/shims.d.ts"
-      ],
-      "nitropack/runtime/context": [
-        "./src/runtime/shims.d.ts"
-      ],
-      "nitropack/runtime/plugin": [
-        "./src/runtime/shims.d.ts"
-      ],
-      "nitropack/runtime/storage": [
-        "./src/runtime/shims.d.ts"
-      ],
       "@holo-js/broadcast/client-config": [
         "../broadcast/src/client-config.ts"
       ],

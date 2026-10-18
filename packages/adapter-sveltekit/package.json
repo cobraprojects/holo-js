@@ -58,13 +58,13 @@
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
     "@holo-js/kernel": "catalog:",
-    "@holo-js/validation": "catalog:",
-    "svelte": "catalog:"
+    "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/forms": "catalog:",
     "@holo-js/realtime": "catalog:",
-    "@sveltejs/kit": "catalog:"
+    "@sveltejs/kit": "catalog:",
+    "svelte": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/forms": {
@@ -80,7 +80,8 @@
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "svelte": "catalog:"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"

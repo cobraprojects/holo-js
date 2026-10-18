@@ -4,7 +4,6 @@ import {
   initializeHoloAdapterProject,
   type CreateHoloOptions,
 } from '@holo-js/core'
-import { createNuxtAuthorizationError } from '../authorization-error'
 
 type RuntimeConfigShape = {
   holo: {
@@ -43,11 +42,8 @@ export type NuxtAuthRequestEvent = {
   }
 }
 
-type NitroContextModule = {
+type NitroRuntimeImports = {
   readonly useEvent: () => NuxtAuthRequestEvent | undefined
-}
-
-type H3RedirectModule = {
   readonly sendRedirect: (
     event: NuxtAuthRequestEvent,
     location: string,
@@ -87,8 +83,8 @@ function resolveRuntimeProjectRoot(config: RuntimeConfigShape): string {
   return config.holo.projectRoot?.trim() || process.cwd()
 }
 
-async function loadNitroContextModule(): Promise<NitroContextModule> {
-  return await import('nitropack/runtime/context') as NitroContextModule
+async function loadNitroRuntimeImports(): Promise<NitroRuntimeImports> {
+  return await import('#imports') as unknown as NitroRuntimeImports
 }
 
 export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEvent) {
@@ -101,7 +97,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   async function readHeader(name: string): Promise<string | undefined> {
-    const event = requestEvent ?? (await loadNitroContextModule()).useEvent()
+    const event = requestEvent ?? (await loadNitroRuntimeImports()).useEvent()
 
     if (!event) {
       return undefined
@@ -156,7 +152,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   async function appendCookie(cookie: string): Promise<void> {
-    const event = requestEvent ?? (await loadNitroContextModule()).useEvent()
+    const event = requestEvent ?? (await loadNitroRuntimeImports()).useEvent()
     const response = event?.node?.res
     if (!response) {
       return
@@ -189,12 +185,12 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   const redirectResponse: NonNullable<CreateHoloOptions['authRequest']>['redirectResponse'] = async (url, status) => {
-    const event = requestEvent ?? (await loadNitroContextModule()).useEvent()
+    const event = requestEvent ?? (await loadNitroRuntimeImports()).useEvent()
     if (!event) {
       throw new TypeError('Holo Nuxt auth redirect requires an active Nitro event.')
     }
 
-    const { sendRedirect } = await import('h3') as unknown as H3RedirectModule
+    const { sendRedirect } = await loadNitroRuntimeImports()
     await sendRedirect(event, url, status)
   }
 
@@ -216,6 +212,7 @@ export async function runWithNuxtRequest<TValue>(event: NuxtAuthRequestEvent, ca
 export const holo = createHoloProjectAccessors(async () => {
   const config = getRuntimeConfig()
   const authRequest = createNuxtAuthRequestAccessors()
+  const { createNuxtAuthorizationError } = await import('../authorization-error')
   const project = await initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
     envName: resolveRuntimeEnvName(config.holo.appEnv),
     preferCache: process.env.NODE_ENV === 'production',

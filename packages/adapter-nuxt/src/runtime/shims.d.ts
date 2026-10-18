@@ -38,7 +38,7 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
  * Minimal Nuxt runtime shims for adapter typechecking.
  *
  * Keep these declarations limited to the fields consumed by adapter runtime code:
- * runtime config, storage access, and Nitro route/plugin globals.
+ * runtime config, storage access, and Nitro route/plugin `#imports`.
  */
 declare module '#app' {
   export function defineNuxtPlugin<T>(plugin: T): T
@@ -49,22 +49,19 @@ declare module '#app' {
 declare module '#imports' {
   export function useRuntimeConfig(): HoloRuntimeConfig
   export function useStorage(base: string): unknown
-}
-
-declare module 'nitropack/runtime/config' {
-  export function useRuntimeConfig(): HoloRuntimeConfig
-}
-
-declare module 'nitropack/runtime/context' {
   export function useEvent(): import('h3').H3Event
-}
-
-declare module 'nitropack/runtime/plugin' {
   export function defineNitroPlugin<T>(plugin: T): T
-}
-
-declare module 'nitropack/runtime/storage' {
-  export function useStorage(base: string): unknown
+  export const createError: typeof import('h3').createError
+  export const defineEventHandler: typeof import('h3').defineEventHandler
+  export const getHeaders: typeof import('h3').getHeaders
+  export const getRequestURL: typeof import('h3').getRequestURL
+  export const readRawBody: typeof import('h3').readRawBody
+  export const send: typeof import('h3').send
+  export const sendRedirect: typeof import('h3').sendRedirect
+  export const sendWebResponse: typeof import('h3').sendWebResponse
+  export const setHeader: typeof import('h3').setHeader
+  export const setResponseStatus: typeof import('h3').setResponseStatus
+  export const toWebRequest: typeof import('h3').toWebRequest
 }
 
 declare global {
