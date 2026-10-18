@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { getRootDatabaseContext } from './core/contextOwnership'
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -755,7 +756,7 @@ async function notifyDatabaseDependencyInvalidationListeners(
     try {
       await listener(event)
     } catch (error) {
-      console.error('[@holo-js/db] Database dependency invalidation listener failed.', error)
+      reportError(error, { capability: 'db', operation: 'cache.invalidationListener' })
     }
   }))
 }

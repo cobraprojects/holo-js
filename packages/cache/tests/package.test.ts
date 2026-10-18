@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
 import { createFileCacheDriver } from '../src/file'
 import { createMemoryCacheDriver } from '../src/memory'
+import { createLazyOptionalCacheDriver } from '../src/optional-driver'
 import { composeRegisteredConfig } from '@holo-js/config/registry'
 import { createFlexibleEnvelope, resolveFlexibleCachedValue } from '../src/flexible'
 import cache, {
@@ -164,7 +166,13 @@ describe('@holo-js/cache package surface', () => {
     })
   })
 
-  it('returns stale flexible values when background refresh lock acquisition fails', async () => {
+  it('returns stale flexible values and reports a late background refresh failure to the reporter active when it started', async () => {
+    const report = vi.fn()
+    const laterReport = vi.fn()
+    let failRefresh: (() => void) | undefined
+    errorReportingInternals.configure({ report })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
+    const lockError = new Error('lock failed')
     const cached = createFlexibleEnvelope({ freshSeconds: 1, staleSeconds: 10 }, 'stale', 0)
     const value = await resolveFlexibleCachedValue({
       ttl: [1, 10],
@@ -173,13 +181,17 @@ describe('@holo-js/cache package surface', () => {
       refresh: async () => 'fresh',
       createLock: () => ({
         name: 'refresh',
-        get: async () => { throw new Error('lock failed') },
+        get: () => new Promise<boolean>((_resolve, reject) => { failRefresh = () => reject(lockError) }),
         release: async () => true,
         block: async () => false,
       }),
     })
+    errorReportingInternals.configure({ report: laterReport })
+    failRefresh?.()
 
     expect(value).toBe('stale')
+    await vi.waitFor(() => expect(report).toHaveBeenCalledExactlyOnceWith(lockError, { capability: 'cache', operation: 'flexible.refresh' }))
+    expect(laterReport).not.toHaveBeenCalled()
   })
 
   it('forgets and flushes cache values without a dependency index', async () => {
@@ -2544,12 +2556,15 @@ export default new PluginCacheDriver()
     await expect(read).rejects.toThrow('load failed')
   })
 
-  it('continues disposing runtime drivers when one driver dispose hook throws', () => {
+  it('continues disposing runtime drivers and reports sync and async dispose failures', async () => {
+    const disposeError = new Error('first dispose failed')
+    const asyncDisposeError = new Error('second dispose rejected')
     const firstDispose = vi.fn(() => {
-      throw new Error('first dispose failed')
+      throw disposeError
     })
-    const secondDispose = vi.fn()
-    const reportError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const secondDispose = vi.fn(() => Promise.reject(asyncDisposeError))
+    const report = vi.fn()
+    errorReportingInternals.configure({ report })
     const driver = {
       name: 'first',
       driver: 'memory' as const,
@@ -2616,13 +2631,42 @@ export default new PluginCacheDriver()
       expect(() => resetCacheRuntime()).not.toThrow()
       expect(firstDispose).toHaveBeenCalledTimes(1)
       expect(secondDispose).toHaveBeenCalledTimes(1)
-      expect(reportError).toHaveBeenCalledWith(
-        expect.stringContaining('first'),
-        expect.any(Error),
-      )
+      await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(2))
+      expect(report.mock.calls).toEqual([
+        [disposeError, { capability: 'cache', operation: 'driver.dispose' }],
+        [asyncDisposeError, { capability: 'cache', operation: 'driver.dispose' }],
+      ])
     } finally {
-      reportError.mockRestore()
+      errorReportingInternals.configure(undefined)
     }
+  })
+
+  it('reports late lazy-driver dispose failures to the reporter active when disposal started', async () => {
+    const report = vi.fn()
+    const laterReport = vi.fn()
+    errorReportingInternals.configure({ report })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
+    const disposeError = new Error('late dispose failed')
+    let finishLoading: (() => void) | undefined
+    const lazyDriver = createLazyOptionalCacheDriver({
+      name: 'lazy',
+      driver: 'memory',
+      options: {},
+      disposeDriver: true,
+      loadModule: () => new Promise<void>((resolve) => { finishLoading = resolve }),
+      createDriver: () => Object.assign(createMemoryCacheDriver({ name: 'lazy' }), {
+        [cacheDriverDisposeSymbol]: () => Promise.reject(disposeError),
+      }),
+    })
+    const read = lazyDriver.get('key')
+    const dispose = (lazyDriver as typeof lazyDriver & { [cacheDriverDisposeSymbol]: () => void })[cacheDriverDisposeSymbol]
+    dispose.call(lazyDriver)
+    errorReportingInternals.configure({ report: laterReport })
+    finishLoading?.()
+    await read
+
+    await vi.waitFor(() => expect(report).toHaveBeenCalledExactlyOnceWith(disposeError, { capability: 'cache', operation: 'driver.dispose' }))
+    expect(laterReport).not.toHaveBeenCalled()
   })
 
   it('requires database cache drivers to resolve named connections from config/database.ts', () => {

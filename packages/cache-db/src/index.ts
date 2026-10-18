@@ -624,9 +624,7 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
   }
   Object.defineProperty(driver, Symbol.for('holo.cache.driver.dispose'), {
     value() {
-      void connection.disconnect().catch(error => {
-        console.error(`[@holo-js/cache-db] Failed to disconnect cache driver "${options.name}".`, error)
-      })
+      return connection.disconnect()
     },
   })
   return driver

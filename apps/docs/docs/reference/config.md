@@ -76,6 +76,7 @@ export default defineAppConfig({
 | `debug` | `true` | Show detailed errors. Set to `false` in production. |
 | `env` | `'development'` | `'development'`, `'production'`, or `'test'`. |
 | `plugins` | `[]` | Active [plugin](/advanced/plugins) package names. `holo plugin:add` and `plugin:remove` edit this list. |
+| `exceptions` | `{}` | `report(error, { capability, operation })` receives errors Holo catches in background work and your `report()` calls. `dontReport` lists error classes to skip. See [Reporting errors](/basics/errors#reporting-errors). |
 | `paths` | see below | Where Holo looks for your files. |
 
 ### paths

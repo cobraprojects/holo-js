@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import {
   DB, collectDatabaseQueryDependencies, column, configureDB, createConnectionManager,
@@ -240,12 +241,17 @@ describe('native database and cache integration', () => {
     expect(await DB.table(users).where('id', 1).value('name')).toBe('Ava')
   })
 
-  it('keeps subsequent subscribers working when one invalidation subscriber fails', async () => {
+  it('reports a failing invalidation subscriber and keeps subsequent subscribers working', async () => {
+    const reports: Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> = []
+    errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
+    const subscriberError = new Error('subscriber failed')
     const received: string[] = []
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated(() => { received.push('failing'); throw new Error('subscriber failed') })
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated(() => { received.push('failing'); throw subscriberError })
     queryCacheInternals.onDatabaseDependencyInvalidated(() => { received.push('healthy') })
     await DB.table(users).where('id', 1).update({ score: 11 })
     expect(received).toEqual(['failing', 'healthy'])
+    expect(reports).toEqual([{ error: subscriberError, context: { capability: 'db', operation: 'cache.invalidationListener' } }])
     unsubscribe()
     await DB.table(users).where('id', 1).update({ score: 12 })
     expect(received).toEqual(['failing', 'healthy', 'healthy'])

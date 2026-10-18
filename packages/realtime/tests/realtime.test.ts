@@ -3,6 +3,7 @@ import { createPostgresAdapter } from '../../db-postgres/src'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import {
   createDatabase,
   createDialect,
@@ -5609,13 +5610,15 @@ describe('@holo-js/realtime', () => {
     expect(firstSnapshots.at(-1)).toEqual(secondSnapshots.at(-1))
   })
 
-  it('isolates user subscription callback failures while refreshing matching subscriptions', async () => {
+  it('isolates and reports user subscription callback failures while refreshing matching subscriptions', async () => {
     const adapter = await createPostsAdapter()
     const db = await createContext(adapter)
     configureRealtimeRuntime({
       db: () => db,
     })
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const reports: Array<{ readonly message: unknown, readonly context: HoloErrorReportContext }> = []
+    errorReportingInternals.configure({ report: (error, context) => { reports.push({ message: error instanceof Error ? error.message : error, context }) } })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
     let shouldFailQuery = false
     let shouldFailOnData = false
     const snapshots: unknown[][] = []
@@ -5673,14 +5676,11 @@ describe('@holo-js/realtime', () => {
       { id: 1, title: 'First' },
       { id: 2, title: 'Next' },
     ])
-    expect(consoleError).toHaveBeenCalledWith(
-      '[@holo-js/realtime] Realtime subscription onData callback failed.',
-      expect.any(Error),
-    )
-    expect(consoleError).toHaveBeenCalledWith(
-      '[@holo-js/realtime] Realtime subscription onError callback failed.',
-      expect.any(Error),
-    )
+    expect(reports).toEqual(expect.arrayContaining([
+      { message: 'onData failed', context: { capability: 'realtime', operation: 'subscription.onData' } },
+      { message: 'onError failed', context: { capability: 'realtime', operation: 'subscription.onError' } },
+    ]))
+    expect(reports).toHaveLength(2)
   })
 
   it('patches ordered belongs-to-many relation queries when related rows are attached without rerunning the handler', async () => {

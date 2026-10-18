@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import {
   clearQueueConnection,
   configureQueueRuntime,
@@ -27,7 +28,10 @@ async function openWorker() {
   return { ...harness, enqueue }
 }
 
-afterEach(() => resetQueueRegistry())
+afterEach(() => {
+  resetQueueRegistry()
+  errorReportingInternals.configure(undefined)
+})
 
 describe('@holo-js/queue native worker behavior', () => {
   it.each(['acknowledge', 'release', 'persist', 'delete'] as const)('stops on a native %s failure without running finalization observers', async operation => {
@@ -140,7 +144,13 @@ describe('@holo-js/queue native worker behavior', () => {
     expect(events).toEqual(['failed', 'worker-failed'])
   })
 
-  it.each(['processed', 'released', 'failed'] as const)('keeps the native %s result settled when its observer throws', async outcome => {
+  it.each([
+    ['processed', 'worker.onJobProcessed'],
+    ['released', 'worker.onJobReleased'],
+    ['failed', 'worker.onJobFailed'],
+  ] as const)('keeps the native %s result settled and reports its throwing observer', async (outcome, operation) => {
+    const reports: HoloErrorReportContext[] = []
+    errorReportingInternals.configure({ report: (_error, context) => { reports.push(context) } })
     const harness = await openWorker()
     let handles = 0
     registerQueueJob({ async handle(_payload, context) {
@@ -154,6 +164,7 @@ describe('@holo-js/queue native worker behavior', () => {
     expect(handles).toBe(1)
     expect(await harness.readJobRows()).toHaveLength(outcome === 'released' ? 1 : 0)
     expect(await listFailedQueueJobs()).toHaveLength(outcome === 'failed' ? 1 : 0)
+    expect(reports).toEqual([{ capability: 'queue', operation }])
   })
 
   it('stops at max jobs and leaves the next real job queued', async () => {

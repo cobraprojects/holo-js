@@ -1,4 +1,5 @@
 export * from './adapter'
+export { report } from './report'
 export type {
   CreateHoloOptions,
   HoloAuthRuntimeBinding,

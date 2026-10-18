@@ -29,6 +29,7 @@ import type {} from '@holo-js/security/config'
 import type {} from '@holo-js/session/config'
 import type {} from '@holo-js/storage/config'
 import { createRuntimeLifecycle } from '@holo-js/kernel'
+import { errorReportingInternals, type HoloExceptionsConfig } from '@holo-js/kernel/error-reporting'
 import {
   config as globalConfig,
   configureConfigRuntime,
@@ -113,6 +114,7 @@ import {
 } from './featureDetection'
 import {
   createRuntimeStateAccessors,
+  type HoloRuntimeTransitionPhase,
   type OptionalSubsystemRuntimeBindings,
 } from './runtimeState'
 
@@ -1890,6 +1892,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
   let activeAuthContext: RuntimeAuthContext | undefined
   let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
+  let previousExceptions: HoloExceptionsConfig | undefined
   const previousRenderView = options.renderView
     ? getHoloRenderingRuntime().renderView
     : undefined
@@ -1974,6 +1977,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       name: 'configuration',
       async initialize() {
         configureConfigRuntime(loadedConfig.all)
+        previousExceptions = errorReportingInternals.configure(loadedConfig.app.exceptions)
         await preloadGeneratedSchemaModule(projectRoot, registry)
         await preloadDiscoveredModelModules(projectRoot, registry)
         previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
@@ -1986,6 +1990,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       },
       dispose() {
         if (options.renderView) restoreHoloRenderingRuntime(previousRenderView)
+        errorReportingInternals.configure(previousExceptions)
         resetConfigRuntime()
       },
     },
@@ -2065,19 +2070,54 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     },
     async initialize() {
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')
-      if (getRuntimeState().current) throw new Error('A Holo runtime is already initialized for this process.')
-      await runtimeLifecycle.initialize({ projectRoot })
-      runtime.initialized = true
-      getRuntimeState().current = runtime
+      const state = getRuntimeState()
+      if (state.current) throw new Error('A Holo runtime is already initialized for this process.')
+      if (state.transition) throw new Error(runtimeTransitionConflicts[state.transition.phase])
+      await runWithinRuntimeTransition(runtime, 'initializing', async () => {
+        await runtimeLifecycle.initialize({ projectRoot })
+        runtime.initialized = true
+        state.current = runtime
+      })
     },
     async shutdown() {
+      const state = getRuntimeState()
+      if (state.transition?.runtime === runtime) {
+        const { phase, settled } = state.transition
+        await settled
+        if (phase === 'initializing') await runtime.shutdown()
+        return
+      }
       runtime.initialized = false
-      if (getRuntimeState().current === runtime) getRuntimeState().current = undefined
-      await runtimeLifecycle.dispose({ projectRoot })
+      if (state.current !== runtime) {
+        await runtimeLifecycle.dispose({ projectRoot })
+        return
+      }
+      state.current = undefined
+      await runWithinRuntimeTransition(runtime, 'shuttingDown', () => runtimeLifecycle.dispose({ projectRoot }))
     },
   }
 
   return runtime
+}
+
+const runtimeTransitionConflicts: Readonly<Record<HoloRuntimeTransitionPhase, string>> = {
+  initializing: 'A Holo runtime is already initializing for this process.',
+  shuttingDown: 'A Holo runtime is still shutting down for this process.',
+}
+
+async function runWithinRuntimeTransition(
+  runtime: HoloRuntime,
+  phase: HoloRuntimeTransitionPhase,
+  transition: () => Promise<void>,
+): Promise<void> {
+  const state = getRuntimeState()
+  const transitionAfterSlotIsRecorded = Promise.resolve().then(transition)
+  state.transition = { runtime, phase, settled: transitionAfterSlotIsRecorded.then(() => undefined, () => undefined) }
+  try {
+    await transitionAfterSlotIsRecorded
+  } finally {
+    if (state.transition?.runtime === runtime) state.transition = undefined
+  }
 }
 
 export async function reconfigureHoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap>(
@@ -2094,6 +2134,8 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
   projectRoot: string,
   options: CreateHoloOptions = {},
 ): Promise<HoloRuntime<TCustom>> {
+  const pendingShutdown = pendingRuntimeShutdown()
+  if (pendingShutdown) await pendingShutdown
   const state = getRuntimeState()
   const resolvedProjectRoot = resolve(projectRoot)
   const current = state.current as HoloRuntime<TCustom> | undefined
@@ -2175,7 +2217,14 @@ export function getHolo<TCustom extends HoloConfigMap = HoloConfigMap>(): HoloRu
   return current
 }
 
+function pendingRuntimeShutdown(): Promise<void> | undefined {
+  const transition = getRuntimeState().transition
+  return transition?.phase === 'shuttingDown' ? transition.settled : undefined
+}
+
 export async function resetHoloRuntime(): Promise<void> {
+  const pendingShutdown = pendingRuntimeShutdown()
+  if (pendingShutdown) await pendingShutdown
   const current = getRuntimeState().current
   const projectRoot = current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   getRuntimeState().pending = undefined

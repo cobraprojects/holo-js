@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
 import { createHash, createHmac } from 'node:crypto'
@@ -273,7 +274,7 @@ async function clearSharedPasswordResetThrottleReservation(
     await sharedReservation.store.clear(sharedReservation.key)
     return 'cleared'
   } catch (error) {
-    console.warn('[@holo-js/auth] Failed to clear a password reset reservation after use.', error)
+    reportError(error, { capability: 'auth', operation: 'passwordReset.clearReservation' })
     return 'failed'
   }
 }
@@ -1459,7 +1460,7 @@ async function verifyCredentialWithRateLimit(
   try {
     await rateLimit.clear()
   } catch (error) {
-    console.warn('[@holo-js/auth] Failed to clear a multi-factor rate limit after successful verification.', error)
+    reportError(error, { capability: 'auth', operation: 'multiFactor.clearRateLimit' })
   }
   return verification
 }
@@ -1527,7 +1528,7 @@ async function completeMultiFactorChallenge(
   try {
     await rateLimit.clear()
   } catch (error) {
-    console.warn('[@holo-js/auth] Failed to clear a multi-factor rate limit after successful verification.', error)
+    reportError(error, { capability: 'auth', operation: 'multiFactor.clearRateLimit' })
   }
   try {
     return await establishSessionForUser(state.payload.user, {
@@ -1639,7 +1640,7 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
       try {
         await writeEnrollment(state, guardName)
       } catch (error) {
-        console.warn('[@holo-js/auth] Failed to clear a completed multi-factor enrollment from the session.', error)
+        reportError(error, { capability: 'auth', operation: 'multiFactor.clearEnrollment' })
       }
       return recoveryResult(recoveryCodes)
     },

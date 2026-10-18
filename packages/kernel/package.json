@@ -11,6 +11,12 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./error-reporting": {
+      "@holo-js/source": "./src/errorReporting.ts",
+      "types": "./dist/error-reporting.d.ts",
+      "import": "./dist/error-reporting.mjs",
+      "default": "./dist/error-reporting.mjs"
+    },
     "./http-errors": {
       "@holo-js/source": "./src/httpErrors.ts",
       "types": "./dist/http-errors.d.ts",

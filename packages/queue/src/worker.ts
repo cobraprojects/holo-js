@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import type {
   QueueAsyncDriver,
@@ -133,20 +134,18 @@ function resolveRetryDelaySeconds(
   return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)]
 }
 
-function normalizeHookError(error: unknown): Error {
+function normalizeHandlerError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
 
 async function runWorkerHook(
-  jobName: string,
   hookName: 'onJobFailed' | 'onJobProcessed' | 'onJobReleased',
   callback: () => void | Promise<void>,
 ): Promise<void> {
   try {
     await callback()
   } catch (error) {
-    const resolvedError = normalizeHookError(error)
-    console.warn(`[Holo Queue] ${hookName} hook failed for job "${jobName}": ${resolvedError.message}`)
+    reportError(error, { capability: 'queue', operation: `worker.${hookName}` })
   }
 }
 
@@ -221,7 +220,7 @@ async function processReservedJob(
       },
     )
   } catch (error) {
-    handlerError = normalizeHookError(error)
+    handlerError = normalizeHandlerError(error)
   }
 
   const failure = handlerError instanceof QueueWorkerTimeoutError
@@ -252,7 +251,7 @@ async function processReservedJob(
   if (outcome.kind === 'released') {
     await driver.release(reserved, typeof outcome.delaySeconds === 'number' ? { delaySeconds: outcome.delaySeconds } : undefined)
     if (options.onJobReleased) {
-      await runWorkerHook(envelope.name, 'onJobReleased', async () => {
+      await runWorkerHook('onJobReleased', async () => {
         await options.onJobReleased?.({
           ...event,
           ...(typeof outcome.delaySeconds === 'number' ? { delaySeconds: outcome.delaySeconds } : {}),
@@ -265,14 +264,14 @@ async function processReservedJob(
     await driver.delete(reserved)
     await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(envelope, outcome.error, { maxAttempts })
     if (options.onJobFailed) {
-      await runWorkerHook(envelope.name, 'onJobFailed', async () => {
+      await runWorkerHook('onJobFailed', async () => {
         await options.onJobFailed?.({ ...event, error: outcome.error })
       })
     }
   } else {
     await driver.acknowledge(reserved)
     if (options.onJobProcessed) {
-      await runWorkerHook(envelope.name, 'onJobProcessed', async () => {
+      await runWorkerHook('onJobProcessed', async () => {
         await options.onJobProcessed?.(event)
       })
     }

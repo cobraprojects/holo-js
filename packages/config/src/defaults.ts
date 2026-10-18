@@ -18,6 +18,7 @@ export const holoAppDefaults: Readonly<NormalizedHoloAppConfig> = Object.freeze(
   debug: true,
   env: 'development',
   plugins: Object.freeze([]),
+  exceptions: Object.freeze({}),
   paths: Object.freeze({ ...DEFAULT_HOLO_PROJECT_PATHS }),
   models: Object.freeze([]),
   migrations: Object.freeze([]),
@@ -62,6 +63,7 @@ export function normalizeAppConfig(
     plugins: Object.freeze([...new Set((config.plugins ?? [])
       .map(plugin => plugin.trim())
       .filter(plugin => plugin.length > 0))]),
+    exceptions: Object.freeze({ ...config.exceptions }),
     paths: project.paths,
     models: project.models,
     migrations: project.migrations,
