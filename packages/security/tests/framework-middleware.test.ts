@@ -2,20 +2,19 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { createApp, defineEventHandler, getResponseHeader, readRawBody, toNodeListener, toWebHandler } from 'h3'
 import { NextRequest } from 'next/server.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } from '../src'
 import { csrfProtection as nextCsrfProtection } from '../src/next/server'
 import { csrfProtection as nuxtCsrfProtection } from '../src/nuxt/server'
 
-function configureSecurity(enabled = true): void {
+function configureSecurity(enabled = true, trustedProxies: readonly string[] | '*' = []): void {
   configureSecurityRuntime({
-    config: defineSecurityConfig({ csrf: { enabled, except: ['/webhooks/*'] } }),
+    config: defineSecurityConfig({ csrf: { enabled, except: ['/webhooks/*'] }, trustedProxies }),
     csrfSigningKey: 'native-middleware-test-key',
   })
 }
 
 afterEach(() => {
-  vi.unstubAllEnvs()
   resetSecurityRuntime()
 })
 
@@ -73,8 +72,7 @@ describe('native csrf middleware', () => {
     { 'x-forwarded-proto': 'wss' },
     { 'x-forwarded-host': 'a b' },
   ])('answers malformed trusted proxy headers %j with a bad request', async (headers) => {
-    configureSecurity()
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    configureSecurity(true, '*')
     for (const method of ['GET', 'HEAD']) {
       const nextResponse = await nextCsrfProtection()(new NextRequest('https://app.test/page', { method, headers }))
       expect(nextResponse?.status).toBe(400)

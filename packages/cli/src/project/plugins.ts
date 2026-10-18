@@ -282,13 +282,18 @@ function normalizeFrameworkContribution(value: unknown): FrameworkDescriptor | u
       suppressSvelteKitOutput: value.runner.suppressSvelteKitOutput,
       nextDevServerConflictHandling: value.runner.nextDevServerConflictHandling,
     },
-    capabilities: {
-      managedBroadcastAuthRoute: value.capabilities.managedBroadcastAuthRoute,
-    },
+    capabilities: pluginFrameworkCapabilities(value.capabilities.managedBroadcastAuthRoute),
     ...(sync ? { sync } : {}),
   }
 
   return Object.freeze(descriptor)
+}
+
+function pluginFrameworkCapabilities(managedBroadcastAuthRoute: boolean): FrameworkDescriptor['capabilities'] {
+  return Object.freeze({
+    managedBroadcastAuthRoute,
+    exposesConnectionAddress: true,
+  })
 }
 
 function normalizeFrameworkSync(value: unknown): FrameworkSync | undefined {
@@ -701,7 +706,7 @@ export async function loadProjectPluginFrameworkDescriptors(projectRoot: string)
     }
 
     ids.add(descriptor.id)
-    descriptors.push(descriptor)
+    descriptors.push(Object.freeze({ ...descriptor, capabilities: pluginFrameworkCapabilities(descriptor.capabilities.managedBroadcastAuthRoute) }))
   }
 
   return Object.freeze(descriptors)

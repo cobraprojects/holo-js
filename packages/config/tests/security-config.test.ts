@@ -114,6 +114,7 @@ describe('@holo-js/config security normalization', () => {
           },
         },
       },
+      trustedProxies: [],
     })
   })
 
@@ -145,6 +146,7 @@ describe('@holo-js/config security normalization', () => {
         },
         limiters: {},
       },
+      trustedProxies: [],
     })
     expect(normalizeSecurityConfig({
       csrf: true,
@@ -273,6 +275,7 @@ describe('@holo-js/config security normalization', () => {
         },
         limiters: {},
       },
+      trustedProxies: [],
     })
 
     expect(() => normalizeSecurityConfig({

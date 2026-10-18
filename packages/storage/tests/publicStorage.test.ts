@@ -211,6 +211,8 @@ describe('createPublicStorageResponse', () => {
       '/storage',
       '/storage/%2e%2e/secret.txt',
       '/storage/%2Fetc/passwd',
+      '/storage/%5Csecret.txt',
+      '/storage/secret%00.txt',
       '/storage/%E0%A4%A',
       '/storage/missing.txt',
     ]

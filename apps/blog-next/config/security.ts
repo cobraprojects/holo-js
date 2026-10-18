@@ -1,6 +1,7 @@
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 
 export default defineSecurityConfig({
+  trustedProxies: '*',
   csrf: {
     enabled: true,
     field: '_token',
@@ -25,7 +26,7 @@ export default defineSecurityConfig({
           ? values.email.trim().toLowerCase()
           : 'unknown'
 
-        return `email:${email}|client:${ip(request, true)}`
+        return `email:${email}|client:${ip(request)}`
       }),
     },
   },

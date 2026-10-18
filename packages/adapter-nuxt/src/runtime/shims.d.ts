@@ -56,7 +56,7 @@ declare module 'nitropack/runtime/config' {
 }
 
 declare module 'nitropack/runtime/context' {
-  export function useEvent(): unknown
+  export function useEvent(): import('h3').H3Event
 }
 
 declare module 'nitropack/runtime/plugin' {

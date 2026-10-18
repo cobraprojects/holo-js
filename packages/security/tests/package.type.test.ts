@@ -29,7 +29,7 @@ describe('@holo-js/security typing', () => {
         : false
 
     const login = limit.perMinute(5).by(({ request, values }) => {
-      const derivedIp: string = ip(request, true)
+      const derivedIp: string = ip(request)
       const email = values?.email
       void derivedIp
       return `${derivedIp}:${String(email ?? 'guest')}`

@@ -4,13 +4,16 @@ import {
 } from '../composables'
 import { createNuxtAuthorizationError } from '../authorization-error'
 import { initializeHoloAdapterProject } from '@holo-js/core'
+import { requestUrlInternals } from '@holo-js/kernel'
 import { useRuntimeConfig } from 'nitropack/runtime/config'
+import { useEvent } from 'nitropack/runtime/context'
 import { defineNitroPlugin } from 'nitropack/runtime/plugin'
 import type { NitroApp } from 'nitropack/types'
 
 export default defineNitroPlugin((nitroApp: NitroApp) => {
   const config = useRuntimeConfig()
   configureHoloRuntimeConfig(config)
+  requestUrlInternals.provideConnectionAddress(() => useEvent().node.req.socket.remoteAddress)
 
   const project = initializeHoloAdapterProject(config.holo.projectRoot?.trim() || process.cwd(), {
     envName: config.holo.appEnv,

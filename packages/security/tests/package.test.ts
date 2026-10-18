@@ -1,8 +1,8 @@
 import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { normalizeRedisConfig } from '@holo-js/kernel'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { normalizeRedisConfig, requestUrlInternals } from '@holo-js/kernel'
 import { composeRegisteredConfig } from '@holo-js/config/registry'
 import * as securityExports from '../src'
 import security, {
@@ -123,9 +123,16 @@ function createMockRateLimitStore(now = new Date('2026-04-16T12:00:00.000Z')): S
   }
 }
 
+const connectionAddress = '198.51.100.20'
+
+beforeEach(() => {
+  requestUrlInternals.provideConnectionAddress(() => connectionAddress)
+})
+
 afterEach(() => {
   vi.unstubAllEnvs()
   resetSecurityRuntime()
+  requestUrlInternals.provideConnectionAddress(undefined)
 })
 
 afterEach(async () => {
@@ -184,7 +191,7 @@ describe('@holo-js/security package surface', () => {
 
   it('exports the package helpers and runtime seam', async () => {
     const limiter = limit.perMinute(5).by(({ request, values }) => {
-      return `${ip(request, true)}:${String(values?.email ?? 'guest')}`
+      return `${ip(request)}:${String(values?.email ?? 'guest')}`
     })
     const config = defineSecurityConfig({
       csrf: {
@@ -406,50 +413,12 @@ describe('@holo-js/security package surface', () => {
     expect(typeof redisAdapterModule.createSecurityRedisAdapter).toBe('function')
   })
 
-  it('derives request ip and validates limiter builders', () => {
-    const request = new Request('https://app.test/login', {
-      headers: {
-        'x-forwarded-for': '203.0.113.7, 203.0.113.8',
-      },
-    })
-
-    expect(ip(request)).toBe('unknown')
-    expect(ip(request, true)).toBe('203.0.113.7')
+  it('validates limiter builders', () => {
     expect(limit.perHour(10).define()).toEqual({
       maxAttempts: 10,
       decaySeconds: 3600,
     })
     expect(() => limit.perMinute(0)).toThrow('greater than or equal to 1')
-  })
-
-  it('keys guest rate limits by the client address from the trusted proxy header family', async () => {
-    configureSecurityRuntime({ config: defineSecurityConfig({}) })
-    const request = new Request('https://app.test/login', {
-      headers: {
-        forwarded: 'for="[2001:db8::7]:4711";proto=https, for=203.0.113.8',
-        'x-forwarded-for': '198.51.100.1',
-      },
-    })
-
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
-    await expect(defaultRateLimitKey(request)).resolves.toBe('ip:2001:db8::7')
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
-    await expect(defaultRateLimitKey(request)).resolves.toBe('ip:198.51.100.1')
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'false')
-    await expect(defaultRateLimitKey(request)).resolves.toBe('ip:unknown')
-  })
-
-  it.each([
-    ['for="[2001:db8::7]:4711"', 'ip:2001:db8::7'],
-    ['for=192.0.2.43:47011', 'ip:192.0.2.43'],
-    ['for=192.0.2.43', 'ip:192.0.2.43'],
-    ['for=unknown', 'ip:unknown'],
-    ['for=_hidden', 'ip:unknown'],
-    ['proto=https', 'ip:unknown'],
-  ])('keys Forwarded clients by bare address, ignoring ports and obfuscated identifiers: %s', async (forwarded, key) => {
-    configureSecurityRuntime({ config: defineSecurityConfig({}) })
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
-    await expect(defaultRateLimitKey(new Request('https://app.test/login', { headers: { forwarded } }))).resolves.toBe(key)
   })
 
   it('normalizes numeric string limiter definitions before freezing them', () => {
@@ -605,14 +574,12 @@ describe('@holo-js/security csrf', () => {
         'x-forwarded-proto': 'https',
       },
     })
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', '')
     expect(isSecureRequest(proxiedRequest)).toBe(false)
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    configureSecurityRuntime({ config: defineSecurityConfig({ trustedProxies: [connectionAddress] }), csrfSigningKey: 'test-signing-key' })
     expect(isSecureRequest(proxiedRequest)).toBe(true)
     expect(isSecureRequest(new Request('http://app.test/register'))).toBe(false)
     await expect(csrf.cookie(proxiedRequest, signedToken)).resolves.toBe(`XSRF-TOKEN=${encodeURIComponent(signedToken)}; Path=/; SameSite=Lax; Secure`)
 
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'forwarded')
     expect(isSecureRequest(new Request('http://app.test/register', {
       headers: {
         forwarded: 'for=203.0.113.10;proto="https";host=app.test',
@@ -1025,7 +992,7 @@ describe('@holo-js/security csrf', () => {
         },
         rateLimit: {
           limiters: {
-            login: limit.perMinute(1).by(({ request }) => ip(request, true)),
+            login: limit.perMinute(1).by(({ request }) => ip(request)),
           },
         },
       }),
@@ -1063,7 +1030,7 @@ describe('@holo-js/security csrf', () => {
         },
         rateLimit: {
           limiters: {
-            login: limit.perMinute(1).by(({ request }) => ip(request, true)),
+            login: limit.perMinute(1).by(({ request }) => ip(request)),
           },
         },
       }),
@@ -1879,10 +1846,11 @@ describe('@holo-js/security rate limiting', () => {
   it('derives limiter keys from the request context', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({
+        trustedProxies: [connectionAddress],
         rateLimit: {
           limiters: {
             login: limit.perMinute(2).by(({ request, values }) => {
-              return `${ip(request, true)}:${String(values?.email ?? 'guest')}`
+              return `${ip(request)}:${String(values?.email ?? 'guest')}`
             }),
           },
         },
@@ -1963,45 +1931,11 @@ describe('@holo-js/security rate limiting', () => {
 
     expect(result.snapshot).toMatchObject({
       limiter: 'invites',
-      key: 'ip:unknown',
+      key: `ip:${connectionAddress}`,
       attempts: 1,
       maxAttempts: 3,
       remainingAttempts: 2,
     })
-  })
-
-  it('opts into trusted proxy headers for the default request key only when explicitly enabled', async () => {
-    const original = process.env.HOLO_SECURITY_TRUST_PROXY
-    process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
-
-    try {
-      configureSecurityRuntime({
-        config: defineSecurityConfig({
-          rateLimit: {
-            limiters: {
-              invites: limit.perHour(3).define(),
-            },
-          },
-        }),
-        rateLimitStore: createMockRateLimitStore(),
-      })
-
-      const result = await rateLimit('invites', {
-        request: new Request('https://app.test/invites', {
-          headers: {
-            'x-forwarded-for': '203.0.113.11',
-          },
-        }),
-      })
-
-      expect(result.snapshot.key).toBe('ip:203.0.113.11')
-    } finally {
-      if (typeof original === 'undefined') {
-        delete process.env.HOLO_SECURITY_TRUST_PROXY
-      } else {
-        process.env.HOLO_SECURITY_TRUST_PROXY = original
-      }
-    }
   })
 
   it('prefers the configured runtime default key resolver for authenticated requests', async () => {
@@ -2032,7 +1966,7 @@ describe('@holo-js/security rate limiting', () => {
         rateLimit: {
           limiters: {
             invites: limit.perHour(3).define(),
-            login: limit.perMinute(2).by(({ request }) => ip(request, true)),
+            login: limit.perMinute(2).by(({ request }) => ip(request)),
           },
         },
       }),
@@ -2077,9 +2011,10 @@ describe('@holo-js/security rate limiting', () => {
   it('throws stable rate-limit metadata after the bucket exceeds its limit', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({
+        trustedProxies: [connectionAddress],
         rateLimit: {
           limiters: {
-            login: limit.perMinute(2).by(({ request }) => ip(request, true)),
+            login: limit.perMinute(2).by(({ request }) => ip(request)),
           },
         },
       }),

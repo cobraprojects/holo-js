@@ -10,6 +10,7 @@ export type SvelteKitRequestEvent = {
     readonly method?: string
     readonly headers: Headers
   }
+  readonly getClientAddress?: () => string
 }
 
 type SvelteKitCookieOptions = {

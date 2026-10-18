@@ -11,6 +11,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
+import { requestUrlInternals } from '@holo-js/kernel'
 export {
   holoSvelteKitTransport,
   type SvelteKitTransportDefinition,
@@ -410,6 +411,8 @@ function resolveSvelteKitOptions(options: SvelteKitHoloOptions): SvelteKitHoloOp
 }
 
 export const svelteKitHoloCapabilities = svelteKitAdapter.capabilities
+
+requestUrlInternals.provideConnectionAddress(() => getCurrentSvelteKitRequestEvent()?.getClientAddress?.())
 
 export function runWithSvelteKitRequestEvent<TValue>(
   event: SvelteKitRequestEvent,

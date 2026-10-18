@@ -218,24 +218,6 @@ export const limit = Object.freeze({
   },
 })
 
-export function ip(request: Request, trustedProxy = false): string {
-  if (!trustedProxy) {
-    return 'unknown'
-  }
-
-  const forwarded = request.headers.get('x-forwarded-for')?.split(',', 1)[0]?.trim()
-  if (forwarded) {
-    return forwarded
-  }
-
-  const realIp = request.headers.get('x-real-ip')?.trim()
-  if (realIp) {
-    return realIp
-  }
-
-  return 'unknown'
-}
-
 function normalizeLimiterIntegerInput(value: number | string | undefined, label: string): number {
   if (typeof value === 'undefined') {
     throw new TypeError(`[@holo-js/security] ${label} is required.`)

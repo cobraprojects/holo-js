@@ -58,7 +58,24 @@ function csrfCookie(response) {
   return response.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN='))
 }
 
+async function clientAddress(baseUrl, headers = {}) {
+  const response = await fetch(`${baseUrl}/api/framework/client-address`, { headers })
+  return { status: response.status, address: response.ok ? (await response.json()).address : undefined }
+}
+
 async function assertTrustedProxyHeaders(baseUrl, guestPath) {
+  assert.ok(['127.0.0.1', '::1'].includes((await clientAddress(baseUrl)).address), 'Expected a direct visitor to be identified by its connection address.')
+  assert.deepEqual(
+    await clientAddress(baseUrl, { 'x-forwarded-for': '203.0.113.66, 192.0.2.10' }),
+    { status: 200, address: '192.0.2.10' },
+    'Expected the client address appended by the trusted proxy, not the one the visitor supplied.',
+  )
+  assert.equal(
+    (await clientAddress(baseUrl, { 'x-forwarded-for': '192.0.2.10', forwarded: 'for=203.0.113.66' })).status,
+    400,
+    'Expected requests whose Forwarded and X-Forwarded headers disagree to be rejected.',
+  )
+
   for (const headers of [{ 'x-forwarded-proto': 'wss' }, { 'x-forwarded-host': 'bad host' }]) {
     const response = await fetch(`${baseUrl}${guestPath}`, { headers, redirect: 'manual' })
     assert.equal(response.status, 400, `Expected malformed trusted proxy headers ${JSON.stringify(headers)} to be rejected as a bad request.`)
@@ -67,12 +84,6 @@ async function assertTrustedProxyHeaders(baseUrl, guestPath) {
   const secure = await fetch(`${baseUrl}${guestPath}`, { headers: { 'x-forwarded-proto': 'https' }, redirect: 'manual' })
   assert.equal(secure.status, 200)
   assert.match(csrfCookie(secure) ?? '', /;\s*Secure/i)
-
-  const injected = await fetch(`${baseUrl}${guestPath}`, { headers: { forwarded: 'proto=https;host=attacker.example' }, redirect: 'manual' })
-  assert.equal(injected.status, 200)
-  assert.ok(csrfCookie(injected), 'Expected a CSRF cookie for a guest page.')
-  assert.doesNotMatch(csrfCookie(injected), /;\s*Secure/i, 'Expected the X-Forwarded trust mode to ignore client Forwarded headers.')
-  assert.doesNotMatch(await injected.text(), /attacker\.example/)
 }
 
 export async function assertExampleAppRequestSecurity({ baseUrl, cwd, guestPath = '/login' }) {

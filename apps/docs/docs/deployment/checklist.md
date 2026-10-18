@@ -59,7 +59,7 @@ Skip this if you don't use the `holo` broadcast driver.
 - [ ] CSRF protection is on for apps with cookie-based forms. See [CSRF Protection](/basics/security/csrf).
 - [ ] Rate limits aren't on the `memory` driver when you run more than one process. Use `file` for several processes on one server and `redis` for several servers. See [Rate Limiting](/basics/security/rate-limiting).
 - [ ] `config/cors.ts` lists only your real frontend origins.
-- [ ] `HOLO_SECURITY_TRUST_PROXY=true` is set only when the app sits behind a proxy you control. See [CORS and Proxies](/basics/security/cors-and-proxies).
+- [ ] `trustedProxies` in `config/security.ts` lists only proxies that every request passes through. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
 ## Mail
 

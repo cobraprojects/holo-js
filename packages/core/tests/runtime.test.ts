@@ -272,7 +272,7 @@ export default defineSecurityConfig({
       path: './storage/framework/rate-limits',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
     },
   },
 })
@@ -2250,7 +2250,7 @@ export default defineSecurityConfig({
       path: './storage/framework/first-rate-limits',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
     },
   },
 })
@@ -2278,7 +2278,7 @@ export default defineSecurityConfig({
   rateLimit: {
     driver: 'memory',
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
     },
   },
 })

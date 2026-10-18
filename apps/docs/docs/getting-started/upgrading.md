@@ -160,7 +160,24 @@ If you maintain a Holo plugin:
 
 See [Writing Plugins](/advanced/plugins) for the full package layout.
 
-## 7. Verify
+## 7. Declare your trusted proxies
+
+`HOLO_SECURITY_TRUST_PROXY` is gone. Holo now identifies visitors by their connection address, and reads forwarded headers only from proxies you list in `config/security.ts`:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['127.0.0.1', '::1'],
+})
+```
+
+- Remove `HOLO_SECURITY_TRUST_PROXY` from your `.env` files.
+- If you set it, list your proxies' addresses or ranges instead. Use `'*'` for a hosting platform whose proxy address you don't know. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
+- Next.js apps need `trustedProxies`, because Next.js doesn't expose the connection address.
+- Call `ip(request)` without the second argument. It now follows `trustedProxies`.
+
+## 8. Verify
 
 Regenerate Holo's files and check that everything compiles and passes:
 
@@ -170,7 +187,7 @@ npm run typecheck
 npm run build
 ```
 
-Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
+Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4 and `ip()` calls from step 7. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
 
 ## Next steps
 

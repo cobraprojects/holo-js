@@ -57,6 +57,7 @@
     "@holo-js/adapter-shared": "catalog:",
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
+    "@holo-js/kernel": "catalog:",
     "@holo-js/validation": "catalog:",
     "svelte": "catalog:"
   },

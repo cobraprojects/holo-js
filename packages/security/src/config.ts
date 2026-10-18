@@ -10,6 +10,7 @@ import {
 } from '@holo-js/kernel'
 import type {} from '@holo-js/config'
 import { registerConfigNormalizer } from '@holo-js/config/registry'
+import { normalizeTrustedProxies, type SecurityTrustedProxies } from './trusted-proxies'
 
 export interface HoloCorsConfig {
   readonly paths?: readonly string[]
@@ -148,11 +149,13 @@ export interface NormalizedHoloSecurityRateLimitConfig {
 export interface HoloSecurityConfig {
   readonly csrf?: boolean | HoloSecurityCsrfConfig
   readonly rateLimit?: HoloSecurityRateLimitConfig
+  readonly trustedProxies?: SecurityTrustedProxies
 }
 
 export interface NormalizedHoloSecurityConfig {
   readonly csrf: NormalizedHoloSecurityCsrfConfig
   readonly rateLimit: NormalizedHoloSecurityRateLimitConfig
+  readonly trustedProxies: SecurityTrustedProxies
 }
 
 export const DEFAULT_CORS_PATHS = Object.freeze(['/api/*'] as const)
@@ -209,6 +212,7 @@ const DEFAULT_SECURITY_RATE_LIMIT_CONFIG: Readonly<NormalizedHoloSecurityRateLim
 export const holoSecurityDefaults: Readonly<NormalizedHoloSecurityConfig> = Object.freeze({
   csrf: DEFAULT_SECURITY_CSRF_CONFIG,
   rateLimit: DEFAULT_SECURITY_RATE_LIMIT_CONFIG,
+  trustedProxies: normalizeTrustedProxies(undefined),
 })
 
 function parseScopedInteger(
@@ -420,6 +424,7 @@ export function normalizeSecurityConfig(
       except,
     }),
     rateLimit: normalizeSecurityRateLimitConfig(config.rateLimit, redisConfig),
+    trustedProxies: normalizeTrustedProxies(config.trustedProxies),
   })
 }
 

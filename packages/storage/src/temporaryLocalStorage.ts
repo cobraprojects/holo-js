@@ -70,5 +70,5 @@ export function resolveTemporaryLocalStorageRequest(
   const disk = diskName ? config.disks[diskName] : undefined
   if (!isLocalDisk(disk)) return null
   const root = resolve(projectRoot, disk.root)
-  return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments) }
+  return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments.map(encodeURIComponent)) }
 }

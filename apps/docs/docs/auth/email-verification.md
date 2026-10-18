@@ -195,7 +195,7 @@ export default defineSecurityConfig({
       register: limit.perHour(10).define(),
       emailVerificationResend: limit.perMinute(1).by(({ request, values }) => {
         const email = typeof values?.email === 'string' ? values.email.trim().toLowerCase() : 'unknown'
-        return `email:${email}|client:${ip(request, true)}`
+        return `email:${email}|client:${ip(request)}`
       }),
     },
   },

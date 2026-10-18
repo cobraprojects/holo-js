@@ -1,4 +1,6 @@
 import { generateKeyPairSync, sign } from 'node:crypto'
+import { requestUrlInternals } from '@holo-js/kernel'
+import { configureSecurityRuntime, resetSecurityRuntime } from '@holo-js/security'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { authJwtInternals } from '../src/runtime/jwt'
 import { authClientInternals } from '../src/client-runtime'
@@ -36,6 +38,8 @@ function createToken(payload: Readonly<Record<string, unknown>>, algorithm = 'RS
 }
 
 afterEach(() => {
+  resetSecurityRuntime()
+  requestUrlInternals.provideConnectionAddress(undefined)
   optionalSecurityInternals.resetImporter()
   scryptPasswordHasherInternals.resetScrypt()
   vi.restoreAllMocks()
@@ -115,7 +119,7 @@ describe('auth runtime utilities', () => {
   })
 
   it('only reconstructs relative request URLs from trusted proxy headers', () => {
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', '')
+    requestUrlInternals.provideConnectionAddress(() => '127.0.0.1')
     const direct = normalizeRequestInput({
       path: '/auth',
       headers: {
@@ -126,7 +130,7 @@ describe('auth runtime utilities', () => {
     })
     expect(direct.url).toBe('http://app.test/auth')
 
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    configureSecurityRuntime({ config: { trustedProxies: ['127.0.0.1'] } })
     const proxied = normalizeRequestInput({
       path: '/auth',
       headers: {

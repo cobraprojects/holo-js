@@ -2,19 +2,18 @@ import 'next/dist/server/node-environment'
 import { adapter } from 'next/dist/server/web/adapter'
 import { NextRequest } from 'next/server'
 import { resolveRequestUrl } from '@holo-js/kernel'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { configureSecurityRuntime, defineSecurityConfig, resetSecurityRuntime } from '../../security/src'
 import { csrfProtection } from '../../security/src/next/server'
 import { createNextRequestContext } from '../src/runtime'
 
 afterEach(() => {
-  vi.unstubAllEnvs()
   resetSecurityRuntime()
 })
 
 describe('Next request URL resolution', () => {
-  it.each([false, true])('resolves native requests and contexts with proxy trust %s without consuming bodies', async (trustProxy) => {
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', String(trustProxy))
+  it.each([false, true])('resolves native requests and contexts with a trusted proxy %s without consuming bodies', async (trustProxy) => {
+    if (trustProxy) configureSecurityRuntime({ config: defineSecurityConfig({ trustedProxies: '*' }) })
     const request = new NextRequest('http://localhost:43201/login?next=%2Fadmin', {
       method: 'POST',
       headers: {
@@ -33,7 +32,6 @@ describe('Next request URL resolution', () => {
   })
 
   it('issues CSRF cookies and resolves the route URL through native Next middleware', async () => {
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'false')
     configureSecurityRuntime({
       config: defineSecurityConfig({ csrf: { enabled: true } }),
       csrfSigningKey: 'native-request-url-test-key',

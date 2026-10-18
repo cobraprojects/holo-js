@@ -4,10 +4,10 @@ import {
   createRedisRateLimitStoreConfig,
   defineRateLimiter,
   defineSecurityRuntimeBindings,
-  ip,
   limit,
   securityInternals,
 } from './contracts'
+import { ip } from './proxy'
 import {
   csrf,
   csrfInternals,
@@ -84,6 +84,7 @@ export type {
   SecurityRateLimitMemoryConfig,
   SecurityRateLimitRedisConfig,
 } from './config'
+export type { SecurityTrustedProxies } from './trusted-proxies'
 
 export {
   createFileRateLimitStoreConfig,

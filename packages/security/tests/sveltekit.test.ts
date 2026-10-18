@@ -19,13 +19,14 @@ type CookieWrite = {
   }
 }
 
-function configureSecurity(except: readonly string[] = []): void {
+function configureSecurity(except: readonly string[] = [], trustedProxies: readonly string[] | '*' = []): void {
   configureSecurityRuntime({
     config: defineSecurityConfig({
       csrf: {
         enabled: true,
         except,
       },
+      trustedProxies,
     }),
     csrfSigningKey: 'test-signing-key',
   })
@@ -62,7 +63,6 @@ function createEvent(request: Request, cookieValue?: string): {
 }
 
 afterEach(() => {
-  vi.unstubAllEnvs()
   resetSecurityRuntime()
 })
 
@@ -71,8 +71,7 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
     { 'x-forwarded-proto': 'wss' },
     { 'x-forwarded-host': 'a b' },
   ])('answers malformed trusted proxy headers %j with a bad request', async (headers) => {
-    configureSecurity()
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    configureSecurity([], '*')
     for (const method of ['GET', 'HEAD']) {
       const { event } = createEvent(new Request('https://app.test/page', { method, headers }))
       const response = await csrfProtection()({ event, resolve: () => new Response('handled') })

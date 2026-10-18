@@ -45,7 +45,6 @@ These are read by Holo directly, not through config files.
 | `HOLO_ENV` | none | Picks the environment. Takes priority over `APP_ENV` and `NODE_ENV`. |
 | `NODE_ENV` | none | Used to pick the environment when `HOLO_ENV` and `APP_ENV` aren't set. In production, Holo uses the [config cache](/reference/cli#config-cache) if one exists. |
 | `PORT` | framework default | Port for `holo dev` and `holo start` when you don't pass `--port`. Must be a whole number up to 65535. |
-| `HOLO_SECURITY_TRUST_PROXY` | off | Set to `true` (or `1`, `yes`, `on`, `x-forwarded`) to trust `X-Forwarded-*` headers, or to `forwarded` to trust the standard `Forwarded` header. Holo uses them for request URLs, secure cookies, and rate-limit client IPs. Turn it on only behind a proxy you control. See [CORS and Proxies](/basics/security/cors-and-proxies#trusted-proxies). |
 
 ## App
 

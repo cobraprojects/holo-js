@@ -92,7 +92,6 @@ let capturedOutput = ''
 function createChildEnv(overrides = {}) {
   const env = {
     ...process.env,
-    HOLO_SECURITY_TRUST_PROXY: 'true',
     BROADCAST_HOST: '127.0.0.1',
     BROADCAST_PORT: broadcastPort,
     ...overrides,

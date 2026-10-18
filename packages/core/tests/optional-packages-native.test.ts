@@ -44,7 +44,7 @@ async function runNativeBoot({ configName, installQueue = false, missingRedisAda
   }
   if (cacheMode === 'memory') await writeFile(join(project, 'config/cache.ts'), "export default { default: 'memory', stores: { memory: { driver: 'memory' } } }")
   if (missingCacheAdapter) await writeFile(join(project, 'config/cache.ts'), `export default { default: '${missingCacheAdapter}', drivers: { ${missingCacheAdapter}: { driver: '${missingCacheAdapter}', connection: 'main' } } }`)
-  if (securityMode) await writeFile(join(project, 'config/security.ts'), "export default { rateLimit: { driver: 'memory' } }")
+  if (securityMode) await writeFile(join(project, 'config/security.ts'), "export default { trustedProxies: '*', rateLimit: { driver: 'memory' } }")
   if (failedBoot) {
     const plugin = join(project, 'node_modules/holo-plugin-failed-boot')
     await mkdir(plugin, { recursive: true })
@@ -204,7 +204,7 @@ try {
 }
 `
   await writeFile(join(project, 'verify.mjs'), script)
-  const result = spawnSync(process.execPath, ['verify.mjs'], { cwd: project, encoding: 'utf8', timeout: 15000, env: { ...process.env, HOLO_SECURITY_TRUST_PROXY: 'true' } })
+  const result = spawnSync(process.execPath, ['verify.mjs'], { cwd: project, encoding: 'utf8', timeout: 15000, env: process.env })
   if (authDelivery) expect(result.stderr).toContain('Email verification delivery is not configured')
   expect(result.error).toBeUndefined()
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)

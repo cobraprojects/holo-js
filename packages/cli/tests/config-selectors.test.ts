@@ -8,6 +8,7 @@ import { loadConfigDirectory, writeConfigCache } from '@holo-js/config'
 import { normalizeModuleOptions } from '@holo-js/storage'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderBroadcastConfig } from '../src/project/scaffold/config-renderers'
+import { getFrameworkDescriptor } from '../src/project/frameworks'
 import { renderScaffoldPackageJson } from '../src/project/scaffold/framework'
 import {
   renderAuthConfig,
@@ -230,6 +231,17 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
       const fromCustomizedFile = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
       expect(fromCustomizedFile.database.connections.main).toEqual(configured.database.connections.main)
     }
+  })
+
+  it.each([
+    ['next', '*'],
+    ['nuxt', []],
+    ['sveltekit', []],
+  ] as const)('scaffolds %s to trust its proxy only when the framework hides the connection address', async (framework, trustedProxies) => {
+    const root = await createProject()
+    await writeConfig(root, 'security', renderSecurityConfig(getFrameworkDescriptor(framework)))
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(loaded.security.trustedProxies).toEqual(trustedProxies)
   })
 
   it('selects the shared Redis connection and rate-limit driver from the environment', async () => {

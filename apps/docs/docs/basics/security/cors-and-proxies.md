@@ -85,36 +85,74 @@ export async function GET(request: Request) {
 
 ## Trusted proxies
 
-Behind a load balancer, CDN, or reverse proxy, your app sees the proxy's connection, not the visitor's. The proxy passes the real details in headers like `X-Forwarded-For` and `X-Forwarded-Proto`.
+Holo identifies each visitor by the address of their connection. That works out of the box when visitors connect straight to your app.
 
-Holo ignores those headers by default, because any client can send them. Turn them on when your proxy overwrites them:
+Behind a load balancer, CDN, or reverse proxy such as nginx, every connection comes from the proxy. The proxy passes the visitor's address, protocol, and host in headers like `X-Forwarded-For` and `X-Forwarded-Proto`. Tell Holo which proxies to believe in `config/security.ts`:
 
-```bash [.env]
-HOLO_SECURITY_TRUST_PROXY=true
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['127.0.0.1', '::1'],
+})
 ```
 
-Proxies send one of two header styles. Set the value that matches yours (any case):
+This is the setup for nginx on the same server. List IP addresses or CIDR ranges, such as `'10.0.0.0/8'`. The default is `[]`, which trusts no proxy.
 
-| Value | Use when your proxy sends | Headers read |
-|---|---|---|
-| `true`, `1`, `yes`, `on`, or `x-forwarded` | `X-Forwarded-*` headers (most proxies, load balancers, and CDNs) | Client IP: first `X-Forwarded-For` value, then `X-Real-IP`. Protocol: first `X-Forwarded-Proto` value. Host: first `X-Forwarded-Host` value, then `Host`. |
-| `forwarded` | The standard `Forwarded` header | Client IP: `for=`. Protocol: `proto=`. Host: `host=`, then `Host`. All from the first `Forwarded` entry. |
+### How Holo finds the visitor
 
-Holo reads only the style you choose. A client can't slip in the other style to change your app's host or protocol.
+Holo reads forwarded headers only when the connection comes from a trusted proxy. Then it reads `X-Forwarded-For` from right to left, skipping trusted proxies, and stops at the first address it doesn't trust. That address is the visitor.
 
-The client IP is used for [rate limiting](/basics/security/rate-limiting#who-gets-counted).
+Proxies such as nginx add the address they saw to the end of the list. Anything a visitor sends in their own `X-Forwarded-For` stays to the left of it, so a visitor can't pretend to be someone else.
 
-The protocol decides whether cookies, including the CSRF cookie, get the `Secure` flag. If TLS ends at your proxy and trust is off, Holo sees plain HTTP and leaves `Secure` off.
+Holo takes the protocol and host from the nearest trusted proxy. The protocol decides whether cookies, including the CSRF cookie, get the `Secure` flag.
 
-If a trusted header has a malformed value, such as an unknown protocol or a host with spaces, Holo answers `400 Bad Request` instead of guessing.
+Holo understands both `X-Forwarded-*` headers and the standard `Forwarded` header. If a request carries both and they describe different clients, Holo answers `400 Bad Request`. It also answers `400` when a trusted header has a malformed value, such as an unknown protocol or a host with spaces.
+
+### Behind Cloudflare
+
+When visitors pass through Cloudflare and then nginx, trust both: nginx's address, and [Cloudflare's IP ranges](https://www.cloudflare.com/ips/):
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: [
+    '127.0.0.1',
+    '::1',
+    '173.245.48.0/20',
+    '103.21.244.0/22',
+  ],
+})
+```
+
+The example lists two of Cloudflare's ranges. Copy the full current list from Cloudflare.
+
+### Trust the proxy in front: `'*'`
+
+Use `'*'` when your app is only reachable through one proxy, but you don't know its address in advance, as on many hosting platforms. Holo then trusts whatever connects to it and takes the visitor from the last `X-Forwarded-For` entry:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: '*',
+})
+```
+
+### Next.js
+
+Next.js doesn't tell Holo the address of the connection. Without trusted proxies, Holo can't identify visitors in a Next.js app, and rate limiting by IP throws an error that tells you to set `trustedProxies`.
+
+New Next.js projects start with `trustedProxies: '*'`. Deploy them behind a proxy or a platform such as Vercel that sets `X-Forwarded-For`. If you know your proxy's addresses, list them instead.
 
 ::: warning
-Only enable `HOLO_SECURITY_TRUST_PROXY` when every request reaches your app through a proxy that replaces the headers of the style you chose. Otherwise a client can fake its IP to dodge rate limits or fake its host.
+Only trust proxies that every request has to pass through. If visitors can reach your app directly, a trusted `'*'` lets them choose their own IP address and dodge rate limits.
 :::
 
 ### Read the public URL
 
-`resolveRequestUrl` returns the URL the visitor actually used, following the same trust rules. Use it when you build absolute links from a request:
+`resolveRequestUrl` returns the URL the visitor actually used, following your trusted proxies. Use it when you build absolute links from a request:
 
 ```ts
 import { resolveRequestUrl } from '@holo-js/kernel'

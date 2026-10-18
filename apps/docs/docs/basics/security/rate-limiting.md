@@ -88,11 +88,9 @@ Each limiter counts attempts per **key**. With `.define()`, the key is:
 - `user:<id>` when a user is signed in through [Holo auth](/auth/), or
 - `ip:<client-ip>` for guests.
 
-Holo only reads the client IP from your proxy's headers (`X-Forwarded-For` and `X-Real-IP`, or `Forwarded`) when you [trust your proxy](/basics/security/cors-and-proxies#trusted-proxies). Otherwise every guest shares the key `ip:unknown` and they are throttled together.
+The client IP is the address of the visitor's connection. Behind a load balancer, CDN, or reverse proxy, list your proxies in [`trustedProxies`](/basics/security/cors-and-proxies#trusted-proxies) so each guest is counted separately instead of as the proxy.
 
-::: warning
-If your app runs behind a load balancer or CDN, either set `HOLO_SECURITY_TRUST_PROXY=true` (only when the proxy overwrites forwarding headers) or give the limiter a custom key. Without one of these, one noisy guest can lock out all guests.
-:::
+In a Next.js app, Holo can only learn the client IP from a trusted proxy. Without `trustedProxies`, a limiter keyed by IP throws an error that tells you to set it.
 
 ### Custom keys
 

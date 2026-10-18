@@ -400,7 +400,7 @@ Social provider options: `clientId`, `clientSecret`, `redirectUri`, `scopes`, `g
 
 ## security.ts
 
-CSRF protection and rate limiting. Created by `holo install security` or `holo install auth`. See [Security Overview](/basics/security/).
+CSRF protection, rate limiting, and trusted proxies. Created by `holo install security` or `holo install auth`. See [Security Overview](/basics/security/).
 
 ```ts [config/security.ts]
 import { defineSecurityConfig, limit } from '@holo-js/security'
@@ -430,6 +430,7 @@ export default defineSecurityConfig({
 | `rateLimit.redis.connection` | `'default'` | Redis connection name. |
 | `rateLimit.redis.prefix` | `'holo:rate-limit:'` | Key prefix. |
 | `rateLimit.limiters` | `{}` | Named [rate limiters](/basics/security/rate-limiting). |
+| `trustedProxies` | `[]` | IP addresses or CIDR ranges of proxies whose forwarded headers Holo trusts, or `'*'` to trust the proxy that connects. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies). |
 
 ## cors.ts
 

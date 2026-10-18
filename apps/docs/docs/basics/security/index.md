@@ -385,11 +385,13 @@ const key = await defaultRateLimitKey(request)
 
 ### ip() {#ip}
 
-Returns the client IP address. It returns `'unknown'` unless you pass `true` as the second argument, which tells Holo to read the proxy headers.
+Returns the visitor's IP address. Holo uses the address of the connection, or reads it from your [trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
 ```ts
-const address = ip(request, true)
+const address = ip(request)
 ```
+
+In a Next.js app without `trustedProxies`, it throws, because Next.js doesn't expose the connection address.
 
 See [trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
@@ -418,7 +420,7 @@ const payload = verifySignedToken<{ readonly exportId: string }>(token, {
 
 ### resolveRequestUrl() {#resolverequesturl}
 
-Imported from `@holo-js/kernel`. Returns the URL the visitor used, following the same proxy trust rules. Use it to build absolute links.
+Imported from `@holo-js/kernel`. Returns the URL the visitor used, following your trusted proxies. Use it to build absolute links.
 
 ```ts
 const url = resolveRequestUrl(request)

@@ -3,6 +3,8 @@ import { createNativeAuthPersistence } from '../../auth/tests/support/native-per
 import { importBundledRuntimeModule } from '../../core/src/runtimeModule'
 import type { holoRuntimeInternals as CoreRuntimeInternals } from '../../core/src/portable/holo'
 import { resolve } from 'node:path'
+import { requestUrlInternals } from '../../kernel/src'
+import { configureSecurityRuntime, resetSecurityRuntime } from '../../security/src'
 import * as sessionModule from '../../session/src'
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
@@ -297,12 +299,10 @@ describe('@holo-js/auth-social', () => {
     })
   })
 
-  it('only trusts forwarded event origins when proxy trust is enabled', async () => {
+  it('only trusts forwarded event origins when the request comes through a trusted proxy', async () => {
     await configureRuntime()
-    const previousTrustProxy = process.env.HOLO_SECURITY_TRUST_PROXY
-
+    requestUrlInternals.provideConnectionAddress(() => '127.0.0.1')
     try {
-      delete process.env.HOLO_SECURITY_TRUST_PROXY
       const directResponse = await redirect('google', {
         method: 'GET',
         node: {
@@ -318,7 +318,7 @@ describe('@holo-js/auth-social', () => {
       })
       expect(directResponse.headers.get('set-cookie')).not.toContain('Secure')
 
-      process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
+      configureSecurityRuntime({ config: { trustedProxies: ['127.0.0.1'] } })
       const proxiedResponse = await redirect('google', {
         method: 'GET',
         node: {
@@ -334,11 +334,8 @@ describe('@holo-js/auth-social', () => {
       })
       expect(proxiedResponse.headers.get('set-cookie')).toContain('Secure')
     } finally {
-      if (typeof previousTrustProxy === 'string') {
-        process.env.HOLO_SECURITY_TRUST_PROXY = previousTrustProxy
-      } else {
-        delete process.env.HOLO_SECURITY_TRUST_PROXY
-      }
+      resetSecurityRuntime()
+      requestUrlInternals.provideConnectionAddress(undefined)
     }
   })
 

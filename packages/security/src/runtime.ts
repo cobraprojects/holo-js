@@ -1,4 +1,6 @@
+import { requestUrlInternals } from '@holo-js/kernel'
 import { normalizeCorsConfig, normalizeSecurityConfig } from './config'
+import { createForwardedRequestResolver } from './trusted-proxies'
 import type { SecurityRuntimeBindings, SecurityRuntimeFacade } from './contracts'
 
 type RuntimeSecurityState = {
@@ -21,9 +23,11 @@ export class SecurityRuntimeNotConfiguredError extends Error {
 }
 
 export function configureSecurityRuntime(bindings?: SecurityRuntimeBindings): void {
-  getSecurityRuntimeState().bindings = bindings
+  const config = bindings ? normalizeSecurityConfig(bindings.config) : undefined
+  requestUrlInternals.configureForwardedRequestResolver(config ? createForwardedRequestResolver(config.trustedProxies) : undefined)
+  getSecurityRuntimeState().bindings = bindings && config
     ? Object.freeze({
-        config: normalizeSecurityConfig(bindings.config),
+        config,
         cors: normalizeCorsConfig(bindings.cors),
         rateLimitStore: bindings.rateLimitStore,
         csrfSigningKey: bindings.csrfSigningKey,
@@ -46,6 +50,7 @@ export function getSecurityRuntimeBindings(): SecurityRuntimeFacade | undefined 
 }
 
 export function resetSecurityRuntime(): void {
+  requestUrlInternals.configureForwardedRequestResolver(undefined)
   getSecurityRuntimeState().bindings = undefined
 }
 

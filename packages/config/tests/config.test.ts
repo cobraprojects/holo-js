@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type * as LoaderModule from '../src/loader'
 import {
   clearConfigCache,
@@ -29,7 +29,7 @@ import {
 import { normalizeAuthConfig } from '@holo-js/auth'
 import { defineMediaConfig } from '@holo-js/media/config'
 import { normalizeMailConfig } from '@holo-js/mail'
-import { normalizeSecurityConfig } from '@holo-js/security'
+import { configureSecurityRuntime, normalizeSecurityConfig, resetSecurityRuntime } from '@holo-js/security'
 import { normalizeSessionConfig } from '@holo-js/session'
 import { normalizeCacheConfig } from '@holo-js/cache'
 import { normalizeRedisConfig } from '@holo-js/kernel'
@@ -1236,6 +1236,7 @@ describe('@holo-js/config', () => {
           },
         },
       },
+      trustedProxies: [],
     })
     expect(loaded.all.security.rateLimit.driver).toBe('redis')
   })
@@ -2249,9 +2250,10 @@ export default defineConfig({
 import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
 
 export default defineSecurityConfig({
+  trustedProxies: '*',
   rateLimit: {
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
     },
   },
 })
@@ -2268,6 +2270,8 @@ export default defineSecurityConfig({
     })
 
     expect(typeof loaded.security.rateLimit.limiters.login?.key).toBe('function')
+    configureSecurityRuntime({ config: loaded.security })
+    onTestFinished(resetSecurityRuntime)
     expect(loaded.security.rateLimit.limiters.login?.key?.({
       request: new Request('https://app.test/login', {
         headers: {
@@ -2328,7 +2332,7 @@ export default defineSecurityConfig({
   },
   rateLimit: {
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
     },
   },
 })
@@ -2373,7 +2377,7 @@ import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
 export default defineSecurityConfig({
   rateLimit: {
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
     },
   },
 })

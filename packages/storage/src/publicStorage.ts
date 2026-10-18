@@ -25,22 +25,12 @@ type PublicStorageResponseHeaders = {
   readonly 'x-content-type-options': string
 }
 
-function normalizeRequestPath(value: string): string[] {
-  return value
-    .split('/')
-    .map((segment) => {
-      const trimmed = segment.trim()
-      if (!trimmed) {
-        return trimmed
-      }
-
-      try {
-        return decodeURIComponent(trimmed)
-      } catch {
-        return trimmed
-      }
-    })
-    .filter(Boolean)
+function normalizeRequestPath(value: string): string[] | null {
+  try {
+    return value.split('/').map(segment => decodeURIComponent(segment.trim())).filter(Boolean)
+  } catch {
+    return null
+  }
 }
 
 function isPublicLocalDisk(disk: RuntimeDiskConfig | undefined): disk is PublicLocalDisk {
@@ -49,7 +39,7 @@ function isPublicLocalDisk(disk: RuntimeDiskConfig | undefined): disk is PublicL
 
 function resolveAbsolutePath(projectRoot: string, disk: PublicLocalDisk, fileSegments: string[]): string | null {
   const root = resolve(projectRoot, disk.root)
-  const absolutePath = resolve(root, ...fileSegments)
+  const absolutePath = resolve(root, ...fileSegments.map(encodeURIComponent))
   if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
     return null
   }
@@ -140,7 +130,7 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
 
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
-  if (segments.length === 0 || segments.includes('..')) {
+  if (!segments?.length || segments.some(segment => segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
     return null
   }
 

@@ -45,28 +45,38 @@ describe('@holo-js/core storage runtime optional imports', () => {
     await expect(backend.getItemStat?.('empty.bin', { sampleBytes: 16 })).resolves.toEqual({ size: 0, sample: new Uint8Array() })
   })
 
-  it('serves private local files through facade URLs signed by the discovered application key', async () => {
+  it.each(['private', 'public'] as const)('serves persisted %s local files byte-for-byte through facade URLs', async (visibility) => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-signed-local-'))
     tempDirs.push(root)
     await mkdir(join(root, 'config'))
     await writeFile(join(root, 'config/app.mjs'), `export default ${JSON.stringify({ url: 'https://app.test', key: 'native-private-storage-test-key' })}\n`)
     await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
       defaultDisk: 'local',
-      disks: { local: { driver: 'local', visibility: 'private', root: join(root, 'storage') } },
+      disks: { local: { driver: visibility === 'public' ? 'public' : 'local', visibility, root: join(root, 'storage') } },
     })}\n`)
     const loadedConfig = await loadConfigDirectory(root, { preferCache: false })
     try {
       await configurePlainNodeStorageRuntime(resolve(import.meta.dirname, '../../..'), loadedConfig)
-      await Storage.put('attachment.txt', 'Private persisted attachment')
-      expect(() => Storage.url('attachment.txt')).toThrow('private')
-      const url = Storage.temporaryUrl('attachment.txt', { expiresIn: 60 })
-      const response = await createPublicStorageResponse(root, loadedConfig.storage, new Request(url), loadedConfig.app.key)
-      expect(response.status).toBe(200)
-      await expect(response.text()).resolves.toBe('Private persisted attachment')
-      const unsigned = new URL(url)
-      unsigned.search = ''
-      const rejected = await createPublicStorageResponse(root, loadedConfig.storage, new Request(unsigned), loadedConfig.app.key)
-      expect(rejected.status).toBe(404)
+      const contents = await readFile(new URL('../../validation/tests/fixtures/images/valid.png', import.meta.url))
+      for (const path of ['plain.png', 'Clipboard name.png', 'nested folder/صورة #1%.png', 'literal%20name.png', 'encoded%2Fname.png', 'encoded%5Cname.png', '%2e%2e/secret.png']) {
+        await expect(Storage.put(path, contents)).resolves.toBe(true)
+        expect(Buffer.from(await Storage.getBytes(path) ?? [])).toEqual(contents)
+        if (visibility === 'private') expect(() => Storage.url(path)).toThrow('private')
+        const url = Storage.temporaryUrl(path, { expiresIn: 60 })
+        const response = await createPublicStorageResponse(root, loadedConfig.storage, new Request(url), loadedConfig.app.key)
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toBe('image/png')
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(contents)
+        const unsigned = new URL(url)
+        unsigned.search = ''
+        const rejected = await createPublicStorageResponse(root, loadedConfig.storage, new Request(unsigned), loadedConfig.app.key)
+        expect(rejected.status).toBe(404)
+        if (visibility === 'public') {
+          const publicResponse = await createPublicStorageResponse(root, loadedConfig.storage, new Request(Storage.url(path)))
+          expect(publicResponse.status).toBe(200)
+          expect(Buffer.from(await publicResponse.arrayBuffer())).toEqual(contents)
+        }
+      }
     } finally {
       await resetOptionalStorageRuntime()
     }

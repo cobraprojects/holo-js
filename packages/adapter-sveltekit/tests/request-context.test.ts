@@ -1,3 +1,4 @@
+import { requestUrlInternals } from '@holo-js/kernel'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { authOnly } from '../../auth/src/sveltekit/server'
 import { getCurrentSvelteKitRequestEvent } from '../../adapter-shared/src/sveltekit/request-context'
@@ -41,5 +42,21 @@ describe('SvelteKit request context', () => {
     expect(await (await secondResponse).text()).toBe('second')
     expect(getCurrentSvelteKitRequestEvent()).toBeUndefined()
     expectTypeOf(runWithSvelteKitRequestEvent(first, () => 'value' as const)).toEqualTypeOf<'value'>()
+  })
+
+  it('exposes each request\'s client address to Holo while it is handled', async () => {
+    const withAddress = (value: string, address: () => string) => ({ ...createEvent(value), getClientAddress: address })
+    const seen = await Promise.all([
+      runWithSvelteKitRequestEvent(withAddress('first', () => '203.0.113.5'), async () => {
+        await Promise.resolve()
+        return requestUrlInternals.currentConnectionAddress()
+      }),
+      runWithSvelteKitRequestEvent(withAddress('second', () => '198.51.100.9'), () => requestUrlInternals.currentConnectionAddress()),
+      runWithSvelteKitRequestEvent(withAddress('prerendered', () => {
+        throw new Error('Cannot call getClientAddress() during prerendering')
+      }), () => requestUrlInternals.currentConnectionAddress()),
+    ])
+    expect(seen).toEqual(['203.0.113.5', '198.51.100.9', undefined])
+    expect(requestUrlInternals.currentConnectionAddress()).toBeUndefined()
   })
 })

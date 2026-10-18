@@ -1,4 +1,5 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { requestUrlInternals } from '@holo-js/kernel'
 import { chmod, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,18 +19,27 @@ import {
   schema,
 } from '@holo-js/validation'
 
+function connectThroughLocalProxy(): void {
+  requestUrlInternals.provideConnectionAddress(() => '127.0.0.1')
+  onTestFinished(() => {
+    resetSecurityRuntime()
+    requestUrlInternals.provideConnectionAddress(undefined)
+  })
+}
+
 async function configureNativeSecurity(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'holo-form-rate-limits-'))
+  connectThroughLocalProxy()
   onTestFinished(async () => {
-    resetSecurityRuntime()
     await rm(directory, { recursive: true, force: true })
   })
   configureSecurityRuntime({
     config: {
+      trustedProxies: ['127.0.0.1'],
       rateLimit: {
         driver: 'file',
         limiters: {
-          login: limit.perMinute(1).by(({ request, values }) => `${ip(request, true)}:${typeof values?.email === 'string' ? values.email : 'guest'}`),
+          login: limit.perMinute(1).by(({ request, values }) => `${ip(request)}:${typeof values?.email === 'string' ? values.email : 'guest'}`),
         },
       },
     },
@@ -40,9 +50,7 @@ async function configureNativeSecurity(): Promise<string> {
 
 describe('@holo-js/forms contracts', () => {
   it('resolves form request origins from Host and honors only explicitly trusted proxies', () => {
-    onTestFinished(() => {
-      vi.unstubAllEnvs()
-    })
+    connectThroughLocalProxy()
     const input = {
       method: 'POST',
       url: 'http://localhost/signup?next=%2Fadmin',
@@ -53,9 +61,8 @@ describe('@holo-js/forms contracts', () => {
       },
       body: 'email=ava',
     }
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'false')
     expect(formsInternals.normalizeRequestLikeInput(input)?.url).toBe('http://127.0.0.1:43201/signup?next=%2Fadmin')
-    vi.stubEnv('HOLO_SECURITY_TRUST_PROXY', 'true')
+    configureSecurityRuntime({ config: { trustedProxies: ['127.0.0.1'] } })
     expect(formsInternals.normalizeRequestLikeInput(input)?.url).toBe('https://public.example/signup?next=%2Fadmin')
   })
 
