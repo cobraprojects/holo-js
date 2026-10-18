@@ -41,6 +41,8 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 | `bun run typecheck` | Typecheck every library package and the tests. |
 | `bun run lint` | Run ESLint across the repo. |
 | `bun run lint:fix` | Lint and auto-fix. |
+| `bun run audit:runtime` | Report dependency advisories; fail on high or critical advisories reachable from published packages. |
+| `bun run check:dead-code` | Fail on new Fallow findings against the committed baseline. |
 | `bun run --cwd packages/<name> test` | Run one package's tests while you work. |
 | `bun run test:libraries` | Run every library test suite against the real services. |
 | `bun run test:examples` | Run the Next.js, Nuxt, and SvelteKit example apps against SQLite, PostgreSQL, and MySQL. |
@@ -54,7 +56,19 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI runs the same scripts and also tests on Linux, Windows, and macOS across supported Node versions.
+CI requires library and test typechecks, lint, published-package acceptance, scaffold acceptance, browser-bundle acceptance, and the full library and example-app suites on Node 22.12.0, 24, and 26. Native package loading and server lifecycle checks also run on Linux, Windows, and macOS.
+
+The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit. Dependabot checks npm dependencies and GitHub Actions weekly.
+
+`bun run check:dead-code` uses Fallow 3.34.1 and `fallow-baseline.json`. The committed `fallow.toml` resolves Holo packages through their `@holo-js/source` exports, so the scan does not require built packages. Existing findings are recorded by identity, so removing one finding does not make room for a new orphan. Remove unused code rather than adding it to the baseline. When intentionally updating the scanner or recording reviewed existing findings, run:
+
+```bash
+npx --yes fallow@3.34.1 dead-code --format json --quiet --save-baseline fallow-baseline.json
+```
+
+Review the baseline diff before committing it. The save command can exit with findings while still writing the baseline.
+
+Overlapping `bun run typecheck` commands can share a checkout. Each test typecheck creates a unique configuration directory and removes only its own directory when it finishes.
 
 ## Code standards
 

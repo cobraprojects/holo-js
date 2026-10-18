@@ -419,7 +419,7 @@ export async function validatePublishedPackageSmoke(options = {}) {
     throw new Error('Root package.json is missing workspaces.catalog.')
   }
   if (!options.skipBuild) {
-    run(rootDir, 'bun', ['run', '--filter', '@holo-js/*', '--sequential', 'build'])
+    run(rootDir, process.execPath, ['scripts/build-libraries.mjs'])
   }
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'holo-published-package-smoke-'))
