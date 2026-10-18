@@ -1,6 +1,6 @@
-import { createApp, defineEventHandler } from 'h3'
+import { createApp, createError, defineEventHandler } from 'h3'
 import { expect, it } from 'vitest'
-import { ValidationException } from '@holo-js/validation'
+import { isValidationException, serializeValidationException, ValidationException, validationInternals } from '@holo-js/validation'
 import handleValidationError from '../src/runtime/server/error'
 import { serve } from './support/http'
 
@@ -42,4 +42,21 @@ it('redirects a real browser form request back to its page with flashed validati
   expect(response.headers.get('location')).toBe('/profile/edit')
   expect(response.headers.get('set-cookie')).toContain('holo_form_failure=')
   expect(await response.text()).toBe('')
+})
+
+it('preserves serialized H3 validation fields and retry metadata over HTTP', async () => {
+  const exception = ValidationException.withMessages({ file: ['Upload a square avatar.'] }, { bag: 'avatar' })
+  validationInternals.setValidationExceptionValues(exception, { title: 'Profile' })
+  validationInternals.setValidationExceptionStatus(exception, 429)
+  validationInternals.setValidationExceptionMetadata(exception, { retryAfterSeconds: 30, retryAt: '2026-10-18T12:00:00Z' })
+  const payload = exception.toJSON()
+  const error = createError({ statusCode: 429, data: payload })
+  expect(isValidationException(error)).toBe(false)
+  expect(serializeValidationException(error)).toEqual(payload)
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(() => { throw error }))
+  const response = await fetch(await serve(app), { headers: { accept: 'application/json' } })
+  expect(response.status).toBe(429)
+  expect(response.headers.get('retry-after')).toBe('30')
+  expect(await response.json()).toEqual(payload)
 })

@@ -60,6 +60,7 @@ Rules are grouped by the field types they apply to. Rules marked "all fields" wo
 - [`max()`](#max-value-message) and [`maxSize()`](#maxsize-value-message), limiting bytes
 - [`size()`](#size-value-message), exact byte count
 - [`image()`](#image-message)
+- [`imageAspectRatio()`](#imageaspectratio-ratios-message)
 
 ## Field types
 
@@ -389,6 +390,27 @@ npm install sharp
 ```
 
 Without it, server-side validation fails with an error asking you to install it. In the browser, `image()` checks the file's contents quickly and leaves the full decode to the server.
+
+### `imageAspectRatio(ratios, message?)`
+
+Require an image with a particular width-to-height ratio. Pass one `'width:height'` string or a nonempty array of allowed ratios:
+
+```ts
+import { field, schema } from '@holo-js/validation'
+
+export const profileImages = schema({
+  avatar: field.file().required().imageAspectRatio('1:1', 'Upload a square avatar.'),
+  cover: field.file().optional().image().imageAspectRatio(['1:1', '16:9']),
+})
+```
+
+The file must match at least one ratio in the list. Width and height must be positive, finite numbers; invalid ratios or an empty list throw a `ValidationContractError` when you define the schema.
+
+This rule performs the same image safety checks as [`image()`](#image-message), even when you omit `.image()`. Combining both rules reuses the image decode. It validates the original file without resizing or cropping it.
+
+Ratios use encoded dimensions before EXIF rotation. Animated images use the height of one frame. Small differences from pixel rounding are allowed: the tolerance for `Math.abs(requestedRatio - width / height)` is `1 / (Math.max((width + height) / 2, height) + 1)`.
+
+Ratio enforcement runs on the Node.js server and requires `sharp`, as described above. Browser validation defers the ratio check to the server, so always validate uploads there too.
 
 ## Sensitive data
 

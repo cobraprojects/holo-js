@@ -106,6 +106,22 @@ export const loginForm = schema({
 
 Forms helpers such as `validate()` and `useForm()` accept these schemas directly.
 
+### Read validation errors across framework boundaries
+
+If you use `isValidationException(error)` to recognize a serialized response or framework-wrapped error, switch to `serializeValidationException(error)` from `@holo-js/validation`. It returns the failure payload, or `undefined` for unrelated errors:
+
+```ts
+import { serializeValidationException } from '@holo-js/validation'
+
+const payload = serializeValidationException(error)
+if (payload) {
+  return payload
+}
+throw error
+```
+
+Read field messages from `payload.errors`. Keep `isValidationException()` when you need to narrow a live exception and call its error bag methods. Holo's adapters and `useForm()` handle transported failures automatically. See [Error Messages](/basics/validation/errors#add-errors-from-your-own-logic).
+
 ## 5. Add the session revocations table (apps using auth)
 
 Auth now records signed-out sessions in an `auth_session_revocations` table, which other-device logout depends on. New projects include this migration. Existing apps need to add it.

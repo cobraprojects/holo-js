@@ -1375,6 +1375,7 @@ describe('@holo-js/forms client', () => {
       retryAfterSeconds: 30,
       retryAt: '2026-07-12T12:00:00.000Z',
     })
+    expect(validationExceptionToFailure({ body: exception.toJSON() })).toEqual(validationExceptionToFailure(exception))
 
     expect(validationExceptionToFailure({
       response: {

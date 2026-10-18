@@ -1,9 +1,10 @@
-import { describe, it } from 'vitest'
+import { describe, expectTypeOf, it } from 'vitest'
 import {
   type FieldKind,
   type InferSchemaData,
   type StandardSchemaV1,
   type ValidationErrorBag,
+  type WebFileLike,
   field,
   parse,
   safeParse,
@@ -11,6 +12,16 @@ import {
 } from '../src'
 
 describe('@holo-js/validation typing', () => {
+  it('preserves file inference through image aspect ratio constraints', () => {
+    const avatar = field.file().imageAspectRatio('1:1').optional()
+    const cover = field.file().required().image().imageAspectRatio(['16:9', '3:2'])
+    const contract = schema({ avatar, cover })
+    expectTypeOf<InferSchemaData<typeof contract.fields>>().toEqualTypeOf<{
+      avatar: WebFileLike | undefined
+      cover: WebFileLike
+    }>()
+  })
+
   it('preserves schema data and error inference through schema-owned type handles', () => {
     type Expect<TValue extends true> = TValue
     type Equal<TLeft, TRight>

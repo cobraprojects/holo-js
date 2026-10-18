@@ -158,7 +158,7 @@ export async function updatePost(id: number, input: PostInput) {
 
 ```ts [Next.js]
 // app/admin/actions.ts — add these imports and actions
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { postForm } from '@/lib/schemas/blog'
 import { createPost, updatePost } from '@/server/lib/blog'
 
@@ -168,8 +168,9 @@ export async function createPostAction(formData: FormData) {
     await createPost(data)
     redirect('/admin/posts')
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error
@@ -182,8 +183,9 @@ export async function updatePostAction(id: number, formData: FormData) {
     await updatePost(id, data)
     redirect('/admin/posts')
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error

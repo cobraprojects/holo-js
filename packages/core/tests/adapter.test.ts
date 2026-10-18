@@ -23,7 +23,7 @@ import { resetStorageRuntime, useStorage } from '@holo-js/storage/runtime'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
-const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const sessionEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
 const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/src/index.ts'))
 const tempDirs: string[] = []

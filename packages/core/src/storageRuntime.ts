@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { openAsBlob } from 'node:fs'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
@@ -216,6 +217,12 @@ function createFileStorageBackend(root: string): StorageBackend {
       }
     },
 
+    async getItemBlob(key) {
+      const targetPath = await resolveStorageReadPath(root, key)
+      if (!targetPath) return null
+      return openAsBlob(targetPath)
+    },
+
     async getItemStat(key, request) {
       try {
         const targetPath = await resolveStorageReadPath(root, key)
@@ -238,6 +245,7 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async getItemStream(key, options) {
+      options.signal?.throwIfAborted()
       const targetPath = await resolveStorageReadPath(root, key)
       if (!targetPath) return null
       const chunkBytes = normalizeChunkBytes(options.chunkBytes)
@@ -246,6 +254,7 @@ function createFileStorageBackend(root: string): StorageBackend {
         const handle = await open(targetPath, 'r')
         try {
           while (true) {
+            options.signal?.throwIfAborted()
             const buffer = new Uint8Array(chunkBytes)
             const { bytesRead } = await handle.read(buffer, 0, chunkBytes, null)
             if (bytesRead === 0) return

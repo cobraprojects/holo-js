@@ -48,7 +48,7 @@ const tempDirs: string[] = []
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../src/index.ts'))
 const kernelPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../kernel/src/index.ts'))
 const queuePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../queue/src/index.ts'))
-const databasePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databasePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 
 function resolveWorkspacePackageEntry(packageName: string): string {
   const packagesRoot = resolve(import.meta.dirname, '../..')

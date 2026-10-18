@@ -1,4 +1,5 @@
 import type { Metadata, default as sharp } from 'sharp'
+import type { DecodedImageVerification } from './imageDecoding'
 
 const maximumDecodedPixels = 40_000_000
 const maximumFrames = 1_000
@@ -58,18 +59,26 @@ function hasCompleteGifStructure(bytes: Uint8Array): boolean {
   return false
 }
 
-export async function verifyDecodedImage(contents: Uint8Array, mimeType: string): Promise<boolean> {
+export async function verifyDecodedImage(contents: Uint8Array, mimeType: string, aspectRatios: readonly (readonly number[])[] = []): Promise<DecodedImageVerification> {
+  const invalid: DecodedImageVerification = { valid: false, aspectRatios: [] }
   const matchesDecodedFormat = decodedFormatMatchers[mimeType]
-  if (!matchesDecodedFormat) return false
-  if (mimeType === 'image/gif' && !hasCompleteGifStructure(contents)) return false
+  if (!matchesDecodedFormat) return invalid
+  if (mimeType === 'image/gif' && !hasCompleteGifStructure(contents)) return invalid
   const decode = await loadSharp()
   try {
     const image = decode(contents, { animated: true, failOn: 'warning', limitInputPixels: maximumDecodedPixels })
     const metadata = await image.metadata()
-    if (!matchesDecodedFormat(metadata) || (metadata.pages ?? 1) > maximumFrames) return false
+    if (!matchesDecodedFormat(metadata) || (metadata.pages ?? 1) > maximumFrames) return invalid
     await image.stats()
-    return true
+    const width = metadata.width
+    const height = metadata.pageHeight ?? metadata.height
+    if (!width || !height) return invalid
+    const precision = 1 / (Math.max((width + height) / 2, height) + 1)
+    return {
+      valid: true,
+      aspectRatios: aspectRatios.map(ratios => ratios.some(ratio => Math.abs(ratio - width / height) <= precision)),
+    }
   } catch {
-    return false
+    return invalid
   }
 }

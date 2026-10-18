@@ -16,6 +16,10 @@ class TransactionError extends Error {}
 
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
+function normalizeBinding(value: unknown): unknown {
+  return typeof value === 'boolean' ? Number(value) : value
+}
+
 type SQLiteTransactionMode = 'deferred' | 'immediate' | 'exclusive'
 
 type SQLiteTransactionOptions = DatabaseOperationOptions & {
@@ -153,7 +157,7 @@ export class SQLiteAdapter implements DriverAdapter {
     bindings: readonly unknown[] = [],
   ): Promise<DriverQueryResult<TRow>> {
     const statement = this.getDatabase().prepare(sql)
-    const rows = statement.all(...bindings) as TRow[]
+    const rows = statement.all(...bindings.map(normalizeBinding)) as TRow[]
     return {
       rows,
       rowCount: rows.length,
@@ -173,7 +177,7 @@ export class SQLiteAdapter implements DriverAdapter {
   ): Promise<DriverExecutionResult> {
     return this.runWithTransactionScope(async () => {
       const statement = this.getDatabase().prepare(sql)
-      const result = statement.run(...bindings)
+      const result = statement.run(...bindings.map(normalizeBinding))
       return {
         affectedRows: result.changes,
         lastInsertId: typeof result.lastInsertRowid === 'bigint'

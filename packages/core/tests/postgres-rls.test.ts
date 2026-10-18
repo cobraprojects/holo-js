@@ -28,7 +28,7 @@ import { defineAppConfig } from ${JSON.stringify(resolve(import.meta.dirname, '.
 export default defineAppConfig({ name: 'RLS test', env: 'test', key: 'rls-test-key' })
 `)
     await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))}
+import { defineDatabaseConfig } from ${JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))}
 const connection = ${JSON.stringify({ driver: 'postgres', ...config, username: name, schema: name })} as const
 export default defineDatabaseConfig({
   defaultConnection: 'main',

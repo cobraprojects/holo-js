@@ -607,6 +607,34 @@ try {
 }
 ```
 
+## Borrowing native files in package integrations
+
+`withStorageFiles()` from `@holo-js/storage/runtime` lends an ordered `File[]` to a callback. Each source contains `path`, an optional configured `disk` name (the default disk when omitted), and an optional display `name` (the path basename when omitted). The callback's return type is preserved.
+
+```ts
+import { withStorageFiles } from '@holo-js/storage/runtime'
+import { field, schema, validate } from '@holo-js/validation'
+
+const gallery = schema({
+  images: field.array(field.file().image().imageAspectRatio(['1:1', '16:9'])),
+})
+
+await withStorageFiles([
+  { disk: 'uploads', path: 'pending/avatar.png', name: 'Avatar.png' },
+  { disk: 'media', path: 'retained/banner.png' },
+], async files => {
+  await validate({ images: files }, gallery)
+})
+```
+
+Files are genuine native Files with `slice()`, `stream()`, `bytes()`, `text()`, and `arrayBuffer()`. Local backends with native Blob support read from the original filesystem path; other backends stream into an OS temporary directory with private permissions. Assembly reads at most Holo's content inspection sample per file into memory, without loading the collection's contents. Backends without native Blob support must implement bounded streaming; otherwise borrowing throws `StorageStreamingUnsupportedError`.
+
+MIME types come from Holo's existing content inspection using the stored path, independently of the supplied display name or remote Content-Type. Unrecognized types use `application/octet-stream`. Files have `lastModified: 0` because storage does not guarantee original modification timestamps. Content inspection does not replace schema image decoding or upload policy validation.
+
+Await every read and validation inside the callback, and do not retain the files, their slices, or unfinished streams afterwards. Temporary files are removed when the callback settles, including failures and cancellation; original stored files are never removed. Native local Blobs require the original file to remain unchanged while being read. This borrowing contract does not revoke native local Files after return.
+
+An optional `AbortSignal` is checked during acquisition and before and after the callback, and forwarded to supported storage streams, including S3 requests. A running callback must cooperate with cancellation; borrowing waits for it to settle before cleanup. A callback failure is rethrown unchanged unless cleanup also fails, in which case both errors are included in an `AggregateError`. Disk/path authorization, tenant checks, upload limits, and validation stay with the calling integration.
+
 ## Next steps
 
 - [Amazon S3 and compatible](/storage/s3): store files in S3, Cloudflare R2, or MinIO

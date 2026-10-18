@@ -176,8 +176,9 @@ export async function createPostAction(formData: FormData) {
 
     redirect('/admin/posts')
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error
@@ -197,8 +198,9 @@ export async function updatePostAction(id: number, formData: FormData) {
 
     redirect('/admin/posts')
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error

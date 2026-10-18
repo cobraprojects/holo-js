@@ -1,5 +1,6 @@
 import * as v from 'valibot'
 import { fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
+import type { DecodedImageVerification } from '@holo-js/kernel/image-decoding'
 import type { FieldDefinition, FieldKind, FieldRule } from './contracts-types'
 import { isPlainObject } from './contracts-support'
 
@@ -20,6 +21,7 @@ export type FieldExecution = {
   readonly checks: RuleValue[]
   readonly customIssues: Map<FieldRule, string>
   readonly confirmationResults: Map<FieldRule, boolean>
+  readonly imageVerifications: Map<Blob, Promise<DecodedImageVerification>>
 }
 
 export type ExecutionNode = {
@@ -37,13 +39,12 @@ export function resolveRuleMessage(rule: FieldRule | undefined, fallback: string
 
 const decodableImageMimeTypes = new Set(['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/tiff', 'image/webp'])
 
-async function isRasterImage(value: unknown): Promise<boolean> {
-  if (!(value instanceof Blob)) return false
+async function verifyRasterImage(value: Blob, aspectRatios: readonly (readonly number[])[]): Promise<DecodedImageVerification> {
   const sample = new Uint8Array(await value.slice(0, fileContentSampleBytes).arrayBuffer())
   const { mimeType, passive } = await inspectFileContent(sample)
-  if (!passive || !mimeType || !decodableImageMimeTypes.has(mimeType)) return false
+  if (!passive || !mimeType || !decodableImageMimeTypes.has(mimeType)) return { valid: false, aspectRatios: [] }
   const { verifyDecodedImage } = await import('@holo-js/kernel/image-decoding')
-  return verifyDecodedImage(new Uint8Array(await value.arrayBuffer()), mimeType)
+  return verifyDecodedImage(new Uint8Array(await value.arrayBuffer()), mimeType, aspectRatios)
 }
 
 export async function executeCustomRule(field: FieldExecution, rule: FieldRule, value: unknown): Promise<void> {
@@ -57,8 +58,23 @@ export async function executeCustomRule(field: FieldExecution, rule: FieldRule, 
     } else if (typeof result === 'string' && result.trim()) {
       field.customIssues.set(rule, result)
     }
-  } else if (validator === 'image' && !await isRasterImage(value)) {
-    field.customIssues.set(rule, resolveRuleMessage(rule, 'The selected file must be an image.'))
+  } else if (validator === 'image' || validator === 'imageAspectRatio') {
+    const ratioRules = field.definition.rules.filter(candidate => candidate.name === 'custom' && candidate.args[0] === 'imageAspectRatio')
+    let verification: DecodedImageVerification = { valid: false, aspectRatios: [] }
+    if (value instanceof Blob) {
+      let pending = field.imageVerifications.get(value)
+      if (!pending) {
+        pending = verifyRasterImage(value, ratioRules.map(candidate => candidate.args.slice(1).filter((ratio): ratio is number => typeof ratio === 'number')))
+        field.imageVerifications.set(value, pending)
+      }
+      verification = await pending
+    }
+    const valid = verification.valid && (validator === 'image' || verification.aspectRatios[ratioRules.indexOf(rule)] === true)
+    if (!valid) {
+      field.customIssues.set(rule, resolveRuleMessage(rule, validator === 'image'
+        ? 'The selected file must be an image.'
+        : 'The selected image must have an allowed aspect ratio.'))
+    }
   }
 }
 
@@ -128,6 +144,7 @@ export function createFieldExecutionSchema(
         checks: [],
         customIssues: new Map(),
         confirmationResults: new Map(),
+        imageVerifications: new Map(),
       }
       node.field = field
       return compile(field, dataset)['~run'](dataset, config)

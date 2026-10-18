@@ -90,7 +90,7 @@ If you call a server action without `useForm()` (for example with React's `useAc
 'use server'
 
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { postForm } from '@/lib/schemas/post'
 import Post from '@/server/models/Post'
 
@@ -100,8 +100,9 @@ export async function createPostAction(formData: FormData) {
     await Post.create(data)
     return { ok: true, status: 201, data: undefined }
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error

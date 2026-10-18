@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
 import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
-import { validationInternals } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
 import { getCurrentNextRequest, setNextAuthRequestRunner, type NextRequestLike } from './request-context'
 export { runWithNextRequest, type NextRequestLike } from './request-context'
@@ -292,7 +292,7 @@ function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs
     try {
       return await handler(...args)
     } catch (error) {
-      const payload = validationInternals.serializeValidationException(error) ?? serializeRateLimitError(error)
+      const payload = serializeValidationException(error) ?? serializeRateLimitError(error)
       if (!payload) throw error
       return Response.json(payload, {
         status: payload.status,

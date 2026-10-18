@@ -79,6 +79,7 @@ These are the messages you get when you don't pass your own:
 | `todayOrBefore()` / `beforeOrToday()` | This field must be today or before. |
 | `todayOrAfter()` / `afterOrToday()` | This field must be today or after. |
 | `image()` | The selected file must be an image. |
+| `imageAspectRatio(ratios)` | The selected image must have an allowed aspect ratio. |
 | `custom()` returning `false` | Validation failed. |
 
 ## Custom messages
@@ -171,16 +172,19 @@ export async function POST(request: Request) {
 }
 ```
 
-To check whether an unknown error is a validation error, use `isValidationException()`. It also recognizes a serialized 422 payload, so it works on errors received from a server:
+Use `isValidationException()` to narrow a live `ValidationException` and access its error bag methods. Framework HTTP errors and serialized payloads are not live exceptions.
+
+At integration and transport boundaries, use `serializeValidationException(error)`. It returns a `SerializedValidationException` or `undefined`, recognizing live exceptions, framework wrappers, serialized payloads, and server error digests. Read field messages from `payload.errors`; the payload also retains `bag`, `values`, `status`, and retry metadata. Digest-only errors have empty values when the framework did not transmit them:
 
 ```ts
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 
 try {
   await savePost(formData)
 } catch (error) {
-  if (isValidationException(error)) {
-    return error.toJSON()
+  const payload = serializeValidationException(error)
+  if (payload) {
+    return payload
   }
 
   throw error

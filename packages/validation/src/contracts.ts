@@ -225,6 +225,29 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     return this.clone(normalizeRule('custom', ['image'], message))
   }
 
+  imageAspectRatio(ratios: `${number}:${number}` | readonly `${number}:${number}`[], message?: string): ValidationFieldBuilder<TOutput> {
+    if (this.field.definition.kind !== 'file') {
+      throw new ValidationContractError('imageAspectRatio is only supported for file fields.')
+    }
+    const values = typeof ratios === 'string' ? [ratios] : ratios
+    if (!Array.isArray(values)) {
+      throw new ValidationContractError('imageAspectRatio must be a ratio or an array of ratios.')
+    }
+    assertNonEmptyArray(values, 'imageAspectRatio')
+    const normalized = Array.from(values, (value: `${number}:${number}`) => {
+      const parts = typeof value === 'string' ? value.split(':') : []
+      const width = Number(parts[0])
+      const height = Number(parts[1])
+      const ratio = width / height
+      if (parts.length !== 2 || !Number.isFinite(width) || !Number.isFinite(height)
+        || width <= 0 || height <= 0 || !Number.isFinite(ratio) || ratio <= 0) {
+        throw new ValidationContractError('imageAspectRatio must contain positive finite width:height ratios.')
+      }
+      return ratio
+    })
+    return this.clone(normalizeRule('custom', ['imageAspectRatio', ...normalized], message))
+  }
+
   maxSize(value: number | `${number}${'kb' | 'mb' | 'gb'}`, message?: string): ValidationFieldBuilder<TOutput> {
     if (typeof value === 'number') {
       assertFiniteNumber(value, 'maxSize')
@@ -335,27 +358,10 @@ function isSerializedValidationExceptionPayload(value: unknown): value is Serial
     && typeof value.message === 'string'
     && typeof value.bag === 'string'
     && isPlainObject(value.values)
+    && (value.retryAfterSeconds === undefined || typeof value.retryAfterSeconds === 'number')
+    && (value.retryAt === undefined || typeof value.retryAt === 'string')
     && isPlainObject(value.errors)
     && Object.values(value.errors).every(messages => Array.isArray(messages) && messages.every(message => typeof message === 'string'))
-}
-
-function findSerializedValidationExceptionPayload(value: unknown): SerializedValidationException | undefined {
-  if (isSerializedValidationExceptionPayload(value)) {
-    return value
-  }
-
-  if (!isPlainObject(value)) {
-    return undefined
-  }
-
-  const candidates = [
-    value.body,
-    value.data,
-    value.error,
-    value.cause,
-  ]
-
-  return candidates.find((candidate): candidate is SerializedValidationException => isSerializedValidationExceptionPayload(candidate))
 }
 
 export class ValidationException<TData = Record<string, unknown>> extends Error {
@@ -497,6 +503,7 @@ export function parseValidationExceptionDigest<TData = Record<string, unknown>>(
       || typeof payload.message !== 'string'
       || typeof payload.bag !== 'string'
       || !isPlainObject(payload.errors)
+      || !Object.values(payload.errors).every(messages => Array.isArray(messages) && messages.every(message => typeof message === 'string'))
     ) {
       return undefined
     }
@@ -569,38 +576,35 @@ function throwValidationException<TData>(exception: ValidationException<TData>):
 }
 
 export function isValidationException(value: unknown): value is ValidationException {
-  if (value instanceof ValidationException) {
-    return true
-  }
-
-  if (findSerializedValidationExceptionPayload(value)) {
-    return true
-  }
-
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-
-  const candidate = value as {
-    readonly name?: unknown
-    readonly toJSON?: () => unknown
-  }
-  if (candidate.name !== 'ValidationException' || typeof candidate.toJSON !== 'function') {
-    return false
-  }
-
-  try {
-    const payload = candidate.toJSON()
-    return isSerializedValidationExceptionPayload(payload)
-  } catch {
-    return false
-  }
+  return value instanceof ValidationException
 }
 
-function serializeValidationException(value: unknown): SerializedValidationException | undefined {
-  const serialized = findSerializedValidationExceptionPayload(value)
-  if (serialized) return serialized
-  return isValidationException(value) ? value.toJSON() : undefined
+export function serializeValidationException(value: unknown): SerializedValidationException | undefined {
+  const pending = [value]
+  const seen = new Set<unknown>()
+  let digest: ValidationExceptionDigestPayload | undefined
+
+  for (const candidate of pending) {
+    if (!isPlainObject(candidate) || seen.has(candidate)) continue
+    seen.add(candidate)
+
+    if (isSerializedValidationExceptionPayload(candidate)) return candidate
+
+    if (candidate.name === 'ValidationException' && typeof candidate.toJSON === 'function') {
+      try {
+        const payload: unknown = candidate.toJSON()
+        if (isSerializedValidationExceptionPayload(payload)) return payload
+      } catch {
+        continue
+      }
+    }
+
+    digest ??= parseValidationExceptionDigest(candidate)
+
+    pending.push(candidate.body, candidate.data, candidate.error, candidate.cause)
+  }
+
+  return digest ? { ...digest, values: digest.values ?? {} } : undefined
 }
 
 export function isValidationSchema(value: unknown): value is ValidationSchema {

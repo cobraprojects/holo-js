@@ -6,12 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../../core/src/storageRuntime'
 import '../src/config'
-import { useStorage } from '../src/runtime/composables'
+import { useStorage, withStorageFiles } from '../src/runtime/composables'
 
 const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
 let server: Server
-let objects: Map<string, { body: Buffer, contentType: string }>
+let objects: Map<string, { body: Buffer, contentType: string, stall?: boolean }>
+let streamingStarted: (() => void) | undefined
+let streamingClosed: (() => void) | undefined
 let denied: boolean
 let rangeStatusForEmptyObjects: 200 | 416
 let contentRangeOverride: string | undefined
@@ -20,6 +22,8 @@ let projectRoot: string
 
 beforeEach(async () => {
   objects = new Map()
+  streamingStarted = undefined
+  streamingClosed = undefined
   denied = false
   rangeStatusForEmptyObjects = 416
   contentRangeOverride = undefined
@@ -43,6 +47,13 @@ beforeEach(async () => {
     }
     const match = /^bytes=0-(\d+)$/.exec(range ?? '')
     if (!match) {
+      if (object.stall) {
+        response.writeHead(200, { 'content-type': object.contentType })
+        response.write(object.body)
+        response.once('close', () => streamingClosed?.())
+        streamingStarted?.()
+        return
+      }
       response.writeHead(200, { 'content-type': object.contentType }).end(object.body)
       return
     }
@@ -137,4 +148,63 @@ describe('file metadata across storage drivers', () => {
     await expect(useStorage('media').stat(path)).rejects.toThrow()
     expect(requests).toEqual([])
   })
+})
+
+describe('borrowing S3 files', () => {
+  it.each([false, true])('releases spooled native files after callback failure=%s', async (fail) => {
+    objects.set('/files/photo.txt', { body: pngPixel, contentType: 'image/jpeg' })
+    let retained: File | undefined
+    const failure = new Error('validator failed')
+    const operation = withStorageFiles([{ disk: 'media', path: 'photo.txt', name: 'Photo.jpg' }], async (files) => {
+      retained = files[0]
+      expect(retained).toBeInstanceOf(File)
+      expect(retained?.name).toBe('Photo.jpg')
+      expect(retained?.type).toBe('image/png')
+      expect(Buffer.from(await retained?.arrayBuffer() ?? new ArrayBuffer(0))).toEqual(pngPixel)
+      expect(await retained?.slice(0, 4).bytes()).toEqual(new Uint8Array(pngPixel.subarray(0, 4)))
+      if (fail) throw failure
+      return 'validated'
+    })
+    if (fail) await expect(operation).rejects.toBe(failure)
+    else await expect(operation).resolves.toBe('validated')
+    await expect(retained?.arrayBuffer()).rejects.toThrow()
+    expect(objects.get('/files/photo.txt')?.body).toEqual(pngPixel)
+  })
+
+  it('releases earlier spools when a later file is missing', async () => {
+    objects.set('/files/photo.png', { body: pngPixel, contentType: 'image/png' })
+    await expect(withStorageFiles([
+      { disk: 'media', path: 'photo.png' },
+      { disk: 'media', path: 'missing.png' },
+    ], () => { throw new Error('Callback must not run') })).rejects.toThrow('File not found')
+  })
+
+  it('waits for a running callback before cleaning up on cancellation', async () => {
+    objects.set('/files/photo.png', { body: pngPixel, contentType: 'image/png' })
+    const controller = new AbortController()
+    const reason = new Error('cancelled')
+    let retained: File | undefined
+    await expect(withStorageFiles([{ disk: 'media', path: 'photo.png' }], async (files) => {
+      retained = files[0]
+      controller.abort(reason)
+      await Promise.resolve()
+      expect(Buffer.from(await retained?.arrayBuffer() ?? new ArrayBuffer(0))).toEqual(pngPixel)
+    }, { signal: controller.signal })).rejects.toBe(reason)
+    await expect(retained?.arrayBuffer()).rejects.toThrow()
+  })
+})
+
+it('aborts an active S3 transfer and closes the response before invoking validation', async () => {
+  objects.set('/files/stalled.bin', { body: pngPixel, contentType: 'image/png', stall: true })
+  const started = new Promise<void>((resolve) => { streamingStarted = resolve })
+  const closed = new Promise<void>((resolve) => { streamingClosed = resolve })
+  const controller = new AbortController()
+  const operation = withStorageFiles([{ disk: 'media', path: 'stalled.bin' }], () => {
+    throw new Error('Callback must not run')
+  }, { signal: controller.signal })
+  const rejection = expect(operation).rejects.toThrow()
+  await started
+  controller.abort()
+  await rejection
+  await closed
 })

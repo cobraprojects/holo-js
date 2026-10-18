@@ -12,7 +12,7 @@ import type * as HoloCoreModule from '@holo-js/core'
 
 type RuntimeConfigShape = Record<string, unknown>
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
-const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/src/index.ts'))
 const tempDirs: string[] = []
 

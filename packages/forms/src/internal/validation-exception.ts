@@ -1,8 +1,4 @@
-import {
-  type SerializedValidationException,
-  isValidationException,
-} from '@holo-js/validation'
-import { parseValidationExceptionDigest } from '@holo-js/validation/internal/compiled'
+import { serializeValidationException } from '@holo-js/validation'
 import type { FormFailurePayload } from '../contracts'
 
 type SubmittedFormFailurePayload<TData> = FormFailurePayload<TData> & {
@@ -56,24 +52,7 @@ export function validationExceptionToFailure<TData>(
   error: unknown,
   fallbackValues: Partial<TData> = {},
 ): SubmittedFormFailurePayload<TData> | undefined {
-  const payload = isValidationException(error)
-    ? error.toJSON() as SerializedValidationException<TData>
-    : parseValidationExceptionDigest<TData>(error)
-
-  if (payload) {
-    return {
-      ok: false,
-      status: payload.status,
-      submitted: true,
-      valid: false,
-      values: payload.values && Object.keys(payload.values).length > 0 ? payload.values : fallbackValues,
-      errors: payload.errors,
-      ...(typeof payload.retryAfterSeconds === 'number' ? { retryAfterSeconds: payload.retryAfterSeconds } : {}),
-      ...(typeof payload.retryAt === 'string' ? { retryAt: payload.retryAt } : {}),
-    }
-  }
-
-  const formFailurePayload = formFailurePayloadFromError<TData>(error)
+  const formFailurePayload = formFailurePayloadFromError<TData>(serializeValidationException(error) ?? error)
   if (formFailurePayload) {
     return {
       ok: false,

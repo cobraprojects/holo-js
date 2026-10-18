@@ -218,10 +218,13 @@ describe('@holo-js/validation contracts', () => {
       body: exception.toJSON(),
     }
 
-    expect(isValidationException(crossBundleException)).toBe(true)
-    expect(isValidationException(new ForeignValidationException())).toBe(true)
-    expect(isValidationException(exception.toJSON())).toBe(true)
-    expect(isValidationException(svelteKitError)).toBe(true)
+    expect(isValidationException(crossBundleException)).toBe(false)
+    expect(validationInternals.serializeValidationException(crossBundleException)).toEqual(exception.toJSON())
+    expect(isValidationException(new ForeignValidationException())).toBe(false)
+    expect(validationInternals.serializeValidationException(new ForeignValidationException())).toEqual(exception.toJSON())
+    expect(isValidationException(exception.toJSON())).toBe(false)
+    expect(isValidationException(svelteKitError)).toBe(false)
+    expect(validationInternals.serializeValidationException(svelteKitError)).toEqual(exception.toJSON())
     expect(isValidationException(null)).toBe(false)
     expect(isValidationException({ name: 'ValidationException' })).toBe(false)
     expect(isValidationException({

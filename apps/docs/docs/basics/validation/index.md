@@ -212,7 +212,8 @@ export const getPost = query(field.string().required(), async (slug) => {
 | `safeParse(input, schema)` | Return `{ valid, values, errors }` or `{ valid, data, values, errors }` without throwing. |
 | `parse(input, schema)` | Return typed data, or throw a `ValidationContractError`. Use it for internal data. |
 | `isValidationSchema(value)` | Return `true` if `value` is a schema built by `schema()`. |
-| `isValidationException(value)` | Return `true` for a `ValidationException` or its serialized 422 payload. See [Error Messages](/basics/validation/errors#add-errors-from-your-own-logic). |
+| `isValidationException(value)` | Narrow a live `ValidationException` with error bag methods. See [Error Messages](/basics/validation/errors#add-errors-from-your-own-logic). |
+| `serializeValidationException(value)` | Read a serialized failure payload from live exceptions, framework wrappers, serialized payloads, or digests. Returns `undefined` for unrelated errors. |
 | `createErrorBag(messages?)` | Build an error bag from a `path → messages` object. See [Read errors](/basics/validation/errors#read-errors). |
 
 `ValidationException` is the error that `validate()` throws. `ValidationContractError` is thrown when a schema is defined or used incorrectly. See [Error Messages](/basics/validation/errors#exception-reference).

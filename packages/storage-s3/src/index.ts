@@ -360,9 +360,10 @@ async function s3Fetch(
   url: URL,
   body?: DriverValue,
   headers?: Headers | Readonly<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<Response | null> {
   const request = createSignedRequest(options, method, url, body, headers)
-  const response = await fetch(request)
+  const response = await fetch(request, { signal })
 
   if (response.status === 404) {
     return null
@@ -559,19 +560,20 @@ export default function createS3Driver(input: S3DriverOptions) {
     },
     async getItemStream(
       key: string,
-      request: { readonly chunkBytes?: number },
+      request: { readonly chunkBytes?: number, readonly signal?: AbortSignal },
     ): Promise<AsyncIterable<Uint8Array> | null> {
       const options = getOptions()
       const url = resolveObjectUrl(options, key)
       const chunkBytes = normalizeStreamChunkBytes(request.chunkBytes)
       try {
-        if (!await s3Fetch(options, 'HEAD', url)) return null
+        if (!await s3Fetch(options, 'HEAD', url, undefined, undefined, request.signal)) return null
       } catch {
+        request.signal?.throwIfAborted()
         throw createDriverError('Stream read failed.')
       }
 
       return (async function* (): AsyncGenerator<Uint8Array> {
-        const response = await s3Fetch(options, 'GET', url)
+        const response = await s3Fetch(options, 'GET', url, undefined, undefined, request.signal)
         const reader = response?.body?.getReader()
         if (!reader) throw createDriverError('Stream read failed.')
         try {

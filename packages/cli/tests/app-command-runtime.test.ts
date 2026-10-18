@@ -9,7 +9,7 @@ import { defaultProjectConfig } from '../src/project'
 import { defineCommand } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
-const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const temporaryDirectories: string[] = []
 
 async function createProject(): Promise<string> {

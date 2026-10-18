@@ -10,3 +10,6 @@ These small fixtures are real encoded images produced with sharp (libvips), plus
 - `scripted.svg`: an SVG containing a script.
 - `disguised-avatar.png`: XHTML with a script, saved under an image name.
 - `bitmap.bmp`: a 2x2 BMP, a raster format that image validation does not decode.
+- `square.png`: a 32x32 solid-color avatar.
+- `rounded-ratio.png`, `outside-ratio-tolerance.png`: 100x56 and 101x56 images, inside and outside Laravel's dimension-dependent tolerance for 16:9.
+- `oriented.jpeg`: a 48x32 image with EXIF orientation 6; encoded dimensions remain landscape while display orientation is portrait.

@@ -117,7 +117,7 @@ The `emailVerificationRoute` from login includes the user's email, so your page 
 // app/api/verify-email/resend/route.ts
 import { resendEmailVerification } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { resendEmailVerificationForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
@@ -128,7 +128,7 @@ export async function POST(request: Request) {
   try {
     await resendEmailVerification(input.email)
   } catch (error) {
-    if (!isValidationException(error)) throw error
+    if (!serializeValidationException(error)) throw error
   }
 
   return Response.json({ ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } })
@@ -139,7 +139,7 @@ export async function POST(request: Request) {
 // server/api/verify-email/resend.post.ts
 import { resendEmailVerification } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { resendEmailVerificationForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
@@ -150,7 +150,7 @@ export default defineEventHandler(async (event) => {
   try {
     await resendEmailVerification(input.email)
   } catch (error) {
-    if (!isValidationException(error)) throw error
+    if (!serializeValidationException(error)) throw error
   }
 
   return { ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } }
@@ -162,7 +162,7 @@ export default defineEventHandler(async (event) => {
 import { json } from '@sveltejs/kit'
 import { resendEmailVerification } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { resendEmailVerificationForm } from '$lib/schemas/auth'
 
 export async function POST({ request }: { request: Request }) {
@@ -173,7 +173,7 @@ export async function POST({ request }: { request: Request }) {
   try {
     await resendEmailVerification(input.email)
   } catch (error) {
-    if (!isValidationException(error)) throw error
+    if (!serializeValidationException(error)) throw error
   }
 
   return json({ ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } })

@@ -13,6 +13,7 @@ export {
   isValidationException,
   parse,
   safeParse,
+  serializeValidationException,
   schema,
   validate,
   validationInternals,

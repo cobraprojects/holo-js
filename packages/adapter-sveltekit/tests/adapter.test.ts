@@ -9,7 +9,7 @@ import { linkInstalledDependenciesForPackage } from '../../../tests/support/publ
 import type * as AdapterModule from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
-const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const repoRoot = resolve(import.meta.dirname, '../../..')
 const tempDirs: string[] = []
 const tempBuildRoots: string[] = []

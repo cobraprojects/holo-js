@@ -14,7 +14,7 @@ import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapter
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
-const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const mailEntry = JSON.stringify(resolve(import.meta.dirname, '../../mail/src/index.ts'))
 const notificationsEntry = JSON.stringify(resolve(import.meta.dirname, '../../notifications/src/index.ts'))
 const sessionEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))

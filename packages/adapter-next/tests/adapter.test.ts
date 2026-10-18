@@ -14,7 +14,7 @@ import {
 import { withHolo } from '../src/config'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
-const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const tempDirs: string[] = []
 const requireNextModule = createRequire(import.meta.url)
 

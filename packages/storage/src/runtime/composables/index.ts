@@ -1,4 +1,9 @@
 import { createHmac, createHash } from 'node:crypto'
+import { createWriteStream, openAsBlob } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
 import { createTemporaryLocalStorageUrl } from '../../temporaryLocalStorage'
 import type {
@@ -17,6 +22,7 @@ type StorageRuntimeConfigValue = {
 export interface StorageBackend {
   getItem<T = unknown>(key: string): Promise<T | null>
   getItemRaw(key: string): Promise<RawStorageValue>
+  getItemBlob?(key: string): Promise<Blob | null>
   getItemStat?(key: string, request: StorageFileSampleRequest): Promise<StorageFileSample | null>
   setItem(key: string, value: unknown): Promise<void>
   setItemRaw(key: string, value: Exclude<RawStorageValue, null>): Promise<void>
@@ -74,6 +80,7 @@ export class StorageMetadataUnsupportedError extends Error {
 }
 
 export interface StorageStreamReadOptions {
+  readonly signal?: AbortSignal
   readonly chunkBytes?: number
 }
 
@@ -675,6 +682,7 @@ function createDisk(diskName?: string): StorageInstance {
 
       return backend.getItemStream(normalizeKey(path), {
         chunkBytes: normalizeStreamChunkBytes(options.chunkBytes),
+        ...(options.signal ? { signal: options.signal } : {}),
       })
     },
 
@@ -862,4 +870,66 @@ export const Storage = {
   temporaryUrl(path: string, options?: TemporaryUrlOptions): string {
     return createDisk().temporaryUrl(path, options)
   },
+}
+
+export interface StorageFileSource {
+  readonly disk?: string
+  readonly path: string
+  readonly name?: string
+}
+
+export interface StorageFileBorrowOptions {
+  readonly signal?: AbortSignal
+}
+
+export async function withStorageFiles<TResult>(
+  sources: readonly StorageFileSource[],
+  callback: (files: File[]) => TResult | Promise<TResult>,
+  options: StorageFileBorrowOptions = {},
+): Promise<TResult> {
+  const { signal } = options
+  let temporaryDirectory: string | undefined
+  let failure: { readonly error: unknown } | undefined
+  try {
+    signal?.throwIfAborted()
+    const files: File[] = []
+    for (const source of sources) {
+      signal?.throwIfAborted()
+      const disk = useStorage(source.disk)
+      let blob: Blob
+      if (disk.getItemBlob) {
+        const stored = await disk.getItemBlob(normalizeKey(source.path))
+        if (!stored) throw new Error('[Holo Storage] File not found.')
+        blob = stored
+      } else {
+        temporaryDirectory ??= await mkdtemp(join(tmpdir(), 'holo-storage-files-'))
+        const path = join(temporaryDirectory, String(files.length))
+        const stream = await disk.readStream(source.path, options)
+        if (!stream) throw new Error('[Holo Storage] File not found.')
+        await pipeline(stream, createWriteStream(path, { flags: 'wx', mode: 0o600 }), { signal })
+        blob = await openAsBlob(path)
+      }
+      signal?.throwIfAborted()
+      const sample = new Uint8Array(await blob.slice(0, fileContentSampleBytes).arrayBuffer())
+      const { mimeType } = await inspectFileContent(sample, source.path)
+      files.push(new File([blob], source.name ?? basename(source.path.replace(/\\/gu, '/')), {
+        type: mimeType ?? 'application/octet-stream',
+        lastModified: 0,
+      }))
+    }
+    signal?.throwIfAborted()
+    const result = await callback(files)
+    signal?.throwIfAborted()
+    return result
+  } catch (error) {
+    failure = { error }
+    throw error
+  } finally {
+    if (temporaryDirectory) {
+      await rm(temporaryDirectory, { recursive: true, force: true }).catch((error: unknown) => {
+        if (failure) throw new AggregateError([failure.error, error], '[Holo Storage] File borrowing and cleanup failed.')
+        throw error
+      })
+    }
+  }
 }
