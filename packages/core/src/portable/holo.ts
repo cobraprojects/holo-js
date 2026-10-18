@@ -2073,13 +2073,21 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       const state = getRuntimeState()
       if (state.current) throw new Error('A Holo runtime is already initialized for this process.')
       if (state.transition) throw new Error(runtimeTransitionConflicts[state.transition.phase])
-      await runWithinRuntimeTransition(runtime, 'initializing', () => runtimeLifecycle.initialize({ projectRoot }))
-      runtime.initialized = true
-      state.current = runtime
+      await runWithinRuntimeTransition(runtime, 'initializing', async () => {
+        await runtimeLifecycle.initialize({ projectRoot })
+        runtime.initialized = true
+        state.current = runtime
+      })
     },
     async shutdown() {
-      runtime.initialized = false
       const state = getRuntimeState()
+      if (state.transition?.runtime === runtime) {
+        const { phase, settled } = state.transition
+        await settled
+        if (phase === 'initializing') await runtime.shutdown()
+        return
+      }
+      runtime.initialized = false
       if (state.current !== runtime) {
         await runtimeLifecycle.dispose({ projectRoot })
         return

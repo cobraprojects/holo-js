@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
 import { defineJob, dispatchSync, registerQueueJob, resetQueueRegistry } from '@holo-js/queue'
-import { createHolo, initializeHolo, report, resetHoloRuntime } from '../src'
+import { createHolo, initializeHolo, peekHolo, report, resetHoloRuntime } from '../src'
 
 type ReportedError = {
   readonly error: unknown
@@ -199,6 +199,62 @@ describe('application error reporting', () => {
     report(error)
 
     expect(reports).toEqual([{ error, context: { capability: 'second', operation: 'report' } }])
+  })
+
+  it('lets repeated shutdown calls share one shutdown before the next runtime boots', async () => {
+    const reports = prepareCollectingReporter()
+    const first = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+    await first.initialize()
+    const secondRoot = await createProject(`{
+      report(error, context) {
+        globalThis.__holoTestReports__.push({ error, context: { ...context, capability: 'second' } })
+      },
+    }`)
+
+    const shutdowns = Promise.all([first.shutdown(), first.shutdown()])
+    await initializeHolo(secondRoot, { processEnv: {} })
+    await shutdowns
+    const error = new Error('owned by the second runtime')
+    report(error)
+
+    expect(reports).toEqual([{ error, context: { capability: 'second', operation: 'report' } }])
+  })
+
+  it('lets shutdowns requested during initialization finish before the next runtime boots', async () => {
+    const reports = prepareCollectingReporter()
+    const first = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+    const secondRoot = await createProject(`{
+      report(error, context) {
+        globalThis.__holoTestReports__.push({ error, context: { ...context, capability: 'second' } })
+      },
+    }`)
+
+    const initialization = first.initialize()
+    const shutdowns = [first.shutdown(), first.shutdown()]
+    await initialization
+    await Promise.all([...shutdowns, initializeHolo(secondRoot, { processEnv: {} })])
+    const error = new Error('owned by the second runtime')
+    report(error)
+
+    expect(reports).toEqual([{ error, context: { capability: 'second', operation: 'report' } }])
+  })
+
+  it('finishes initialization before shutdowns requested during it, leaving no runtime installed', async () => {
+    const outerReport = vi.fn()
+    errorReportingInternals.configure({ report: outerReport })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
+    const reports = prepareCollectingReporter()
+    const runtime = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+
+    const initialization = runtime.initialize()
+    const shutdowns = [runtime.shutdown(), runtime.shutdown()]
+    await Promise.all([initialization, ...shutdowns])
+    const error = new Error('after shutdown during initialization')
+    report(error)
+
+    expect(peekHolo()).toBeUndefined()
+    expect(reports).toEqual([])
+    expect(outerReport).toHaveBeenCalledExactlyOnceWith(error, { capability: 'app', operation: 'report' })
   })
 
   it('writes to console.error when the application configures no reporter', async () => {
