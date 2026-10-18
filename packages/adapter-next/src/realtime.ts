@@ -190,7 +190,7 @@ export const mutation: typeof createRealtimeMutation = ((input) => {
   return wrappedDefinition
 }) as typeof createRealtimeMutation
 
-function fulfilledPromise<TValue>(value: TValue): Promise<TValue> {
+function fulfilledReactThenable<TValue>(value: TValue): Promise<TValue> {
   return Object.assign(Promise.resolve(value), { status: 'fulfilled', value })
 }
 
@@ -200,7 +200,7 @@ function loadRealtimeSnapshot<TResult>(store: RealtimeQueryStore<TResult>): Prom
     return existingLoad as Promise<RealtimeSubscriptionSnapshot<TResult>>
   }
 
-  const load = store.snapshot ? fulfilledPromise(store.snapshot) : store.load()
+  const load = store.snapshot ? fulfilledReactThenable(store.snapshot) : store.load()
   realtimeSnapshotLoads.set(store, load)
   return load
 }
