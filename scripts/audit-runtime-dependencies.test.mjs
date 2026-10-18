@@ -106,3 +106,9 @@ test('fails when an exception no longer matches a blocking advisory', async () =
   assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`)
   assert.match(result.stdout, /Unused exception.*parser@0\.9\.0/)
 })
+
+test('rejects an exception whose expiry is not a real calendar date', async () => {
+  const result = await runExceptionScenario([{ ...parserException, expires: '2026-13-17' }])
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /Invalid audit exceptions/)
+})

@@ -21,6 +21,12 @@ async function readAdvisories() {
   return JSON.parse(result.stdout)
 }
 
+function isCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
 async function readExceptions() {
   const contents = await readFile('audit-exceptions.json', 'utf8').catch(error => {
     if (error.code === 'ENOENT') return '[]'
@@ -31,7 +37,7 @@ async function readExceptions() {
     typeof exception?.advisory === 'string'
     && typeof exception.package === 'string'
     && semver.valid(exception.version)
-    && /^\d{4}-\d{2}-\d{2}$/.test(exception.expires ?? '')
+    && isCalendarDate(exception.expires)
     && typeof exception.reason === 'string'
     && exception.reason.trim().length > 0
   ))
