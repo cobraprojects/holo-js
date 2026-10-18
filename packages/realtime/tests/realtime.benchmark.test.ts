@@ -4734,7 +4734,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         },
       })
     }))
-    expect(realtimeRuntimeInternals.getRuntimeState().tableBroadSubscribers.get(tableDependency())?.size).toBe(1)
+    expect(realtimeRuntimeInternals.getRuntimeState().tableBroadSubscribers.get(tableDependency())?.size).toBe(subscriptionCount)
 
     const contradictedStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
@@ -4743,7 +4743,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const contradictedDurationMs = Number((performance.now() - contradictedStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
 
     version = 1
@@ -4754,7 +4754,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const matchingDurationMs = Number((performance.now() - matchingStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
 
     console.info(JSON.stringify({
@@ -4932,7 +4932,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures patch delivery across many shared subscribers without rerunning the query', async () => {
+  it('measures patch delivery across many identical subscriptions without rerunning the query', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -4977,7 +4977,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(observedTitle).toBe('Updated 500')
     expect(subscriptions[0]?.current.data[499]?.title).toBe('Updated 500')
@@ -5003,7 +5003,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('records representative sync execution modes without per-subscriber reruns', async () => {
+  it('records representative sync execution modes with independent subscriptions', async () => {
     type RepresentativeMetric = {
       readonly emittedPatches: number
       readonly emittedSnapshots: number
@@ -5052,7 +5052,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         tableDependency(),
       ],
     })
-    expect(patchCounters.queryExecutions).toBe(1)
+    expect(patchCounters.queryExecutions).toBe(representativeSubscriptions)
     expect(patchCounters.emittedSnapshots).toBe(representativeSubscriptions)
     expect(emittedPatches).toBe(representativeSubscriptions)
     matrix.push({
@@ -5098,7 +5098,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       projectedPatchedRow,
       'Post 500',
     ))
-    expect(projectedCounters.queryExecutions).toBe(1)
+    expect(projectedCounters.queryExecutions).toBe(representativeSubscriptions)
     expect(projectedCounters.emittedSnapshots).toBe(representativeSubscriptions)
     expect(projectedPatches).toBe(representativeSubscriptions)
     matrix.push({
@@ -5142,7 +5142,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }
     aggregateRows.push(insertedAggregateRow)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedAggregateRow))
-    expect(aggregateCounters.queryExecutions).toBe(1)
+    expect(aggregateCounters.queryExecutions).toBe(representativeSubscriptions)
     expect(aggregateCounters.emittedSnapshots).toBe(representativeSubscriptions)
     expect(aggregatePatches).toBe(representativeSubscriptions)
     matrix.push({
@@ -5219,7 +5219,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }
     fallbackRows[499] = fallbackPatchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(fallbackPatchedRow, 'Post 500'))
-    expect(fallbackCounters.queryExecutions).toBe(2)
+    expect(fallbackCounters.queryExecutions).toBe(representativeSubscriptions * 2)
     expect(fallbackCounters.emittedSnapshots).toBe(representativeSubscriptions * 2)
     expect(fallbackPatches).toBe(0)
     matrix.push({
@@ -5365,7 +5365,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedRowBackfillQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "id" IN (?, ?)').length
     const singleRowBackfillQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "id" = ? LIMIT 1').length
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(groupedRowBackfillQueries).toBe(1)
@@ -5385,7 +5385,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures shared safe fallback for unpatchable queries across many subscribers', async () => {
+  it('measures independent safe fallback for unpatchable queries across many subscribers', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -5461,7 +5461,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
     expect(observedTitle).toBe('Updated 500')
@@ -5479,7 +5479,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures batched shared fallback for unpatchable queries without per-event reruns', async () => {
+  it('measures batched independent fallback for unpatchable queries without per-event reruns', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -5569,7 +5569,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ])
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
     expect(observedFirstTitle).toBe('Updated 500')
@@ -5588,7 +5588,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures model shared safe fallback for unsupported distinct queries across many subscribers', async () => {
+  it('measures model independent safe fallback for unsupported distinct queries across many subscribers', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -5631,7 +5631,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
     expect(observedTitle).toBe('Updated 500')
@@ -5694,7 +5694,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedTotal).toBe(patchRowCount)
@@ -5759,7 +5759,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedFirstGroupTotal).toBe(patchRowCount)
@@ -5826,7 +5826,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedFirstGroupTotal).toBe(patchRowCount)
@@ -5897,7 +5897,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       .slice(0, patchRowCount)
       .reduce((total, row) => total + Number(row.score), 0)
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedFirstGroupTotal).toBe(expectedInitialTotal)
@@ -5983,7 +5983,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         && queryLog.sql.includes('HAVING COUNT(*) > ?')
     }).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedFirstGroupTotal).toBe(expectedInitialTotal)
@@ -6071,7 +6071,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         && queryLog.sql.includes('HAVING COUNT(*) > ?')
     }).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedFirstGroupAverage).toBe(expectedInitialAverage)
@@ -6155,7 +6155,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       return queryLog.sql.includes('AVG("score") AS "__holo_grouped_aggregate_value"')
     }).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedAverage).toBe(expectedInitialAverage)
@@ -6253,7 +6253,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         && queryLog.sql.includes('HAVING COUNT(*) > ?')
     }).length
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(observedMax).toBe(11_000)
@@ -6335,7 +6335,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         && queryLog.sql.includes('HAVING COUNT(*) > ?')
     }).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedMax).toBe(11_000)
@@ -6400,7 +6400,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchScoreUpdateInvalidation(patchedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedBestScore).toBe(11_000)
@@ -6466,7 +6466,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       return queryLog.sql.includes('__holo_grouped_aggregate_value_count')
     }).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedBackfillQueries).toBe(1)
@@ -6492,7 +6492,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures compact patch transport across many shared subscribers', async () => {
+  it('measures compact patch transport across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -6530,7 +6530,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -6555,7 +6555,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures compact merge patch transport for wide row updates across many shared subscribers', async () => {
+  it('measures compact merge patch transport for wide row updates across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -6608,7 +6608,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -6696,7 +6696,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(adapter.queries).toHaveLength(2)
@@ -6776,7 +6776,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(adapter.queries).toHaveLength(2)
@@ -6803,7 +6803,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures selected row patch transport across many shared subscribers without leaking unselected fields', async () => {
+  it('measures selected row patch transport across many identical subscriptions without leaking unselected fields', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -6844,7 +6844,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialUserId).toBeUndefined()
@@ -6910,7 +6910,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPartialRowValueInvalidation(patchedRow, 'Post 500'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialUserId).toBeUndefined()
@@ -6979,7 +6979,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialUserId).toBeUndefined()
@@ -7052,7 +7052,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialUserId).toBe(1)
@@ -7158,7 +7158,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(entry?.queries[0]?.patchable).toBe(true)
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialId).toBeUndefined()
@@ -7287,7 +7287,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(entry?.queries[0]?.patchable).toBe(true)
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(observedInitialId).toBeUndefined()
@@ -7319,7 +7319,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures compact multi-row patch transport across many shared subscribers', async () => {
+  it('measures compact multi-row patch transport across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -7369,7 +7369,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -7439,7 +7439,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 151'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -7522,7 +7522,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(entry?.queries[0]?.patchable).toBe(true)
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(adapter.queries).toHaveLength(1)
@@ -7589,7 +7589,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 51'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -7666,7 +7666,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(adapter.queries).toHaveLength(1)
@@ -7745,7 +7745,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const countBackfillQueries = adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(adapter.queries).toHaveLength(2)
@@ -7813,7 +7813,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -7919,7 +7919,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedCountBackfillQueries = patchQueries.filter(query => query.sql === 'SELECT "user_id", COUNT(*) AS "__holo_count" FROM "posts" WHERE "user_id" IN (?, ?) GROUP BY "user_id"').length
     const singleCountBackfillQueries = patchQueries.filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "user_id" = ?').length
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(groupedWindowBackfillQueries).toBe(1)
@@ -7996,7 +7996,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const countBackfillQueries = adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(adapter.queries).toHaveLength(3)
@@ -8062,7 +8062,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -8146,7 +8146,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -8227,7 +8227,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -8310,7 +8310,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -8393,7 +8393,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8477,7 +8477,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8544,7 +8544,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8627,7 +8627,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8712,7 +8712,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8795,7 +8795,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8880,7 +8880,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -8962,7 +8962,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 51'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9036,7 +9036,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const patchQueryCount = adapter.queries.length - setupQueryCount
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9105,7 +9105,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9194,7 +9194,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9280,7 +9280,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9368,7 +9368,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9454,7 +9454,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialHasMorePages).toBe(true)
@@ -9534,7 +9534,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialHasMorePages).toBe(true)
@@ -9614,7 +9614,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialHasMorePages).toBe(true)
@@ -9696,7 +9696,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialHasMorePages).toBe(true)
@@ -9773,7 +9773,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 51'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -9838,7 +9838,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -9900,7 +9900,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const filterDurationMs = Number((performance.now() - filterStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
 
@@ -9961,7 +9961,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -10047,7 +10047,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -10135,7 +10135,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -10224,7 +10224,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialHasMorePages).toBe(true)
@@ -10306,7 +10306,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialHasMorePages).toBe(true)
@@ -10383,7 +10383,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10448,7 +10448,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10513,7 +10513,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPartialRowValueInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10586,7 +10586,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10651,7 +10651,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10716,7 +10716,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPartialRowValueInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10777,7 +10777,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchIrrelevantScalarUpdateInvalidation(row))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10844,7 +10844,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10916,7 +10916,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -10980,7 +10980,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -11045,7 +11045,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -11110,7 +11110,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 500'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitles[499]).toBe('Post 500')
@@ -11169,7 +11169,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchIrrelevantScalarUpdateInvalidation(row))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
 
@@ -11225,7 +11225,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -11291,7 +11291,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 500'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitles[499]).toBe('Post 500')
@@ -11350,7 +11350,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchIrrelevantScalarUpdateInvalidation(row))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
 
@@ -11406,7 +11406,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -11472,7 +11472,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(false)
@@ -11546,7 +11546,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(true)
@@ -11611,7 +11611,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(true)
@@ -11685,7 +11685,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(false)
@@ -11750,7 +11750,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(false)
@@ -11824,7 +11824,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(true)
@@ -11889,7 +11889,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(true)
@@ -11963,7 +11963,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialValue).toBe(false)
@@ -12028,7 +12028,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -12093,7 +12093,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -12158,7 +12158,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -12223,7 +12223,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 1'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 1')
@@ -12246,7 +12246,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures compact splice transport for ordered list churn across many shared subscribers', async () => {
+  it('measures compact splice transport for ordered list churn across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -12285,7 +12285,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const deletePatchDurationMs = Number((performance.now() - deleteStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(patches[0]?.operations).toEqual([{
@@ -12301,7 +12301,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(deletedRow))
     const insertPatchDurationMs = Number((performance.now() - insertStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(patches[subscriptionCount]?.operations).toEqual([{
@@ -12330,7 +12330,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures compact move transport for ordered updates across many shared subscribers', async () => {
+  it('measures compact move transport for ordered updates across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -12373,7 +12373,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -12404,7 +12404,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures model compact move transport for ordered row updates across many shared subscribers', async () => {
+  it('measures model compact move transport for ordered row updates across many identical subscriptions', async () => {
     const rows = createPriorityPatchBenchmarkRows()
     configureRealtimeRuntime({
       db: () => createBenchmarkModelDatabaseContext(rows),
@@ -12447,7 +12447,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -12478,7 +12478,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures compact move transport for ordered pluck scalar-lists across many shared subscribers', async () => {
+  it('measures compact move transport for ordered pluck scalar-lists across many identical subscriptions', async () => {
     const rows = createPriorityPatchBenchmarkRows()
     configureRealtimeRuntime({
       db: () => createBenchmarkModelDatabaseContext(rows),
@@ -12522,7 +12522,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -12545,7 +12545,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures model compact move transport for ordered pluck scalar-lists across many shared subscribers', async () => {
+  it('measures model compact move transport for ordered pluck scalar-lists across many identical subscriptions', async () => {
     const rows = createPriorityPatchBenchmarkRows()
     configureRealtimeRuntime({
       db: () => createBenchmarkModelDatabaseContext(rows),
@@ -12589,7 +12589,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -12680,7 +12680,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPrimaryTitle).toBe('Post 500')
@@ -12762,7 +12762,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpsertInvalidation(upsertedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -12852,7 +12852,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMultiUpsertInvalidation(upsertedRows, previousRows))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -12904,7 +12904,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   }, longBenchmarkTimeoutMs)
 
-  it('measures aggregate merge patch transport across many shared subscribers', async () => {
+  it('measures aggregate merge patch transport across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -12944,7 +12944,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -13018,7 +13018,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -13046,7 +13046,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures ambiguous aggregate merge patch transport across many shared subscribers', async () => {
+  it('measures ambiguous aggregate merge patch transport across many identical subscriptions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -13086,7 +13086,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -13113,7 +13113,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures model aggregate merge patch transport across many shared subscribers', async () => {
+  it('measures model aggregate merge patch transport across many identical subscriptions', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -13154,7 +13154,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -13230,7 +13230,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(aggregateBackfillQueries).toBe(0)
@@ -13305,7 +13305,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -13370,7 +13370,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(aggregateBackfillQueries).toBe(1)
@@ -13472,7 +13472,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedCountBackfillQueries = patchQueries.filter(query => query.sql === 'SELECT "user_id", COUNT(*) AS "__holo_count" FROM "posts" WHERE "user_id" IN (?, ?) GROUP BY "user_id"').length
     const singleCountBackfillQueries = patchQueries.filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "user_id" = ?').length
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedCountBackfillQueries).toBe(1)
@@ -13541,7 +13541,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(aggregateBackfillQueries).toBe(0)
@@ -13639,7 +13639,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const totalAggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(backfillAggregateQueries).toBe(1)
@@ -13717,7 +13717,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -13800,7 +13800,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(aggregateBackfillQueries).toBe(0)
@@ -13885,7 +13885,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -13962,7 +13962,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -14036,7 +14036,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -14114,7 +14114,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -14192,7 +14192,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
@@ -14210,7 +14210,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures model paginated relation aggregate merge patch transport across many shared subscribers', async () => {
+  it('measures model paginated relation aggregate merge patch transport across many identical subscriptions', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -14263,7 +14263,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14346,7 +14346,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14487,7 +14487,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const totalAggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14611,7 +14611,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const totalAggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14729,7 +14729,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const totalAggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14805,7 +14805,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14876,7 +14876,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -14949,7 +14949,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -15042,7 +15042,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationUpdateInvalidation(patchedRow, previousTitle))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 500')
@@ -15125,7 +15125,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateDeleteInvalidation(relationDeletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 500')
@@ -15210,7 +15210,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateDeleteInvalidation(relationDeletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTitle).toBe('Post 500')
@@ -15299,7 +15299,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialSourceTitle).toBe('Post 500')
@@ -15407,7 +15407,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialSourceTitle).toBe('Published')
@@ -15508,7 +15508,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialSourceTitle).toBe(scoredRow.title)
@@ -15616,7 +15616,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialSourceTitle).toBe('Published')
@@ -15701,7 +15701,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorInsertInvalidation(insertedAuthor))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -15807,7 +15807,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedRelatedHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "author_id" IN (?, ?)').length
     const singleRelatedHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "author_id" = ?').length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedRelatedHydrationQueries).toBe(1)
@@ -15903,7 +15903,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const patchQueryCount = adapter.queries.length - setupQueryCount
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
     expect(patchQueryCount).toBe(0)
@@ -15971,7 +15971,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorInsertInvalidation(insertedAuthor))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -16077,7 +16077,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedRelatedHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "author_id" IN (?, ?)').length
     const singleRelatedHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "author_id" = ? LIMIT 1').length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedRelatedHydrationQueries).toBe(1)
@@ -16205,7 +16205,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedOverfetchHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "author_id" IN (?, ?) ORDER BY "id" DESC').length
     const singleRelatedHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "author_id" = ? ORDER BY "id" DESC LIMIT 1').length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedTopOneHydrationQueries).toBe(1)
@@ -16314,7 +16314,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorInsertInvalidation(insertedAuthor))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -16410,7 +16410,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorInsertInvalidation(insertedAuthor))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -16513,7 +16513,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorInsertInvalidation(insertedAuthor))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -16616,7 +16616,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorInsertInvalidation(insertedAuthor))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -16707,7 +16707,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialAuthorName).toBe('Author 500')
@@ -16794,7 +16794,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialAuthorName).toBe('Author 500')
@@ -16887,7 +16887,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialAuthorName).toBe('Author 500')
@@ -16970,7 +16970,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
@@ -17070,7 +17070,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const groupedParentHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "authors" WHERE "id" IN (?, ?)').length
     const singleParentHydrationQueries = patchQueries.filter(query => query.sql === 'SELECT * FROM "authors" WHERE "id" = ? LIMIT 1').length
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedParentHydrationQueries).toBe(1)
@@ -17170,7 +17170,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -17278,7 +17278,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -17383,7 +17383,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTotal).toBe(patchRowCount)
@@ -17486,7 +17486,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -17583,7 +17583,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([
@@ -17682,7 +17682,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -17786,7 +17786,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
@@ -17891,7 +17891,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialPostCount).toBe(1)
@@ -17975,7 +17975,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialPostCount).toBe(0)
@@ -18059,7 +18059,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialPostCount).toBe(1)
@@ -18143,7 +18143,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateInsertInvalidation(insertedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialPostCount).toBe(1)
@@ -18234,7 +18234,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialSourceCount).toBe(1)
@@ -18339,7 +18339,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialSourceCount).toBe(1)
@@ -18378,7 +18378,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   }, longBenchmarkTimeoutMs)
 
-  it('measures model has-many relation insert shared fallback without per-subscriber reruns', async () => {
+  it('measures model has-many relation insert independent fallback per subscription', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -18432,7 +18432,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
     const refreshedDataBytes = jsonByteLength(realtimeRuntimeInternals.getRuntimeState().queryEntries.values().next().value?.current?.data)
 
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
     expect(observedFinalPostCount).toBe(2)
@@ -18510,7 +18510,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyAttachInvalidation(attachedPivot))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTagName).toBe('Tag 500')
@@ -18606,7 +18606,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTagName).toBe('Tag 500')
@@ -18709,7 +18709,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTagName).toBe('Tag 500')
@@ -18808,7 +18808,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTagName).toBe('Tag 500')
@@ -18887,7 +18887,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyRelatedDeleteInvalidation(deletedTag))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTagName).toBe('Tag 500')
@@ -18968,7 +18968,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyDetachInvalidation(detachedPivot))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialTagName).toBe('Tag 500')
