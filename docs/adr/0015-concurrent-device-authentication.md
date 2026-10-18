@@ -69,3 +69,7 @@ Core supplies a database adapter through `auth_session_revocations`, keyed by `(
 Enabling the revocation adapter rejects authenticated browser payloads that lack its logical session identity and generation, including payloads restored from remember cookies. Those users must sign in again; no compatibility fallback infers revocation metadata for an older authenticated payload. Existing personal access tokens remain valid. Subsequent ordinary login and rotation preserve independent authentication on other devices.
 
 References: [Sanctum authentication and token revocation](https://laravel.com/framework/docs/13.x/sanctum), [Laravel other-device session invalidation](https://laravel.com/framework/docs/13.x/authentication#invalidating-sessions-on-other-devices).
+
+## Amendment: remember-me tokens follow Laravel's per-user model
+
+Under ADR-0016, remember-me restoration uses one `remember_token` per user, as Laravel does, instead of a credential on the browser session record. The encrypted remember cookie carries the user identifier, the token, and the password hash; session-guard logout and password reset cycle the token. Cycling ends remember-me restoration on every device, but it does not revoke active browser sessions on other devices, which remain governed by explicit other-device logout. We accepted this narrower cross-device effect for Laravel parity and so that a remember credential no longer expires with its session.

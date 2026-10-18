@@ -8,6 +8,10 @@ Holo-JS integrates application capabilities with a selected web framework.
 An execution of the application's selected web framework under `holo dev` or `holo start`.
 _Avoid_: Application runtime
 
+**Application environment**:
+The named deployment context, such as development, production, or test, that selects environment files and production safeguards.
+_Avoid_: Node environment
+
 **Framework restart**:
 Replacement of the active development framework run with another run.
 
@@ -46,6 +50,10 @@ An optional application capability whose resources Holo owns for the duration of
 
 **Reserved job**:
 A Queue job acquired by a worker for an execution attempt.
+
+**Abandoned reservation**:
+A reserved job whose worker stopped renewing or finalizing it before its reservation expired. Recovering it consumes an execution attempt.
+_Avoid_: Stalled job, stuck job
 
 **Job finalization**:
 The acknowledgement, release, or terminal failure of a reserved job following its execution attempt.
