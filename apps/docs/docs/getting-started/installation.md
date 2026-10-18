@@ -4,11 +4,14 @@ This page covers every way to create a Holo-JS project, add packages later, and 
 
 ## Requirements
 
-- **Node.js** 22.12 or newer on the 22 line, or Node.js 24 or 26
-- **A package manager**: npm, pnpm, Yarn, or Bun
+- **Node.js** 22.14 or newer on the 22 line, or Node.js 24 or 26
+- **A package manager**: npm, pnpm, Yarn, or Bun. On Node.js 22, use npm 11 (`npm install --global npm@11`) for Nuxt projects. npm 10, bundled with Node.js 22, currently fails to install Nuxt's dependencies with `Cannot read properties of null (reading 'edgesOut')` ([npm/cli#9787](https://github.com/npm/cli/issues/9787)).
 - **A database**: SQLite (no server needed), PostgreSQL, or MySQL
+- **A framework**: Next.js 16.3.8 or newer on the 16 line with React 19.2.6 or newer, Nuxt 4.5.1 or newer on the 4 line with Vue 3.5.13 or newer, or SvelteKit 2.70.2 or newer on the 2 line with Svelte 5.56.8 or newer on the 5 line
 
 You don't need an existing framework app. The installer creates the Next.js, Nuxt, or SvelteKit project for you.
+
+Holo adapters use your app's framework instead of installing their own copy. `@holo-js/adapter-next` needs `next` and `react`, `@holo-js/adapter-nuxt` needs `nuxt` and `vue`, and `@holo-js/adapter-sveltekit` needs `@sveltejs/kit` and `svelte`. Keep these packages in your app's `package.json`. Projects created by the installer already list them.
 
 ## Create a project
 

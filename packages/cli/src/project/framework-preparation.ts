@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { readProjectDependencyNames } from '../package-json'
-import { readTextFile, writeTextFile } from './runtime'
+import { readTextFile } from './runtime'
+import { writeTextFile } from './atomic-file'
 import {
   getFrameworkDescriptorByIdFrom,
   getFrameworkDescriptorsWith,

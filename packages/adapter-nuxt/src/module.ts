@@ -11,6 +11,7 @@ import {
   createResolver,
   defineNuxtModule,
 } from '@nuxt/kit'
+import type { NuxtModule } from 'nuxt/schema'
 import { loadConfigDirectory, type LoadedHoloConfig, type HoloConfigMap } from '@holo-js/config'
 import '@holo-js/db/config'
 import {
@@ -697,7 +698,7 @@ async function createServerModelImports(
   }
 }
 
-export default defineNuxtModule<ModuleOptions>({
+const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@holo-js/adapter-nuxt',
   },
@@ -878,6 +879,8 @@ export default defineNuxtModule<ModuleOptions>({
     }
   },
 })
+
+export default holoNuxtModule
 
 export const moduleInternals = {
   addViteOptimizeDeps,

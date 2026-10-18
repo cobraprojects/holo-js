@@ -36,8 +36,8 @@ import { pathExists } from './shared'
 import {
   readTextFile,
   resolveFirstExistingPath,
-  writeTextFile,
 } from './runtime'
+import { writeTextFile } from './atomic-file'
 import { isMigrationDefinition, normalizeCommandAliases, validateMigrationName } from './discovery-helpers'
 import type { FrameworkDescriptor, FrameworkTsconfigKind } from './frameworks'
 import type { DiscoveredAppCommand } from './shared'

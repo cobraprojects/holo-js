@@ -222,5 +222,5 @@ describe('@holo-js/adapter-sveltekit typing', () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
-  }, 60000)
+  }, 120000)
 })

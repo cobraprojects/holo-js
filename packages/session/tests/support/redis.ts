@@ -4,7 +4,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
-import { getCACertificates, setDefaultCACertificates } from 'node:tls'
+import * as tls from 'node:tls'
 import { promisify } from 'node:util'
 import Redis from 'ioredis'
 import { onTestFinished } from 'vitest'
@@ -32,6 +32,8 @@ async function redisExecutable(): Promise<string> {
   }
 }
 
+export const canTrustTestCertificates = typeof tls.setDefaultCACertificates === 'function'
+
 export async function startRedisService(options: { cluster?: boolean; tls?: boolean } = {}): Promise<{
   readonly ports: readonly number[]
   readonly socket: string
@@ -45,11 +47,11 @@ export async function startRedisService(options: { cluster?: boolean; tls?: bool
   const socket = join(root, 'redis.sock')
   const certificatePath = join(root, 'certificate.pem')
   const privateKeyPath = join(root, 'private-key.pem')
-  const previousCertificates = getCACertificates('default')
+  const previousCertificates = options.tls ? tls.getCACertificates('default') : []
   let certificate: string | undefined
   onTestFinished(async () => {
     clients.forEach(client => client.disconnect())
-    if (options.tls) setDefaultCACertificates(previousCertificates)
+    if (options.tls) tls.setDefaultCACertificates(previousCertificates)
     await Promise.all(processes.map(child => new Promise<void>(resolve => {
       if (child.exitCode !== null || child.signalCode !== null) return resolve()
       child.once('exit', () => resolve())
@@ -60,7 +62,7 @@ export async function startRedisService(options: { cluster?: boolean; tls?: bool
   if (options.tls) {
     await promisify(execFile)('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', privateKeyPath, '-out', certificatePath, '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost'])
     certificate = await readFile(certificatePath, 'utf8')
-    setDefaultCACertificates([...previousCertificates, certificate])
+    tls.setDefaultCACertificates([...previousCertificates, certificate])
   }
   const executable = await redisExecutable()
   for (let index = 0; index < (options.cluster ? 3 : 1); index += 1) {

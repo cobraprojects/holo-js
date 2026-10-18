@@ -285,7 +285,3 @@ export async function readTextFile(path: string): Promise<string | undefined> {
   return readFile(path, 'utf8')
 }
 
-export async function writeTextFile(path: string, contents: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, contents, 'utf8')
-}

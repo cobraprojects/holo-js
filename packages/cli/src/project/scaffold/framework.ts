@@ -26,7 +26,7 @@ import {
   type ProjectScaffoldOptions,
   type SupportedScaffoldPackageManager,
 } from '../shared'
-import { writeTextFile } from '../runtime'
+import { writeTextFile } from '../atomic-file'
 import { ensureEmptyDirectory } from '../../fs-utils'
 import {
   ensureRateLimitStorageIgnore,

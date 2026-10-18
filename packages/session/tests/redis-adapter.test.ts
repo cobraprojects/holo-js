@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { startRedisService } from './support/redis'
+import { canTrustTestCertificates, startRedisService } from './support/redis'
 import type { SessionRecord } from '../src/contracts'
 import { createSessionRedisAdapter } from '../src/drivers/redis-adapter'
 
@@ -68,7 +68,7 @@ describe('session Redis behavior', () => {
     await expect(adapter.get(record.id)).resolves.toMatchObject({ data: { refreshed: true } })
   })
 
-  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }])('atomically rotates sessions and private flash data through %j', async options => {
+  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('atomically rotates sessions and private flash data through %j', async options => {
     const { adapter, record } = await createStore(options)
     const rotated = { ...record, id: randomUUID() }
     await adapter.set(record)

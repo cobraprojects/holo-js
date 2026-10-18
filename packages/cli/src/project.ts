@@ -86,8 +86,8 @@ import {
   bundleProjectModule,
   findProjectRoot,
   resolveProjectPackageImportSpecifier,
-  writeTextFile,
 } from './project/runtime'
+import { writeTextFile } from './project/atomic-file'
 import {
   installAuthIntoProject,
   installAuthorizationIntoProject,

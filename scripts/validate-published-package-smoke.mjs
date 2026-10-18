@@ -235,11 +235,19 @@ async function copyFrameworkApp(source, target) {
   await mkdir(join(target, 'storage'), { recursive: true })
 }
 
-function listManifestDependencyNames(manifest, includeDevDependencies = false) {
-  const sections = includeDevDependencies
-    ? dependencySections
-    : ['dependencies', 'peerDependencies', 'optionalDependencies']
-  return sections.flatMap(sectionName => Object.keys(manifest[sectionName] ?? {}))
+function listManifestDependencyNames(manifest) {
+  return dependencySections.flatMap(sectionName => Object.keys(manifest[sectionName] ?? {}))
+}
+
+function listInstalledDependencyNames(manifest) {
+  const optionalPeers = new Set(Object.entries(manifest.peerDependenciesMeta ?? {})
+    .filter(([, meta]) => meta?.optional === true)
+    .map(([packageName]) => packageName))
+  return [
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.optionalDependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}).filter(packageName => !optionalPeers.has(packageName)),
+  ]
 }
 
 function resolveInstalledPackageRoot(sourceAppRoot, packageName) {
@@ -259,30 +267,31 @@ async function copyExternalDependencyClosure(
   options = {},
 ) {
   const appManifest = JSON.parse(await readFile(join(sourceAppRoot, 'package.json'), 'utf8'))
-  const appDependencyNames = new Set(listManifestDependencyNames(appManifest, true))
-  const pending = options.includeAppDependencies === false ? [] : [...appDependencyNames]
-  const stagedScopeRoot = join(stagedNodeModules, '@holo-js')
-  for (const packageDirectory of await readdir(stagedScopeRoot)) {
-    const manifest = JSON.parse(await readFile(join(stagedScopeRoot, packageDirectory, 'package.json'), 'utf8'))
-    pending.push(...listManifestDependencyNames(manifest))
-  }
-
+  const appDependencyNames = new Set(listManifestDependencyNames(appManifest))
+  const pending = [...appDependencyNames]
   const visited = new Set()
   while (pending.length > 0) {
     const packageName = pending.shift()
-    if (!packageName || packageName.startsWith('@holo-js/') || visited.has(packageName)) {
+    if (!packageName || visited.has(packageName)) {
+      continue
+    }
+    visited.add(packageName)
+    if (packageName.startsWith('@holo-js/')) {
+      const stagedManifestPath = join(stagedNodeModules, ...packageName.split('/'), 'package.json')
+      if (existsSync(stagedManifestPath)) {
+        pending.push(...listInstalledDependencyNames(JSON.parse(await readFile(stagedManifestPath, 'utf8'))))
+      }
       continue
     }
     if (options.includeAppDependencies === false && appDependencyNames.has(packageName)) {
       continue
     }
-    visited.add(packageName)
     const source = resolveInstalledPackageRoot(sourceAppRoot, packageName)
     if (!source) {
       continue
     }
     const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
-    pending.push(...listManifestDependencyNames(manifest))
+    pending.push(...listInstalledDependencyNames(manifest))
     const target = join(nodeModulesRoot, ...packageName.split('/'))
     if (existsSync(target) && !options.replaceExisting) {
       continue
@@ -425,9 +434,10 @@ export async function validatePublishedPackageSmoke(options = {}) {
   const tempRoot = await mkdtemp(join(tmpdir(), 'holo-published-package-smoke-'))
   try {
     const packages = await readPackageManifests()
-    const stagedNodeModules = await stagePackages(tempRoot, packages, catalog)
+    const registryRoot = join(tempRoot, 'registry')
+    const stagedNodeModules = await stagePackages(registryRoot, packages, catalog)
     await linkExternalDependencies(stagedNodeModules)
-    await verifyPackageImports(tempRoot, packages)
+    await verifyPackageImports(registryRoot, packages)
     await buildFrameworkCopies(tempRoot, stagedNodeModules, options.framework)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })

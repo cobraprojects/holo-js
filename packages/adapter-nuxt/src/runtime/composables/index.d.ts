@@ -52,8 +52,10 @@ export type NuxtAuthRequestEvent = {
       readonly headers?: Readonly<Record<string, string | readonly string[] | undefined>>
     }
     readonly res?: {
+      statusCode: number
       getHeader(name: string): number | string | readonly string[] | undefined
       setHeader(name: string, value: number | string | readonly string[]): void
+      end(): void
     }
   }
 }

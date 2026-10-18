@@ -38,8 +38,8 @@ import {
   importProjectModule,
   readTextFile,
   resolveFirstExistingPath,
-  writeTextFile,
 } from '../runtime'
+import { writeTextFile } from '../atomic-file'
 import { loadGeneratedProjectRegistry } from '../registry'
 import { isWorkspaceDependencyVersion, resolveManagedHoloPackageVersion } from '../dependency-versions'
 import { resolveWorkspacePackageNames } from '../workspaces'

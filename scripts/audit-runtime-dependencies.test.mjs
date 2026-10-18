@@ -58,3 +58,57 @@ test('invalid advisory input fails closed', async () => {
     await rm(checkout, { recursive: true, force: true })
   }
 })
+
+async function runExceptionScenario(exceptions) {
+  const checkout = await mkdtemp(join(tmpdir(), 'holo-audit-exception-'))
+  try {
+    await mkdir(join(checkout, 'packages', 'library'), { recursive: true })
+    await writeFile(join(checkout, 'packages', 'library', 'package.json'), JSON.stringify({
+      name: '@holo-js/library', dependencies: { parser: '*' },
+    }))
+    await writeFile(join(checkout, 'bun.lock'), JSON.stringify({
+      lockfileVersion: 1,
+      packages: { parser: ['parser@1.0.0', '', {}] },
+    }))
+    await writeFile(join(checkout, 'audit.json'), JSON.stringify({
+      parser: [{ severity: 'high', vulnerable_versions: '<=1.0.0', title: 'Parser vulnerability', url: 'https://example.test/advisory' }],
+    }))
+    await writeFile(join(checkout, 'audit-exceptions.json'), JSON.stringify(exceptions))
+    return await execFileAsync(process.execPath, [script, '--report', 'audit.json'], { cwd: checkout })
+      .then(value => ({ ...value, code: 0 }), error => error)
+  } finally {
+    await rm(checkout, { recursive: true, force: true })
+  }
+}
+
+const parserException = {
+  advisory: 'https://example.test/advisory',
+  package: 'parser',
+  version: '1.0.0',
+  reason: 'No patched release; reachable only through a framework peer.',
+}
+
+test('reports an excepted advisory without blocking until the exception expires', async () => {
+  const result = await runExceptionScenario([{ ...parserException, expires: '2999-01-01' }])
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stdout, /EXCEPT parser@1\.0\.0 \(high\).*until 2999-01-01/)
+})
+
+test('blocks an advisory again once its exception has expired', async () => {
+  const result = await runExceptionScenario([{ ...parserException, expires: '2000-01-01' }])
+  assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stdout, /BLOCK parser@1\.0\.0/)
+  assert.match(result.stdout, /Expired exception.*parser@1\.0\.0.*2000-01-01/)
+})
+
+test('fails when an exception no longer matches a blocking advisory', async () => {
+  const result = await runExceptionScenario([{ ...parserException, version: '0.9.0', expires: '2999-01-01' }])
+  assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stdout, /Unused exception.*parser@0\.9\.0/)
+})
+
+test('rejects an exception whose expiry is not a real calendar date', async () => {
+  const result = await runExceptionScenario([{ ...parserException, expires: '2026-13-17' }])
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /Invalid audit exceptions/)
+})

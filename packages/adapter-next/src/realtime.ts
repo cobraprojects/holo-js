@@ -4,6 +4,7 @@ import { cache, createElement, use, useEffect, useMemo, useSyncExternalStore } f
 import { useServerInsertedHTML } from 'next/navigation'
 import {
   type RealtimeClientTransport,
+  type RealtimeQueryStore,
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,
   createBroadcastRealtimeTransport,
@@ -19,10 +20,12 @@ import type {
   RealtimeArgsFor,
   RealtimeQueryDefinition,
   RealtimeResultFor,
+  RealtimeSubscriptionSnapshot,
 } from '@holo-js/realtime'
 import { createNextRenderableError, normalizeNextClientHttpError, renderNextClientHttpErrorPage } from './client-errors'
 
 let currentRealtimeError: Error | undefined
+const hydratedSnapshotLoads = new WeakMap<RealtimeQueryStore<unknown>, Promise<RealtimeSubscriptionSnapshot<unknown>>>()
 const realtimeErrorListeners = new Set<() => void>()
 
 function isBrowserRuntime(): boolean {
@@ -187,6 +190,20 @@ export const mutation: typeof createRealtimeMutation = ((input) => {
   return wrappedDefinition
 }) as typeof createRealtimeMutation
 
+function fulfilledReactThenable<TValue>(value: TValue): Promise<TValue> {
+  return Object.assign(Promise.resolve(value), { status: 'fulfilled', value })
+}
+
+function loadRealtimeSnapshot<TResult>(store: RealtimeQueryStore<TResult>): Promise<RealtimeSubscriptionSnapshot<TResult>> {
+  if (!store.snapshot) {
+    return store.load()
+  }
+
+  const hydratedLoad = hydratedSnapshotLoads.get(store) ?? fulfilledReactThenable(store.snapshot)
+  hydratedSnapshotLoads.set(store, hydratedLoad)
+  return hydratedLoad as Promise<RealtimeSubscriptionSnapshot<TResult>>
+}
+
 function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
@@ -223,11 +240,8 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     getSnapshot,
   )
 
-  if (!snapshot) {
-    return use(store.load()).data
-  }
-
-  return snapshot.data
+  const loadedSnapshot = use(loadRealtimeSnapshot(store))
+  return (snapshot ?? loadedSnapshot).data
 }
 
 if (isBrowserRuntime()) {

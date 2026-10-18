@@ -1,4 +1,4 @@
-import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
+import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from '#imports'
 import { renderBroadcastAuthResponse } from '@holo-js/broadcast/auth'
 import { holo } from '../../composables'
 

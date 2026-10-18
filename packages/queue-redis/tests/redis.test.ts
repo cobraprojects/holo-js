@@ -2,7 +2,7 @@ import { Queue } from 'bullmq'
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { startRedisService } from '../../session/tests/support/redis'
+import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
 import { redisQueueDriverFactory, type QueueJobEnvelope } from '../src'
 
 async function openQueue(options: { cluster?: boolean; tls?: boolean; socket?: boolean; host?: boolean } = {}) {
@@ -31,14 +31,14 @@ async function openQueue(options: { cluster?: boolean; tls?: boolean; socket?: b
 }
 
 describe('@holo-js/queue-redis native Redis behavior', () => {
-  it.each([
+  it.each(([
     ['URL', {}],
     ['TCP configuration', { host: true }],
     ['Unix socket', { socket: true }],
     ['TLS', { tls: true }],
     ['cluster', { cluster: true }],
     ['TLS cluster', { cluster: true, tls: true }],
-  ] as const)('dispatches and settles jobs over %s', async (_transport, options) => {
+  ] as const).filter(([, options]) => !('tls' in options) || canTrustTestCertificates))('dispatches and settles jobs over %s', async (_transport, options) => {
     const { driver, job } = await openQueue(options)
     const envelope = job()
     expect(await driver.dispatch(envelope)).toEqual({ jobId: envelope.id, synchronous: false })

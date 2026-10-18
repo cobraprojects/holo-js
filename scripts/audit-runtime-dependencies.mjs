@@ -21,6 +21,30 @@ async function readAdvisories() {
   return JSON.parse(result.stdout)
 }
 
+function isCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+async function readExceptions() {
+  const contents = await readFile('audit-exceptions.json', 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return '[]'
+    throw error
+  })
+  const exceptions = JSON.parse(contents)
+  const isValid = Array.isArray(exceptions) && exceptions.every(exception => (
+    typeof exception?.advisory === 'string'
+    && typeof exception.package === 'string'
+    && semver.valid(exception.version)
+    && isCalendarDate(exception.expires)
+    && typeof exception.reason === 'string'
+    && exception.reason.trim().length > 0
+  ))
+  if (!isValid) throw new Error('Invalid audit exceptions')
+  return exceptions
+}
+
 async function main() {
   const parsed = ts.parseConfigFileTextToJson('bun.lock', await readFile('bun.lock', 'utf8'))
   if (parsed.error || parsed.config?.lockfileVersion !== 1 || !parsed.config.packages) throw new Error('Invalid or unsupported bun.lock')
@@ -79,6 +103,9 @@ async function main() {
     versions.add(identity.slice(separator + 1))
     inventory.set(name, versions)
   }
+  const exceptions = await readExceptions()
+  const usedExceptions = new Set()
+  const today = new Date().toISOString().slice(0, 10)
   const advisories = await readAdvisories()
   if (!advisories || typeof advisories !== 'object' || Array.isArray(advisories)) throw new Error('Invalid advisory report')
   let failures = 0
@@ -90,10 +117,25 @@ async function main() {
         if (!semver.satisfies(version, finding.vulnerable_versions, { includePrerelease: true })) continue
         const identity = `${name}@${version}`
         const blocked = runtime.has(identity) && ['high', 'critical'].includes(finding.severity)
+        const exception = blocked
+          ? exceptions.find(candidate => candidate.advisory === finding.url && candidate.package === name && candidate.version === version)
+          : undefined
+        if (exception) {
+          usedExceptions.add(exception)
+          if (exception.expires >= today) {
+            console.log(`EXCEPT ${identity} (${finding.severity}): ${finding.title} ${finding.url} until ${exception.expires}`)
+            continue
+          }
+          console.log(`Expired exception for ${identity} ${finding.url} on ${exception.expires}`)
+        }
         if (blocked) failures++
         console.log(`${blocked ? 'BLOCK' : 'REPORT'} ${identity} (${finding.severity}): ${finding.title} ${finding.url}`)
       }
     }
+  }
+  for (const exception of exceptions.filter(candidate => !usedExceptions.has(candidate))) {
+    failures++
+    console.log(`Unused exception for ${exception.package}@${exception.version} ${exception.advisory}`)
   }
   console.log(`Published runtime audit: ${failures} blocking advisories.`)
   process.exitCode = failures > 0 ? 1 : 0

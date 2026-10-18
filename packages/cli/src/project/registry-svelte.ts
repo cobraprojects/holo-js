@@ -1,5 +1,5 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, extname, relative, resolve, sep } from 'node:path'
+import { readdir, readFile, rm, stat } from 'node:fs/promises'
+import { extname, relative, resolve, sep } from 'node:path'
 import {
   GENERATED_SVELTE_HOOKS_PATH,
   GENERATED_SVELTE_SERVER_HOOKS_PATH,
@@ -12,6 +12,7 @@ import {
   renderSvelteManagedRuntimeFiles,
   renderSecurityFrameworkFiles,
 } from './scaffold/framework-renderers'
+import { writeTextFile } from './atomic-file'
 
 type SvelteManagedFeatures = {
   readonly securityEnabled: boolean
@@ -581,7 +582,7 @@ async function ensureSvelteConfigHooksOverride(projectRoot: string): Promise<voi
 
   const patched = patchSvelteConfigWithHoloWrapper(contents) ?? contents
   if (patched !== contents) {
-    await writeFile(configPath, patched, 'utf8')
+    await writeTextFile(configPath, patched)
   }
 }
 
@@ -589,8 +590,7 @@ async function writeFileIfChanged(path: string, contents: string): Promise<boole
   const existing = await readFileIfPresent(path)
   if (existing === contents) return false
 
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, contents, 'utf8')
+  await writeTextFile(path, contents)
   return existing === undefined
 }
 

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type { loadNuxt } from '@nuxt/kit'
 import { createApp, defineEventHandler } from 'h3'
 import { serve } from './support/http'
-import { createNativeNuxt } from './support/nuxt'
+import { createNativeNuxt, registeredServerPlugins } from './support/nuxt'
 import { writeConfigCache } from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 
@@ -82,10 +82,6 @@ afterEach(async () => {
   runtime.resetHoloRuntimeConfig()
   vi.doUnmock('@nuxt/kit')
   vi.doUnmock('#app')
-  vi.doUnmock('nitropack/runtime/plugin')
-  vi.doUnmock('nitropack/runtime/config')
-  vi.doUnmock('nitropack/runtime/context')
-  vi.doUnmock('h3')
   vi.doUnmock('@holo-js/config')
   vi.doUnmock('@holo-js/db')
   vi.doUnmock('@holo-js/core')
@@ -207,8 +203,8 @@ export default defineDatabaseConfig({
         },
       },
     })
-    expect(nuxt.options.nitro.plugins).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/init'))
-    expect(nuxt.options.nitro.plugins).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/forms'))
+    expect(registeredServerPlugins(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/init'))
+    expect(registeredServerPlugins(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/forms'))
     const imports: Parameters<typeof nuxt.callHook<'imports:extend'>>[1] = []
     await nuxt.callHook('imports:extend', imports)
     expect(imports).toEqual([])
@@ -218,7 +214,7 @@ export default defineDatabaseConfig({
     expect(nuxt.options.build.transpile).toContain('@holo-js/auth')
 
     const references: Array<{ types: string } | { path: string }> = []
-    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {} })
+    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], serverReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {}, serverTsConfig: {} })
     expect(references).toContainEqual({ types: '@holo-js/adapter-nuxt' })
     expect(references).toContainEqual({ path: resolve(root, '.holo-js/generated/auth.d.ts') })
     expect(references).toContainEqual({ path: resolve(root, '.holo-js/generated/authorization/types.d.ts') })
@@ -252,7 +248,7 @@ export default defineDatabaseConfig({
     await module.setup({}, nuxt)
 
     const references: Array<{ types: string } | { path: string }> = []
-    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {} })
+    await nuxt.callHook('prepare:types', { references, declarations: [], nodeReferences: [], sharedReferences: [], serverReferences: [], tsConfig: {}, nodeTsConfig: {}, sharedTsConfig: {}, serverTsConfig: {} })
     expect(references).toContainEqual({ path: generatedTypePath })
   })
 
@@ -340,7 +336,7 @@ export default defineAppConfig({
     expect(await serverImportDirectories(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/server/auto-imports'))
     expect(await serverImportDirectories(nuxt)).toContain(resolve(root, '.holo-js/generated/nuxt-server-imports'))
     expect(await serverImportDirectories(nuxt)).toHaveLength(2)
-    expect(nuxt.options.nitro.plugins).toContain(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
+    expect(registeredServerPlugins(nuxt)).toContain(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
     expect(nuxt.options.nitro.moduleSideEffects).toEqual(['/application/bootstrap', resolve(root, '.holo-js/generated/schema.generated.ts')])
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
       "import '../schema.generated'",
