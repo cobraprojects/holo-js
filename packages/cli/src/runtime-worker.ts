@@ -1,5 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { writeTextFile } from './project/atomic-file'
 import { initializeHolo } from '@holo-js/core'
 import {
   configureDB,
@@ -234,12 +233,10 @@ async function writeGeneratedSchemaArtifact(
 
   const tables = manager.connection().getSchemaRegistry().list()
   if (outputPath) {
-    await mkdir(dirname(outputPath), { recursive: true })
-    await writeFile(outputPath, renderGeneratedSchemaModule(tables), 'utf8')
+    await writeTextFile(outputPath, renderGeneratedSchemaModule(tables))
   }
   if (runtimeOutputPath) {
-    await mkdir(dirname(runtimeOutputPath), { recursive: true })
-    await writeFile(runtimeOutputPath, renderGeneratedSchemaRuntimeModule(tables), 'utf8')
+    await writeTextFile(runtimeOutputPath, renderGeneratedSchemaRuntimeModule(tables))
   }
 }
 

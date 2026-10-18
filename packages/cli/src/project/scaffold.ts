@@ -40,8 +40,8 @@ import {
 import {
   readTextFile,
   resolveFirstExistingPath,
-  writeTextFile,
 } from './runtime'
+import { writeTextFile } from './atomic-file'
 import {
   authFeaturesRequireConfigUpdate,
   canSafelyRewriteAuthConfig,

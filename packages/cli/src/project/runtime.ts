@@ -5,8 +5,6 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
 import { createSourceModuleUrlPlugin } from './source-module-url'
-
-export { writeTextFile } from './atomic-file'
 import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,

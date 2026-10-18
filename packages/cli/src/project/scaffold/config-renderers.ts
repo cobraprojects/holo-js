@@ -27,8 +27,8 @@ import type {
 import {
   readTextFile,
   resolveFirstExistingPath,
-  writeTextFile,
 } from '../runtime'
+import { writeTextFile } from '../atomic-file'
 import {
   renderBroadcastAuthSupportFrameworkFiles,
 } from './framework-renderers'

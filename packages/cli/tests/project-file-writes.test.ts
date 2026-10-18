@@ -1,8 +1,8 @@
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { writeTextFile } from '../src/project/runtime'
+import { writeTextFile } from '../src/project/atomic-file'
 
 const tempRoots: string[] = []
 
@@ -51,4 +51,18 @@ it.skipIf(process.platform === 'win32')('keeps the permissions of a file it rewr
 
   expect((await stat(scriptPath)).mode & 0o777).toBe(0o750)
   expect(await readFile(scriptPath, 'utf8')).toBe('#!/bin/sh\nexit 1\n')
+})
+
+it.skipIf(process.platform === 'win32')('rewrites the target of a symlinked file and keeps the link', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-file-links-'))
+  tempRoots.push(root)
+  const sharedEnvPath = join(root, 'shared.env')
+  const linkedEnvPath = join(root, '.env')
+  await writeFile(sharedEnvPath, 'APP_KEY=\n')
+  await symlink(sharedEnvPath, linkedEnvPath)
+
+  await writeTextFile(linkedEnvPath, 'APP_KEY=base64:generated\n')
+
+  expect((await lstat(linkedEnvPath)).isSymbolicLink()).toBe(true)
+  expect(await readFile(sharedEnvPath, 'utf8')).toBe('APP_KEY=base64:generated\n')
 })
