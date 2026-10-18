@@ -4,7 +4,7 @@ This page covers every way to create a Holo-JS project, add packages later, and 
 
 ## Requirements
 
-- **Node.js** 22.12 or newer on the 22 line, or Node.js 24 or 26
+- **Node.js** 22.14 or newer on the 22 line, or Node.js 24 or 26
 - **A package manager**: npm, pnpm, Yarn, or Bun
 - **A database**: SQLite (no server needed), PostgreSQL, or MySQL
 - **A framework**: Next.js 16.3.8 or newer on the 16 line with React 19.2.6 or newer, Nuxt 4.5.1 or newer on the 4 line with Vue 3.5.13 or newer, or SvelteKit 2.70.2 or newer on the 2 line with Svelte 5.56.8 or newer on the 5 line

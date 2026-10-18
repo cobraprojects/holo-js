@@ -56,7 +56,7 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI requires library and test typechecks, lint, published-package acceptance, scaffold acceptance, browser-bundle acceptance, and the full library and example-app suites on Node 22.12.0, 24, and 26. Native package loading and server lifecycle checks also run on Linux, Windows, and macOS.
+CI requires library and test typechecks, lint, published-package acceptance, scaffold acceptance, browser-bundle acceptance, and the full library and example-app suites on Node 22.14.0, 24, and 26. Native package loading and server lifecycle checks also run on Linux, Windows, and macOS.
 
 The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit. Dependabot checks npm dependencies and GitHub Actions weekly.
 
