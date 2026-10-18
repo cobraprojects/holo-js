@@ -1049,7 +1049,7 @@ const tempRoot = await mkdtemp(join(tmpdir(), 'holo-scaffold-user-journey-'))
 try {
   log('workspace', tempRoot)
   if (!process.argv.includes('--skip-build')) {
-    run('workspace', 'bun', ['run', '--filter', '@holo-js/*', '--sequential', 'build'])
+    run('workspace', process.execPath, ['scripts/build-libraries.mjs'])
   }
   const realNpm = run('workspace', 'which', ['npm']).stdout.trim()
   const localPackagesRoot = await stageLocalWorkspacePackages(rootDir, tempRoot)
