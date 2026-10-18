@@ -2069,10 +2069,17 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     },
     async initialize() {
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')
-      if (getRuntimeState().current) throw new Error('A Holo runtime is already initialized for this process.')
-      await runtimeLifecycle.initialize({ projectRoot })
+      const state = getRuntimeState()
+      if (state.current) throw new Error('A Holo runtime is already initialized for this process.')
+      if (state.initializing) throw new Error('A Holo runtime is already initializing for this process.')
+      state.initializing = runtime
+      try {
+        await runtimeLifecycle.initialize({ projectRoot })
+      } finally {
+        state.initializing = undefined
+      }
       runtime.initialized = true
-      getRuntimeState().current = runtime
+      state.current = runtime
     },
     async shutdown() {
       runtime.initialized = false

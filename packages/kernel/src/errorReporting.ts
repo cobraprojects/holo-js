@@ -34,16 +34,20 @@ function isUnreported(error: unknown, exceptions: HoloExceptionsConfig): boolean
 
 export type HoloErrorReporter = (error: unknown, context: HoloErrorReportContext) => void
 
-function reportWith(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): void {
+function deliver(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): void {
   if (exceptions && isUnreported(error, exceptions)) return
   if (!exceptions?.report) {
     console.error(describeContext(context), error)
     return
   }
 
+  void Promise.resolve(exceptions.report(error, context))
+    .catch(reporterError => logReporterFailure(error, context, reporterError))
+}
+
+function reportWith(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): void {
   try {
-    void Promise.resolve(exceptions.report(error, context))
-      .catch(reporterError => logReporterFailure(error, context, reporterError))
+    deliver(exceptions, error, context)
   } catch (reporterError) {
     logReporterFailure(error, context, reporterError)
   }

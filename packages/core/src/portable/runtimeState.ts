@@ -1,5 +1,6 @@
 export interface HoloRuntimeState<TRuntime, TSecurityRedisAdapter, TSessionRedisAdapter> {
   current?: TRuntime
+  initializing?: TRuntime
   pending?: Promise<TRuntime>
   pendingProjectRoot?: string
   securityRedisAdapter?: TSecurityRedisAdapter

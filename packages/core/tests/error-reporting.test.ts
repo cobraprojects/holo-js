@@ -130,6 +130,38 @@ describe('application error reporting', () => {
     ])
   })
 
+  it('keeps the caller running when dontReport contains an entry that is not an error class', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await initializeProject(`{
+      report() {},
+      dontReport: [undefined],
+    }`)
+    const error = new Error('still reported safely')
+
+    expect(() => report(error)).not.toThrow()
+
+    expect(consoleError).toHaveBeenCalledWith('[holo:app] report', error, expect.any(TypeError))
+  })
+
+  it('lets only one of two concurrently initializing runtimes own the process reporter', async () => {
+    const outerReport = vi.fn()
+    errorReportingInternals.configure({ report: outerReport })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
+    const reports = prepareCollectingReporter()
+    const first = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+    const second = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+
+    const results = await Promise.allSettled([first.initialize(), second.initialize()])
+
+    expect(results[0]?.status).toBe('fulfilled')
+    expect(results[1]).toMatchObject({ status: 'rejected', reason: { message: 'A Holo runtime is already initializing for this process.' } })
+    await first.shutdown()
+    const error = new Error('after the owning runtime shut down')
+    report(error)
+    expect(reports).toEqual([])
+    expect(outerReport).toHaveBeenCalledExactlyOnceWith(error, { capability: 'app', operation: 'report' })
+  })
+
   it('writes to console.error when the application configures no reporter', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     await initializeProject()
