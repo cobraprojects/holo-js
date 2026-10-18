@@ -11,6 +11,8 @@ import { renderNextHoloHelper, renderNextRuntimeBootstrap } from '../src/project
 
 const execute = promisify(execFile)
 
+const nodeTypeStrippingArgs = process.features.typescript ? [] : ['--experimental-strip-types']
+
 it.each(['next bundle', 'native source', 'raw Node source', 'raw Node alias'] as const)('dispatches native app job definitions through %s and after reinitialization', async (startup) => {
   const root = await mkdtemp(join(tmpdir(), 'holo-native-queue-'))
   try {
@@ -114,7 +116,7 @@ console.log(JSON.stringify({ first, second, restarted, listeners: event.syncList
     })
     const { stdout } = startup === 'next bundle'
       ? await execute(process.execPath, ['--import', join(root, '.holo-js/generated/next/bootstrap.mjs'), outfile], { cwd: root })
-      : await execute(process.execPath, [join(root, '.holo-js/generated/next/app.ts')], { cwd: root })
+      : await execute(process.execPath, [...nodeTypeStrippingArgs, join(root, '.holo-js/generated/next/app.ts')], { cwd: root })
     expect(JSON.parse(stdout.trim())).toEqual({ first: 'FIRST:42', second: 'SECOND:42', restarted: startup === 'next bundle' ? 'SECOND:43' : 'UPDATED:SECOND:43', listeners: 1, factoryEvaluations: startup === 'raw Node source' ? 1 : null, listenerResults: ['FIRST:44', 'SECOND:44'], restartedListenerResults: startup === 'next bundle' ? ['FIRST:45', 'SECOND:45'] : ['UPDATED:FIRST:45', 'UPDATED:SECOND:45'] })
   } finally {
     await rm(root, { recursive: true, force: true })

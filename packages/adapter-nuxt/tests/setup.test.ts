@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createNativeNuxt, registeredServerPlugins } from './support/nuxt'
 import {
   linkInstalledDependenciesForPackage,
@@ -280,6 +280,10 @@ afterAll(async () => {
 })
 
 describe('@holo-js/adapter-nuxt module setup', () => {
+  beforeAll(async () => {
+    await runAdapterStub()
+  }, 300_000)
+
   it('registers isolated panel styles when the Panels plugin is active', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/app.ts'), `export default { plugins: ['@holo-js/panels'] }\n`)
