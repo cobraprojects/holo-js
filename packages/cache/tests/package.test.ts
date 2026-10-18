@@ -2631,8 +2631,9 @@ export default new PluginCacheDriver()
     }
   })
 
-  it('reports dispose failures of a lazy driver that finishes loading after disposal', async () => {
+  it('reports late lazy-driver dispose failures to the reporter active when disposal started', async () => {
     const report = vi.fn()
+    const laterReport = vi.fn()
     errorReportingInternals.configure({ report })
     onTestFinished(() => { errorReportingInternals.configure(undefined) })
     const disposeError = new Error('late dispose failed')
@@ -2650,10 +2651,12 @@ export default new PluginCacheDriver()
     const read = lazyDriver.get('key')
     const dispose = (lazyDriver as typeof lazyDriver & { [cacheDriverDisposeSymbol]: () => void })[cacheDriverDisposeSymbol]
     dispose.call(lazyDriver)
+    errorReportingInternals.configure({ report: laterReport })
     finishLoading?.()
     await read
 
     await vi.waitFor(() => expect(report).toHaveBeenCalledExactlyOnceWith(disposeError, { capability: 'cache', operation: 'driver.dispose' }))
+    expect(laterReport).not.toHaveBeenCalled()
   })
 
   it('requires database cache drivers to resolve named connections from config/database.ts', () => {

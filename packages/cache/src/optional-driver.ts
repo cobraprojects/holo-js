@@ -1,4 +1,4 @@
-import { reportError } from '@holo-js/kernel/error-reporting'
+import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import {
   CacheOptionalPackageError,
   type CacheDriverContract,
@@ -125,10 +125,11 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
       return
     }
 
+    const report = captureErrorReporter()
     pending?.then((driver) => {
       const disposable = driver as DisposableCacheDriver
       disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
-    }, () => undefined).catch(error => reportError(error, { capability: 'cache', operation: 'driver.dispose' }))
+    }, () => undefined).catch(error => report(error, { capability: 'cache', operation: 'driver.dispose' }))
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {

@@ -32,8 +32,9 @@ function isUnreported(error: unknown, exceptions: HoloExceptionsConfig): boolean
   return exceptions.dontReport?.some(errorClass => error instanceof errorClass) ?? false
 }
 
-export function reportError(error: unknown, context: HoloErrorReportContext): void {
-  const exceptions = errorReportingState().exceptions
+export type HoloErrorReporter = (error: unknown, context: HoloErrorReportContext) => void
+
+function reportWith(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): void {
   if (exceptions && isUnreported(error, exceptions)) return
   if (!exceptions?.report) {
     console.error(describeContext(context), error)
@@ -53,6 +54,15 @@ function configure(exceptions: HoloExceptionsConfig | undefined): HoloExceptions
   const previous = state.exceptions
   state.exceptions = exceptions
   return previous
+}
+
+export function reportError(error: unknown, context: HoloErrorReportContext): void {
+  reportWith(errorReportingState().exceptions, error, context)
+}
+
+export function captureErrorReporter(): HoloErrorReporter {
+  const exceptions = errorReportingState().exceptions
+  return (error, context) => reportWith(exceptions, error, context)
 }
 
 export const errorReportingInternals = {

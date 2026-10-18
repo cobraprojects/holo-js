@@ -1,4 +1,4 @@
-import { reportError } from '@holo-js/kernel/error-reporting'
+import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import {
   CacheConfigError,
@@ -625,8 +625,9 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
   }
   Object.defineProperty(driver, Symbol.for('holo.cache.driver.dispose'), {
     value() {
+      const report = captureErrorReporter()
       void connection.disconnect().catch(error => {
-        reportError(error, { capability: 'cache', operation: 'driver.disconnect' })
+        report(error, { capability: 'cache', operation: 'driver.disconnect' })
       })
     },
   })
