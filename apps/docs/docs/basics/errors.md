@@ -191,6 +191,7 @@ export default defineAppConfig({
 | `cache` | `flexible.refresh`, `driver.dispose` |
 | `db` | `cache.invalidationListener` |
 | `broadcast` | `worker.socketMessage`, `worker.scalingMessage`, `worker.socketCleanup`, `worker.realtimeSubscriptionCleanup` |
+| `realtime` | `subscription.onData`, `subscription.onPatch`, `subscription.onError` |
 
 `report` can be `async`. Holo doesn't wait for it, and a reporter that throws or rejects never breaks the request or job. Holo writes the original error and the reporter's error to `console.error` instead.
 

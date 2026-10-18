@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type {
   RealtimeQueryDefinitionMetadata,
   RealtimeResultFor,
@@ -98,7 +99,7 @@ export async function deliverRefreshError(
   try {
     await entry.options.onError?.(error)
   } catch (handlerError) {
-    console.error('[@holo-js/realtime] Realtime subscription onError callback failed.', handlerError)
+    reportError(handlerError, { capability: 'realtime', operation: 'subscription.onError' })
   }
 }
 
@@ -145,6 +146,6 @@ async function deliverQueryEntryData<TDefinition extends RealtimeQueryDefinition
       await entry.options.onData?.(current)
     }
   } catch (error) {
-    console.error(`[@holo-js/realtime] Realtime subscription ${callbackName} callback failed.`, error)
+    reportError(error, { capability: 'realtime', operation: `subscription.${callbackName}` })
   }
 }

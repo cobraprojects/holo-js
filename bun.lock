@@ -1043,6 +1043,7 @@
       "dependencies": {
         "@holo-js/broadcast": "workspace:*",
         "@holo-js/db": "catalog:",
+        "@holo-js/kernel": "catalog:",
         "@holo-js/validation": "catalog:",
         "esbuild": "catalog:",
       },
