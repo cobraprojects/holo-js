@@ -1,5 +1,9 @@
 # Drivers and Config
 
+::: warning Experimental
+Realtime and Broadcast are Experimental in 0.4.0. Production reliability work is still pending; review the [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates.
+:::
+
 Broadcasting settings live in `config/broadcast.ts`. You list named connections, each with a driver, and pick one as the default. The `worker` section configures the WebSocket server started by `npx holo broadcast:work`.
 
 ## Default config

@@ -38,6 +38,14 @@
 
 These changes were merged in [#96](https://github.com/cobraprojects/holo-js/pull/96).
 
+## 0.4.0
+
+In preparation, not yet released.
+
+### Documentation
+
+- Prepare the 0.3.x to 0.4.0 upgrade guide and mark Realtime and Broadcast as **Experimental** in the documentation and package READMEs. Production reliability work remains in the separate Realtime production readiness milestone; this label does not change runtime behavior.
+
 ## 0.3.13
 
 Prepared, not yet published.

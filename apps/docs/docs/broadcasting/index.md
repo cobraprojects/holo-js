@@ -1,5 +1,9 @@
 # Broadcasting
 
+::: warning Experimental
+Realtime and Broadcast are Experimental in 0.4.0. Production reliability work is still pending; review the [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates.
+:::
+
 Broadcasting pushes server-side events to the browser over WebSockets. Use it to show live activity feeds, update dashboards when data changes, or show who else is viewing a page.
 
 You define a broadcast event on the server, send it with `broadcast(...)`, and listen for it in your components with `useFlux(...)`.

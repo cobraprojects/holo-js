@@ -1,5 +1,9 @@
 # Listening on the Client
 
+::: warning Experimental
+Realtime and Broadcast are Experimental in 0.4.0. Production reliability work is still pending; review the [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates.
+:::
+
 Flux is the Holo browser client for broadcasting. Your framework's Flux package gives you hooks that subscribe when a component mounts and leave the channel when it unmounts.
 
 There is no client setup to write. Flux fetches its connection settings from `/broadcasting/config` and authorizes private and presence channels through `/broadcasting/auth`. `holo install broadcast` sets up both.

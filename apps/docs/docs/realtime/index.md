@@ -1,5 +1,9 @@
 # Realtime Queries
 
+::: warning Experimental
+Realtime and Broadcast are Experimental in 0.4.0. Production reliability work is still pending; review the [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates.
+:::
+
 Realtime queries are server functions whose results stay up to date in the browser. You write a query that reads from the database, call it from a component, and when a realtime mutation changes the rows it read, the component re-renders with fresh data. You don't define channels or events.
 
 ## Quick example

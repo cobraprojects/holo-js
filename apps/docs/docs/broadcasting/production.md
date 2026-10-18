@@ -1,6 +1,21 @@
 # Scaling in Production
 
+::: warning Experimental
+Realtime and Broadcast are Experimental in 0.4.0. Production reliability work is still pending; review the [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates.
+:::
+
 With the `holo` driver, broadcasting depends on a long-running WebSocket worker next to your web app. This page covers running that worker, putting it behind a proxy, and running several copies of it.
+
+## Experimental production limits
+
+Realtime and Broadcast are not production-ready. The deployment settings below do not remove these limits:
+
+- Browser reconnection and resubscription, heartbeat handling, and dead-connection cleanup still need reliability work. Do not rely on uninterrupted live updates.
+- Presence membership can become stale after a worker crashes.
+- Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
+- Protocol hardening is pending, including subscription-error handling, socket-ID collision checks, private-channel authorization for anonymous users in the default worker, per-connection limits, backpressure, error-message handling, and Nuxt definition bundling.
+
+These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
 
 ## Quick checklist
 

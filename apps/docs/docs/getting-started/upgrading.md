@@ -1,10 +1,18 @@
 # Upgrade Guide
 
+## Upgrading from 0.3.x to 0.4.0
+
+0.4.0 is in preparation. This section collects upgrade steps as the release changes land.
+
+[Realtime](/realtime/) and [Broadcast](/broadcasting/) are **Experimental** in 0.4.0. Review their [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates. This label does not change runtime behavior.
+
+## Earlier 0.3.x releases
+
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.
 
 Follow these steps in order.
 
-## 1. Update all Holo packages together
+### 1. Update all Holo packages together
 
 Holo packages are released as one group. Update every `@holo-js/*` package in `package.json` to the same new version, then install:
 
@@ -14,7 +22,7 @@ npm install
 
 Mixing versions of Holo packages is not supported.
 
-## 2. Move config helper imports
+### 2. Move config helper imports
 
 Each `define...Config` helper now comes from the package for that feature. `env` stays in `@holo-js/config`.
 
@@ -54,7 +62,7 @@ export default defineDatabaseConfig({
 
 The object you pass to each helper does not change.
 
-## 3. Install the driver packages you use
+### 3. Install the driver packages you use
 
 Drivers are no longer bundled with the feature package. Install the package for each driver your config selects:
 
@@ -90,7 +98,7 @@ If your code imports a driver directly, update the import:
 
 The `@holo-js/storage/runtime/drivers/s3` path no longer exists.
 
-## 4. Move schema imports to `@holo-js/validation`
+### 4. Move schema imports to `@holo-js/validation`
 
 `@holo-js/forms` no longer exports schema builders, and the `@holo-js/forms/schema` entry has been removed. Import `schema` and `field` from `@holo-js/validation`:
 
@@ -106,7 +114,7 @@ export const loginForm = schema({
 
 Forms helpers such as `validate()` and `useForm()` accept these schemas directly.
 
-### Read validation errors across framework boundaries
+#### Read validation errors across framework boundaries
 
 If you use `isValidationException(error)` to recognize a serialized response or framework-wrapped error, switch to `serializeValidationException(error)` from `@holo-js/validation`. It returns the failure payload, or `undefined` for unrelated errors:
 
@@ -122,7 +130,7 @@ throw error
 
 Read field messages from `payload.errors`. Keep `isValidationException()` when you need to narrow a live exception and call its error bag methods. Holo's adapters and `useForm()` handle transported failures automatically. See [Error Messages](/basics/validation/errors#add-errors-from-your-own-logic).
 
-## 5. Add the session revocations table (apps using auth)
+### 5. Add the session revocations table (apps using auth)
 
 Auth now records signed-out sessions in an `auth_session_revocations` table, which other-device logout depends on. New projects include this migration. Existing apps need to add it.
 
@@ -165,7 +173,7 @@ The table is required whichever session store you use. On MySQL it requires MySQ
 After you deploy this change, users who are signed in through the browser must sign in again. Existing API tokens keep working.
 :::
 
-## 6. Plugin authors: depend on `@holo-js/kernel`
+### 6. Plugin authors: depend on `@holo-js/kernel`
 
 If you maintain a Holo plugin:
 
@@ -176,7 +184,7 @@ If you maintain a Holo plugin:
 
 See [Writing Plugins](/advanced/plugins) for the full package layout.
 
-## 7. Declare your trusted proxies
+### 7. Declare your trusted proxies
 
 `HOLO_SECURITY_TRUST_PROXY` is gone. Holo now identifies visitors by their connection address, and reads forwarded headers only from proxies you list in `config/security.ts`:
 
@@ -193,7 +201,7 @@ export default defineSecurityConfig({
 - Next.js apps need `trustedProxies`, because Next.js doesn't expose the connection address.
 - Call `ip(request)` without the second argument. It now follows `trustedProxies`.
 
-## 8. Verify
+### 8. Verify
 
 Regenerate Holo's files and check that everything compiles and passes:
 

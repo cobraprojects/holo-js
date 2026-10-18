@@ -1,5 +1,9 @@
 # Events and Channels
 
+::: warning Experimental
+Realtime and Broadcast are Experimental in 0.4.0. Production reliability work is still pending; review the [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates.
+:::
+
 A broadcast event is a named message with a JSON payload, sent to one or more channels. Channels decide who receives it: anyone (public), a signed-in user you approve (private), or a group whose members can see each other (presence).
 
 ## Quick example
