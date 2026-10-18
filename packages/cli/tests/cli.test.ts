@@ -769,6 +769,13 @@ async function createTempDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'holo-cli-dir-'))
 }
 
+async function createOfflinePackageManagerEnv(projectRoot: string): Promise<NodeJS.ProcessEnv> {
+  const binRoot = join(projectRoot, '.offline-package-manager')
+  await mkdir(binRoot, { recursive: true })
+  await writeFile(join(binRoot, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  return { PATH: `${binRoot}:${process.env.PATH ?? ''}` }
+}
+
 async function writeProjectFile(projectRoot: string, relativePath: string, contents: string): Promise<void> {
   const pathSegments = relativePath.split('/')
   if (pathSegments[0] === 'node_modules' && pathSegments[1] === '@holo-js' && pathSegments[2]) {
@@ -4129,7 +4136,7 @@ export default defineCacheConfig({
       },
     }, null, 2))
     await writeProjectFile(nextRoot, 'app/layout.tsx', 'export default function Layout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html> }\n')
-    const nextResult = runCliProcess(nextRoot, ['install', 'broadcast'])
+    const nextResult = runCliProcess(nextRoot, ['install', 'broadcast'], { env: await createOfflinePackageManagerEnv(nextRoot) })
     expect(nextResult.status, `${nextResult.stdout}\n${nextResult.stderr}`).toBe(0)
     expect(nextResult.stdout).toContain('Installed broadcast support.')
     expect(nextResult.stdout).toContain('  - updated .env')
@@ -4186,7 +4193,7 @@ export default defineCacheConfig({
         nuxt: expectedNuxtPackageRange,
       },
     }, null, 2))
-    const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'])
+    const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'], { env: await createOfflinePackageManagerEnv(nuxtRoot) })
     expect(nuxtResult.status, `${nuxtResult.stdout}\n${nuxtResult.stderr}`).toBe(0)
     await expect(stat(join(nuxtRoot, 'app/plugins/flux.client.ts'))).rejects.toThrow()
     await expect(stat(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'))).rejects.toThrow()
@@ -4208,7 +4215,7 @@ export default defineCacheConfig({
         '@sveltejs/kit': expectedSvelteKitPackageRange,
       },
     }, null, 2))
-    const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'])
+    const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'], { env: await createOfflinePackageManagerEnv(svelteRoot) })
     expect(svelteResult.status, `${svelteResult.stdout}\n${svelteResult.stderr}`).toBe(0)
     await expect(stat(join(svelteRoot, 'src/lib/flux.ts'))).rejects.toThrow()
     await expect(stat(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'))).rejects.toThrow()
