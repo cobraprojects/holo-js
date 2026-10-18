@@ -148,11 +148,13 @@ it('delivers identical channel names only to the authenticated app scope over na
   await expect.poll(() => tenant.messages.filter(message => message.event === 'orders.updated').map(message => JSON.parse(message.data))).toEqual([{ title: 'tenant' }])
 })
 
-it('reports malformed socket messages and closes the connection with a protocol error', async () => {
+it('reports malformed socket messages to the reporter active at worker start and closes with a protocol error', async () => {
   const reports: HoloErrorReportContext[] = []
+  const laterReports: HoloErrorReportContext[] = []
   errorReportingInternals.configure({ report: (_error, context) => { reports.push(context) } })
   onTestFinished(() => { errorReportingInternals.configure(undefined) })
   const worker = await startNativeWorker()
+  errorReportingInternals.configure({ report: (_error, context) => { laterReports.push(context) } })
   const client = await worker.connect()
   const closed = once(client.socket, 'close')
   client.socket.send('not json')
@@ -160,6 +162,7 @@ it('reports malformed socket messages and closes the connection with a protocol 
   expect(code).toBe(4001)
   expect(String(reason)).toBe('Protocol error')
   expect(reports).toEqual([{ capability: 'broadcast', operation: 'worker.socketMessage' }])
+  expect(laterReports).toEqual([])
 })
 
 it('rejects unauthorized private subscriptions without registering a channel', async () => {

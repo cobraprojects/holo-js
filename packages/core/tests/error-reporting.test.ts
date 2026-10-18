@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
 import { defineJob, dispatchSync, registerQueueJob, resetQueueRegistry } from '@holo-js/queue'
-import { createHolo, report, resetHoloRuntime } from '../src'
+import { createHolo, initializeHolo, report, resetHoloRuntime } from '../src'
 
 type ReportedError = {
   readonly error: unknown
@@ -160,6 +160,45 @@ describe('application error reporting', () => {
     report(error)
     expect(reports).toEqual([])
     expect(outerReport).toHaveBeenCalledExactlyOnceWith(error, { capability: 'app', operation: 'report' })
+  })
+
+  it('keeps a shutting-down runtime as process owner until its reporter is restored', async () => {
+    const reports = prepareCollectingReporter()
+    const first = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+    await first.initialize()
+    const second = await createHolo(await createProject(`{
+      report(error, context) {
+        globalThis.__holoTestReports__.push({ error, context: { ...context, capability: 'second' } })
+      },
+    }`), { processEnv: {} })
+
+    const shutdown = first.shutdown()
+    await expect(second.initialize()).rejects.toThrow('A Holo runtime is still shutting down for this process.')
+    await shutdown
+    await second.initialize()
+    const error = new Error('owned by the second runtime')
+    report(error)
+
+    expect(reports).toEqual([{ error, context: { capability: 'second', operation: 'report' } }])
+  })
+
+  it('waits for a shutting-down runtime before initializeHolo boots the next one', async () => {
+    const reports = prepareCollectingReporter()
+    const first = await createHolo(await createProject(collectingReporter), { processEnv: {} })
+    await first.initialize()
+    const secondRoot = await createProject(`{
+      report(error, context) {
+        globalThis.__holoTestReports__.push({ error, context: { ...context, capability: 'second' } })
+      },
+    }`)
+
+    const shutdown = first.shutdown()
+    await initializeHolo(secondRoot, { processEnv: {} })
+    await shutdown
+    const error = new Error('owned by the second runtime')
+    report(error)
+
+    expect(reports).toEqual([{ error, context: { capability: 'second', operation: 'report' } }])
   })
 
   it('writes to console.error when the application configures no reporter', async () => {

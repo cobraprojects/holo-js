@@ -5,7 +5,7 @@ import type {
   NormalizedHoloBroadcastConfig,
 } from './config'
 import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
-import { reportError } from '@holo-js/kernel/error-reporting'
+import { captureErrorReporter, type HoloErrorReporter } from '@holo-js/kernel/error-reporting'
 import type { NormalizedHoloQueueConfig, NormalizedQueueRedisConnectionConfig } from '@holo-js/queue'
 import {
   authorizeBroadcastChannel,
@@ -137,10 +137,11 @@ export interface BroadcastWorkerStats {
 
 function createScalingMessageListener(
   runtime: Pick<BroadcastWorkerRuntime, 'receiveScalingMessage'>,
+  report: HoloErrorReporter,
 ): (payload: string) => void {
   return (payload) => {
     void runtime.receiveScalingMessage(payload).catch((error) => {
-      reportError(error, { capability: 'broadcast', operation: 'worker.scalingMessage' })
+      report(error, { capability: 'broadcast', operation: 'worker.scalingMessage' })
     })
   }
 }
@@ -478,11 +479,11 @@ function verifyClientChannelAuth(
   return parseSignedChannelData(clientAuth.channelData)
 }
 
-function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscription: BroadcastRealtimeSubscription): void {
+function unsubscribeRealtimeSubscription(subscription: BroadcastRealtimeSubscription, report: HoloErrorReporter): void {
   try {
     subscription.unsubscribe()
   } catch (error) {
-    reportError(error, { capability: 'broadcast', operation: 'worker.realtimeSubscriptionCleanup' })
+    report(error, { capability: 'broadcast', operation: 'worker.realtimeSubscriptionCleanup' })
   }
 }
 
@@ -988,6 +989,7 @@ function resolveRealtimeErrorKind(error: unknown, status: number | undefined): R
 }
 
 export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): BroadcastWorkerRuntime {
+  const report = captureErrorReporter()
   const appsByKey = buildWorkerApps(options.config)
   const connectedSockets = new Map<string, SocketState>()
   const channels = new Map<string, Set<string>>()
@@ -1001,7 +1003,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     : scaling && options.scalingAutoSubscribe !== false
       ? scaling.adapter.subscribe(scaling.eventChannel, createScalingMessageListener({
           receiveScalingMessage: handleScalingMessage,
-        }))
+        }, report))
     : Promise.resolve(async () => {})
 
   function createPresenceSocketRef(channel: string, socketId: string): string {
@@ -1267,7 +1269,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       const subscription = socket.realtimeSubscriptions.get(request.id)
       socket.realtimeSubscriptionTokens.delete(request.id)
       if (subscription) {
-        unsubscribeRealtimeSubscription(socket, request.id, subscription)
+        unsubscribeRealtimeSubscription(subscription, report)
       }
       socket.realtimeSubscriptions.delete(request.id)
       sendRealtimeMessage(socket, 'holo:realtime:unsubscribed', {
@@ -1305,7 +1307,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       const previousSubscription = socket.realtimeSubscriptions.get(request.id)
       socket.realtimeSubscriptionTokens.delete(request.id)
       if (previousSubscription) {
-        unsubscribeRealtimeSubscription(socket, request.id, previousSubscription)
+        unsubscribeRealtimeSubscription(previousSubscription, report)
         socket.realtimeSubscriptions.delete(request.id)
       }
 
@@ -1343,7 +1345,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         },
       })
       if (!isRealtimeSubscriptionCurrent(socket, request.id, subscriptionToken)) {
-        unsubscribeRealtimeSubscription(socket, request.id, subscription)
+        unsubscribeRealtimeSubscription(subscription, report)
         return
       }
 
@@ -1829,8 +1831,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
       socket.active = false
       connectedSockets.delete(socketId)
-      for (const [subscriptionId, subscription] of socket.realtimeSubscriptions) {
-        unsubscribeRealtimeSubscription(socket, subscriptionId, subscription)
+      for (const subscription of socket.realtimeSubscriptions.values()) {
+        unsubscribeRealtimeSubscription(subscription, report)
       }
       socket.realtimeSubscriptions.clear()
       socket.realtimeSubscriptionTokens.clear()
@@ -1844,11 +1846,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         return async () => {
           if (removedPresenceMember.removed && removedPresenceMember.member) {
             await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member).catch((error) => {
-              reportError(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
+              report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
             })
           }
           await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((error) => {
-            reportError(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
+            report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
           })
         }
       })
@@ -1922,6 +1924,7 @@ export async function startBroadcastWorker(
     readonly loadWebSocketModule?: () => Promise<unknown>
   },
 ): Promise<StartedBroadcastWorker> {
+  const report = captureErrorReporter()
   const config = runtimeBindings.config
   if (!config) {
     throw new Error('[@holo-js/broadcast] Broadcast worker requires a loaded broadcast config.')
@@ -1962,7 +1965,7 @@ export async function startBroadcastWorker(
   if (scalingConfig) {
     scalingUnsubscribe = await scalingConfig.adapter.subscribe(
       scalingConfig.eventChannel,
-      createScalingMessageListener(runtime),
+      createScalingMessageListener(runtime, report),
     ).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
   }
   const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
@@ -2027,7 +2030,7 @@ export async function startBroadcastWorker(
             ? message
             : new TextDecoder().decode(message)
           void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
-            reportError(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
+            report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
             runtime.disconnectWebSocket(socket.data.socketId)
             socket.close(4001, 'Protocol error')
           })
@@ -2090,7 +2093,7 @@ export async function startBroadcastWorker(
       }
       const value = decodeNodeWebSocketMessage(message)
       void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
-        reportError(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
+        report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
         runtime.disconnectWebSocket(socketId)
         socket.close(4001, 'Protocol error')
       })

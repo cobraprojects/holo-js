@@ -1,6 +1,14 @@
+export type HoloRuntimeTransitionPhase = 'initializing' | 'shuttingDown'
+
+export interface HoloRuntimeTransition<TRuntime> {
+  readonly runtime: TRuntime
+  readonly phase: HoloRuntimeTransitionPhase
+  readonly settled: Promise<void>
+}
+
 export interface HoloRuntimeState<TRuntime, TSecurityRedisAdapter, TSessionRedisAdapter> {
   current?: TRuntime
-  initializing?: TRuntime
+  transition?: HoloRuntimeTransition<TRuntime>
   pending?: Promise<TRuntime>
   pendingProjectRoot?: string
   securityRedisAdapter?: TSecurityRedisAdapter

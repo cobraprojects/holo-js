@@ -114,6 +114,7 @@ import {
 } from './featureDetection'
 import {
   createRuntimeStateAccessors,
+  type HoloRuntimeTransitionPhase,
   type OptionalSubsystemRuntimeBindings,
 } from './runtimeState'
 
@@ -2071,24 +2072,44 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')
       const state = getRuntimeState()
       if (state.current) throw new Error('A Holo runtime is already initialized for this process.')
-      if (state.initializing) throw new Error('A Holo runtime is already initializing for this process.')
-      state.initializing = runtime
-      try {
-        await runtimeLifecycle.initialize({ projectRoot })
-      } finally {
-        state.initializing = undefined
-      }
+      if (state.transition) throw new Error(runtimeTransitionConflicts[state.transition.phase])
+      await runWithinRuntimeTransition(runtime, 'initializing', () => runtimeLifecycle.initialize({ projectRoot }))
       runtime.initialized = true
       state.current = runtime
     },
     async shutdown() {
       runtime.initialized = false
-      if (getRuntimeState().current === runtime) getRuntimeState().current = undefined
-      await runtimeLifecycle.dispose({ projectRoot })
+      const state = getRuntimeState()
+      if (state.current !== runtime) {
+        await runtimeLifecycle.dispose({ projectRoot })
+        return
+      }
+      state.current = undefined
+      await runWithinRuntimeTransition(runtime, 'shuttingDown', () => runtimeLifecycle.dispose({ projectRoot }))
     },
   }
 
   return runtime
+}
+
+const runtimeTransitionConflicts: Readonly<Record<HoloRuntimeTransitionPhase, string>> = {
+  initializing: 'A Holo runtime is already initializing for this process.',
+  shuttingDown: 'A Holo runtime is still shutting down for this process.',
+}
+
+async function runWithinRuntimeTransition(
+  runtime: HoloRuntime,
+  phase: HoloRuntimeTransitionPhase,
+  transition: () => Promise<void>,
+): Promise<void> {
+  const state = getRuntimeState()
+  const transitionAfterSlotIsRecorded = Promise.resolve().then(transition)
+  state.transition = { runtime, phase, settled: transitionAfterSlotIsRecorded.then(() => undefined, () => undefined) }
+  try {
+    await transitionAfterSlotIsRecorded
+  } finally {
+    if (state.transition?.runtime === runtime) state.transition = undefined
+  }
 }
 
 export async function reconfigureHoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap>(
@@ -2105,6 +2126,8 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
   projectRoot: string,
   options: CreateHoloOptions = {},
 ): Promise<HoloRuntime<TCustom>> {
+  const pendingShutdown = pendingRuntimeShutdown()
+  if (pendingShutdown) await pendingShutdown
   const state = getRuntimeState()
   const resolvedProjectRoot = resolve(projectRoot)
   const current = state.current as HoloRuntime<TCustom> | undefined
@@ -2186,7 +2209,14 @@ export function getHolo<TCustom extends HoloConfigMap = HoloConfigMap>(): HoloRu
   return current
 }
 
+function pendingRuntimeShutdown(): Promise<void> | undefined {
+  const transition = getRuntimeState().transition
+  return transition?.phase === 'shuttingDown' ? transition.settled : undefined
+}
+
 export async function resetHoloRuntime(): Promise<void> {
+  const pendingShutdown = pendingRuntimeShutdown()
+  if (pendingShutdown) await pendingShutdown
   const current = getRuntimeState().current
   const projectRoot = current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   getRuntimeState().pending = undefined
