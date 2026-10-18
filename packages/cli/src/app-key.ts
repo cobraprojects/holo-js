@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { writeTextFile } from './project/atomic-file'
 
 export type AppKeyGenerateResult = {
   readonly envPath: string
@@ -75,7 +74,7 @@ export async function generateProjectAppKey(projectRoot: string): Promise<AppKey
     }
   }
 
-  await writeTextFile(envPath, nextEnv.contents)
+  await writeFile(envPath, nextEnv.contents, 'utf8')
 
   return {
     envPath,

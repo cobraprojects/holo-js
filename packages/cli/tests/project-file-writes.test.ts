@@ -66,3 +66,16 @@ it.skipIf(process.platform === 'win32')('rewrites the target of a symlinked file
   expect((await lstat(linkedEnvPath)).isSymbolicLink()).toBe(true)
   expect(await readFile(sharedEnvPath, 'utf8')).toBe('APP_KEY=base64:generated\n')
 })
+
+it.skipIf(process.platform === 'win32')('creates the missing target of a dangling symlink and keeps the link', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-file-dangling-'))
+  tempRoots.push(root)
+  const targetPath = join(root, 'shared', 'config.json')
+  const linkPath = join(root, 'config.json')
+  await symlink(targetPath, linkPath)
+
+  await writeTextFile(linkPath, '{"ready":true}\n')
+
+  expect((await lstat(linkPath)).isSymbolicLink()).toBe(true)
+  expect(await readFile(targetPath, 'utf8')).toBe('{"ready":true}\n')
+})
