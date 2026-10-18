@@ -232,16 +232,21 @@ function createInvalidationBackfills(
 async function refreshParsedInvalidations(events: readonly ParsedInvalidationEvent[]): Promise<void> {
   const entries = collectQueryEntriesForParsedInvalidations(events)
   const databases = new Map<number, ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[]>()
+  const reruns: Promise<void>[] = []
   for (const entry of entries) {
+    if ([...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) {
+      reruns.push(scheduleRefreshKey(entry.refreshKey))
+      continue
+    }
     const group = databases.get(entry.contextId) ?? []
     group.push(entry)
     databases.set(entry.contextId, group)
   }
-  await Promise.all([...databases.values()].map(async (group) => {
+  await Promise.all([...reruns, ...[...databases.values()].map(async (group) => {
     const first = group[0]
     if (!first) return
     await refreshInvalidatedQueryEntries(first, group.slice(1), createInvalidationBackfills(events, group))
-  }))
+  })])
 }
 
 export async function handleDatabaseInvalidation(

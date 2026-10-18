@@ -186,3 +186,23 @@ it('retains each caller across independent memory auth contexts', async () => {
   expect(first.current.data).toEqual([{ id: 10, name: 'Updated Ava' }])
   expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
 }, 30000)
+
+it('reruns queries that observe a different database from the runtime binding', async () => {
+  const primaryAdapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'A1' }, { id: 2, title: 'A2' }] })
+  const observedAdapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'B1' }, { id: 2, title: 'B2' }] })
+  const primary = createDatabase({ adapter: primaryAdapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  const observed = createDatabase({ adapter: observedAdapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  configureRealtimeRuntime({ db: () => primary })
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({
+    access: 'public',
+    handler: async () => await observed.table('posts').orderBy('id').limit(1).get(),
+  }))
+  expect(subscription.current.data).toEqual([{ id: 1, title: 'B1' }])
+
+  await primary.table('posts').where('id', 1).update({ title: 'Foreign A1' })
+  expect(subscription.current.data).toEqual([{ id: 1, title: 'B1' }])
+
+  await observed.table('posts').where('id', 1).delete()
+
+  expect(subscription.current.data).toEqual([{ id: 2, title: 'B2' }])
+})
