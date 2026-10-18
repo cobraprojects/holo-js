@@ -159,6 +159,45 @@ One case to know: `findOrFail()` and `firstOrFail()` throw a `ModelNotFoundExcep
 In Next.js and SvelteKit API routes, use `first()` or `find()` and return a `404` yourself, as in the example at the top of this page. Use `findOrFail()` only where a `500` is acceptable, or catch the error.
 :::
 
+## Reporting errors
+
+Some failures happen after Holo has already answered, or inside background work, so they never reach your framework's error handling. Holo catches these, keeps the request or job running, and reports them. Examples are a queue `onCompleted` hook that throws, a cache refresh that fails in the background, or a broadcast socket that sends a malformed message.
+
+By default, each report is written to `console.error`. To send reports to Sentry, OpenTelemetry, or your own logger, add `exceptions.report` to `config/app.ts`:
+
+```ts [config/app.ts]
+import { defineAppConfig, env } from '@holo-js/config'
+import * as Sentry from '@sentry/node'
+import { PaymentDeclinedError } from '../server/errors'
+
+export default defineAppConfig({
+  name: env('APP_NAME', 'Blog'),
+  exceptions: {
+    report(error, { capability, operation }) {
+      Sentry.captureException(error, { tags: { capability, operation } })
+    },
+    dontReport: [PaymentDeclinedError],
+  },
+})
+```
+
+`report` receives the original error and where it happened:
+
+| `capability` | `operation` |
+|---|---|
+| `app` | `report` (your own `report()` calls) |
+| `queue` | `job.onCompleted`, `job.onFailed`, `dispatch.onComplete`, `dispatch.onFailed`, `worker.onJobProcessed`, `worker.onJobReleased`, `worker.onJobFailed` |
+| `auth` | `passwordReset.clearReservation`, `multiFactor.clearRateLimit`, `multiFactor.clearEnrollment`, `next.resolveState`, `sveltekit.resolveState` |
+| `cache` | `flexible.refresh`, `driver.dispose`, `driver.disconnect` |
+| `db` | `cache.invalidationListener` |
+| `broadcast` | `worker.socketMessage`, `worker.scalingMessage`, `worker.socketCleanup`, `worker.realtimeSubscriptionCleanup` |
+
+`report` can be `async`. Holo doesn't wait for it, and a reporter that throws or rejects never breaks the request or job. Holo writes the original error and the reporter's error to `console.error` instead.
+
+Errors that are instances of a class in `dontReport` are skipped, including subclasses.
+
+To report an error you handled yourself, call [`report()`](#report).
+
 ## Errors on the client
 
 When a submission from [`useForm()`](/basics/forms/client) fails with an HTTP error other than `422`, such as a `403` from `authorize()`, Holo replaces the page with a minimal error screen that shows the status and message. Field errors from a `422` stay in the form instead.
@@ -171,6 +210,7 @@ In Next.js, the error is also rethrown while rendering, so your `error.tsx`, `no
 
 - [isHoloHttpErrorStatus()](#isholohttperrorstatus)
 - [normalizeHoloHttpError()](#normalizeholohttperror)
+- [report()](#report)
 
 **Error classes**
 
@@ -204,6 +244,26 @@ export async function POST(request: Request) {
 
     return Response.json({ message: httpError.message }, { status: httpError.status })
   }
+}
+```
+
+### report() {#report}
+
+Sends an error to the reporter in `config/app.ts` with `{ capability: 'app', operation: 'report' }`, and keeps your code running. It respects `dontReport` and writes to `console.error` when no reporter is configured. Import it from `@holo-js/core`.
+
+```ts
+import { report } from '@holo-js/core'
+
+export async function POST(request: Request) {
+  const order = await Order.create(await request.json())
+
+  try {
+    await sendReceipt(order)
+  } catch (error) {
+    report(error)
+  }
+
+  return Response.json(order, { status: 201 })
 }
 ```
 

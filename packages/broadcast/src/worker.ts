@@ -5,6 +5,7 @@ import type {
   NormalizedHoloBroadcastConfig,
 } from './config'
 import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type { NormalizedHoloQueueConfig, NormalizedQueueRedisConnectionConfig } from '@holo-js/queue'
 import {
   authorizeBroadcastChannel,
@@ -139,7 +140,7 @@ function createScalingMessageListener(
 ): (payload: string) => void {
   return (payload) => {
     void runtime.receiveScalingMessage(payload).catch((error) => {
-      logScalingMessageError(error)
+      reportError(error, { capability: 'broadcast', operation: 'worker.scalingMessage' })
     })
   }
 }
@@ -415,26 +416,6 @@ function parseRealtimeSocketMessage(data: Record<string, unknown>): RealtimeSock
   })
 }
 
-function logSocketMessageError(socketId: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
-}
-
-function logScalingMessageError(error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[@holo-js/broadcast] Scaling message handling failed: ${message}`)
-}
-
-function logSocketCleanupError(socketId: string, channel: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[@holo-js/broadcast] Socket cleanup failed for socket "${socketId}" on "${channel}": ${message}`)
-}
-
-function logRealtimeSubscriptionCleanupError(socketId: string, subscriptionId: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[@holo-js/broadcast] Realtime subscription cleanup failed for socket "${socketId}" on "${subscriptionId}": ${message}`)
-}
-
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left)
   const rightBuffer = Buffer.from(right)
@@ -501,7 +482,7 @@ function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscr
   try {
     subscription.unsubscribe()
   } catch (error) {
-    logRealtimeSubscriptionCleanupError(socket.socketId, id, error)
+    reportError(error, { capability: 'broadcast', operation: 'worker.realtimeSubscriptionCleanup' })
   }
 }
 
@@ -1863,11 +1844,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         return async () => {
           if (removedPresenceMember.removed && removedPresenceMember.member) {
             await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member).catch((error) => {
-              logSocketCleanupError(socket.socketId, channel, error)
+              reportError(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
             })
           }
           await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((error) => {
-            logSocketCleanupError(socket.socketId, channel, error)
+            reportError(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
           })
         }
       })
@@ -2046,7 +2027,7 @@ export async function startBroadcastWorker(
             ? message
             : new TextDecoder().decode(message)
           void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
-            logSocketMessageError(socket.data.socketId, error)
+            reportError(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
             runtime.disconnectWebSocket(socket.data.socketId)
             socket.close(4001, 'Protocol error')
           })
@@ -2109,7 +2090,7 @@ export async function startBroadcastWorker(
       }
       const value = decodeNodeWebSocketMessage(message)
       void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
-        logSocketMessageError(socketId, error)
+        reportError(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
         runtime.disconnectWebSocket(socketId)
         socket.close(4001, 'Protocol error')
       })
@@ -2237,10 +2218,6 @@ export const workerInternals = {
   normalizeRealtimeAction,
   normalizeRealtimeArgs,
   parseRealtimeSocketMessage,
-  logSocketMessageError,
-  logScalingMessageError,
-  logSocketCleanupError,
-  logRealtimeSubscriptionCleanupError,
   safeEqual,
   signChannelAuth,
   parseClientChannelAuth,

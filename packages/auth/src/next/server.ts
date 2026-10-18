@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { connection } from 'next/server.js'
 import type { HoloAuthUser } from '../contracts'
 import type * as AuthRuntime from '../index'
@@ -120,7 +121,7 @@ export async function auth(options: AuthOptions = {}): Promise<AuthState> {
       user: clientUser,
     }
   } catch (error) {
-    console.warn('Failed to resolve Next.js auth state.', error)
+    reportError(error, { capability: 'auth', operation: 'next.resolveState' })
     return {
       authenticated: false,
       guard,

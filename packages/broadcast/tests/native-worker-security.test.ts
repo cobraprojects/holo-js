@@ -5,6 +5,7 @@ import { createServer as createHttpServer } from 'node:http'
 import WebSocket from 'ws'
 import { defineSchema, field } from '@holo-js/validation'
 import { expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { defineChannel, normalizeBroadcastConfig, renderBroadcastAuthResponse, startBroadcastWorker } from '../src'
 
 async function startNativeWorker(options: { authorize?: () => boolean | Promise<boolean>; authEndpoint?: string } = {}) {
@@ -145,6 +146,20 @@ it('delivers identical channel names only to the authenticated app scope over na
   await expect(fetch(worker.request('tenant')).then(response => response.json())).resolves.toMatchObject({ deliveredSockets: 1 })
   await expect.poll(() => main.messages.filter(message => message.event === 'orders.updated').map(message => JSON.parse(message.data))).toEqual([{ title: 'main' }])
   await expect.poll(() => tenant.messages.filter(message => message.event === 'orders.updated').map(message => JSON.parse(message.data))).toEqual([{ title: 'tenant' }])
+})
+
+it('reports malformed socket messages and closes the connection with a protocol error', async () => {
+  const reports: HoloErrorReportContext[] = []
+  errorReportingInternals.configure({ report: (_error, context) => { reports.push(context) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  const worker = await startNativeWorker()
+  const client = await worker.connect()
+  const closed = once(client.socket, 'close')
+  client.socket.send('not json')
+  const [code, reason] = await closed
+  expect(code).toBe(4001)
+  expect(String(reason)).toBe('Protocol error')
+  expect(reports).toEqual([{ capability: 'broadcast', operation: 'worker.socketMessage' }])
 })
 
 it('rejects unauthorized private subscriptions without registering a channel', async () => {

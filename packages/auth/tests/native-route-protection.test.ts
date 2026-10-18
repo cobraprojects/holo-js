@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server'
 import { readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import auth, { configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthProviderAdapter } from '../src'
 import type NativeUser from './support/models/User'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
@@ -96,7 +97,10 @@ it('continues identical Next redirects and performs cross-origin redirects with 
   await expect(app.run(request, () => composed(request))).resolves.toBeUndefined()
 })
 
-it('denies Next protected routes when the actual persisted session can no longer be loaded', async () => {
+it('denies protected routes and reports the failure when the actual persisted session can no longer be loaded', async () => {
+  const reports: HoloErrorReportContext[] = []
+  errorReportingInternals.configure({ report: (_error, context) => { reports.push(context) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
   const app = await nativeAuth()
   const request = app.request('/admin', true)
   const records = (await readdir(app.sessionStore.path)).filter(filename => filename.endsWith('.json'))
@@ -114,6 +118,11 @@ it('denies Next protected routes when the actual persisted session can no longer
   }))
   expect(svelteResponse.status).toBe(303)
   expect(svelteResponse.headers.get('location')).toBe('https://app.test/login')
+  expect(reports).toEqual([
+    { capability: 'auth', operation: 'next.resolveState' },
+    { capability: 'auth', operation: 'next.resolveState' },
+    { capability: 'auth', operation: 'sveltekit.resolveState' },
+  ])
 })
 
 it('uses persisted auth with SvelteKit guard matching, continuation, and cross-origin redirects', async () => {

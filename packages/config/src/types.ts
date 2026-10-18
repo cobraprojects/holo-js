@@ -2,6 +2,7 @@ import type {
   HoloProjectConfig,
   HoloProjectPaths,
 } from '@holo-js/kernel'
+import type { HoloExceptionsConfig } from '@holo-js/kernel/error-reporting'
 
 export type HoloAppEnv = 'development' | 'production' | 'test'
 
@@ -13,6 +14,7 @@ export interface HoloAppConfig extends HoloProjectConfig {
   debug?: boolean
   env?: HoloAppEnv
   plugins?: readonly string[]
+  exceptions?: HoloExceptionsConfig
 }
 
 export interface NormalizedHoloAppConfig {
@@ -23,6 +25,7 @@ export interface NormalizedHoloAppConfig {
   readonly debug: boolean
   readonly env: HoloAppEnv
   readonly plugins: readonly string[]
+  readonly exceptions: Readonly<HoloExceptionsConfig>
   readonly paths: Readonly<HoloProjectPaths>
   readonly models: readonly string[]
   readonly migrations: readonly string[]

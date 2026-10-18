@@ -2243,6 +2243,32 @@ export default defineConfig({
     await expect(writeConfigCache(root, { processEnv: {} })).rejects.toThrow('JSON-serializable')
   })
 
+  it('caches app configs that register an exception reporter', async () => {
+    const root = await createProject()
+
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Reporting App',
+  exceptions: {
+    report(error) {
+      return error
+    },
+    dontReport: [TypeError],
+  },
+})
+`, 'utf8')
+
+    await expect(writeConfigCache(root, { processEnv: {} })).resolves.toBe(resolveConfigCachePath(root))
+
+    const loaded = await loadConfigDirectory(root, { processEnv: {} })
+
+    expect(loaded.app.name).toBe('Reporting App')
+    expect(typeof loaded.app.exceptions.report).toBe('function')
+    expect(loaded.app.exceptions.dontReport).toEqual([TypeError])
+  })
+
   it('caches security configs that use keyed rate limiters', async () => {
     const root = await createProject()
 

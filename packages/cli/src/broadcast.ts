@@ -1,6 +1,7 @@
 import { basename, extname, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { loadConfigDirectory } from '@holo-js/config'
+import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
 import type {} from '@holo-js/broadcast/config'
 import {
   loadGeneratedProjectRegistry,
@@ -354,6 +355,7 @@ export async function runBroadcastWorkCommand(
   const registry = await prepareProjectDiscovery(projectRoot, project.config)
   const broadcastModule = await loadModule(projectRoot)
   const realtime = await createRealtimeWorkerBindings(projectRoot)
+  const previousExceptions = errorReportingInternals.configure(config.app.exceptions)
   try {
     const worker = await broadcastModule.startBroadcastWorker({
       config: config.broadcast,
@@ -399,6 +401,7 @@ export async function runBroadcastWorkCommand(
       process.on('SIGTERM', onSignal)
     })
   } finally {
+    errorReportingInternals.configure(previousExceptions)
     await realtime?.shutdown()
   }
 }

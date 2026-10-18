@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import {
   CacheInvalidTtlError,
   type CacheFlexibleTtlInput,
@@ -105,7 +106,7 @@ export async function resolveFlexibleCachedValue<TValue>(
       void refreshLock.get(async () => {
         await options.refresh(normalizedTtl)
         return true
-      }).catch(() => undefined)
+      }).catch(error => reportError(error, { capability: 'cache', operation: 'flexible.refresh' }))
 
       return cached.value
     }

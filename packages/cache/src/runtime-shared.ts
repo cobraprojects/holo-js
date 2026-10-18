@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import {
   holoCacheDefaults,
   normalizeCacheConfig,
@@ -50,11 +51,11 @@ export function disposeCacheRuntimeBindings(bindings: CacheRuntimeFacade | undef
     return
   }
 
-  for (const [driverName, driver] of bindings.drivers.entries()) {
+  for (const driver of bindings.drivers.values()) {
     try {
       disposeDriver(driver)
     } catch (error) {
-      console.error(`[@holo-js/cache] Failed to dispose cache driver "${driverName}".`, error)
+      reportError(error, { capability: 'cache', operation: 'driver.dispose' })
     }
   }
 }

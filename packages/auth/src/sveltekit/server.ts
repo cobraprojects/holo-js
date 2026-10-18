@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { AuthUserLike, HoloAuthUser } from '../contracts'
@@ -133,7 +134,7 @@ export async function auth(options: AuthOptions = {}): Promise<AuthState> {
       ? await holoAuth.guard(options.guard).provider()
       : await currentProvider()
   } catch (error) {
-    console.warn('Failed to resolve SvelteKit auth state.', error)
+    reportError(error, { capability: 'auth', operation: 'sveltekit.resolveState' })
     return {
       authenticated: false,
       guard,

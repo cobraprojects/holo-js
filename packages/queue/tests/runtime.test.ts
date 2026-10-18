@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
 import { createQueueDbRuntimeOptions } from '../../queue-db/src'
 import { redisQueueDriverFactory } from '../../queue-redis/src'
@@ -51,8 +52,19 @@ const sharedRedisConfig = {
 afterEach(() => {
   resetQueueRegistry()
   resetQueueRuntime()
+  errorReportingInternals.configure(undefined)
   vi.useRealTimers()
 })
+
+function collectReportedErrors(): Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> {
+  const reports: Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> = []
+  errorReportingInternals.configure({
+    report(error, context) {
+      reports.push({ error, context })
+    },
+  })
+  return reports
+}
 
 function registerNamedJob<TPayload extends QueueJsonValue, TResult>(
   name: string,
@@ -479,8 +491,10 @@ export default {
     expect(onFailed).toHaveBeenCalledWith(expect.any(Error))
   })
 
-  it('warns and preserves the original dispatch outcome when pending dispatch hooks fail', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('reports hook failures and preserves the original dispatch outcome when pending dispatch hooks fail', async () => {
+    const reports = collectReportedErrors()
+    const completeHookError = new Error('complete hook failed')
+    const failedHookError = new Error('failed hook failed')
 
     registerNamedJob('jobs.hook-warning', {
       async handle(payload) {
@@ -490,7 +504,7 @@ export default {
 
     await expect(dispatch('jobs.hook-warning', { ok: true })
       .onComplete(async () => {
-        throw new Error('complete hook failed')
+        throw completeHookError
       })).resolves.toMatchObject({
       connection: 'sync',
       queue: 'default',
@@ -508,7 +522,7 @@ export default {
 
     await expect(dispatch('missing.job', { ok: true })
       .onFailed(async () => {
-        throw new Error('failed hook failed')
+        throw failedHookError
       })).rejects.toThrow('Queue job "missing.job" is not registered.')
 
     await expect(dispatch('missing.job', { ok: true })
@@ -516,27 +530,17 @@ export default {
         throw 'failed hook string failed'
       })).rejects.toThrow('Queue job "missing.job" is not registered.')
 
-    expect(warn).toHaveBeenNthCalledWith(
-      1,
-      '[Holo Queue] onComplete hook failed during dispatch of "jobs.hook-warning": complete hook failed',
-    )
-    expect(warn).toHaveBeenNthCalledWith(
-      2,
-      '[Holo Queue] onComplete hook failed during dispatch of "jobs.hook-warning": complete hook string failed',
-    )
-    expect(warn).toHaveBeenNthCalledWith(
-      3,
-      '[Holo Queue] onFailed hook failed during dispatch of "missing.job": failed hook failed',
-    )
-    expect(warn).toHaveBeenNthCalledWith(
-      4,
-      '[Holo Queue] onFailed hook failed during dispatch of "missing.job": failed hook string failed',
-    )
+    expect(reports).toEqual([
+      { error: completeHookError, context: { capability: 'queue', operation: 'dispatch.onComplete' } },
+      { error: 'complete hook string failed', context: { capability: 'queue', operation: 'dispatch.onComplete' } },
+      { error: failedHookError, context: { capability: 'queue', operation: 'dispatch.onFailed' } },
+      { error: 'failed hook string failed', context: { capability: 'queue', operation: 'dispatch.onFailed' } },
+    ])
   })
 
-  it('runs job completion hooks for synchronous execution and ignores hook failures', async () => {
+  it('runs job completion hooks for synchronous execution and reports hook failures', async () => {
     const onCompleted = vi.fn()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const reports = collectReportedErrors()
 
     registerNamedJob('jobs.complete', {
       async handle(payload) {
@@ -598,12 +602,12 @@ export default {
         maxAttempts: 1,
       },
     })
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onCompleted hook failed for job "jobs.complete-warn": hook failed')
+    expect(reports).toEqual([{ error: 'hook failed', context: { capability: 'queue', operation: 'job.onCompleted' } }])
   })
 
-  it('runs terminal failure hooks for synchronous execution and ignores hook failures', async () => {
+  it('runs terminal failure hooks for synchronous execution and reports hook failures', async () => {
     const onFailed = vi.fn()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const reports = collectReportedErrors()
 
     registerNamedJob('jobs.fail-sync', {
       async handle() {
@@ -690,7 +694,7 @@ export default {
         maxAttempts: 1,
       },
     })
-    expect(warn).toHaveBeenCalledWith('[Holo Queue] onFailed hook failed for job "jobs.fail-sync-warn": hook blew up')
+    expect(reports).toEqual([{ error: 'hook blew up', context: { capability: 'queue', operation: 'job.onFailed' } }])
   })
 
   it('does not run terminal failure hooks when a real database rejects enqueueing', async () => {

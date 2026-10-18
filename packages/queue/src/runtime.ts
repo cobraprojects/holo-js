@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import type {
   NormalizedQueueConnectionConfig,
@@ -332,8 +333,7 @@ async function executeRegisteredQueueJobCompletedHook<TPayload extends QueueJson
       createJobContext(envelope, contextOverrides),
     )
   } catch (error) {
-    const resolvedError = error instanceof Error ? error : new Error(String(error))
-    console.warn(`[Holo Queue] onCompleted hook failed for job "${envelope.name}": ${resolvedError.message}`)
+    reportError(error, { capability: 'queue', operation: 'job.onCompleted' })
   }
 }
 
@@ -354,8 +354,7 @@ async function executeRegisteredQueueJobFailedHook<TPayload extends QueueJsonVal
       createJobContext(envelope, contextOverrides),
     )
   } catch (hookError) {
-    const resolvedError = hookError instanceof Error ? hookError : new Error(String(hookError))
-    console.warn(`[Holo Queue] onFailed hook failed for job "${envelope.name}": ${resolvedError.message}`)
+    reportError(hookError, { capability: 'queue', operation: 'job.onFailed' })
   }
 }
 
@@ -607,8 +606,7 @@ class PendingQueueDispatch<TPayload extends QueueJsonValue> implements QueuePend
           try {
             await hook(result)
           } catch (error) {
-            const resolvedError = error instanceof Error ? error : new Error(String(error))
-            console.warn(`[Holo Queue] onComplete hook failed during dispatch of "${this.jobName}": ${resolvedError.message}`)
+            reportError(error, { capability: 'queue', operation: 'dispatch.onComplete' })
           }
         }
 
@@ -618,8 +616,7 @@ class PendingQueueDispatch<TPayload extends QueueJsonValue> implements QueuePend
           try {
             await hook(error)
           } catch (hookError) {
-            const resolvedError = hookError instanceof Error ? hookError : new Error(String(hookError))
-            console.warn(`[Holo Queue] onFailed hook failed during dispatch of "${this.jobName}": ${resolvedError.message}`)
+            reportError(hookError, { capability: 'queue', operation: 'dispatch.onFailed' })
           }
         }
 

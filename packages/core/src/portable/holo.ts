@@ -29,6 +29,7 @@ import type {} from '@holo-js/security/config'
 import type {} from '@holo-js/session/config'
 import type {} from '@holo-js/storage/config'
 import { createRuntimeLifecycle } from '@holo-js/kernel'
+import { errorReportingInternals, type HoloExceptionsConfig } from '@holo-js/kernel/error-reporting'
 import {
   config as globalConfig,
   configureConfigRuntime,
@@ -1890,6 +1891,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
   let activeAuthContext: RuntimeAuthContext | undefined
   let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
+  let previousExceptions: HoloExceptionsConfig | undefined
   const previousRenderView = options.renderView
     ? getHoloRenderingRuntime().renderView
     : undefined
@@ -1974,6 +1976,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       name: 'configuration',
       async initialize() {
         configureConfigRuntime(loadedConfig.all)
+        previousExceptions = errorReportingInternals.configure(loadedConfig.app.exceptions)
         await preloadGeneratedSchemaModule(projectRoot, registry)
         await preloadDiscoveredModelModules(projectRoot, registry)
         previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
@@ -1986,6 +1989,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       },
       dispose() {
         if (options.renderView) restoreHoloRenderingRuntime(previousRenderView)
+        errorReportingInternals.configure(previousExceptions)
         resetConfigRuntime()
       },
     },
