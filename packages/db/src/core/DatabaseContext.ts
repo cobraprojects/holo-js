@@ -1,3 +1,4 @@
+import { getRootDatabaseContext, registerDatabaseContext } from './contextOwnership'
 import { beginSchemaMutationScope, commitSchemaMutationScope, rollbackSchemaMutationScope } from '../schema/mutationState'
 import { createFactoryService, type FactoryService } from '../factories/FactoryService'
 import { createMigrationService, type MigrationService } from '../migrations/MigrationService'
@@ -52,6 +53,7 @@ type TransactionCallbackState = {
 }
 
 type ContextInternals = {
+  rootContext: DatabaseContext
   contextId: number
   connectionName: string
   schemaName?: string
@@ -121,6 +123,7 @@ export class DatabaseContext {
         }
     this._scope = 'scope' in options ? options.scope : { kind: 'root', depth: 0 }
     this._transactionCallbacks = 'transactionCallbacks' in options ? options.transactionCallbacks : undefined
+    registerDatabaseContext(this, 'rootContext' in options ? options.rootContext : this)
   }
 
   async initialize(): Promise<void> {
@@ -508,6 +511,7 @@ export class DatabaseContext {
     transactionCallbacks?: TransactionCallbackState,
   ): DatabaseContext {
     return new DatabaseContext({
+      rootContext: getRootDatabaseContext(this),
       contextId: this._contextId,
       adapter: this._adapter,
       dialect: this._dialect,

@@ -1,3 +1,5 @@
+import { captureAuthContext, getDatabaseContext } from './execution'
+import { createExecutionContext } from './execution-context'
 import type {
   RealtimeQueryDefinitionMetadata,
   RealtimeArgsFor,
@@ -12,7 +14,7 @@ import {
 import {
   getRuntimeState,
   type ActiveQueryEntry,
-  type ActiveSubscription,
+  type InternalRealtimeSubscribeOptions,
 } from './state'
 import {
   addQueryEntryDependencies,
@@ -20,7 +22,6 @@ import {
   removeQueryEntryDependencies,
   removeQueryEntryInvalidationIndexes,
 } from './subscription-index'
-import type { RealtimeExecutionOptions } from '../contracts'
 
 export type InitializedActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata> = ActiveQueryEntry<TDefinition> & {
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
@@ -36,32 +37,22 @@ export function detachDatabaseSubscriptionIfIdle(): void {
   state.unsubscribeFromDatabase = undefined
 }
 
-export async function resolveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata>(
+export async function createQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
-  executionOptions: RealtimeExecutionOptions | undefined,
   refreshKey: string,
+  options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>,
 ): Promise<InitializedActiveQueryEntry<TDefinition>> {
   const state = getRuntimeState()
-  const existing = state.queryEntries.get(refreshKey) as ActiveQueryEntry<TDefinition> | undefined
-  if (existing) {
-    if (existing.initialQuery) {
-      await existing.initialQuery
-    }
-
-    return existing as InitializedActiveQueryEntry<TDefinition>
-  }
-
+  const database = getDatabaseContext(state.bindings).connection
   const entry: ActiveQueryEntry<TDefinition> = {
+    runWithContext: createExecutionContext(database),
+    contextId: database.getContextId(),
+    contexts: new Map(),
     refreshKey,
     definition,
     args,
-    executionOptions,
-    patchFallbackSubscriberRefs: new Set<ActiveSubscription<TDefinition>>(),
-    patchSubscriberRefs: new Set<ActiveSubscription<TDefinition>>(),
-    snapshotSubscriberRefs: new Set<ActiveSubscription<TDefinition>>(),
-    subscriberRefs: new Set<ActiveSubscription<TDefinition>>(),
-    subscribers: new Set<string>(),
+    options,
     dependencies: Object.freeze([]),
     patchTargets: [],
     predicateDependencies: new Map<string, Map<string, Set<string>>>(),
@@ -71,12 +62,13 @@ export async function resolveQueryEntry<TDefinition extends RealtimeQueryDefinit
     tableDependencies: EMPTY_TABLE_DEPENDENCIES,
     version: 0,
   }
-  const initialQuery = executeInitialQuery(definition, args, executionOptions)
-  entry.initialQuery = initialQuery
   state.queryEntries.set(refreshKey, entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
 
   try {
-    const result = await initialQuery
+    const result = await executeInitialQuery(definition, args, undefined)
+    const auth = await captureAuthContext(state.bindings)
+    entry.runWithContext = createExecutionContext(database, auth)
+    entry.contexts = new Map(result.contexts)
     entry.dependencies = result.result.dependencies
     entry.predicateDependencies = result.predicateDependencies
     entry.resultHash = result.resultHash
@@ -89,14 +81,12 @@ export async function resolveQueryEntry<TDefinition extends RealtimeQueryDefinit
       result.result.queries,
       result.snapshot.data,
     )
-    entry.initialQuery = undefined
     addQueryEntryDependencies(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
     addQueryEntryInvalidationIndexes(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
     return entry as InitializedActiveQueryEntry<TDefinition>
-  } finally {
-    if (entry.initialQuery === initialQuery) {
-      state.queryEntries.delete(refreshKey)
-    }
+  } catch (error) {
+    state.queryEntries.delete(refreshKey)
+    throw error
   }
 }
 
@@ -112,12 +102,7 @@ export function deleteSubscription(subscriptionId: string): void {
   if (entry?.current) {
     subscription.current = entry.current
   }
-  entry?.subscribers.delete(subscriptionId)
-  entry?.subscriberRefs.delete(subscription)
-  entry?.patchSubscriberRefs.delete(subscription)
-  entry?.snapshotSubscriberRefs.delete(subscription)
-  entry?.patchFallbackSubscriberRefs.delete(subscription)
-  if (entry && entry.subscribers.size === 0) {
+  if (entry) {
     removeQueryEntryDependencies(entry)
     removeQueryEntryInvalidationIndexes(entry)
     state.queryEntries.delete(entry.refreshKey)

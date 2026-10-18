@@ -1,6 +1,6 @@
+import type { RealtimeContextRunner } from './execution-context'
 import type {
   RealtimeExecutionResult,
-  RealtimeExecutionOptions,
   RealtimeArgsFor,
   RealtimeQueryDefinitionMetadata,
   RealtimeResultFor,
@@ -109,17 +109,14 @@ export type InternalRealtimeSubscribeOptions<TResult> = RealtimeSubscribeOptions
 }
 
 export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata> = {
+  runWithContext: RealtimeContextRunner
+  readonly contextId: number
+  contexts: Map<string, ReadonlySet<number>>
   readonly args: RealtimeArgsFor<TDefinition>
   readonly definition: TDefinition
-  readonly executionOptions?: RealtimeExecutionOptions
-  readonly patchFallbackSubscriberRefs: Set<ActiveSubscription<TDefinition>>
-  readonly patchSubscriberRefs: Set<ActiveSubscription<TDefinition>>
   readonly refreshKey: string
-  readonly snapshotSubscriberRefs: Set<ActiveSubscription<TDefinition>>
-  readonly subscriberRefs: Set<ActiveSubscription<TDefinition>>
-  readonly subscribers: Set<string>
+  readonly options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
   dependencies: readonly string[]
-  initialQuery?: Promise<InitialQueryResult<TDefinition>>
   patchTargets: QueryPatchTarget[]
   predicateDependencies: PredicateDependencyIndex
   queries: DatabaseQueryObservation[]
@@ -133,6 +130,7 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
 export type BackfillCache = QueryBackfillCache<ActiveQueryEntry<RealtimeQueryDefinitionMetadata>>
 
 export type DatabaseDependencyCollectionWithQueries<TValue> = {
+  readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly dependencies: readonly string[]
   readonly queries: readonly DatabaseQueryObservation[]
   readonly value: TValue
@@ -143,6 +141,7 @@ export type InternalRealtimeExecutionResult<TResult> = RealtimeExecutionResult<T
 }
 
 export type InitialQueryResult<TDefinition extends RealtimeQueryDefinitionMetadata> = {
+  readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly predicateDependencies: PredicateDependencyIndex
   readonly result: InternalRealtimeExecutionResult<RealtimeResultFor<TDefinition>>
   readonly resultHash: string

@@ -18,7 +18,6 @@ import {
 import {
   getRuntimeState,
   type ActiveQueryEntry,
-  type ActiveSubscription,
 } from '../src/runtime/state'
 
 const subscriptionIndexQuery = query({
@@ -27,9 +26,7 @@ const subscriptionIndexQuery = query({
   handler: () => ({ ok: true }),
 })
 
-type TestDefinition = typeof subscriptionIndexQuery
-type TestEntry = ActiveQueryEntry<TestDefinition>
-type TestSubscription = ActiveSubscription<TestDefinition>
+type TestEntry = ActiveQueryEntry<RealtimeQueryDefinitionMetadata>
 
 const tableKey = 'db:main:posts'
 
@@ -61,20 +58,19 @@ function createPredicateIndex(
 
 function createEntry(overrides: Partial<TestEntry> = {}): TestEntry {
   return {
+    options: {},
+    runWithContext: callback => callback(),
+    contextId: 0,
+    contexts: new Map(),
     args: {},
     definition: subscriptionIndexQuery,
     dependencies: [tableKey],
-    patchFallbackSubscriberRefs: new Set<TestSubscription>(),
-    patchSubscriberRefs: new Set<TestSubscription>(),
     patchTargets: [],
     predicateDependencies: new Map(),
     queries: [],
     refreshKey: 'runtime.subscription-index:{}',
     resultHash: '{"ok":true}',
     resultHashDirty: false,
-    snapshotSubscriberRefs: new Set<TestSubscription>(),
-    subscriberRefs: new Set<TestSubscription>(),
-    subscribers: new Set<string>(),
     tableDependencies: [tableKey],
     version: 1,
     ...overrides,

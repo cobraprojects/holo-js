@@ -246,6 +246,11 @@ function collectQueryEntryKey(collector: QueryEntryCollector, entryKey: string):
   if (!entry || isQueryEntryContradictedByInvalidation(entry, collector.event)) {
     return
   }
+  const { contextId, connectionName } = collector.event
+  if (contextId !== undefined && connectionName) {
+    const observed = entry.contexts.get(connectionName)
+    if (observed ? !observed.has(contextId) : contextId !== entry.contextId) return
+  }
 
   if (typeof collector.firstEntryKey === 'undefined') {
     collector.firstEntryKey = entryKey

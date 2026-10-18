@@ -12,8 +12,8 @@ import {
   ensureRefreshDeliveryTableDependencies,
   updateQueryEntryDependencies,
 } from './subscription-index'
+import { getRuntimeState } from './state'
 import type {
-  ActiveSubscription,
   ActiveQueryEntry,
   InternalRealtimeExecutionResult,
   RealtimeSubscriptionPatch,
@@ -79,7 +79,7 @@ export async function deliverRefreshData<TDefinition extends RealtimeQueryDefini
   })
 
   const patch = delivery.patchOperations && (delivery.patchOperations.length > 0 || dependenciesChanged)
-    && entry.patchSubscriberRefs.size > 0
+    && entry.options.onPatch
     ? Object.freeze({
         ...(dependenciesChanged ? { dependencies: delivery.result.dependencies } : {}),
         operations: delivery.patchOperations,
@@ -94,43 +94,11 @@ export async function deliverRefreshError(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   error: unknown,
 ): Promise<void> {
-  let firstDelivery: Promise<void> | undefined
-  let deliveries: Promise<void>[] | undefined
-  const reportError = (handlerError: unknown): void => {
+  if (!getRuntimeState().subscriptions.has(entry.refreshKey)) return
+  try {
+    await entry.options.onError?.(error)
+  } catch (handlerError) {
     console.error('[@holo-js/realtime] Realtime subscription onError callback failed.', handlerError)
-  }
-  for (const subscription of entry.subscriberRefs) {
-    const onError = subscription.options.onError
-    if (!onError) {
-      continue
-    }
-
-    try {
-      const result = onError(error)
-      if (!isPromiseLike(result)) {
-        continue
-      }
-
-      const delivery = Promise.resolve(result).catch(reportError)
-      if (!firstDelivery) {
-        firstDelivery = delivery
-        continue
-      }
-
-      deliveries ??= [firstDelivery]
-      deliveries.push(delivery)
-    } catch (handlerError) {
-      reportError(handlerError)
-    }
-  }
-
-  if (deliveries) {
-    await Promise.all(deliveries)
-    return
-  }
-
-  if (firstDelivery) {
-    await firstDelivery
   }
 }
 
@@ -168,81 +136,15 @@ async function deliverQueryEntryData<TDefinition extends RealtimeQueryDefinition
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>,
   patch?: RealtimeSubscriptionPatch,
 ): Promise<void> {
-  const reportError = (callbackName: 'onData' | 'onPatch', error: unknown): void => {
+  if (!getRuntimeState().subscriptions.has(entry.refreshKey)) return
+  const callbackName = patch && entry.options.onPatch ? 'onPatch' : 'onData'
+  try {
+    if (patch && entry.options.onPatch) {
+      await entry.options.onPatch(patch)
+    } else {
+      await entry.options.onData?.(current)
+    }
+  } catch (error) {
     console.error(`[@holo-js/realtime] Realtime subscription ${callbackName} callback failed.`, error)
   }
-
-  if (patch) {
-    const patchDelivery = deliverToSubscribers(
-      entry.patchSubscriberRefs,
-      subscription => subscription.options.onPatch?.(patch),
-      error => reportError('onPatch', error),
-    )
-    const fallbackDelivery = deliverToSubscribers(
-      entry.patchFallbackSubscriberRefs,
-      subscription => subscription.options.onData?.(current),
-      error => reportError('onData', error),
-    )
-    await awaitDeliveries(patchDelivery, fallbackDelivery)
-    return
-  }
-
-  await deliverToSubscribers(
-    entry.snapshotSubscriberRefs,
-    subscription => subscription.options.onData?.(current),
-    error => reportError('onData', error),
-  )
-}
-
-function deliverToSubscribers<TDefinition extends RealtimeQueryDefinitionMetadata>(
-  subscriptions: ReadonlySet<ActiveSubscription<TDefinition>>,
-  deliver: (subscription: ActiveSubscription<TDefinition>) => void | Promise<void> | undefined,
-  reportError: (error: unknown) => void,
-): Promise<void> | undefined {
-  let firstDelivery: Promise<void> | undefined
-  let deliveries: Promise<void>[] | undefined
-  for (const subscription of subscriptions) {
-    try {
-      const result = deliver(subscription)
-      if (!isPromiseLike(result)) {
-        continue
-      }
-
-      const delivery = Promise.resolve(result).catch(reportError)
-      if (!firstDelivery) {
-        firstDelivery = delivery
-        continue
-      }
-
-      deliveries ??= [firstDelivery]
-      deliveries.push(delivery)
-    } catch (error) {
-      reportError(error)
-    }
-  }
-
-  return deliveries
-    ? Promise.all(deliveries).then(() => undefined)
-    : firstDelivery
-}
-
-async function awaitDeliveries(
-  firstDelivery: Promise<void> | undefined,
-  secondDelivery: Promise<void> | undefined,
-): Promise<void> {
-  if (firstDelivery && secondDelivery) {
-    await Promise.all([firstDelivery, secondDelivery])
-    return
-  }
-
-  await firstDelivery
-  await secondDelivery
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
-    return false
-  }
-
-  return typeof (value as { readonly then?: unknown }).then === 'function'
 }

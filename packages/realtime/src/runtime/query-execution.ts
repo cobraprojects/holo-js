@@ -43,7 +43,7 @@ export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQ
   definition: TDefinition,
   input = {} as RealtimeArgsFor<TDefinition>,
   options?: RealtimeExecutionOptions,
-): Promise<InternalRealtimeExecutionResult<RealtimeResultFor<TDefinition>>> {
+): Promise<InternalRealtimeExecutionResult<RealtimeResultFor<TDefinition>> & { readonly contexts: ReadonlyMap<string, ReadonlySet<number>> }> {
   return await runWithExecutionOptions(getRuntimeState().bindings, options, async () => {
     const db = getRealtimeDatabaseContext()
     const args = await resolveArgs(definition, input)
@@ -69,6 +69,7 @@ export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQ
       data,
       dependencies: result.dependencies,
       queries,
+      contexts: result.contexts,
     })
   })
 }
@@ -87,6 +88,7 @@ export async function executeInitialQuery<TDefinition extends RealtimeQueryDefin
   })
 
   return {
+    contexts: result.contexts,
     predicateDependencies: collectPredicateDependencies(result.dependencies),
     result,
     resultHash: createResultHash(result.data),

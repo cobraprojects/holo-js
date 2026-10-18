@@ -23,6 +23,7 @@ import {
   rebindDatabaseQueryObservationScalarList,
   recordDatabaseQueryDependencies,
   recordDatabaseQueryObservation,
+  recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
@@ -1480,6 +1481,7 @@ export class TableQueryBuilder<
     createObservation: DatabaseQueryObservationFactory,
     rows: readonly TRow[],
   ): Promise<void> {
+    if (activeDependencyCollector) recordDatabaseQueryContext(this.connection)
     if (!activeDependencyCollector || !observationDependencies) {
       return
     }

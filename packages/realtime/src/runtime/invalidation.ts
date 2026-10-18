@@ -27,7 +27,6 @@ import {
   type RefreshDelivery,
 } from './state'
 import {
-  collectQueryEntriesForParsedInvalidation,
   collectQueryEntriesForParsedInvalidations,
 } from './subscription-index'
 import type {
@@ -123,11 +122,11 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
   }
 
   try {
-    const result = await executeRealtimeQueryInternal(
+    const result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
       entry.definition,
       entry.args,
-      entry.executionOptions,
-    )
+    ))
+    entry.contexts = new Map(result.contexts)
     const delivery = {
       result,
       resultHash: createResultHash(result.data),
@@ -178,7 +177,7 @@ async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  if (await tryPatchQueryEntry(entry, backfills)) {
+  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
     return
   }
 
@@ -206,75 +205,66 @@ async function refreshInvalidatedQueryEntries(
   await firstRefresh
 }
 
-export async function handleDatabaseInvalidation(
-  event: DatabaseDependencyInvalidationEventWithMutations,
-  events?: readonly DatabaseDependencyInvalidationEventWithMutations[],
-): Promise<void> {
-  if (getRuntimeState().queryEntries.size === 0) {
-    return
-  }
-
-  if (!events) {
-    const parsedEvent = parseInvalidationEvent(event)
-    const entries = collectQueryEntriesForParsedInvalidation(parsedEvent)
-    const firstEntry = entries[0]
-    if (!firstEntry) {
-      return
-    }
-
-    const backfills: BackfillCache = {
-      aggregates: new Map(),
-      aggregateGroupedSql: new Map(),
-      aggregateSql: new Map(),
-      entries,
-      exactPredicates: readExactPredicatesForPatching(parsedEvent),
-      groupedAggregateValueCounts: new Map(),
-      groupedAggregateValues: new Map(),
-      mutationExactPredicates: createMutationExactPredicatesForPatching([parsedEvent]),
-      mutationMetadata: new WeakMap(),
-      mutations: createSingleEventMutationIndex(parsedEvent),
-      paginationGroupedCounts: new Map(),
-      paginationCounts: new Map(),
-      rowGroups: new Map(),
-      rows: new Map(),
-    }
-
-    await refreshInvalidatedQueryEntries(firstEntry, entries.slice(1), backfills)
-    return
-  }
-
-  const parsedEvents: ParsedInvalidationEvent[] = []
-  for (const invalidationEvent of events) {
-    parsedEvents.push(parseInvalidationEvent(invalidationEvent))
-  }
-
-  const entries = collectQueryEntriesForParsedInvalidations(parsedEvents)
-  const firstEntry = entries[0]
-  if (!firstEntry) {
-    return
-  }
-
-  const parsedEvent = parsedEvents.length === 1 ? parsedEvents[0] : undefined
-  const backfills: BackfillCache = {
+function createInvalidationBackfills(
+  events: readonly ParsedInvalidationEvent[],
+  entries: readonly ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[],
+): BackfillCache {
+  const event = events.length === 1 ? events[0] : undefined
+  return {
     aggregates: new Map(),
     aggregateGroupedSql: new Map(),
     aggregateSql: new Map(),
     entries,
-    exactPredicates: parsedEvent
-      ? readExactPredicatesForPatching(parsedEvent)
-      : createBatchedExactPredicatesForPatching(parsedEvents),
+    exactPredicates: event ? readExactPredicatesForPatching(event) : createBatchedExactPredicatesForPatching(events),
     groupedAggregateValueCounts: new Map(),
     groupedAggregateValues: new Map(),
-    mutationExactPredicates: createMutationExactPredicatesForPatching(parsedEvents),
+    mutationExactPredicates: createMutationExactPredicatesForPatching(events),
     mutationMetadata: new WeakMap(),
-    mutations: parsedEvent ? createSingleEventMutationIndex(parsedEvent) : createMutationIndex(parsedEvents),
+    mutations: event ? createSingleEventMutationIndex(event) : createMutationIndex(events),
     paginationGroupedCounts: new Map(),
     paginationCounts: new Map(),
     rowGroups: new Map(),
     rows: new Map(),
   }
+}
 
-  await refreshInvalidatedQueryEntries(firstEntry, entries.slice(1), backfills)
+async function refreshParsedInvalidations(events: readonly ParsedInvalidationEvent[]): Promise<void> {
+  const entries = collectQueryEntriesForParsedInvalidations(events)
+  const databases = new Map<number, ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[]>()
+  const reruns: Promise<void>[] = []
+  for (const entry of entries) {
+    if ([...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) {
+      reruns.push(scheduleRefreshKey(entry.refreshKey))
+      continue
+    }
+    const group = databases.get(entry.contextId) ?? []
+    group.push(entry)
+    databases.set(entry.contextId, group)
+  }
+  await Promise.all([...reruns, ...[...databases.values()].map(async (group) => {
+    const first = group[0]
+    if (!first) return
+    await refreshInvalidatedQueryEntries(first, group.slice(1), createInvalidationBackfills(events, group))
+  })])
+}
+
+export async function handleDatabaseInvalidation(
+  event: DatabaseDependencyInvalidationEventWithMutations,
+  events?: readonly DatabaseDependencyInvalidationEventWithMutations[],
+): Promise<void> {
+  if (getRuntimeState().queryEntries.size === 0) return
+  if (!events || events.length === 1) {
+    await refreshParsedInvalidations([parseInvalidationEvent(events?.[0] ?? event)])
+    return
+  }
+  const databases = new Map<number | undefined, ParsedInvalidationEvent[]>()
+  for (const invalidation of events) {
+    const parsed = parseInvalidationEvent(invalidation)
+    const group = databases.get(parsed.contextId) ?? []
+    group.push(parsed)
+    databases.set(parsed.contextId, group)
+  }
+  await Promise.all([...databases.values()].map(refreshParsedInvalidations))
 }
 
 async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<void> {

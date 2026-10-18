@@ -1,3 +1,4 @@
+import { getRootDatabaseContext } from './core/contextOwnership'
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { ConfigurationError } from './core/errors'
@@ -286,6 +287,7 @@ type DatabaseDependencyPredicateMetadata = {
 }
 
 type DatabaseDependencyInvalidationMetadata = {
+  readonly contextId?: number
   readonly directDependencies: readonly string[]
   readonly exactPredicates: readonly DatabaseDependencyPredicateMetadata[]
   readonly hasMutationDependency: boolean
@@ -306,6 +308,7 @@ type DatabaseDependencyInvalidationListenerInternal = (
 ) => void | Promise<void>
 
 type DatabaseDependencyCollectionResultInternal<TValue> = DatabaseDependencyCollectionResult<TValue> & {
+  readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly queries: readonly DatabaseQueryObservation[]
 }
 
@@ -320,6 +323,7 @@ type DatabaseDependencyPredicateEntry = {
 }
 
 type DatabaseDependencyCollectorState = {
+  readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
 }
@@ -412,6 +416,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
   callback: () => TValue | Promise<TValue>,
 ): Promise<DatabaseDependencyCollectionResultInternal<TValue>> {
   const state: DatabaseDependencyCollectorState = {
+    contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
   }
@@ -419,6 +424,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
 
   return Object.freeze({
     value,
+    contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
     queries: Object.freeze([...state.queries]),
   })
@@ -441,6 +447,15 @@ export function recordDatabaseQueryDependencies(dependencies: readonly string[] 
   for (const dependency of dependencies) {
     state.dependencies.add(dependency)
   }
+}
+
+export function recordDatabaseQueryContext(connection: DatabaseContext): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) return
+  const name = connection.getConnectionName()
+  const contexts = state.contexts.get(name) ?? new Set<number>()
+  contexts.add(connection.getContextId())
+  state.contexts.set(name, contexts)
 }
 
 export function recordDatabaseQueryObservation(observation: DatabaseQueryObservation | undefined): void {
@@ -1052,13 +1067,13 @@ function createDatabaseDependencyInvalidationMetadata(
 }
 
 function createDatabaseDependencyInvalidationEvent(
-  connectionName: string,
+  connection: DatabaseContext,
   dependencies: readonly string[],
   mutations: readonly DatabaseMutationEvent[],
   metadata?: DatabaseDependencyInvalidationMetadata,
 ): DatabaseDependencyInvalidationEventInternal {
   const event: DatabaseDependencyInvalidationEventInternal = {
-    connectionName,
+    connectionName: connection.getConnectionName(),
     dependencies,
     mutations,
   }
@@ -1066,7 +1081,10 @@ function createDatabaseDependencyInvalidationEvent(
   Object.defineProperty(event, DATABASE_DEPENDENCY_METADATA_KEY, {
     configurable: false,
     enumerable: false,
-    value: metadata ?? createDatabaseDependencyInvalidationMetadata(dependencies, mutations),
+    value: Object.freeze({
+      ...(metadata ?? createDatabaseDependencyInvalidationMetadata(dependencies, mutations)),
+      contextId: connection.getContextId(),
+    }),
     writable: false,
   })
 
@@ -2006,7 +2024,7 @@ export async function invalidateQueryCacheDependencies(
     await bridge?.invalidateDependencies(dependencies)
     if (hasDatabaseDependencyInvalidationListeners()) {
       await notifyDatabaseDependencyInvalidationListeners(
-        createDatabaseDependencyInvalidationEvent(connection.getConnectionName(), dependencies, mutations, plan?.metadata),
+        createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata),
       )
     }
   }
@@ -2020,6 +2038,7 @@ export async function invalidateQueryCacheDependencies(
 }
 
 export const queryCacheInternals = {
+  getRootDatabaseContext,
   setMutationPreviousRowsRequirement,
   requiresMutationPreviousRows,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,

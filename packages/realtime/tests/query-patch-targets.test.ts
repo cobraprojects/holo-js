@@ -27,7 +27,6 @@ import type {
 } from '../src/runtime/query-state'
 import type {
   ActiveQueryEntry,
-  ActiveSubscription,
   BackfillCache,
 } from '../src/runtime/state'
 
@@ -86,16 +85,14 @@ function createEntry(
   patchTargets: QueryPatchTarget[],
   data: unknown,
 ): ActiveQueryEntry<typeof todosQuery> {
-  const subscriberRefs = new Set<ActiveSubscription<typeof todosQuery>>()
   return {
+    options: {},
+    runWithContext: callback => callback(),
+    contextId: 0,
+    contexts: new Map(),
     args: {},
     definition: todosQuery,
-    patchFallbackSubscriberRefs: new Set<ActiveSubscription<typeof todosQuery>>(),
-    patchSubscriberRefs: new Set<ActiveSubscription<typeof todosQuery>>(),
     refreshKey: 'patch-targets.todos:{}',
-    snapshotSubscriberRefs: new Set<ActiveSubscription<typeof todosQuery>>(),
-    subscriberRefs,
-    subscribers: new Set<string>(),
     current: {
       data: data as RealtimeResultFor<typeof todosQuery>,
       dependencies: ['db:main:posts'],

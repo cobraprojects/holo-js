@@ -216,5 +216,8 @@ export interface RealtimeAuthRuntime {
 }
 
 export interface RealtimeAuthModule {
+  readonly authRuntimeInternals?: {
+    captureRequestContext(): (<TValue>(callback: () => TValue) => TValue) | undefined
+  }
   getAuthRuntime(): RealtimeAuthRuntime
 }

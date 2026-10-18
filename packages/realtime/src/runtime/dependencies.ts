@@ -38,6 +38,7 @@ export type ParsedDatabaseDependency = {
 }
 
 export type DatabaseDependencyInvalidationMetadata = {
+  readonly contextId?: number
   readonly directDependencies: readonly string[]
   readonly exactPredicates: readonly ParsedPredicateDependency[]
   readonly hasMutationDependency: boolean
@@ -52,6 +53,8 @@ export type DatabaseDependencyInvalidationEventWithMetadata = DatabaseDependency
 export type PredicateDependencyIndex = Map<string, Map<string, Set<string>>>
 
 export type ParsedInvalidationEvent = {
+  readonly contextId?: number
+  readonly connectionName?: string
   readonly dependencies: readonly string[]
   readonly directDependencies: readonly string[]
   readonly exactPredicates: PredicateDependencyIndex
@@ -316,6 +319,7 @@ export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEven
   if (metadata) {
     const hasMutationDependency = metadata.hasMutationDependency || hasUpsertMutation(mutations)
     return {
+      ...(metadata.contextId === undefined ? {} : { contextId: metadata.contextId, connectionName: event.connectionName }),
       dependencies: hasMutationDependency ? event.dependencies : metadata.directDependencies,
       directDependencies: metadata.directDependencies,
       exactPredicates: createPredicateDependencyIndex(metadata.exactPredicates),
