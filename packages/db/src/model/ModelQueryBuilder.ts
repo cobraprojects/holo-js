@@ -148,9 +148,8 @@ export class ModelQueryBuilder<
     return query
   }
 
-  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded>) => unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const result = scope(this)
-    const query = result instanceof ModelQueryBuilder ? result : this
+  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    const query = scope(this)
     const predicates = query.tableQuery.getPlan().predicates
     return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
       query.repository,

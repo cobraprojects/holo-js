@@ -1997,7 +1997,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         if (excludedGlobalScopes.has(name)) {
           continue
         }
-        query = query.applyGlobalScope(scope as (query: ModelQueryBuilder<TTable>) => unknown)
+        query = query.applyGlobalScope(scope)
       }
     }
 
