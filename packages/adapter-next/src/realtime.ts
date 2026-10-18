@@ -26,6 +26,7 @@ import { createNextRenderableError, normalizeNextClientHttpError, renderNextClie
 
 let currentRealtimeError: Error | undefined
 const realtimeSnapshotLoads = new WeakMap<RealtimeQueryStore<unknown>, Promise<RealtimeSubscriptionSnapshot<unknown>>>()
+const snapshotBackedLoads = new WeakSet<Promise<unknown>>()
 const realtimeErrorListeners = new Set<() => void>()
 
 function isBrowserRuntime(): boolean {
@@ -194,13 +195,21 @@ function fulfilledReactThenable<TValue>(value: TValue): Promise<TValue> {
   return Object.assign(Promise.resolve(value), { status: 'fulfilled', value })
 }
 
+function snapshotBackedLoad<TResult>(
+  snapshot: RealtimeSubscriptionSnapshot<TResult>,
+): Promise<RealtimeSubscriptionSnapshot<TResult>> {
+  const load = fulfilledReactThenable(snapshot)
+  snapshotBackedLoads.add(load)
+  return load
+}
+
 function loadRealtimeSnapshot<TResult>(store: RealtimeQueryStore<TResult>): Promise<RealtimeSubscriptionSnapshot<TResult>> {
   const existingLoad = realtimeSnapshotLoads.get(store)
-  if (existingLoad) {
+  if (existingLoad && (!store.snapshot || snapshotBackedLoads.has(existingLoad))) {
     return existingLoad as Promise<RealtimeSubscriptionSnapshot<TResult>>
   }
 
-  const load = store.snapshot ? fulfilledReactThenable(store.snapshot) : store.load()
+  const load = store.snapshot ? snapshotBackedLoad(store.snapshot) : store.load()
   realtimeSnapshotLoads.set(store, load)
   return load
 }
