@@ -45,17 +45,7 @@ declare module '#imports' {
   export function useStorage(base: string): unknown
   export function useEvent(): import('h3').H3Event
   export function defineNitroPlugin<T>(plugin: T): T
-  export const createError: typeof import('h3').createError
-  export const defineEventHandler: typeof import('h3').defineEventHandler
-  export const getHeaders: typeof import('h3').getHeaders
-  export const getRequestURL: typeof import('h3').getRequestURL
-  export const readRawBody: typeof import('h3').readRawBody
-  export const send: typeof import('h3').send
-  export const sendRedirect: typeof import('h3').sendRedirect
-  export const sendWebResponse: typeof import('h3').sendWebResponse
-  export const setHeader: typeof import('h3').setHeader
-  export const setResponseStatus: typeof import('h3').setResponseStatus
-  export const toWebRequest: typeof import('h3').toWebRequest
+  export * from 'h3'
 }
 
 declare global {

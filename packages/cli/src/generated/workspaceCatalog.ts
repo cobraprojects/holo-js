@@ -51,7 +51,6 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "@holo-js/validation": "^0.3.28",
   "@nuxt/kit": "^4.5.1",
   "@nuxt/module-builder": "^1.0.2",
-  "@nuxt/schema": "^4.5.1",
   "@sveltejs/adapter-node": "^5.5.4",
   "@sveltejs/kit": "^2.70.2",
   "@sveltejs/vite-plugin-svelte": "^7.1.0",

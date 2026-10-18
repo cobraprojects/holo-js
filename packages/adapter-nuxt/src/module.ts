@@ -11,7 +11,7 @@ import {
   createResolver,
   defineNuxtModule,
 } from '@nuxt/kit'
-import type { NuxtModule } from '@nuxt/schema'
+import type { NuxtModule } from 'nuxt/schema'
 import { loadConfigDirectory, type LoadedHoloConfig, type HoloConfigMap } from '@holo-js/config'
 import '@holo-js/db/config'
 import {
