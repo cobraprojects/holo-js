@@ -121,6 +121,8 @@ export class ModelQueryBuilder<
     private readonly relationFilters: readonly RelationFilter[] = [],
     private readonly aggregateLoads: readonly AggregateLoad[] = [],
     private readonly queryCasts: Readonly<Record<string, ModelCastDefinition>> = {},
+    private readonly scopePredicates: TableQueryPredicates<TTable> = [],
+    private readonly softDeleteMode: 'with' | 'without' | 'only' = 'with',
   ) {}
 
   getConnection(): DatabaseContext {
@@ -132,7 +134,34 @@ export class ModelQueryBuilder<
   }
 
   getTableQueryBuilder(): TableQueryBuilder<TTable, Record<string, unknown>> {
-    return this.tableQuery
+    const column = this.repository.getDeletedAtColumn()
+    if (this.scopePredicates.length === 0 && (!column || this.softDeleteMode === 'with')) return this.tableQuery
+
+    const predicates = this.tableQuery.getPlan().predicates
+    let query = this.tableQuery.withPredicates([
+      ...this.scopePredicates,
+      ...(predicates.length > 0 ? [{ kind: 'group' as const, predicates }] : []),
+    ])
+    if (column && this.softDeleteMode !== 'with') {
+      query = this.softDeleteMode === 'only' ? query.whereNotNull(column as never) : query.whereNull(column as never)
+    }
+    return query
+  }
+
+  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded>) => unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    const result = scope(this)
+    const query = result instanceof ModelQueryBuilder ? result : this
+    const predicates = query.tableQuery.getPlan().predicates
+    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+      query.repository,
+      query.tableQuery.withPredicates([]),
+      query.eagerLoads,
+      query.relationFilters,
+      query.aggregateLoads,
+      query.queryCasts,
+      [...query.scopePredicates, ...(predicates.length > 0 ? [{ kind: 'group' as const, predicates }] : [])],
+      query.softDeleteMode,
+    )
   }
 
   private collectNestedPredicates(
@@ -438,6 +467,8 @@ export class ModelQueryBuilder<
         ...this.queryCasts,
         ...casts,
       }),
+      this.scopePredicates,
+      this.softDeleteMode,
     )
   }
 
@@ -699,6 +730,10 @@ export class ModelQueryBuilder<
       this.tableQuery,
       this.mergeEagerLoads(specs),
       this.relationFilters,
+      this.aggregateLoads,
+      this.queryCasts,
+      this.scopePredicates,
+      this.softDeleteMode,
     )
   }
 
@@ -870,15 +905,15 @@ export class ModelQueryBuilder<
   }
 
   toSQL() {
-    return this.tableQuery.toSQL()
+    return this.getTableQueryBuilder().toSQL()
   }
 
   debug() {
-    return this.tableQuery.debug()
+    return this.getTableQueryBuilder().debug()
   }
 
   dump(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    this.tableQuery.dump()
+    this.getTableQueryBuilder().dump()
     return this
   }
 
@@ -891,7 +926,7 @@ export class ModelQueryBuilder<
   async get(): Promise<
     ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
   > {
-    const rows = await this.tableQuery.get<ModelRecord<TTable>>()
+    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
@@ -918,7 +953,7 @@ export class ModelQueryBuilder<
   }
 
   async getJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>[]> {
-    const rows = await this.tableQuery.get<ModelRecord<TTable>>()
+    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
@@ -1013,7 +1048,7 @@ export class ModelQueryBuilder<
   }
 
   private async paginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
-    const page = await this.tableQuery.paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const page = await this.getTableQueryBuilder().paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
     const collection = await this.hydrateRows(page.data)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
@@ -1052,7 +1087,7 @@ export class ModelQueryBuilder<
   }
 
   private async simplePaginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
-    const page = await this.tableQuery.simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const page = await this.getTableQueryBuilder().simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
     const collection = await this.hydrateRows(page.data)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
@@ -1093,8 +1128,8 @@ export class ModelQueryBuilder<
     normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
     decodeValueCursor(cursor, message => new HydrationError(message))
     const query = this.tableQuery.getPlan().orderBy.length === 0
-      ? this.tableQuery.orderBy(this.repository.definition.primaryKey)
-      : this.tableQuery
+      ? this.getTableQueryBuilder().orderBy(this.repository.definition.primaryKey)
+      : this.getTableQueryBuilder()
     const page = await query.cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
     const rows = hiddenColumns.length === 0 ? page.data : page.data.map(row => {
       const attributes = { ...row }
@@ -1114,7 +1149,7 @@ export class ModelQueryBuilder<
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     let page = 1
-    for await (const rows of queryBatches(this.tableQuery, size, {
+    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       if (await callback(rows, page) === false) return
@@ -1148,7 +1183,7 @@ export class ModelQueryBuilder<
     direction: 'asc' | 'desc',
   ): Promise<void> {
     let page = 1
-    for await (const rows of queryBatches(this.tableQuery, size, {
+    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
       column,
       direction,
       fallbackOrder: direction === 'asc' ? 'database' : 'rows',
@@ -1170,7 +1205,7 @@ export class ModelQueryBuilder<
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    for await (const rows of queryBatches(this.tableQuery, size, {
+    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       yield* rows
@@ -1182,15 +1217,15 @@ export class ModelQueryBuilder<
   }
 
   async count(): Promise<number> {
-    return this.tableQuery.count()
+    return this.getTableQueryBuilder().count()
   }
 
   async exists(): Promise<boolean> {
-    return this.tableQuery.exists()
+    return this.getTableQueryBuilder().exists()
   }
 
   async doesntExist(): Promise<boolean> {
-    return this.tableQuery.doesntExist()
+    return this.getTableQueryBuilder().doesntExist()
   }
 
   async pluck<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<Array<ModelRecord<TTable>[TColumn]>> {
@@ -1344,14 +1379,14 @@ export class ModelQueryBuilder<
   }
 
   async update(values: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult> {
-    return this.tableQuery.update(this.repository.sanitizeWritePayload(values, 'update'))
+    return this.getTableQueryBuilder().update(this.repository.sanitizeWritePayload(values, 'update'))
   }
 
   async updateJson(
     columnPath: ModelJsonColumnPath<TTable>,
     value: unknown,
   ): Promise<DriverExecutionResult> {
-    return this.tableQuery.update(this.repository.sanitizeWritePayload({ [columnPath]: value } as Record<string, unknown>, 'update'))
+    return this.getTableQueryBuilder().update(this.repository.sanitizeWritePayload({ [columnPath]: value } as Record<string, unknown>, 'update'))
   }
 
   async increment(
@@ -1359,7 +1394,7 @@ export class ModelQueryBuilder<
     amount = 1,
     extraValues: Partial<ModelRecord<TTable>> = {},
   ): Promise<DriverExecutionResult> {
-    return this.tableQuery.increment(
+    return this.getTableQueryBuilder().increment(
       column,
       amount,
       this.repository.sanitizeWritePayload(extraValues, 'update'),
@@ -1371,7 +1406,7 @@ export class ModelQueryBuilder<
     amount = 1,
     extraValues: Partial<ModelRecord<TTable>> = {},
   ): Promise<DriverExecutionResult> {
-    return this.tableQuery.decrement(
+    return this.getTableQueryBuilder().decrement(
       column,
       amount,
       this.repository.sanitizeWritePayload(extraValues, 'update'),
@@ -1397,42 +1432,19 @@ export class ModelQueryBuilder<
       })
     }
 
-    return this.tableQuery.delete()
+    return this.getTableQueryBuilder().delete()
   }
 
   withTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const column = this.repository.getDeletedAtColumn()
-    if (!column) return this
-
-    return this.clone(
-      this.tableQuery
-        .withoutWhereNull(column as never)
-        .withoutWhereNotNull(column as never),
-    )
+    return this.clone(this.tableQuery, 'with')
   }
 
   onlyTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const column = this.repository.getDeletedAtColumn()
-    if (!column) return this
-
-    return this.clone(
-      this.tableQuery
-        .withoutWhereNull(column as never)
-        .withoutWhereNotNull(column as never)
-        .whereNotNull(column as never),
-    )
+    return this.clone(this.tableQuery, 'only')
   }
 
   withoutTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const column = this.repository.getDeletedAtColumn()
-    if (!column) return this
-
-    return this.clone(
-      this.tableQuery
-        .withoutWhereNotNull(column as never)
-        .withoutWhereNull(column as never)
-        .whereNull(column as never),
-    )
+    return this.clone(this.tableQuery, 'without')
   }
 
   async restore(): Promise<number> {
@@ -1451,7 +1463,7 @@ export class ModelQueryBuilder<
     return entities.length
   }
 
-  private clone(tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  private clone(tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>, softDeleteMode = this.softDeleteMode): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
       this.repository,
       tableQuery,
@@ -1459,6 +1471,8 @@ export class ModelQueryBuilder<
       this.relationFilters,
       this.aggregateLoads,
       this.queryCasts,
+      this.scopePredicates,
+      softDeleteMode,
     )
   }
 
@@ -1478,6 +1492,8 @@ export class ModelQueryBuilder<
       Object.freeze([...this.relationFilters, filter]),
       this.aggregateLoads,
       this.queryCasts,
+      this.scopePredicates,
+      this.softDeleteMode,
     )
   }
 
@@ -1495,6 +1511,8 @@ export class ModelQueryBuilder<
       this.relationFilters,
       Object.freeze([...merged.values()]),
       this.queryCasts,
+      this.scopePredicates,
+      this.softDeleteMode,
     )
   }
 
@@ -1821,7 +1839,7 @@ export class ModelQueryBuilder<
     readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
     readonly rows: readonly ModelRecord<TTable>[]
   }> {
-    const rows = await this.tableQuery.get<ModelRecord<TTable>>()
+    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
     return {
       collection: await this.hydrateRows(rows),
       rows,
