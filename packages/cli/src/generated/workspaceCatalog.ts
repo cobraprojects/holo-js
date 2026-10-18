@@ -107,5 +107,6 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "vue-tsc": "^2.2.0",
   "ws": "^8.18.3",
   "yaml": "^2.8.3",
-  "@nuxt/nitro-server": "^4.4.4"
+  "@nuxt/nitro-server": "^4.4.4",
+  "fallow": "3.34.1"
 } as const)
