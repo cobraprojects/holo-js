@@ -34,12 +34,6 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
   }
 }
 
-/**
- * Minimal Nuxt runtime shims for adapter typechecking.
- *
- * Keep these declarations limited to the fields consumed by adapter runtime code:
- * runtime config, storage access, and Nitro route/plugin `#imports`.
- */
 declare module '#app' {
   export function defineNuxtPlugin<T>(plugin: T): T
   export function useRuntimeConfig(): HoloRuntimeConfig
