@@ -2,7 +2,7 @@
 
 In this guide you create a Holo-JS project, add a `Post` model with a database table, and return posts from an API route. It takes about ten minutes.
 
-You need Node.js 22.14 or newer. The project uses SQLite, so there is no database server to set up.
+You need Node.js 22.14 or newer. The project uses SQLite, so there is no database server to set up. On Node.js 22, Nuxt projects installed with npm need npm 11; see [Installation](/getting-started/installation#requirements).
 
 ## 1. Create the project
 

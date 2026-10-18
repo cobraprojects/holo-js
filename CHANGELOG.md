@@ -25,7 +25,7 @@
 
 ### Changed
 
-- Require CI typechecks, lint, package/scaffold/browser acceptance and full tests on Node 22.12.0, 24 and 26. Monitor npm and Actions updates, block high/critical published-runtime dependency advisories, and reject new Fallow dead-code findings against a pinned baseline. Concurrent test typechecks retain their own generated configurations.
+- Require CI typechecks, lint, package/scaffold/browser acceptance and full tests on Node 22.14.0, 24 and 26. Monitor npm and Actions updates, block high/critical published-runtime dependency advisories, and reject new Fallow dead-code findings against a pinned baseline. Concurrent test typechecks retain their own generated configurations.
 
 - Core capability disposal and startup rollback continue cleanup after individual failures, close only Holo-owned resources, and restore prior live bindings. Multiple failures are reported together. Queue asynchronous shutdown closes all owned drivers and resets state even if closure fails.
 - Queue separates handler outcomes from reservation finalization. Acknowledgement, release, failed-job persistence or reservation deletion errors stop `runQueueWorker` with the original adapter error instead of entering handler retry logic. Terminal failures are persisted before reservation deletion; delivery may repeat according to driver reservation semantics. See [worker failure semantics](apps/docs/docs/queue/workers.md#delivery-and-finalization-failures).
