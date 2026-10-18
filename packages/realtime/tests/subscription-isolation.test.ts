@@ -3,6 +3,7 @@ import { afterEach, expect, it } from 'vitest'
 import { authRuntimeInternals, createAsyncAuthContext, getAuthRuntime, resetAuthRuntime, type AuthRuntimeContext } from '@holo-js/auth'
 import { DB, configureDB, createConnectionManager, createDatabase, createDialect, resetDB, type DatabaseContext } from '@holo-js/db'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
+import { createRequestAwareAuthContext } from '../../core/src/portable/authRequestContext'
 import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
 import { createNativeRelationalAdapter } from './helpers/native-fixture'
@@ -206,3 +207,41 @@ it('reruns queries that observe a different database from the runtime binding', 
 
   expect(subscription.current.data).toEqual([{ id: 2, title: 'B2' }])
 })
+
+
+it('captures credentials resolved through request accessors before the request ends', async () => {
+  const context = createRequestAwareAuthContext(createAsyncAuthContext())
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const sessions = await Promise.all([10, 20].map(id => context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(id)
+    return context.getSessionId('web')
+  })))
+  let currentSessionId = sessions[0]
+  const cookieName = getSessionRuntime().sessionCookie('').split('=')[0]
+  const accessors = {
+    getCookie: async (name: string) => name === cookieName ? currentSessionId : undefined,
+    getHeader: async () => undefined,
+    appendResponseCookie: async () => {},
+    redirectResponse: async () => {},
+  }
+  configureRealtimeRuntime({ db: () => persistence.db, runWithAuthRequestAccessors: context.runWithRequestAccessors })
+  const query = defineRealtimeQuery({
+    access: 'public',
+    handler: async ({ auth, db }) => await db.table('users').where('id', auth?.user.id ?? 0).whereInSub('id', db.table('users').select('id')).select('id', 'name').get(),
+  })
+  const first = await subscribeRealtimeQuery(query, {}, {}, { authRequest: accessors })
+  currentSessionId = sessions[1]
+  const second = await subscribeRealtimeQuery(query, {}, {}, { authRequest: accessors })
+  currentSessionId = undefined
+  const anonymous = await subscribeRealtimeQuery(query, {}, {}, { authRequest: accessors })
+  expect(first.current.data).toEqual([{ id: 10, name: 'Ava' }])
+  expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
+  expect(anonymous.current.data).toEqual([])
+
+  currentSessionId = sessions[1]
+  await persistence.db.table('users').where('id', 10).update({ name: 'Updated Ava' })
+
+  expect(first.current.data).toEqual([{ id: 10, name: 'Updated Ava' }])
+  expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
+  expect(anonymous.current.data).toEqual([])
+}, 30000)

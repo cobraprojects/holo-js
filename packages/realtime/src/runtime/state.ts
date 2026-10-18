@@ -1,7 +1,6 @@
 import type { RealtimeContextRunner } from './execution-context'
 import type {
   RealtimeExecutionResult,
-  RealtimeExecutionOptions,
   RealtimeArgsFor,
   RealtimeQueryDefinitionMetadata,
   RealtimeResultFor,
@@ -115,7 +114,6 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   contexts: Map<string, ReadonlySet<number>>
   readonly args: RealtimeArgsFor<TDefinition>
   readonly definition: TDefinition
-  readonly executionOptions?: RealtimeExecutionOptions
   readonly refreshKey: string
   readonly options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
   dependencies: readonly string[]

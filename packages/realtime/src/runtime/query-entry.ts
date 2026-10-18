@@ -22,7 +22,6 @@ import {
   removeQueryEntryDependencies,
   removeQueryEntryInvalidationIndexes,
 } from './subscription-index'
-import type { RealtimeExecutionOptions } from '../contracts'
 
 export type InitializedActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata> = ActiveQueryEntry<TDefinition> & {
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
@@ -41,7 +40,6 @@ export function detachDatabaseSubscriptionIfIdle(): void {
 export async function createQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
-  executionOptions: RealtimeExecutionOptions | undefined,
   refreshKey: string,
   options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>,
 ): Promise<InitializedActiveQueryEntry<TDefinition>> {
@@ -54,7 +52,6 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
     refreshKey,
     definition,
     args,
-    executionOptions,
     options,
     dependencies: Object.freeze([]),
     patchTargets: [],
@@ -69,9 +66,7 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
 
   try {
     const result = await executeInitialQuery(definition, args, undefined)
-    const auth = executionOptions?.authRequest && state.bindings?.runWithAuthRequestAccessors
-      ? undefined
-      : await captureAuthContext(state.bindings)
+    const auth = await captureAuthContext(state.bindings)
     entry.runWithContext = createExecutionContext(database, auth)
     entry.contexts = new Map(result.contexts)
     entry.dependencies = result.result.dependencies

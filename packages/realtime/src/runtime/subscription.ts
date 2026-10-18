@@ -52,7 +52,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     const id = `subscription.${subscriptionId}`
     const refreshKey = id
     const subscriptionOptions = options as InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
-    const entry = await runWithExecutionOptions(state.bindings, executionOptions, async () => await createQueryEntry(definition, args, executionOptions, refreshKey, subscriptionOptions))
+    const entry = await runWithExecutionOptions(state.bindings, executionOptions, async () => await createQueryEntry(definition, args, refreshKey, subscriptionOptions))
     const subscription: ActiveSubscription<TDefinition> = {
       id,
       refreshKey,

@@ -125,7 +125,6 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
     const result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
       entry.definition,
       entry.args,
-      entry.executionOptions,
     ))
     entry.contexts = new Map(result.contexts)
     const delivery = {
