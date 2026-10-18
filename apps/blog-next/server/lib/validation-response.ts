@@ -1,11 +1,11 @@
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 
 export function validationExceptionResponse(error: unknown): Response | null {
-  if (!isValidationException(error)) {
+  const payload = serializeValidationException(error)
+  if (!payload) {
     return null
   }
 
-  const payload = error.toJSON()
   return Response.json(payload, {
     status: payload.status,
   })

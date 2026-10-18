@@ -1,6 +1,6 @@
 import auth from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 
 import { loginForm } from '@/lib/schemas/auth'
 import { validationExceptionResponse } from '../../../../server/lib/validation-response'
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
       try {
         return await auth.guard('api').login(input)
       } catch (error) {
-        if (isValidationException(error)) {
+        if (serializeValidationException(error)) {
           return Response.json({
             ok: false,
             status: 401,

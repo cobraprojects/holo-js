@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
 import { auth } from '@holo-js/auth/next/server'
 import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 import { postForm } from '@/lib/schemas/blog'
 import {
   createPost,
@@ -45,8 +45,9 @@ export async function createPostAction(formData: FormData) {
 
     redirect('/admin/posts')
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error
@@ -77,8 +78,9 @@ export async function updatePostAction(id: number, formData: FormData) {
 
     redirect('/admin/posts')
   } catch (error) {
-    if (isValidationException(error)) {
-      return error.toJSON()
+    const payload = serializeValidationException(error)
+    if (payload) {
+      return payload
     }
 
     throw error

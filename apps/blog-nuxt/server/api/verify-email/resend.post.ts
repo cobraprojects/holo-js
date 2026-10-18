@@ -1,6 +1,6 @@
 import { resendEmailVerification } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 
 import { resendEmailVerificationForm } from '#shared/schemas/auth'
 
@@ -24,7 +24,7 @@ export default defineEventHandler(async (event) => {
   try {
     await resendEmailVerification(input.email)
   } catch (error) {
-    if (!isValidationException(error)) {
+    if (!serializeValidationException(error)) {
       throw error
     }
   }

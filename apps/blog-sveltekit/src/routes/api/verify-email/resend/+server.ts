@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit'
 import { resendEmailVerification } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { isValidationException } from '@holo-js/validation'
+import { serializeValidationException } from '@holo-js/validation'
 
 import { resendEmailVerificationForm } from '$lib/schemas/auth'
 import type { RequestHandler } from './$types'
@@ -26,7 +26,7 @@ export const POST: RequestHandler = async ({ request }) => {
   try {
     await resendEmailVerification(input.email)
   } catch (error) {
-    if (!isValidationException(error)) {
+    if (!serializeValidationException(error)) {
       throw error
     }
   }
