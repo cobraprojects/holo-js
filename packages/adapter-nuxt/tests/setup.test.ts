@@ -421,6 +421,35 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(output).toContain('Storage runtime is not configured')
   }, 60000)
 
+  it('redirects a supplied request event from the published runtime in plain Node', async () => {
+    const build = await runAdapterStub()
+    const runtimeEntry = resolve(build.adapterOutDir, 'runtime/composables/index.js')
+    const output = execFileSync(
+      'node',
+      [
+        '--input-type=module',
+        '--eval',
+        `const { createServer } = await import('node:http');`
+        + `const runtime = await import(${JSON.stringify(runtimeEntry)});`
+        + `const server = createServer(async (req, res) => {`
+        + `  try { await runtime.createNuxtAuthRequestAccessors({ node: { req, res } }).redirectResponse('/signed-in', 303) }`
+        + `  catch (error) { res.statusCode = 500; res.end(String(error)) }`
+        + `});`
+        + `await new Promise(done => server.listen(0, done));`
+        + `const response = await fetch('http://127.0.0.1:' + server.address().port + '/login', { redirect: 'manual' });`
+        + `console.log(JSON.stringify({ status: response.status, location: response.headers.get('location'), body: await response.text() }));`
+        + `server.close();`,
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    )
+
+    expect(JSON.parse(output)).toMatchObject({ status: 303, location: '/signed-in' })
+  }, 60000)
+
   it('publishes Nitro runtime files that use the application Nitro and h3 through #imports', async () => {
     const build = await runAdapterStub()
     const runtimeFiles = (await readdir(resolve(build.adapterOutDir, 'runtime'), { recursive: true }))
