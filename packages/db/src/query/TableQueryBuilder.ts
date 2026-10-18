@@ -203,6 +203,10 @@ export class TableQueryBuilder<
     return this.plan
   }
 
+  withPredicates(predicates: readonly QueryPredicateNode[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone({ ...this.plan, predicates: Object.freeze([...predicates]) })
+  }
+
   from(table: string): TableQueryBuilder<string, TSelectedRow> {
     return new TableQueryBuilder(
       table,

@@ -127,6 +127,12 @@ await Post.all()
 
 You don't need to annotate `query` in global scopes. Holo types it from the table.
 
+Holo combines the caller's conditions, each global scope, and the soft-delete filter with `AND` between separate groups. An `orWhere()` in a caller query cannot bypass a tenant scope or include deleted rows. An `OR` inside one global scope cannot bypass another global scope.
+
+The same grouping applies to eager-load constraints, `whereHas()` constraints, and writes. Instance `update()` and `delete()` retain the target row's primary-key condition even when a global scope contains `OR`.
+
+Other scope settings, such as ordering and eager loading, remain part of the query.
+
 ### Skip global scopes
 
 ```ts
