@@ -1,4 +1,5 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { captureAuthContext, getDatabaseContext } from './execution'
+import { createExecutionContext } from './execution-context'
 import type {
   RealtimeQueryDefinitionMetadata,
   RealtimeArgsFor,
@@ -45,8 +46,11 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
   options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>,
 ): Promise<InitializedActiveQueryEntry<TDefinition>> {
   const state = getRuntimeState()
+  const database = getDatabaseContext(state.bindings).connection
   const entry: ActiveQueryEntry<TDefinition> = {
-    runWithContext: AsyncLocalStorage.snapshot(),
+    runWithContext: createExecutionContext(database),
+    contextId: database.getContextId(),
+    contexts: new Map(),
     refreshKey,
     definition,
     args,
@@ -64,7 +68,12 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
   state.queryEntries.set(refreshKey, entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
 
   try {
-    const result = await executeInitialQuery(definition, args, executionOptions)
+    const result = await executeInitialQuery(definition, args, undefined)
+    const auth = executionOptions?.authRequest && state.bindings?.runWithAuthRequestAccessors
+      ? undefined
+      : await captureAuthContext(state.bindings)
+    entry.runWithContext = createExecutionContext(database, auth)
+    entry.contexts = new Map(result.contexts)
     entry.dependencies = result.result.dependencies
     entry.predicateDependencies = result.predicateDependencies
     entry.resultHash = result.resultHash

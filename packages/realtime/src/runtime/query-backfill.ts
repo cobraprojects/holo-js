@@ -1,9 +1,10 @@
+import { getExecutionDatabase } from './execution-context'
 import { DB, type DatabaseContext } from '@holo-js/db'
 import type { DatabaseQuerySelectionObservation } from './query-state'
 import { getRuntimeState } from './state'
 
 export function getBackfillDatabaseConnection(connectionName: string): DatabaseContext | undefined {
-  const boundConnection = getRuntimeState().bindings?.db?.()
+  const boundConnection = getExecutionDatabase() ?? getRuntimeState().bindings?.db?.()
   if (boundConnection) {
     return boundConnection.getConnectionName() === connectionName
       ? boundConnection

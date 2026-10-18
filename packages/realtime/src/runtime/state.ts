@@ -1,4 +1,4 @@
-import type { AsyncLocalStorage } from 'node:async_hooks'
+import type { RealtimeContextRunner } from './execution-context'
 import type {
   RealtimeExecutionResult,
   RealtimeExecutionOptions,
@@ -110,7 +110,9 @@ export type InternalRealtimeSubscribeOptions<TResult> = RealtimeSubscribeOptions
 }
 
 export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata> = {
-  readonly runWithContext: ReturnType<typeof AsyncLocalStorage.snapshot>
+  runWithContext: RealtimeContextRunner
+  readonly contextId: number
+  contexts: Map<string, ReadonlySet<number>>
   readonly args: RealtimeArgsFor<TDefinition>
   readonly definition: TDefinition
   readonly executionOptions?: RealtimeExecutionOptions
@@ -130,6 +132,7 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
 export type BackfillCache = QueryBackfillCache<ActiveQueryEntry<RealtimeQueryDefinitionMetadata>>
 
 export type DatabaseDependencyCollectionWithQueries<TValue> = {
+  readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly dependencies: readonly string[]
   readonly queries: readonly DatabaseQueryObservation[]
   readonly value: TValue
@@ -140,6 +143,7 @@ export type InternalRealtimeExecutionResult<TResult> = RealtimeExecutionResult<T
 }
 
 export type InitialQueryResult<TDefinition extends RealtimeQueryDefinitionMetadata> = {
+  readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly predicateDependencies: PredicateDependencyIndex
   readonly result: InternalRealtimeExecutionResult<RealtimeResultFor<TDefinition>>
   readonly resultHash: string

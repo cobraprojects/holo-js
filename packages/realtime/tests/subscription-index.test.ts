@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
 import { afterEach, describe, expect, it } from 'vitest'
 import { query, type RealtimeQueryDefinitionMetadata } from '../src'
 import {
@@ -60,7 +59,9 @@ function createPredicateIndex(
 function createEntry(overrides: Partial<TestEntry> = {}): TestEntry {
   return {
     options: {},
-    runWithContext: AsyncLocalStorage.snapshot(),
+    runWithContext: callback => callback(),
+    contextId: 0,
+    contexts: new Map(),
     args: {},
     definition: subscriptionIndexQuery,
     dependencies: [tableKey],

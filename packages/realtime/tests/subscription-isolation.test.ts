@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { afterEach, expect, it } from 'vitest'
-import { authRuntimeInternals, createAsyncAuthContext, getAuthRuntime, resetAuthRuntime } from '@holo-js/auth'
-import { createDatabase, createDialect, resetDB } from '@holo-js/db'
+import { authRuntimeInternals, createAsyncAuthContext, getAuthRuntime, resetAuthRuntime, type AuthRuntimeContext } from '@holo-js/auth'
+import { DB, configureDB, createConnectionManager, createDatabase, createDialect, resetDB, type DatabaseContext } from '@holo-js/db'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
@@ -15,10 +16,9 @@ afterEach(() => {
   resetDB()
 })
 
-it.each(['authenticated', 'public'] as const)('isolates identical %s subscriptions for different users and anonymous callers', async (require) => {
+async function configureAuthenticatedSubscriptions(context: AuthRuntimeContext) {
   const persistence = await createNativeAuthPersistence()
   const store = createNativeSessionStore()
-  const context = createAsyncAuthContext()
   configureSessionRuntime({
     config: { ...persistence.loadedConfig.session, driver: 'file', stores: { file: { name: 'file', driver: 'file', path: store.path } } },
     stores: { file: store },
@@ -34,6 +34,13 @@ it.each(['authenticated', 'public'] as const)('isolates identical %s subscriptio
     { id: 20, name: 'Ben', email: 'ben@example.com' },
   ])
   configureRealtimeRuntime({ db: () => persistence.db })
+  return persistence
+}
+
+it.each(['authenticated', 'public'] as const)('isolates identical %s subscriptions for different users and anonymous callers', async (require) => {
+  const context = createAsyncAuthContext()
+  const configuredContext = { ...context, getSessionId: (guard: string) => context.getSessionId(guard) }
+  const persistence = await configureAuthenticatedSubscriptions(configuredContext)
   const authorized: Array<string | number | undefined> = []
   const query = defineRealtimeQuery({
     access: {
@@ -100,3 +107,82 @@ it('uses one initial query and patches a single subscription without extra reads
   expect(subscription.current.data).toEqual([{ id: 1, title: 'Updated' }])
   expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(0)
 })
+
+it('refreshes outside a completed subscription transaction', async () => {
+  const adapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'First' }] })
+  const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+  configureRealtimeRuntime({ db: () => DB.connection() })
+  const query = defineRealtimeQuery({
+    access: 'public',
+    handler: async ({ db }) => ({
+      scope: DB.connection().getScope().kind,
+      posts: await db.table('posts').whereInSub('id', db.table('posts').select('id')).get(),
+    }),
+  })
+  const subscription = await db.transaction(async () => await subscribeRealtimeQuery(query))
+  expect(subscription.current.data.scope).not.toBe('root')
+
+  await db.table('posts').where('id', 1).update({ title: 'Updated' })
+
+  expect(subscription.current.data).toEqual({ scope: 'root', posts: [{ id: 1, title: 'Updated' }] })
+})
+
+it('keeps mutation patches and backfills inside each caller database', async () => {
+  const firstAdapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'A1' }, { id: 2, title: 'A2' }] })
+  const secondAdapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'B1' }, { id: 2, title: 'B2' }] })
+  const firstDb = createDatabase({ adapter: firstAdapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  const secondDb = createDatabase({ adapter: secondAdapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  const caller = new AsyncLocalStorage<DatabaseContext>()
+  configureRealtimeRuntime({ db: () => caller.getStore() ?? firstDb })
+  const query = defineRealtimeQuery({
+    access: 'public',
+    handler: async ({ db }) => await db.table('posts').orderBy('id').limit(1).get(),
+  })
+  const first = await caller.run(firstDb, async () => await subscribeRealtimeQuery(query))
+  const second = await caller.run(secondDb, async () => await subscribeRealtimeQuery(query))
+  expect(first.current.data).toEqual([{ id: 1, title: 'A1' }])
+  expect(second.current.data).toEqual([{ id: 1, title: 'B1' }])
+
+  await caller.run(firstDb, async () => await firstDb.table('posts').where('id', 1).delete())
+
+  expect(first.current.data).toEqual([{ id: 2, title: 'A2' }])
+  expect(second.current.data).toEqual([{ id: 1, title: 'B1' }])
+
+  await caller.run(secondDb, async () => await secondDb.table('posts').where('id', 1).delete())
+
+  expect(first.current.data).toEqual([{ id: 2, title: 'A2' }])
+  expect(second.current.data).toEqual([{ id: 2, title: 'B2' }])
+
+  await Promise.all([
+    caller.run(firstDb, async () => await firstDb.table('posts').where('id', 2).update({ title: 'Updated A2' })),
+    caller.run(secondDb, async () => await secondDb.table('posts').where('id', 2).update({ title: 'Updated B2' })),
+  ])
+
+  expect(first.current.data).toEqual([{ id: 2, title: 'Updated A2' }])
+  expect(second.current.data).toEqual([{ id: 2, title: 'Updated B2' }])
+})
+
+it('retains each caller across independent memory auth contexts', async () => {
+  const context = authRuntimeInternals.createMemoryAuthContext()
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const query = defineRealtimeQuery({
+    access: 'authenticated',
+    handler: async ({ auth, db }) => await db.table('users').where('id', auth.user.id).whereInSub('id', db.table('users').select('id')).select('id', 'name').get(),
+  })
+  await getAuthRuntime().guard('web').loginUsingId(10)
+  const first = await subscribeRealtimeQuery(query)
+  authRuntimeInternals.configureRuntime({
+    config: persistence.loadedConfig.auth,
+    providers: persistence.providers,
+    session: getSessionRuntime(),
+    context: authRuntimeInternals.createMemoryAuthContext(),
+  })
+  await getAuthRuntime().guard('web').loginUsingId(20)
+  const second = await subscribeRealtimeQuery(query)
+
+  await persistence.db.table('users').where('id', 10).update({ name: 'Updated Ava' })
+
+  expect(first.current.data).toEqual([{ id: 10, name: 'Updated Ava' }])
+  expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
+}, 30000)

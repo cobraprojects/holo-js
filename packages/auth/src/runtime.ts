@@ -55,6 +55,8 @@ import type {
   PasswordResetTokenStore,
 } from './contracts'
 import {
+  captureAuthRequestContext,
+  getCapturedAuthContext,
   createAsyncAuthContext,
   createMemoryAuthContext,
 } from './runtime/context'
@@ -203,10 +205,12 @@ function hasContextActivator(context: AuthRuntimeContext): context is Activatabl
 }
 
 function getRuntimeBindings(): RuntimeBindings {
-  const bindings = getAuthRuntimeState().bindings
-  if (!bindings) {
+  const configured = getAuthRuntimeState().bindings
+  if (!configured) {
     throwUnconfigured()
   }
+  const context = getCapturedAuthContext()
+  const bindings = context ? { ...configured, context } : configured
 
   if (hasContextActivator(bindings.context)) {
     bindings.context.activate()
@@ -2849,6 +2853,10 @@ export function resendEmailVerification(
 }
 
 export const authRuntimeInternals = {
+  captureRequestContext() {
+    const bindings = getAuthRuntimeState().bindings
+    return captureAuthRequestContext(bindings ? getRuntimeBindings().context : undefined, Object.keys(bindings?.config.guards ?? {}))
+  },
   configureRuntime,
   createAsyncAuthContext,
   createDefaultPasswordHasher,

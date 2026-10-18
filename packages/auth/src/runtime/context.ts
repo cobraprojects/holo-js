@@ -1,6 +1,32 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { AuthenticatedAuthUser, AuthRuntimeContext } from '../contracts'
 
+type AuthRequestContextRunner = <TValue>(callback: () => TValue) => TValue
+
+const capturedContexts = new AsyncLocalStorage<AuthRuntimeContext>()
+
+export function getCapturedAuthContext(): AuthRuntimeContext | undefined {
+  return capturedContexts.getStore()
+}
+
+export function captureAuthRequestContext(context: AuthRuntimeContext | undefined, guards: readonly string[]): AuthRequestContextRunner {
+  const credentials = guards.map(guard => ({
+    guard,
+    sessionId: context?.getSessionId(guard),
+    accessToken: context?.getAccessToken?.(guard),
+    rememberToken: context?.getRememberToken?.(guard),
+  }))
+  return callback => {
+    const current = createMemoryAuthContext()
+    for (const credential of credentials) {
+      current.setSessionId(credential.guard, credential.sessionId)
+      current.setAccessToken(credential.guard, credential.accessToken)
+      current.setRememberToken(credential.guard, credential.rememberToken)
+    }
+    return capturedContexts.run(current, callback)
+  }
+}
+
 const requestScopes = new WeakMap<AuthRuntimeContext, () => object>()
 const asyncRequestScopes = new WeakMap<AuthRuntimeContext['getSessionId'], () => object>()
 

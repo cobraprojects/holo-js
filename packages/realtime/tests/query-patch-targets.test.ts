@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, it } from 'vitest'
 import { query } from '../src'
 import type { RealtimeResultFor } from '../src'
@@ -88,7 +87,9 @@ function createEntry(
 ): ActiveQueryEntry<typeof todosQuery> {
   return {
     options: {},
-    runWithContext: AsyncLocalStorage.snapshot(),
+    runWithContext: callback => callback(),
+    contextId: 0,
+    contexts: new Map(),
     args: {},
     definition: todosQuery,
     refreshKey: 'patch-targets.todos:{}',

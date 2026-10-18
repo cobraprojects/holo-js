@@ -10,7 +10,7 @@ import type {
   RealtimeSubscribeOptions,
   RealtimeSubscription,
 } from '../contracts'
-import { resolveArgs } from './execution'
+import { resolveArgs, runWithExecutionOptions } from './execution'
 import { ensureDatabaseSubscription } from './invalidation'
 import { deleteSubscription, detachDatabaseSubscriptionIfIdle, createQueryEntry } from './query-entry'
 import {
@@ -52,7 +52,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     const id = `subscription.${subscriptionId}`
     const refreshKey = id
     const subscriptionOptions = options as InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
-    const entry = await createQueryEntry(definition, args, executionOptions, refreshKey, subscriptionOptions)
+    const entry = await runWithExecutionOptions(state.bindings, executionOptions, async () => await createQueryEntry(definition, args, executionOptions, refreshKey, subscriptionOptions))
     const subscription: ActiveSubscription<TDefinition> = {
       id,
       refreshKey,

@@ -1,3 +1,4 @@
+import { getExecutionDatabase, type RealtimeContextRunner } from './execution-context'
 import { DB, TableQueryBuilder, type DatabaseContext, type TableDefinition } from '@holo-js/db'
 import { validate } from '@holo-js/validation'
 import {
@@ -34,7 +35,7 @@ export function createRealtimeDatabaseContext(connection: DatabaseContext): Real
 }
 
 export function getDatabaseContext(bindings: RealtimeRuntimeBindings | undefined): RealtimeDatabaseContext {
-  return createRealtimeDatabaseContext(bindings?.db?.() ?? DB.connection())
+  return createRealtimeDatabaseContext(getExecutionDatabase() ?? bindings?.db?.() ?? DB.connection())
 }
 
 export async function runWithExecutionOptions<TResult>(
@@ -74,6 +75,16 @@ async function defaultLoadAuthModule(): Promise<RealtimeAuthModule | null> {
 async function loadAuthModule(bindings: RealtimeRuntimeBindings | undefined): Promise<RealtimeAuthModule | null> {
   const load = bindings?.loadAuthModule ?? defaultLoadAuthModule
   return await load()
+}
+
+export async function captureAuthContext(bindings: RealtimeRuntimeBindings | undefined): Promise<RealtimeContextRunner | undefined> {
+  const auth = await loadAuthModule(bindings)
+  if (!auth) return undefined
+  const captured = auth.authRuntimeInternals?.captureRequestContext()
+  if (!captured) {
+    throw new RealtimeAuthUnavailableError('Realtime subscriptions require an auth request context that can be retained independently.')
+  }
+  return captured
 }
 
 function normalizeAccess<TArgs>(access: RealtimeAccess<TArgs>): RealtimeAccessObject<TArgs> {
