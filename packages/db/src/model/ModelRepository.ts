@@ -1989,7 +1989,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
     const deletedAtColumn = this.getDeletedAtColumn()
     if (applySoftDeletes && deletedAtColumn) {
-      query = query.whereNull(deletedAtColumn as never)
+      query = query.withoutTrashed()
     }
 
     if (applyGlobalScopes) {
@@ -1997,7 +1997,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         if (excludedGlobalScopes.has(name)) {
           continue
         }
-        query = (scope as (query: ModelQueryBuilder<TTable>) => ModelQueryBuilder<TTable> | unknown)(query) as ModelQueryBuilder<TTable>
+        query = query.applyGlobalScope(scope)
       }
     }
 
