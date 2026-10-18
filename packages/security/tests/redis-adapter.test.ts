@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { describe, expect, it } from 'vitest'
-import { startRedisService } from '../../session/tests/support/redis'
+import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
 import { createSecurityRedisAdapter } from '../src/drivers/redis-adapter'
 
 async function createAdapter(options: { cluster?: boolean; socket?: boolean; url?: boolean; db?: number; prefix?: string; tls?: boolean } = {}) {
@@ -60,7 +60,7 @@ describe('Redis rate-limit behavior', () => {
     }
   }, 10_000)
 
-  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }])('clears every matching bucket and preserves unrelated keys through %j', async options => {
+  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('clears every matching bucket and preserves unrelated keys through %j', async options => {
     const { adapter, service } = await createAdapter(options)
     const { cluster } = options
     try {

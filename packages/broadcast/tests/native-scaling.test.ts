@@ -5,7 +5,7 @@ import { expect, it, onTestFinished } from 'vitest'
 import { normalizeRedisConfig } from '@holo-js/kernel'
 import { createFluxClient, fluxInternals } from '../../flux/src'
 import { defineSchema, field } from '@holo-js/validation'
-import { startRedisService } from '../../session/tests/support/redis'
+import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
 import { defineChannel, normalizeBroadcastConfig, startBroadcastWorker } from '../src'
 
 async function reservePort(): Promise<number> {
@@ -37,7 +37,7 @@ it.each([
   { name: 'Redis Unix socket', cluster: false, tls: false, socket: true },
   { name: 'Redis Cluster', cluster: true, tls: false, socket: false },
   { name: 'Redis Cluster with TLS', cluster: true, tls: true, socket: false },
-])('delivers cross-worker events, notifications, and presence through real $name', async ({ cluster, tls, socket }) => {
+].filter(transport => !transport.tls || canTrustTestCertificates))('delivers cross-worker events, notifications, and presence through real $name', async ({ cluster, tls, socket }) => {
   const redis = await startRedisService({ cluster, tls })
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
