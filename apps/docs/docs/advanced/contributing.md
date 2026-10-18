@@ -58,7 +58,11 @@ Run `bun run check` before you push. Running one package's tests is fine while y
 
 CI requires library and test typechecks, lint, published-package acceptance, scaffold acceptance, browser-bundle acceptance, and the full library and example-app suites on Node 22.14.0, 24, and 26. Native package loading and server lifecycle checks also run on Linux, Windows, and macOS.
 
-The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit. Dependabot checks npm dependencies and GitHub Actions weekly.
+The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit.
+
+When a blocking advisory has no patched release, add a time-boxed entry to `audit-exceptions.json` with the advisory URL, the exact package and version, the reason it is reachable, and an `expires` date. Excepted advisories are reported as `EXCEPT` until that date, then block again. An exception that no longer matches a blocking advisory also fails the audit, so remove entries once the dependency is patched. An invalid exceptions file fails the audit.
+
+Dependabot checks npm dependencies and GitHub Actions weekly.
 
 `bun run check:dead-code` uses Fallow 3.34.1 and `fallow-baseline.json`. The committed `fallow.toml` resolves Holo packages through their `@holo-js/source` exports, so the scan does not require built packages. Existing findings are recorded by identity, so removing one finding does not make room for a new orphan. Remove unused code rather than adding it to the baseline. When intentionally updating the scanner or recording reviewed existing findings, run:
 

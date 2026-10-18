@@ -60,6 +60,7 @@ In preparation, not yet released.
 ### Changed
 
 - Framework runtimes are peer dependencies. `@holo-js/adapter-nuxt` peers on `nuxt` and takes h3 and Nitro from Nuxt's `#imports` instead of depending on `h3` and `nitropack`. `@holo-js/adapter-sveltekit` peers on `svelte` (`^5.56.8`) instead of depending on an exact version. Applications share one framework runtime with Holo. See [framework peer dependencies](apps/docs/docs/getting-started/upgrading.md#framework-peer-dependencies).
+- The published runtime audit accepts reviewed, time-boxed exceptions in `audit-exceptions.json` for blocking advisories that have no patched release. braces 3.0.3 (GHSA-vfj7-8cjw-p6xm) and node-forge 1.4.0 (GHSA-86w9-cpqp-85rv), reachable only through the application's Nuxt peer, are excepted until 2026-12-17.
 - Require Node.js 22.14 or newer on the 22 line (`^22.14.0 || ^24.0.0 || ^26.0.0`). The SQLite driver's prebuilt binary needs Node-API 10 and crashed with a segmentation fault on Node.js 22.12 and 22.13. CI tests Node.js 22.14.0, 24 and 26.
 - Nuxt auth redirects write the status and `Location` header through the request's native response, including for supplied request events outside a Nitro build. Redirect responses no longer include h3's HTML meta-refresh body.
 

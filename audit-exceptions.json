@@ -1,0 +1,16 @@
+[
+  {
+    "advisory": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "version": "3.0.3",
+    "expires": "2026-12-17",
+    "reason": "No patched braces release exists. Reachable only through the application's Nuxt peer (nuxt -> @nuxt/nitro-server -> nitropack -> globby -> micromatch -> braces), where Nitro expands developer-authored file patterns at build and dev time."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+    "package": "node-forge",
+    "version": "1.4.0",
+    "expires": "2026-12-17",
+    "reason": "No patched node-forge release exists. Reachable only through the application's Nuxt peer (nuxt -> @nuxt/nitro-server -> nitropack -> listhen -> node-forge), where listhen generates a local development HTTPS certificate and does not verify RSA signatures."
+  }
+]
