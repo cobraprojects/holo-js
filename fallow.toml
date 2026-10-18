@@ -1,0 +1,2 @@
+[resolve]
+conditions = ["@holo-js/source"]

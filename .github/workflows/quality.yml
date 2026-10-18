@@ -1,0 +1,57 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validation:
+    name: Typecheck, lint and acceptance / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - 22.12.0
+          - 24
+          - 26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: npm rebuild better-sqlite3
+      - run: bun x playwright install --with-deps chromium
+      - run: bun run test:acceptance
+      - run: bun run typecheck
+      - run: bun run lint
+
+  dependencies:
+    name: Published runtime audit and dead code
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run audit:runtime
+      - run: bun run check:dead-code

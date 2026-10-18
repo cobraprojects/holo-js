@@ -12,7 +12,7 @@ describe('client-facing request URLs', () => {
   it('uses the HTTP Host when the framework URL uses its internal hostname', async () => {
     const server = createServer((incoming, response) => {
       const request = new Request(`http://localhost${incoming.url}`, {
-        headers: new Headers(Object.entries(incoming.headers).flatMap(([name, value]) =>
+        headers: new Headers(Object.entries(incoming.headers).flatMap<[string, string]>(([name, value]) =>
           typeof value === 'string' ? [[name, value]] : [])),
       })
       response.end(resolveRequestUrl(request).href)

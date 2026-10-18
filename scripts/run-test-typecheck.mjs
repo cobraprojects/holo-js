@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { removeStaleGeneratedConfigs } from './remove-stale-test-typecheck-configs.mjs'
 import { runTypecheckJobs } from './typecheck-runner.mjs'
 
 const packagesRoot = resolve('packages')
@@ -12,7 +11,6 @@ async function main() {
   let generatedConfigsRootDir
 
   try {
-    await removeStaleGeneratedConfigs(generatedConfigsRootPrefix)
     generatedConfigsRootDir = await mkdtemp(generatedConfigsRootPrefix)
 
     const jobs = []
