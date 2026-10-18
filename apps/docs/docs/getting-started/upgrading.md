@@ -27,8 +27,8 @@ Holo adapters now use your app's framework packages as peer dependencies instead
 | Adapter | Required in your app's `package.json` |
 | --- | --- |
 | `@holo-js/adapter-next` | `next` 16.3.8 or newer on the 16 line, and `react` |
-| `@holo-js/adapter-nuxt` | `nuxt` 4.5.1 or newer, and `vue` |
-| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 2.70.2 or newer, and `svelte` 5.56.8 or newer |
+| `@holo-js/adapter-nuxt` | `nuxt` 4.5.1 or newer on the 4 line, and `vue` |
+| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 2.70.2 or newer on the 2 line, and `svelte` 5.56.8 or newer on the 5 line |
 
 `@holo-js/adapter-nuxt` no longer installs `h3` or `nitropack`. Its server routes and plugins use the h3 and Nitro that come with your Nuxt version. `@holo-js/adapter-sveltekit` no longer installs Svelte. It accepts any Svelte 5 release from 5.56.8 instead of one exact version.
 
