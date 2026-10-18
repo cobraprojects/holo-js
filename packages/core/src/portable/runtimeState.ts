@@ -3,6 +3,7 @@ export type HoloRuntimeTransitionPhase = 'initializing' | 'shuttingDown'
 export interface HoloRuntimeTransition<TRuntime> {
   readonly runtime: TRuntime
   readonly phase: HoloRuntimeTransitionPhase
+  readonly outcome: Promise<void>
   readonly settled: Promise<void>
 }
 

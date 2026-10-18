@@ -2082,10 +2082,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     async shutdown() {
       const state = getRuntimeState()
       if (state.transition?.runtime === runtime) {
-        const { phase, settled } = state.transition
+        const { phase, outcome, settled } = state.transition
+        if (phase === 'shuttingDown') return await outcome
         await settled
-        if (phase === 'initializing') await runtime.shutdown()
-        return
+        return await runtime.shutdown()
       }
       runtime.initialized = false
       if (state.current !== runtime) {
@@ -2111,10 +2111,10 @@ async function runWithinRuntimeTransition(
   transition: () => Promise<void>,
 ): Promise<void> {
   const state = getRuntimeState()
-  const transitionAfterSlotIsRecorded = Promise.resolve().then(transition)
-  state.transition = { runtime, phase, settled: transitionAfterSlotIsRecorded.then(() => undefined, () => undefined) }
+  const outcome = Promise.resolve().then(transition)
+  state.transition = { runtime, phase, outcome, settled: outcome.then(() => undefined, () => undefined) }
   try {
-    await transitionAfterSlotIsRecorded
+    await outcome
   } finally {
     if (state.transition?.runtime === runtime) state.transition = undefined
   }

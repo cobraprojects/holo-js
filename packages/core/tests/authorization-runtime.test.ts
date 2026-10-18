@@ -242,6 +242,32 @@ export default definePolicy('posts', Post, { class: { viewAny: () => true } })
     expect((await authorizationInternals.evaluatePolicyByTarget({}, 'viewAny', PreviousPost)).allowed).toBe(true)
   })
 
+  it('rejects every concurrent shutdown call when authorization disposal fails', async () => {
+    const root = await createAuthorizationProject()
+    await writeFile(join(root, 'config/database.ts'), `export default { defaultConnection: 'default', connections: { default: { driver: 'sqlite', url: ':memory:' } } }`)
+    await rm(join(root, 'config/auth.ts'))
+    await rm(join(root, 'config/session.ts'))
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/registry.json'), JSON.stringify(authorizationRegistry(['posts'], [])))
+    class PreviousPost {}
+    definePolicy('posts', PreviousPost, { class: { viewAny: () => false } })
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+class Post {}
+export default definePolicy('posts', Post, { class: { viewAny: () => true } })
+`)
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    definePolicy('new-owner', PreviousPost, { class: { viewAny: () => true } })
+
+    const results = await Promise.allSettled([runtime.shutdown(), runtime.shutdown()])
+
+    const [first, second] = results
+    if (first?.status !== 'rejected' || second?.status !== 'rejected') throw new Error('Both shutdown calls must reject.')
+    expect(first.reason).toMatchObject({ message: expect.stringContaining('already registered') })
+    expect(second.reason).toBe(first.reason)
+  })
+
   it('reports every rollback restoration failure while removing owned grants and restoring unaffected definitions', async () => {
     class PreviousPost {}
     class PreviousReport {}
