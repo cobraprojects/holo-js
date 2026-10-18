@@ -31,6 +31,7 @@ import {
   readTextFile,
   resolveFirstExistingPath,
 } from './runtime'
+import { writeTextFile } from './atomic-file'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -259,8 +260,7 @@ export async function writeProjectConfig(
   manifestPath?: string,
 ): Promise<string> {
   const targetPath = manifestPath ?? join(projectRoot, 'config/app.ts')
-  await mkdir(dirname(targetPath), { recursive: true })
-  await writeFile(targetPath, await serializeProjectConfig(projectRoot, config, targetPath), 'utf8')
+  await writeTextFile(targetPath, await serializeProjectConfig(projectRoot, config, targetPath))
   return targetPath
 }
 
@@ -308,8 +308,7 @@ async function ensureDatabaseConfig(projectRoot: string): Promise<string> {
   }
 
   const targetPath = join(projectRoot, 'config/database.ts')
-  await mkdir(dirname(targetPath), { recursive: true })
-  await writeFile(targetPath, await serializeDatabaseConfig(projectRoot, targetPath), 'utf8')
+  await writeTextFile(targetPath, await serializeDatabaseConfig(projectRoot, targetPath))
   return targetPath
 }
 

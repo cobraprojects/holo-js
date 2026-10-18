@@ -1,11 +1,12 @@
-import { randomUUID } from 'node:crypto'
-import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
 import { createSourceModuleUrlPlugin } from './source-module-url'
+
+export { writeTextFile } from './atomic-file'
 import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
@@ -286,18 +287,3 @@ export async function readTextFile(path: string): Promise<string | undefined> {
   return readFile(path, 'utf8')
 }
 
-export async function writeTextFile(path: string, contents: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
-  const existingMode = await stat(path).then(stats => stats.mode & 0o7777, () => undefined)
-  try {
-    await writeFile(temporaryPath, contents, 'utf8')
-    if (existingMode !== undefined) {
-      await chmod(temporaryPath, existingMode)
-    }
-    await rename(temporaryPath, path)
-  } catch (error) {
-    await rm(temporaryPath, { force: true })
-    throw error
-  }
-}

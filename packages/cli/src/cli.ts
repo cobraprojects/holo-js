@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { clearConfigCache, resolveConfigCachePath } from '@holo-js/config'
@@ -72,6 +72,7 @@ import {
   type RuntimeExecutor,
   type SecurityCommandExecutors,
 } from './command-executors'
+import { writeTextFile } from './project/atomic-file'
 
 const AUTH_INSTALL_FEATURES = ['social', 'workos', 'clerk'] as const
 const AUTH_SOCIAL_PROVIDER_MODES = ['default', 'specific'] as const
@@ -332,7 +333,7 @@ async function readPackageJsonSnapshot(projectRoot: string): Promise<string> {
 }
 
 async function restorePackageJsonSnapshot(projectRoot: string, snapshot: string): Promise<void> {
-  await writeFile(resolve(projectRoot, 'package.json'), snapshot)
+  await writeTextFile(resolve(projectRoot, 'package.json'), snapshot)
 }
 
 async function readAppConfigSnapshot(projectRoot: string): Promise<FileSnapshot | undefined> {
@@ -354,7 +355,7 @@ async function restoreAppConfigSnapshot(snapshot: FileSnapshot | undefined): Pro
     return
   }
 
-  await writeFile(snapshot.path, snapshot.contents)
+  await writeTextFile(snapshot.path, snapshot.contents)
 }
 
 async function readDirectorySnapshot(projectRoot: string, relativePath: string): Promise<DirectorySnapshot> {

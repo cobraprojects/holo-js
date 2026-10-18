@@ -1,6 +1,6 @@
 import { constants as fsConstants } from 'node:fs'
-import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, resolve } from 'node:path'
+import { access, mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { extname, join, resolve } from 'node:path'
 import type { NormalizedHoloAuthConfig } from '@holo-js/auth'
 import { loadConfigDirectory } from '@holo-js/config'
 import { renderGeneratedSchemaRuntimeModule, type TableDefinition } from '@holo-js/db'
@@ -50,6 +50,7 @@ import {
   isRecord,
   makeProjectRelativePath,
 } from './shared'
+import { writeTextFile } from './atomic-file'
 
 export function renderGeneratedModule(exportName: string, value: unknown): string {
   return [
@@ -864,8 +865,7 @@ async function writeFileIfChanged(path: string, contents: string): Promise<void>
     // File does not exist yet or cannot be read. Fall through and write it.
   }
 
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, contents, 'utf8')
+  await writeTextFile(path, contents)
 }
 
 function stripGeneratedAt(registry: GeneratedProjectRegistry): Omit<GeneratedProjectRegistry, 'generatedAt'> {

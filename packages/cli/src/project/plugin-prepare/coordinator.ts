@@ -23,6 +23,7 @@ import {
   platformPathKey,
   resolveContainedPath,
 } from './paths'
+import { stageFile } from '../atomic-file'
 
 const MAX_ARTIFACTS = 2_000
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
@@ -635,16 +636,7 @@ async function assertSnapshotOwnership(snapshot: PreparedSnapshot, projectRoot: 
 }
 
 async function stageWrite(path: string, contents: Uint8Array, plugin: LoadedProjectPreparer): Promise<StagedWrite> {
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.holo-${process.pid}-${randomUUID()}.tmp`
-  const handle = await open(temporary, 'w')
-  try {
-    await handle.writeFile(contents)
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  return { target: path, temporary, plugin }
+  return { target: path, temporary: await stageFile(path, contents), plugin }
 }
 
 async function moveExistingPathToBackup(path: string): Promise<string | undefined> {
