@@ -1,3 +1,4 @@
+import type { AsyncLocalStorage } from 'node:async_hooks'
 import type {
   RealtimeExecutionResult,
   RealtimeExecutionOptions,
@@ -109,17 +110,13 @@ export type InternalRealtimeSubscribeOptions<TResult> = RealtimeSubscribeOptions
 }
 
 export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata> = {
+  readonly runWithContext: ReturnType<typeof AsyncLocalStorage.snapshot>
   readonly args: RealtimeArgsFor<TDefinition>
   readonly definition: TDefinition
   readonly executionOptions?: RealtimeExecutionOptions
-  readonly patchFallbackSubscriberRefs: Set<ActiveSubscription<TDefinition>>
-  readonly patchSubscriberRefs: Set<ActiveSubscription<TDefinition>>
   readonly refreshKey: string
-  readonly snapshotSubscriberRefs: Set<ActiveSubscription<TDefinition>>
-  readonly subscriberRefs: Set<ActiveSubscription<TDefinition>>
-  readonly subscribers: Set<string>
+  readonly options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
   dependencies: readonly string[]
-  initialQuery?: Promise<InitialQueryResult<TDefinition>>
   patchTargets: QueryPatchTarget[]
   predicateDependencies: PredicateDependencyIndex
   queries: DatabaseQueryObservation[]

@@ -203,7 +203,7 @@ async function deliverPatchedQueryEntry(
 ): Promise<void> {
   let data: unknown = entry.current?.data
   const { queries } = entry
-  const shouldCreatePatchOperations = entry.patchSubscriberRefs.size > 0
+  const shouldCreatePatchOperations = Boolean(entry.options.onPatch)
   if (additionalPatches.length === 0) {
     const query = firstPatch.nextQuery ?? firstPatch.query
     const path = query.resultPath ?? EMPTY_RESULT_PATH

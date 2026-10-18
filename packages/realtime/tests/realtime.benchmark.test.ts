@@ -59,7 +59,7 @@ type BenchmarkMetrics = {
   readonly emittedSnapshots: number
   readonly queryExecutions: number
   readonly scenario: string
-  readonly sharedQueries: number
+  readonly distinctArguments: number
   readonly subscriptions: number
 }
 
@@ -205,7 +205,7 @@ type BenchmarkWidePostRow = BenchmarkPostRow & {
 const connectionName = 'main'
 const tableName = 'posts'
 const subscriptionCount = 1_000
-const sharedQueryCount = 100
+const distinctArgumentCount = 100
 const patchRowCount = 1_000
 const longBenchmarkTimeoutMs = 20_000
 
@@ -4095,7 +4095,7 @@ function captureMetrics(
     emittedSnapshots: counters.emittedSnapshots,
     queryExecutions: counters.queryExecutions,
     scenario,
-    sharedQueries: sharedQueryCount,
+    distinctArguments: distinctArgumentCount,
     subscriptions: subscriptionCount,
   }
 }
@@ -4106,7 +4106,7 @@ async function createBenchmarkSubscriptions(
 ): Promise<void> {
   const query = createBenchmarkQuery(counters, versions)
   await Promise.all(Array.from({ length: subscriptionCount }, async (_, index) => {
-    await subscribeRealtimeQuery(query, { userId: index % sharedQueryCount }, {
+    await subscribeRealtimeQuery(query, { userId: index % distinctArgumentCount }, {
       onData: () => {
         counters.emittedSnapshots += 1
       },
@@ -4540,22 +4540,22 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const setupStartedAt = performance.now()
     await createBenchmarkSubscriptions(counters, versions)
     const setupMetrics = captureMetrics('setup', setupStartedAt, counters)
-    expect(counters.queryExecutions).toBe(sharedQueryCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
-    expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(sharedQueryCount)
-    expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(tableDependency())?.size).toBe(sharedQueryCount)
-    expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(userPredicateDependency(42))?.size).toBe(1)
+    expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(subscriptionCount)
+    expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(tableDependency())?.size).toBe(subscriptionCount)
+    expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(userPredicateDependency(42))?.size).toBe(subscriptionCount / distinctArgumentCount)
     expect(realtimeRuntimeInternals.getRuntimeState().tableBroadSubscribers.get(tableDependency())?.size ?? 0).toBe(0)
-    expect(realtimeRuntimeInternals.getRuntimeState().tablePredicateColumnSubscribers.get(tableDependency())?.get('user_id')?.size).toBe(sharedQueryCount)
-    expect(realtimeRuntimeInternals.getRuntimeState().tablePredicateValueSubscribers.get(tableDependency())?.get('user_id')?.get(encodeDependencyValue(42))?.size).toBe(1)
+    expect(realtimeRuntimeInternals.getRuntimeState().tablePredicateColumnSubscribers.get(tableDependency())?.get('user_id')?.size).toBe(subscriptionCount)
+    expect(realtimeRuntimeInternals.getRuntimeState().tablePredicateValueSubscribers.get(tableDependency())?.get('user_id')?.get(encodeDependencyValue(42))?.size).toBe(subscriptionCount / distinctArgumentCount)
 
     const unrelatedStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName,
-      dependencies: createInvalidationDependencies(sharedQueryCount + 1),
+      dependencies: createInvalidationDependencies(distinctArgumentCount + 1),
     })
     const unrelatedMetrics = captureMetrics('unrelated-exact-write', unrelatedStartedAt, counters)
-    expect(counters.queryExecutions).toBe(sharedQueryCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
 
     versions.set(42, 1)
@@ -4565,8 +4565,8 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       dependencies: createInvalidationDependencies(42),
     })
     const matchingMetrics = captureMetrics('matching-exact-write', matchingStartedAt, counters)
-    expect(counters.queryExecutions).toBe(sharedQueryCount + 1)
-    expect(counters.emittedSnapshots).toBe(subscriptionCount + subscriptionCount / sharedQueryCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount + subscriptionCount / distinctArgumentCount)
+    expect(counters.emittedSnapshots).toBe(subscriptionCount + subscriptionCount / distinctArgumentCount)
 
     const burstUserIds = Array.from({ length: 10 }, (_, index) => index)
     for (const userId of burstUserIds) {
@@ -4580,8 +4580,8 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       })
     }))
     const burstMetrics = captureMetrics('batched-matching-exact-writes', burstStartedAt, counters)
-    expect(counters.queryExecutions).toBe(sharedQueryCount + 1 + burstUserIds.length)
-    expect(counters.emittedSnapshots).toBe(subscriptionCount + (subscriptionCount / sharedQueryCount) * (1 + burstUserIds.length))
+    expect(counters.queryExecutions).toBe(subscriptionCount + (subscriptionCount / distinctArgumentCount) * (1 + burstUserIds.length))
+    expect(counters.emittedSnapshots).toBe(subscriptionCount + (subscriptionCount / distinctArgumentCount) * (1 + burstUserIds.length))
 
     console.info(JSON.stringify({
       benchmark: '@holo-js/realtime invalidation',
@@ -4594,7 +4594,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
   })
 
-  it('measures concurrent same-query subscription fanout with one initial execution', async () => {
+  it('measures concurrent same-query subscription fanout with independent initial executions', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -4628,17 +4628,17 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       })
     }))
 
-    await waitForBenchmarkCondition(() => counters.queryExecutions === 1)
-    expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(1)
+    await waitForBenchmarkCondition(() => counters.queryExecutions === subscriptionCount)
+    expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(subscriptionCount)
     releaseInitialQuery?.()
     const subscriptions = await subscriptionsPromise
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
     expect(subscriptions).toHaveLength(subscriptionCount)
-    expect(counters.queryExecutions).toBe(1)
+    expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
-    expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(1)
-    expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(tableDependency())?.size).toBe(1)
+    expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(subscriptionCount)
+    expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(tableDependency())?.size).toBe(subscriptionCount)
 
     console.info(JSON.stringify({
       benchmark: '@holo-js/realtime concurrent same-query subscription fanout',
@@ -4821,11 +4821,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const broadSubscription = await subscribeRealtimeQuery(broadQuery, {})
     const state = realtimeRuntimeInternals.getRuntimeState()
     const predicateEntry = state.queryEntries.get(predicateSubscription.id) ?? [...state.queryEntries.values()]
-      .find(entry => entry.subscribers.has(predicateSubscription.id))
+      .find(entry => entry.refreshKey === predicateSubscription.id)
     const otherPredicateEntry = state.queryEntries.get(otherPredicateSubscription.id) ?? [...state.queryEntries.values()]
-      .find(entry => entry.subscribers.has(otherPredicateSubscription.id))
+      .find(entry => entry.refreshKey === otherPredicateSubscription.id)
     const broadEntry = state.queryEntries.get(broadSubscription.id) ?? [...state.queryEntries.values()]
-      .find(entry => entry.subscribers.has(broadSubscription.id))
+      .find(entry => entry.refreshKey === broadSubscription.id)
 
     expect(predicateEntry).toBeDefined()
     expect(otherPredicateEntry).toBeDefined()

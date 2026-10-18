@@ -197,7 +197,7 @@ The result has the handler's return type. If the handler returns `Promise<Post[]
 
 On Nuxt and SvelteKit, guard for the empty first render, for example `data.posts ?? []`.
 
-Calls with the same name and arguments share one subscription.
+Within one browser client, calls with the same name and arguments share one client subscription. Each server subscription is authorized and executed independently, even when another caller subscribes to the same query and arguments.
 
 ## Define mutations
 
@@ -796,7 +796,7 @@ console.log(result.data)
 
 ### subscribeRealtimeQuery()
 
-Subscribes to a query from `@holo-js/realtime/server` and keeps it updated after writes. It calls `onData` with the first result and again after each change. Use `unsubscribe()` to stop.
+Subscribes to a query from `@holo-js/realtime/server` and keeps it updated after writes. It calls `onData` with the first result and again after each change. Use `unsubscribe()` to stop. Each call authorizes the caller and owns its result and refresh state. Results are never reused from another server subscription.
 
 ```ts
 import { subscribeRealtimeQuery } from '@holo-js/realtime/server'

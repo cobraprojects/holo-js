@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, it } from 'vitest'
 import { query } from '../src'
 import type { RealtimeResultFor } from '../src'
@@ -27,7 +28,6 @@ import type {
 } from '../src/runtime/query-state'
 import type {
   ActiveQueryEntry,
-  ActiveSubscription,
   BackfillCache,
 } from '../src/runtime/state'
 
@@ -86,16 +86,12 @@ function createEntry(
   patchTargets: QueryPatchTarget[],
   data: unknown,
 ): ActiveQueryEntry<typeof todosQuery> {
-  const subscriberRefs = new Set<ActiveSubscription<typeof todosQuery>>()
   return {
+    options: {},
+    runWithContext: AsyncLocalStorage.snapshot(),
     args: {},
     definition: todosQuery,
-    patchFallbackSubscriberRefs: new Set<ActiveSubscription<typeof todosQuery>>(),
-    patchSubscriberRefs: new Set<ActiveSubscription<typeof todosQuery>>(),
     refreshKey: 'patch-targets.todos:{}',
-    snapshotSubscriberRefs: new Set<ActiveSubscription<typeof todosQuery>>(),
-    subscriberRefs,
-    subscribers: new Set<string>(),
     current: {
       data: data as RealtimeResultFor<typeof todosQuery>,
       dependencies: ['db:main:posts'],

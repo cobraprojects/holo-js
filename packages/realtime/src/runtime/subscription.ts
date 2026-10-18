@@ -12,8 +12,7 @@ import type {
 } from '../contracts'
 import { resolveArgs } from './execution'
 import { ensureDatabaseSubscription } from './invalidation'
-import { deleteSubscription, detachDatabaseSubscriptionIfIdle, resolveQueryEntry } from './query-entry'
-import { createRefreshKey } from './refresh-key'
+import { deleteSubscription, detachDatabaseSubscriptionIfIdle, createQueryEntry } from './query-entry'
 import {
   getRuntimeState,
   type ActiveQueryEntry,
@@ -51,14 +50,9 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     const subscriptionId = state.nextSubscriptionId
     const args = await resolveArgs(definition, input)
     const id = `subscription.${subscriptionId}`
-    const refreshKey = createRefreshKey(
-      definition,
-      args as Record<string, unknown>,
-      id,
-      executionOptions,
-    )
-    const entry = await resolveQueryEntry(definition, args, executionOptions, refreshKey)
+    const refreshKey = id
     const subscriptionOptions = options as InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
+    const entry = await createQueryEntry(definition, args, executionOptions, refreshKey, subscriptionOptions)
     const subscription: ActiveSubscription<TDefinition> = {
       id,
       refreshKey,
@@ -66,17 +60,6 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
       current: entry.current,
     }
     state.subscriptions.set(subscription.id, subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
-    entry.subscribers.add(subscription.id)
-    entry.subscriberRefs.add(subscription)
-    if (subscriptionOptions.onPatch) {
-      entry.patchSubscriberRefs.add(subscription)
-    }
-    if (subscriptionOptions.onData) {
-      entry.snapshotSubscriberRefs.add(subscription)
-      if (!subscriptionOptions.onPatch) {
-        entry.patchFallbackSubscriberRefs.add(subscription)
-      }
-    }
     try {
       await subscriptionOptions.onData?.(entry.current)
     } catch (error) {

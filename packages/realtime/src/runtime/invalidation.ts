@@ -123,11 +123,11 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
   }
 
   try {
-    const result = await executeRealtimeQueryInternal(
+    const result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
       entry.definition,
       entry.args,
       entry.executionOptions,
-    )
+    ))
     const delivery = {
       result,
       resultHash: createResultHash(result.data),
@@ -178,7 +178,7 @@ async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  if (await tryPatchQueryEntry(entry, backfills)) {
+  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
     return
   }
 
