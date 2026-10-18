@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -38,4 +38,17 @@ it('never exposes a partially written file to concurrent readers', async () => {
 
   expect(observed).toEqual(new Set(['complete']))
   expect(await readdir(root)).toEqual(['package.json'])
+})
+
+it.skipIf(process.platform === 'win32')('keeps the permissions of a file it rewrites', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-file-modes-'))
+  tempRoots.push(root)
+  const scriptPath = join(root, 'script.sh')
+  await writeFile(scriptPath, '#!/bin/sh\nexit 0\n')
+  await chmod(scriptPath, 0o750)
+
+  await writeTextFile(scriptPath, '#!/bin/sh\nexit 1\n')
+
+  expect((await stat(scriptPath)).mode & 0o777).toBe(0o750)
+  expect(await readFile(scriptPath, 'utf8')).toBe('#!/bin/sh\nexit 1\n')
 })

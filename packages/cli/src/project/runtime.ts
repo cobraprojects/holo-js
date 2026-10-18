@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
@@ -289,8 +289,12 @@ export async function readTextFile(path: string): Promise<string | undefined> {
 export async function writeTextFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
+  const existingMode = await stat(path).then(stats => stats.mode & 0o7777, () => undefined)
   try {
     await writeFile(temporaryPath, contents, 'utf8')
+    if (existingMode !== undefined) {
+      await chmod(temporaryPath, existingMode)
+    }
     await rename(temporaryPath, path)
   } catch (error) {
     await rm(temporaryPath, { force: true })
