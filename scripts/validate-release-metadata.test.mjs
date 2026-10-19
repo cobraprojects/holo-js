@@ -16,6 +16,8 @@ afterEach(async () => {
   })))
 })
 
+const rejectOtherRefsRun = 'test "$GITHUB_REF" = refs/heads/main || { echo "::error::Releases publish only from main."; exit 1; }'
+
 const validReleaseWorkflow = [
   'name: Release',
   'permissions:',
@@ -23,7 +25,14 @@ const validReleaseWorkflow = [
   '  id-token: write',
   'jobs:',
   '  publish:',
+  `    if: github.ref == 'refs/heads/main'`,
+  '    environment: release',
   '    steps:',
+  '      - name: Reject runs from other refs',
+  `        run: ${rejectOtherRefsRun}`,
+  '      - uses: actions/checkout@v7',
+  '        with:',
+  '          ref: ${{ github.sha }}',
   '      - run: bun run build',
   '      - run: git config user.name "github-actions[bot]"',
   '      - run: git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
@@ -227,6 +236,46 @@ test('release metadata requires the publish step to skip with a notice when NPM_
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
     '.github/workflows/release.yml must skip the publish with a notice, not fail, when NPM_TOKEN is not configured.',
+  ])
+})
+
+test('release metadata runs the publish job only for refs/heads/main', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace("    if: github.ref == 'refs/heads/main'\n", ''),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must run the publish job only for refs/heads/main.',
+  ])
+})
+
+test('release metadata rejects a run from another ref in an early step', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(`        run: ${rejectOtherRefsRun}`, '        run: echo ok'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must reject runs from refs other than main in an early step.',
+  ])
+})
+
+test('release metadata pins checkout to the triggering commit', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('          ref: ${{ github.sha }}\n', ''),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must check out github.sha, not a user-chosen ref.',
+  ])
+})
+
+test('release metadata declares the release environment for the publish job', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('    environment: release\n', ''),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must declare environment: release so NPM_TOKEN sits behind its protection rules.',
   ])
 })
 

@@ -74,6 +74,18 @@ async function collectReleaseWorkflowFailures(root) {
   if (!/git config user\.name\b/.test(workflow) || !/git config user\.email\b/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must set git user.name and user.email before publishing, because changeset publish creates annotated tags.`)
   }
+  if (!/^    if: github\.ref == 'refs\/heads\/main'$/m.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must run the publish job only for refs/heads/main.`)
+  }
+  if (!/GITHUB_REF" = refs\/heads\/main \|\| .*exit 1/.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must reject runs from refs other than main in an early step.`)
+  }
+  if (!/^ {10}ref: \$\{\{ github\.sha \}\}$/m.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must check out github.sha, not a user-chosen ref.`)
+  }
+  if (!/^    environment: release$/m.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must declare environment: release so NPM_TOKEN sits behind its protection rules.`)
+  }
   const steps = workflow.split(/\n {6}- /)
   const tokenSteps = steps.filter(step => step.includes('secrets.NPM_TOKEN'))
   if (tokenSteps.length !== 1 || !/\bbun run release\b/.test(tokenSteps[0])) {
