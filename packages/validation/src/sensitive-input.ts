@@ -21,6 +21,10 @@ export interface StripSensitiveInputOptions {
   readonly files?: boolean
 }
 
+interface SensitiveInputWalk extends StripSensitiveInputOptions {
+  readonly clear: boolean
+}
+
 function isOmittedDefinition(definition: FieldDefinition, options: StripSensitiveInputOptions): boolean {
   if (definition.sensitive === true || (options.files === true && definition.kind === 'file')) {
     return true
@@ -31,25 +35,29 @@ function isOmittedDefinition(definition: FieldDefinition, options: StripSensitiv
     && isOmittedDefinition(definition.item, options)
 }
 
-function stripArrayItems(
+function walkArrayItems(
   items: readonly unknown[],
   item: FieldArrayItemDefinition | undefined,
-  options: StripSensitiveInputOptions,
+  options: SensitiveInputWalk,
 ): unknown[] {
   return items.map(value => isFieldDefinition(item)
-    ? stripFieldValue(item, value, options)
-    : stripValue(value, item, options))
+    ? walkFieldValue(item, value, options)
+    : walkValue(value, item, options))
 }
 
-function stripFieldValue(definition: FieldDefinition, value: unknown, options: StripSensitiveInputOptions): unknown {
+function walkFieldValue(definition: FieldDefinition, value: unknown, options: SensitiveInputWalk): unknown {
   return definition.kind === 'array' && Array.isArray(value)
-    ? stripArrayItems(value, definition.item, options)
-    : stripValue(value, undefined, options)
+    ? walkArrayItems(value, definition.item, options)
+    : walkValue(value, undefined, options)
 }
 
-function stripValue(value: unknown, shape: SensitiveShape | undefined, options: StripSensitiveInputOptions): unknown {
+function clearedValue(value: unknown): unknown {
+  return Array.isArray(value) ? value.map(clearedValue) : ''
+}
+
+function walkValue(value: unknown, shape: SensitiveShape | undefined, options: SensitiveInputWalk): unknown {
   if (Array.isArray(value)) {
-    return value.map(item => stripValue(item, undefined, options))
+    return value.map(item => walkValue(item, undefined, options))
   }
 
   if (!isPlainObject(value) || value instanceof Date || value instanceof Blob) {
@@ -58,19 +66,20 @@ function stripValue(value: unknown, shape: SensitiveShape | undefined, options: 
 
   const output: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value)) {
-    if (DONT_FLASH_FIELD_SET.has(key)) {
-      continue
-    }
-
     const definition = shape?.[key]
-    if (isValidationField(definition)) {
-      if (!isOmittedDefinition(definition.definition, options)) {
-        output[key] = stripFieldValue(definition.definition, item, options)
+    if (DONT_FLASH_FIELD_SET.has(key) || (isValidationField(definition) && isOmittedDefinition(definition.definition, options))) {
+      if (options.clear) {
+        output[key] = clearedValue(item)
       }
       continue
     }
 
-    output[key] = stripValue(item, isPlainObject(definition) ? definition : undefined, options)
+    if (isValidationField(definition)) {
+      output[key] = walkFieldValue(definition.definition, item, options)
+      continue
+    }
+
+    output[key] = walkValue(item, isPlainObject(definition) ? definition : undefined, options)
   }
 
   return output
@@ -81,5 +90,13 @@ export function stripSensitiveInput<TValue>(
   shape?: SensitiveShape,
   options: StripSensitiveInputOptions = {},
 ): TValue {
-  return stripValue(value, shape, options) as TValue
+  return walkValue(value, shape, { ...options, clear: false }) as TValue
+}
+
+export function clearSensitiveInput<TValue>(
+  value: TValue,
+  shape?: SensitiveShape,
+  options: StripSensitiveInputOptions = {},
+): TValue {
+  return walkValue(value, shape, { ...options, clear: true }) as TValue
 }

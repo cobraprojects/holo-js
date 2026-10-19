@@ -43,7 +43,7 @@ import {
 import { createFieldStandardValidate, createSchemaStandardValidate, flatToStandardIssues, summarizeErrors, validateInternal } from './contracts-runtime'
 
 import { makeCompiledFieldSchema, resolveCompiledSchema } from './contracts-compiler'
-import { DONT_FLASH_FIELDS, stripSensitiveInput } from './sensitive-input'
+import { clearSensitiveInput, DONT_FLASH_FIELDS, stripSensitiveInput } from './sensitive-input'
 
 export * from './contracts-types'
 
@@ -660,6 +660,7 @@ export const validationInternals = {
   serializeValidationException,
   appendIssues,
   assignNestedValue,
+  clearSensitiveInput,
   buildErrorTree,
   coerceShapeInput,
   createField,

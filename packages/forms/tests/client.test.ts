@@ -816,6 +816,54 @@ describe('@holo-js/forms client', () => {
     expect(client.errors.first('password')).toBe('The password field is required.')
   })
 
+  it('clears sensitive array items after a failed submission', () => {
+    const team = schema({
+      name: field.string().required(),
+      recoveryCodes: field.array(field.string().sensitive()),
+      pins: field.array(field.password()),
+      vault: field.array(field.array(field.password())),
+      members: field.array({
+        email: field.string(),
+        password: field.string(),
+        apiKey: field.string().sensitive(),
+        devices: field.array({ label: field.string(), secret: field.string().sensitive() }),
+        backupCodes: field.array(field.array(field.password())),
+      }),
+    })
+    const client = useForm(team, {
+      initialValues: {
+        name: 'Core',
+        recoveryCodes: ['recovery-one'],
+        pins: ['pin-one'],
+        vault: [['vault-one']],
+        members: [{
+          email: 'ava@example.com',
+          password: 'member-password',
+          apiKey: 'member-key',
+          devices: [{ label: 'phone', secret: 'device-secret' }],
+          backupCodes: [['backup-one']],
+        }],
+      },
+    })
+
+    client.applyServerState({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: { name: 'Core', members: [{ email: 'ava@example.com', devices: [{ label: 'phone' }] }] },
+      errors: { name: ['Name is taken.'] },
+    })
+
+    expect(client.values).toEqual({
+      name: 'Core',
+      recoveryCodes: [''],
+      pins: [''],
+      vault: [['']],
+      members: [{ email: 'ava@example.com', devices: [{ label: 'phone' }] }],
+    })
+    expect(JSON.stringify(client.values)).not.toMatch(/recovery-one|pin-one|vault-one|member-password|member-key|device-secret|backup-one/)
+  })
+
   it('preserves controlled sensitive values for nested and malformed client state', () => {
     const nestedCredentials = schema({
       credentials: {
@@ -880,7 +928,7 @@ describe('@holo-js/forms client', () => {
     const emptyPathValues = {
       '': 'private-id',
     }
-    expect(clearSensitiveInputValues(emptyPathValues, emptyPathSchema)).toEqual(emptyPathValues)
+    expect(clearSensitiveInputValues(emptyPathValues, emptyPathSchema)).toEqual({ '': '' })
     expect(sanitizeFlashedInput(emptyPathValues, emptyPathSchema)).toEqual({})
     expect(clearSensitiveInputValues('super-secret')).toBe('super-secret')
     expect(sanitizeFlashedInput('super-secret')).toBe('super-secret')
