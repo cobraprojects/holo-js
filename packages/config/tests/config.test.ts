@@ -2345,6 +2345,49 @@ export default defineAppConfig({
     expect(typeof loaded.app.exceptions.report).toBe('function')
   })
 
+  it('reads the runtime environment from background work that a function-bearing config module starts while loading', async () => {
+    const root = await createProject()
+    await writeFile(join(root, '.env'), 'FROZEN_BACKGROUND_NAME=Cached Name\n', 'utf8')
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+const phase = globalThis.__holoLoadPhase
+setTimeout(() => {
+  globalThis.__holoBackgroundReads ??= []
+  globalThis.__holoBackgroundReads.push({ phase, value: env('FROZEN_BACKGROUND_NAME', 'Fallback') })
+}, 40)
+
+export default defineAppConfig({
+  name: env('FROZEN_BACKGROUND_NAME', 'Fallback'),
+  exceptions: {
+    report(error) {
+      return error
+    },
+  },
+})
+`, 'utf8')
+    const runtime = globalThis as typeof globalThis & {
+      __holoLoadPhase?: string
+      __holoBackgroundReads?: Array<{ phase?: string, value: string }>
+    }
+    onTestFinished(() => {
+      delete runtime.__holoLoadPhase
+      delete runtime.__holoBackgroundReads
+      vi.unstubAllEnvs()
+    })
+
+    await writeConfigCache(root, { envName: 'production', processEnv: {} })
+    vi.stubEnv('FROZEN_BACKGROUND_NAME', 'Changed Name')
+
+    runtime.__holoLoadPhase = 'load'
+    const loaded = await loadConfigDirectory(root, { envName: 'production', processEnv: {} })
+    expect(loaded.app.name).toBe('Cached Name')
+
+    await vi.waitFor(() => {
+      expect(runtime.__holoBackgroundReads?.find(read => read.phase === 'load')).toEqual({ phase: 'load', value: 'Changed Name' })
+    })
+  })
+
   it('uses the fallback for function-bearing config env reads that were unset at config:cache time', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/app.ts'), `

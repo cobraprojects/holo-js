@@ -17,7 +17,12 @@ type EnvRuntimeState = {
   pendingEvaluation: Promise<void>
   evaluationContext: AsyncLocalStorage<{ active: boolean }>
   envReads: AsyncLocalStorage<Map<string, string | null>>
-  envSnapshot: AsyncLocalStorage<Readonly<Record<string, string | null>>>
+  envSnapshot: AsyncLocalStorage<EnvSnapshotScope>
+}
+
+type EnvSnapshotScope = {
+  active: boolean
+  values: Readonly<Record<string, string | null>>
 }
 
 function parseEnvFile(contents: string): Record<string, string> {
@@ -249,7 +254,14 @@ function withEnvSnapshot<TValue>(
     return callback()
   }
 
-  return getEnvRuntimeState().envSnapshot.run(snapshot, callback)
+  const scope: EnvSnapshotScope = { active: true, values: snapshot }
+  return getEnvRuntimeState().envSnapshot.run(scope, async () => {
+    try {
+      return await callback()
+    } finally {
+      scope.active = false
+    }
+  })
 }
 
 export const configEvaluationInternals = {
@@ -296,9 +308,9 @@ export function env(key: string): string
 export function env<TValue extends EnvScalar>(key: string, fallback: TValue): TValue
 export function env<TValue extends EnvScalar>(key: string, fallback?: TValue): string | TValue {
   const state = getEnvRuntimeState()
-  const snapshot = state.envSnapshot.getStore()
-  if (snapshot && Object.hasOwn(snapshot, key)) {
-    const frozenValue = snapshot[key]
+  const scope = state.envSnapshot.getStore()
+  if (scope?.active && Object.hasOwn(scope.values, key)) {
+    const frozenValue = scope.values[key]
     if (typeof frozenValue === 'string') {
       return typeof fallback === 'undefined'
         ? frozenValue
