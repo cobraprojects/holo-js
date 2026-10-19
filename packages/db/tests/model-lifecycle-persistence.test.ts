@@ -506,6 +506,49 @@ describe('model lifecycle persistence', () => {
     expect(row?.updated_at).not.toBeNull()
   })
 
+  it('records no changes for a clean save whose saved handler sets an attribute', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string(), slug: column.string().nullable() })
+    await createTestTable(db, slugged)
+    await db.table('slugged').insert({ id: 1, title: 'Hello', slug: null })
+    const Post = defineModelFromTable(slugged, {
+      timestamps: false,
+      fillable: ['title', 'slug'],
+      events: {
+        saved: [entity => { asTestEntity(entity).set('slug', 'set-after-save') }],
+      },
+    })
+
+    const post = await Post.findOrFail(1)
+    await post.save()
+
+    expect(post.wasChanged('slug')).toBe(false)
+    expect(post.getChanges()).toEqual({})
+    expect(await db.table('slugged').get()).toMatchObject([{ slug: null }])
+  })
+
+  it('records only the written attribute when a saved handler edits another attribute on an update', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string(), slug: column.string().nullable() })
+    await createTestTable(db, slugged)
+    await db.table('slugged').insert({ id: 1, title: 'Hello', slug: null })
+    const Post = defineModelFromTable(slugged, {
+      timestamps: false,
+      fillable: ['title', 'slug'],
+      events: {
+        saved: [entity => { asTestEntity(entity).set('slug', 'set-after-save') }],
+      },
+    })
+
+    const post = await Post.findOrFail(1)
+    post.set('title', 'Changed')
+    await post.save()
+
+    expect(post.getChanges()).toEqual({ title: 'Changed' })
+    expect(post.wasChanged('slug')).toBe(false)
+    expect(await db.table('slugged').get()).toMatchObject([{ title: 'Changed', slug: null }])
+  })
+
   it('runs the full update path when a saving handler dirties a clean timestamped model', async () => {
     const db = await openDatabase()
     const stamped = defineTable('stamped', {

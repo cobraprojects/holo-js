@@ -467,10 +467,8 @@ class EntityBase<
       throw new HydrationError(errorMessage)
     }
 
-    const wasPersisted = this.#persisted
     const persisted = await method.call(repo, this)
-    const changes = wasPersisted ? this.getDirty() : this.toAttributes()
-    this.applyPersistedEntity(persisted, changes)
+    this.applyPersistedEntity(persisted, this.getChanges())
     return this
   }
 

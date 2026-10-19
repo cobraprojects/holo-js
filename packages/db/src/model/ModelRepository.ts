@@ -1622,6 +1622,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           : {}),
       } as Partial<ModelRecord<TTable>>
       const created = this.hydrate(attributes).syncOriginal()
+      entity.syncChanges()
       await this.dispatchEvent('created', created)
       await this.dispatchEvent('saved', created)
       await this.touchOwners(created)
@@ -1734,6 +1735,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
       await this.dispatchCancelableEvent('saving', entity)
       if (Object.keys(entity.getDirty()).length === 0) {
+        entity.syncChanges()
         await this.dispatchEvent('saved', entity)
         return entity
       }
@@ -1744,11 +1746,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const dirty = this.sanitizeWritePayload(entity.getDirty(), 'update', false, false)
       if (Object.keys(dirty).length === 0) {
+        entity.syncChanges()
         await this.dispatchEvent('saved', entity)
         return entity
       }
 
       await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
+      entity.syncChanges()
       const updated = new Entity<TTable>(this, { ...entity.toAttributes(), ...this.normalizeFromStorage(dirty) }, true)
       updated.syncOriginal()
       await this.dispatchEvent('updated', updated)
