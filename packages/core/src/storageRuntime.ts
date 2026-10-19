@@ -111,10 +111,10 @@ function storagePathIsInside(root: string, target: string): boolean {
   return relativeTarget === '' || (!relativeTarget.startsWith(`..${sep}`) && relativeTarget !== '..' && !isAbsolute(relativeTarget))
 }
 
-async function resolveStorageWritePath(root: string, key: string): Promise<string> {
+async function resolveStorageWritePath(root: string, key: string, directoryMode: number): Promise<string> {
   const rootPath = resolve(root)
   const unresolvedTarget = resolveStorageKeyPath(rootPath, key)
-  await mkdir(rootPath, { recursive: true })
+  await mkdir(rootPath, { recursive: true, mode: directoryMode })
   const resolvedRoot = await realpath(rootPath)
   const targetPath = resolve(resolvedRoot, relative(rootPath, unresolvedTarget))
   if (!storagePathIsInside(resolvedRoot, targetPath)) {
@@ -127,7 +127,7 @@ async function resolveStorageWritePath(root: string, key: string): Promise<strin
   for (const segment of parentSegments) {
     currentPath = join(currentPath, segment)
     try {
-      await mkdir(currentPath)
+      await mkdir(currentPath, { mode: directoryMode })
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
@@ -357,7 +357,9 @@ async function writeCompleteChunk(handle: StreamWriteHandle, chunk: Uint8Array):
   }
 }
 
-function createFileStorageBackend(root: string): StorageBackend {
+function createFileStorageBackend(root: string, visibility: RuntimeDiskConfig['visibility'] = 'private'): StorageBackend {
+  const directoryMode = visibility === 'public' ? 0o755 : 0o700
+  const fileMode = visibility === 'public' ? 0o644 : 0o600
   const normalizeChunkBytes = (value = 64 * 1024): number => {
     if (!Number.isInteger(value) || value < 4 * 1024 || value > 1024 * 1024) {
       throw new Error('[Holo Storage] Stream chunkBytes must be an integer from 4096 through 1048576.')
@@ -512,9 +514,9 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void> {
-      const targetPath = await resolveStorageWritePath(root, key)
+      const targetPath = await resolveStorageWritePath(root, key, directoryMode)
       const temporaryPath = `${targetPath}.holo-write-${randomUUID()}.tmp`
-      const handle = await open(temporaryPath, 'wx')
+      const handle = await open(temporaryPath, 'wx', fileMode)
       try {
         const contents = typeof value === 'string'
           ? new TextEncoder().encode(value)
@@ -533,9 +535,9 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async setItemStream(key, source, options): Promise<void> {
-      const targetPath = await resolveStorageWritePath(root, key)
+      const targetPath = await resolveStorageWritePath(root, key, directoryMode)
       const temporaryPath = `${targetPath}.holo-stream-${randomUUID()}.tmp`
-      const handle = await open(temporaryPath, 'wx')
+      const handle = await open(temporaryPath, 'wx', fileMode)
 
       try {
         for await (const chunk of source) {
@@ -583,7 +585,12 @@ function createFileStorageBackend(root: string): StorageBackend {
     async removeItem(key: string): Promise<void> {
       const targetPaths = [await resolveStorageDeletePath(root, key), await resolveStorageDeletePath(root, `${key}$`)]
       for (const targetPath of targetPaths) {
-        if (targetPath) await rm(targetPath, { force: true })
+        if (!targetPath) continue
+        try {
+          await unlink(targetPath)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
       }
     },
 
@@ -628,7 +635,7 @@ function createFileStorageBackend(root: string): StorageBackend {
 
       const resolvedRoot = await resolveExistingRealPath(resolve(root))
       if (!resolvedRoot) {
-        await mkdir(root, { recursive: true })
+        await mkdir(root, { recursive: true, mode: directoryMode })
         return
       }
       const entries = await readdir(resolvedRoot)
@@ -684,7 +691,7 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
   for (const [diskName, disk] of Object.entries(runtimeStorage.disks)) {
     const factory = disk.driver === 's3'
       ? await createS3StorageBackendFactory(projectRoot, disk)
-      : () => createFileStorageBackend(disk.root as string)
+      : () => createFileStorageBackend(disk.root as string, disk.visibility)
     factories.set(diskName, factory)
   }
 

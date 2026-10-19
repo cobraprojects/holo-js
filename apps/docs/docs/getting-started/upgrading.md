@@ -99,6 +99,11 @@ export default defineEventHandler(async () => {
 `@holo-js/storage` no longer exports the Nitro helpers `applyNitroStorageConfig()`, `buildStorageConfig()`, `buildStorageConfigWithDriver()`, or the `StorageConfig`, `NitroStorageLike`, and `StorageAdapterOptionsLike` types.
 
 On every framework, local disks now refuse to delete through symlinks that lead outside the disk root. `delete()`, `removeItem()`, and `clear(base)` throw instead of deleting the outside file, and `clear()` with no base empties the disk root without replacing a symlinked root folder. `exists()` returns `false` for a folder instead of throwing. If your app keeps files outside the disk root and links them in, delete them through a disk whose root contains them.
+
+### Local disk permissions
+
+New files and folders on local disks use Laravel's permissions: `0600` files and `0700` folders on private disks, and `0644` files and `0755` folders on public disks. Existing files and folders keep their permissions. If another OS user serves your public files, check that it can still read them.
+
 ### Database queue workers on MySQL
 
 The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).

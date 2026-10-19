@@ -6,7 +6,7 @@ import '@holo-js/storage/config'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 
 const tempDirs: string[] = []
 
@@ -133,7 +133,7 @@ describe('@holo-js/core storage runtime optional imports', () => {
 
 const canRestrictPermissions = process.platform !== 'win32' && process.getuid?.() !== 0
 
-async function configureLocalDisk(): Promise<{ readonly root: string, readonly storage: string, readonly outside: string }> {
+async function configureLocalDisk(visibility: 'private' | 'public' = 'private'): Promise<{ readonly root: string, readonly storage: string, readonly outside: string }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'holo-storage-local-safety-')))
   tempDirs.push(root)
   const storage = join(root, 'storage')
@@ -141,7 +141,7 @@ async function configureLocalDisk(): Promise<{ readonly root: string, readonly s
   await Promise.all([mkdir(join(root, 'config')), mkdir(storage), mkdir(outside)])
   await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
     defaultDisk: 'local',
-    disks: { local: { driver: 'local', root: storage } },
+    disks: { local: { driver: visibility === 'public' ? 'public' : 'local', visibility, root: storage } },
   })}\n`)
   await configurePlainNodeStorageRuntime(root, await loadConfigDirectory(root, { preferCache: false }))
   return { root, storage, outside }
@@ -150,6 +150,31 @@ async function configureLocalDisk(): Promise<{ readonly root: string, readonly s
 describe('@holo-js/core local storage safety', () => {
   afterEach(async () => {
     await resetOptionalStorageRuntime()
+  })
+
+  it.skipIf(process.platform === 'win32').each(['private', 'public'] as const)('creates %s storage with Laravel permissions even with a permissive umask', async (visibility) => {
+    const { storage } = await configureLocalDisk(visibility)
+    await rm(storage, { recursive: true })
+    const previousUmask = process.umask(0)
+    try {
+      await Storage.put('nested/deep/file.txt', 'data')
+      await Storage.writeStream('streamed/file.txt', (async function* () {
+        yield new TextEncoder().encode('streamed')
+      })())
+
+      for (const path of ['', 'nested', 'nested/deep', 'streamed']) {
+        expect((await stat(join(storage, path))).mode & 0o777).toBe(visibility === 'private' ? 0o700 : 0o755)
+      }
+      for (const path of ['nested/deep/file.txt', 'streamed/file.txt']) {
+        expect((await stat(join(storage, path))).mode & 0o777).toBe(visibility === 'private' ? 0o600 : 0o644)
+      }
+      await expect(Storage.get('nested/deep/file.txt')).resolves.toBe('data')
+      await rm(storage, { recursive: true })
+      await useStorage('local').clear?.()
+      expect((await stat(storage)).mode & 0o777).toBe(visibility === 'private' ? 0o700 : 0o755)
+    } finally {
+      process.umask(previousUmask)
+    }
   })
 
   it('refuses to delete files through a symlinked directory outside the disk root', async () => {
