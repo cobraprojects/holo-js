@@ -7,7 +7,7 @@ const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-
 type Packet = { readonly event: string, readonly channel?: string, readonly data: string }
 type Close = { readonly code?: number, readonly reason?: string }
 
-function createRuntime(options: { realtime?: BroadcastRealtimeRuntimeBindings, channelAuth?: BroadcastChannelAuthRuntimeBindings, now?: () => number } = {}) {
+function createRuntime(options: { realtime?: BroadcastRealtimeRuntimeBindings, channelAuth?: BroadcastChannelAuthRuntimeBindings, scaling?: Parameters<typeof createBroadcastWorkerRuntime>[0]['scaling'], now?: () => number } = {}) {
   const runtime = createBroadcastWorkerRuntime({
     config: normalizeBroadcastConfig({
       default: 'main',
@@ -181,6 +181,43 @@ it('leaves a replacement connection with a reused socket id in place when a queu
 
   expect(replacement.closes).toEqual([])
   expect(runtime.getStats().connectionCount).toBe(2)
+})
+
+it('counts presence channels whose failed subscription is still pending cleanup toward the channel limit', async () => {
+  const redisDown = (): never => { throw new Error('Redis connection lost') }
+  let hashSetCalls = 0
+  const runtime = createRuntime({
+    channelAuth: {
+      resolveUser: ({ socketId }) => ({ id: socketId }),
+      definitions: [defineChannel('room.{id}', { type: 'presence', authorize: user => typeof user === 'object' && user !== null && 'id' in user ? { id: user.id } : false })],
+    },
+    scaling: {
+      driver: 'redis',
+      connection: 'shared',
+      nodeId: 'node-1',
+      eventChannel: 'events',
+      adapter: {
+        publish: async () => {},
+        subscribe: async () => () => {},
+        hashSet: async () => { hashSetCalls += 1; redisDown() },
+        hashGetAll: async () => redisDown(),
+        hashDelete: async () => redisDown(),
+        close: async () => {},
+      },
+    },
+  })
+  const client = connect(runtime, '1.1')
+  for (let index = 1; index <= 100; index += 1) {
+    await runtime.receiveWebSocketMessage('1.1', subscribe(`presence-room.${index}`))
+  }
+  expect(client.sent.filter(packet => packet.event === 'pusher:subscription_error').map(packet => JSON.parse(packet.data).status)).toEqual(Array(100).fill(500))
+  expect(hashSetCalls).toBe(100)
+
+  await runtime.receiveWebSocketMessage('1.1', subscribe('presence-room.101'))
+
+  expect(JSON.parse(client.sent.at(-1)!.data)).toMatchObject({ status: 429 })
+  expect(hashSetCalls).toBe(100)
+  expect(client.closes).toEqual([])
 })
 
 it('disconnects a slow consumer as soon as one send pushes its buffered output over the bound', async () => {

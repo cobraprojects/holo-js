@@ -1631,7 +1631,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   function exceedsChannelLimit(socket: SocketState, channel: string): boolean {
-    return !socket.subscribedChannels.has(channel) && socket.subscribedChannels.size >= MAX_CHANNELS_PER_CONNECTION
+    const heldChannels = new Set([...socket.subscribedChannels, ...socket.presenceCleanupPending])
+    return !heldChannels.has(channel) && heldChannels.size >= MAX_CHANNELS_PER_CONNECTION
   }
 
   function exceedsRealtimeSubscriptionLimit(socket: SocketState, id: string): boolean {
