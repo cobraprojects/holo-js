@@ -69,6 +69,14 @@ npx holo queue:listen --queue default
 
 It watches `config/`, `.env` files, your models, jobs, events, and listeners, and other source files. On a change it rescans your project and starts a fresh worker. It accepts the same flags as `queue:work`, except `--once` and `--stop-when-empty`.
 
+Stop `queue:listen` with `Ctrl+C`, or send it `SIGTERM` or `SIGINT`. It passes the signal to its worker, waits for the worker to finish its current job and exit, then exits too. When a change restarts the worker, `queue:listen` waits for the old worker to exit before it starts the new one.
+
+If the old worker reports a process error while it stops, `queue:listen` exits with that error instead of starting another worker. Two workers on the same queue would race for jobs, so fix the error and start `queue:listen` again.
+
+::: warning Windows stops workers immediately
+On Windows, `queue:listen` ends the worker's whole process tree at once instead of sending it a signal, so the job in progress is interrupted. The job is retried after the connection's `retryAfter` seconds. On macOS and Linux the worker finishes its current job first.
+:::
+
 Use `queue:listen` while developing and `queue:work` in production.
 
 ## Stop and restart workers

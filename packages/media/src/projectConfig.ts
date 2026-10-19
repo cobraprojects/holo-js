@@ -1,4 +1,5 @@
 export interface HoloMediaConfig {
+  readonly disk?: string
   readonly [key: string]: unknown
 }
 

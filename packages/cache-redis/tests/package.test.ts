@@ -2,14 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { describe, expect, it } from 'vitest'
 import cache, { CacheInvalidNumericMutationError, configureCacheRuntime, resetCacheRuntime } from '@holo-js/cache'
+import Redis from 'ioredis'
 import { startRedisService } from '../../session/tests/support/redis'
 import { createRedisCacheDriver, type RedisCacheDriverOptions } from '../src'
 
-async function configureRealCache(options: { cluster?: boolean; socket?: boolean; url?: boolean; db?: number; prefix?: string } = {}) {
+async function configureRealCache(options: { cluster?: boolean; socket?: boolean; url?: boolean; db?: number } = {}) {
   const service = await startRedisService(options)
   const port = service.ports[0]
   if (!port) throw new Error('Expected Redis port')
-  const prefix = options.prefix ?? `holo:cache:${randomUUID()}:`
   const redis: RedisCacheDriverOptions['redis'] = options.cluster
     ? { clusters: service.ports.map(port => ({ host: '127.0.0.1', port })), db: 0 }
     : options.socket
@@ -17,9 +17,10 @@ async function configureRealCache(options: { cluster?: boolean; socket?: boolean
       : options.url
         ? { url: `redis://127.0.0.1:${port}`, db: options.db ?? 0 }
         : { host: '127.0.0.1', port, db: options.db ?? 0 }
-  const driver = createRedisCacheDriver({ name: 'redis', connectionName: 'cache', prefix, redis })
+  const prefix = `holo:cache:${randomUUID()}:`
+  const driver = createRedisCacheDriver({ name: 'redis', connectionName: 'cache', redis })
   configureCacheRuntime({ config: { default: 'redis', drivers: { redis: { driver: 'redis', prefix } } }, drivers: new Map([['redis', driver]]) })
-  return { service, prefix }
+  return { service, port }
 }
 
 describe('Redis cache behavior', () => {
@@ -119,27 +120,42 @@ describe('Redis cache behavior', () => {
     }
   })
 
-  it.each([false, true])('flushes only its configured prefix across all primary nodes with cluster=%s', async cluster => {
-    const { service } = await configureRealCache({ cluster, prefix: `holo:[cache]*?:${randomUUID()}:` })
+  it('flushes the configured Redis database and leaves other databases untouched', async () => {
+    const { service, port } = await configureRealCache({ db: 2 })
+    const cacheDatabase = new Redis({ host: '127.0.0.1', port, db: 2, maxRetriesPerRequest: 1 })
+    const defaultDatabase = service.clients[0]
+    if (!defaultDatabase) throw new Error('Expected Redis client')
     try {
       for (let index = 0; index < 30; index += 1) await cache.forever(`item:${index}`, index)
-      if (cluster) expect((await Promise.all(service.clients.map(client => client.dbsize()))).every(size => size > 0)).toBe(true)
-      const firstClient = service.clients[0]
-      if (!firstClient) throw new Error('Expected Redis client')
-      const slot = cluster ? await firstClient.cluster('KEYSLOT', 'unrelated:sentinel{outside}') : 0
-      const client = service.clients.find((_, index) => Number(slot) < Math.floor((index + 1) * 16384 / service.clients.length))
-      if (!client) throw new Error('Expected Redis slot owner')
-      await client.set('unrelated:sentinel{outside}', 'preserved')
+      await cacheDatabase.set('unprefixed:neighbor', 'cleared')
+      await defaultDatabase.set('unrelated:sentinel', 'preserved')
+
       await cache.flush()
+
       for (let index = 0; index < 30; index += 1) expect(await cache.has(`item:${index}`)).toBe(false)
-      expect(await client.get('unrelated:sentinel{outside}')).toBe('preserved')
+      expect(await cacheDatabase.dbsize()).toBe(0)
+      expect(await defaultDatabase.get('unrelated:sentinel')).toBe('preserved')
+    } finally {
+      cacheDatabase.disconnect()
+      resetCacheRuntime()
+    }
+  }, 30_000)
+
+  it('flushes every primary node of a Redis cluster', async () => {
+    const { service } = await configureRealCache({ cluster: true })
+    try {
+      for (let index = 0; index < 30; index += 1) await cache.forever(`item:${index}`, index)
+      expect((await Promise.all(service.clients.map(client => client.dbsize()))).every(size => size > 0)).toBe(true)
+
       await cache.flush()
+
+      expect(await Promise.all(service.clients.map(client => client.dbsize()))).toEqual(service.clients.map(() => 0))
     } finally {
       resetCacheRuntime()
     }
   }, 30_000)
 
   it.each(['redis://user:pass@127.0.0.1:6379', 'redis://127.0.0.1:6379/2', 'http://127.0.0.1:6379', 'redis:///'])('rejects invalid cluster targets: %s', url => {
-    expect(() => createRedisCacheDriver({ name: 'redis', connectionName: 'cache', prefix: '', redis: { clusters: [{ url }], db: 0 } })).toThrow()
+    expect(() => createRedisCacheDriver({ name: 'redis', connectionName: 'cache', redis: { clusters: [{ url }], db: 0 } })).toThrow()
   })
 })

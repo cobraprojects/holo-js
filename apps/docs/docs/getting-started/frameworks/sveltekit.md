@@ -163,6 +163,8 @@ export const handle = sequence(
 - `csrfProtection()` rejects form posts without a valid CSRF token. See [CSRF Protection](/basics/security/csrf).
 - `authOnly()` and `guestOnly()` redirect visitors based on whether they are signed in. `routes` accepts path patterns, regular expressions, or functions. Each option also takes `guard` and a redirect `status`.
 
+Without your own `handleError`, unexpected errors are logged and the response carries SvelteKit's generic message, unless `debug` is `true` in `config/app.ts`. See [Unexpected errors](/basics/errors#unexpected-errors-in-sveltekit).
+
 In `src/hooks.ts` you can export `reroute` and `transport`. Holo merges them with its own.
 
 ## Authorization errors

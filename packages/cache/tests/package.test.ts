@@ -2029,19 +2029,17 @@ export default new PluginCacheDriver()
     }
   })
 
-  it('preserves differently prefixed file entries when flushing a shared path', async () => {
+  it('flushes every file entry and lock in a shared path regardless of key prefix', async () => {
     const cachePath = await createTempCacheDirectory('file-shared-prefix')
 
     try {
       const primary = createFileCacheDriver({
         name: 'primary',
         path: cachePath,
-        prefix: 'primary:',
       })
       const secondary = createFileCacheDriver({
         name: 'secondary',
         path: cachePath,
-        prefix: 'secondary:',
       })
 
       await primary.put({
@@ -2054,78 +2052,17 @@ export default new PluginCacheDriver()
         payload: '"second"',
         expiresAt: Date.now() + 60_000,
       })
+      expect(await primary.lock('primary:held', 60).get()).toBe(true)
+      await writeFile(join(cachePath, 'unrelated.txt'), 'kept', 'utf8')
 
       await primary.flush()
 
       expect(await primary.get('primary:shared')).toEqual({ hit: false })
-      expect(await secondary.get('secondary:shared')).toEqual({
-        hit: true,
-        payload: '"second"',
-        expiresAt: expect.any(Number),
-      })
+      expect(await secondary.get('secondary:shared')).toEqual({ hit: false })
+      expect(await secondary.lock('primary:held', 60).get()).toBe(true)
+      expect(await readFile(join(cachePath, 'unrelated.txt'), 'utf8')).toBe('kept')
     } finally {
       await rm(cachePath, { recursive: true, force: true })
-    }
-  })
-
-  it('removes malformed shared-path files while flushing a prefixed file driver', async () => {
-    const cachePath = await createTempCacheDirectory('file-shared-malformed')
-
-    try {
-      const primary = createFileCacheDriver({
-        name: 'primary',
-        path: cachePath,
-        prefix: 'primary:',
-      })
-      const secondary = createFileCacheDriver({
-        name: 'secondary',
-        path: cachePath,
-        prefix: 'secondary:',
-      })
-
-      await primary.put({
-        key: 'primary:shared',
-        payload: '"first"',
-        expiresAt: Date.now() + 60_000,
-      })
-      await secondary.put({
-        key: 'secondary:shared',
-        payload: '"second"',
-        expiresAt: Date.now() + 60_000,
-      })
-      const malformedFilePath = join(cachePath, 'entries', 'ff', 'broken.json')
-      await mkdir(join(cachePath, 'entries', 'ff'), { recursive: true })
-      await writeFile(malformedFilePath, '{not-json', 'utf8')
-
-      await primary.flush()
-
-      expect(await secondary.get('secondary:shared')).toEqual({
-        hit: true,
-        payload: '"second"',
-        expiresAt: expect.any(Number),
-      })
-      await expect(readFile(malformedFilePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    } finally {
-      await rm(cachePath, { recursive: true, force: true })
-    }
-  })
-
-  it('surfaces non-directory traversal errors while flushing a prefixed file driver', async () => {
-    const parentDirectory = await createTempCacheDirectory('file-flush-enotdir')
-    const cachePath = join(parentDirectory, 'cache-root')
-
-    try {
-      await writeFile(cachePath, 'not-a-directory', 'utf8')
-
-      const driver = createFileCacheDriver({
-        name: 'primary',
-        path: cachePath,
-        prefix: 'primary:',
-      })
-
-      await expect(driver.flush()).rejects.toMatchObject({ code: 'ENOTDIR' })
-    } finally {
-      await rm(parentDirectory, { recursive: true, force: true })
     }
   })
 
@@ -2279,16 +2216,10 @@ export default new PluginCacheDriver()
 
       expect(await driver.lock('never-acquired', 1).release()).toBe(false)
 
-      const prefixedDriver = createFileCacheDriver({
-        name: 'prefixed',
-        path: cachePath,
-        prefix: 'p:',
-        ownerFactory: () => 'prefixed-owner',
-      })
-      const prefixedLock = prefixedDriver.lock('p:flush-lock', 1)
-      expect(await prefixedLock.get()).toBe(true)
-      await prefixedDriver.flush()
-      expect(await prefixedLock.get()).toBe(true)
+      const flushedLock = driver.lock('flush-lock', 60)
+      expect(await flushedLock.get()).toBe(true)
+      await driver.flush()
+      expect(await driver.lock('flush-lock', 60).get()).toBe(true)
     } finally {
       await rm(cachePath, { recursive: true, force: true })
     }

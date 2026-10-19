@@ -159,6 +159,14 @@ One case to know: `findOrFail()` and `firstOrFail()` throw a `ModelNotFoundExcep
 In Next.js and SvelteKit API routes, use `first()` or `find()` and return a `404` yourself, as in the example at the top of this page. Use `findOrFail()` only where a `500` is acceptable, or catch the error.
 :::
 
+## Unexpected errors in SvelteKit
+
+In SvelteKit, an unexpected error is logged through the [error reporter](#reporting-errors), and the response carries SvelteKit's generic message, `Internal Error`, not the error's message.
+
+The error's own message is returned only while `debug` is `true` in `config/app.ts`. `debug` defaults to `false`, so set `APP_DEBUG=true` in your local `.env` file for development.
+
+To choose the response yourself, export `handleError` from `src/hooks.server.ts`.
+
 ## Reporting errors
 
 Some failures happen after Holo has already answered, or inside background work, so they never reach your framework's error handling. Holo catches these, keeps the request or job running, and reports them. Examples are a queue `onCompleted` hook that throws, a cache refresh that fails in the background, or a broadcast socket that sends a malformed message.
@@ -193,6 +201,7 @@ export default defineAppConfig({
 | `db` | `cache.invalidationListener` |
 | `broadcast` | `worker.socketMessage`, `worker.scalingMessage`, `worker.socketCleanup`, `worker.realtimeSubscriptionCleanup` |
 | `realtime` | `subscription.onData`, `subscription.onPatch`, `subscription.onError` |
+| `sveltekit` | `handleError` (unexpected errors when your `hooks.server.ts` has no `handleError`) |
 
 `report` can be `async`. Holo doesn't wait for it, and a reporter that throws or rejects never breaks the request or job. Holo writes the original error and the reporter's error to `console.error` instead.
 

@@ -10,7 +10,7 @@ export default defineAppConfig({
   key: env('APP_KEY'),
   url: env('APP_URL', 'http://localhost:3000'),
   timezone: env('APP_TIMEZONE', 'UTC'),
-  debug: env('APP_DEBUG', true),
+  debug: env('APP_DEBUG', false),
 })
 ```
 
@@ -100,7 +100,7 @@ export default defineDatabaseConfig({
 
 - `env('KEY')` returns the value as a string, or `''` if it isn't set.
 - `env('KEY', fallback)` returns the fallback when the value is missing or empty.
-- When the fallback is a number or boolean, the value is converted to that type. `env('DB_PORT', 5432)` returns a number. `env('APP_DEBUG', true)` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`. See [`env()`](#available-functions) for what happens to a value that doesn't convert.
+- When the fallback is a number or boolean, the value is converted to that type. `env('DB_PORT', 5432)` returns a number. `env('APP_DEBUG', false)` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`. See [`env()`](#available-functions) for what happens to a value that doesn't convert.
 
 Use `env()` in `config/` files, and read config values everywhere else. That keeps every setting in one place.
 
@@ -264,7 +264,7 @@ npx holo config:clear
 How the cache behaves:
 
 - It is used only when the app runs in the `production` environment, and only if the cache was built for that same environment.
-- It stores the values your `env()` calls returned when you built it, including secrets such as `APP_KEY`. Changing `.env` has no effect on those values until you run `config:cache` again. Config modules that contain functions can't be cached, so Holo loads them live: `app` with an exception reporter, `security` with rate-limit callbacks, and `database` when it contains functions. Their `env()` calls read the runtime environment, so a changed `.env` affects them without a rebuild. Keep the cache file out of version control; the scaffolded `.gitignore` already ignores `.holo-js/generated`.
+- It stores the values your `env()` calls returned when you built it, including secrets such as `APP_KEY`. Changing `.env` has no effect on those values until you run `config:cache` again. Config modules that contain functions, such as `app` with an exception reporter, `security` with rate-limit callbacks, and `database` when it contains functions, are loaded from their files, but the `env()` calls they make while loading are frozen the same way. A changed `.env` has no effect on them until you run `config:cache` again. A function that calls `env()` after startup, such as a reporter's body, still reads the runtime environment, and so does any work a module starts and leaves running while it loads. Read `env()` in the module's own code while it loads. Keep the cache file out of version control; the scaffolded `.gitignore` already ignores `.holo-js/generated`.
 - It does not notice edits to `config/` files. Run `config:cache` again after changing config, or `config:clear` to go back to reading the files.
 
 Build the cache as a deploy step, after `npm run build`. New projects include `config:cache` and `config:clear` package scripts for this.

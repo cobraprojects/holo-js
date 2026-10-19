@@ -15,7 +15,7 @@ export const holoAppDefaults: Readonly<NormalizedHoloAppConfig> = Object.freeze(
   key: '',
   url: 'http://localhost:3000',
   timezone: 'UTC',
-  debug: true,
+  debug: false,
   env: 'production',
   plugins: Object.freeze([]),
   exceptions: Object.freeze({}),

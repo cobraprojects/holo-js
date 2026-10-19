@@ -87,7 +87,9 @@ Holo never migrates on startup. A typical deploy:
 5. Cache config with `npx holo config:cache` (optional).
 6. Start or restart the web server and workers.
 
-To undo the last deploy's migrations, run `npx holo migrate:rollback`. See [Migrations](/database/migrations).
+If several replicas run step 3 at once, use `npx holo migrate --isolated`. One replica applies the migrations and the others skip them without failing the deploy. See [Isolating migration runs](/database/migrations#isolating-migration-runs).
+
+To undo the last deploy's migrations, run `npx holo migrate:rollback`. In production it asks you to confirm, so pass `--force` in a script. See [Migrations](/database/migrations).
 
 ## Run workers
 
@@ -121,7 +123,7 @@ It listens on `worker.host` and `worker.port` from `config/broadcast.ts` (defaul
 APP_ENV=production npx holo config:cache
 ```
 
-This evaluates `config/*.ts` with your env values and writes the results, secrets included, to `.holo-js/generated/config-cache.json`. Holo still reads `.env` at startup to choose the environment. `APP_ENV` picks which cache is used, and in production Holo reads that file instead of loading each config file. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, still load at startup, so their env values come from the runtime environment. Run it on every deploy, after your environment variables are in place. Remove it with `npx holo config:clear`. Don't commit the cache file.
+This evaluates `config/*.ts` with your env values and writes the results, secrets included, to `.holo-js/generated/config-cache.json`. Holo still reads `.env` at startup to choose the environment. `APP_ENV` picks which cache is used, and in production Holo reads that file instead of loading each config file. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, still load at startup, and the `env()` values they read while loading are frozen too. Code that calls `env()` after startup, such as a reporter's body, reads the runtime environment. Run it on every deploy, after your environment variables are in place. Remove it with `npx holo config:clear`. Don't commit the cache file.
 
 ## Environment variables
 

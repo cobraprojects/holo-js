@@ -1,6 +1,6 @@
 import { execFileSync, fork, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
@@ -8,6 +8,10 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vites
 import { createFileSessionStore, fileSessionDriverInternals, type SessionRecord } from '../src'
 
 let packageBuildRoot: string | undefined
+const windowsFsLoader = new URL('./support/windows-fs-loader/register.mjs', import.meta.url)
+const windowsFsWorkerEnv = process.env.HOLO_SESSION_WINDOWS_FS === '1'
+  ? { ...process.env, NODE_OPTIONS: `--import ${windowsFsLoader.href}`, WINDOWS_FS_FRESH_MS: '1000', WINDOWS_FS_FAIL_RATE: '0.1' }
+  : process.env
 
 async function createSession() {
   const root = await mkdtemp(join(tmpdir(), 'holo-file-lock-'))
@@ -25,7 +29,7 @@ async function createSession() {
 
 async function startWorker(mode: 'hold' | 'flash', root: string, sessionId: string, parameter: string): Promise<ChildProcess> {
   if (!packageBuildRoot) throw new Error('Expected the current session package build')
-  const child = fork(new URL('./support/file-session-worker.mjs', import.meta.url), [mode, root, sessionId, parameter, join(packageBuildRoot, 'index.mjs')], { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+  const child = fork(new URL('./support/file-session-worker.mjs', import.meta.url), [mode, root, sessionId, parameter, join(packageBuildRoot, 'index.mjs')], { execArgv: [], env: windowsFsWorkerEnv, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
   let stderr = ''
   child.stderr?.on('data', (value: Buffer) => { stderr += value.toString() })
   onTestFinished(async () => {
@@ -56,6 +60,14 @@ async function writeStaleOwner(lockPath: string, owner: { host: string; pid: num
   await writeFile(join(lockPath, `owner.${owner.token}.json`), JSON.stringify(owner))
   const stale = new Date(Date.now() - 20_000)
   await utimes(join(lockPath, `owner.${owner.token}.json`), stale, stale)
+}
+
+async function markLeaseReleasedWithoutRemoval(lockPath: string): Promise<void> {
+  const ownerFileName = (await readdir(lockPath)).find(name => name.startsWith('owner.') && name.endsWith('.json'))
+  if (!ownerFileName) throw new Error('Expected a live owner lease')
+  const leasePath = join(lockPath, ownerFileName)
+  const owner = JSON.parse(await readFile(leasePath, 'utf8')) as Record<string, unknown>
+  await writeFile(leasePath, JSON.stringify({ ...owner, released: true }))
 }
 
 describe('file session locking with real processes', () => {
@@ -90,6 +102,16 @@ describe('file session locking with real processes', () => {
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
   })
+
+  it('reclaims a lease its live owner released without being able to remove it', async () => {
+    const { root, store, record, lockPath } = await createSession()
+    const owner = await startWorker('hold', root, record.id, lockPath)
+    await markLeaseReleasedWithoutRemoval(lockPath)
+    await store.flash(record.id, 'notice', 'Saved')
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
+    await stopWorker(owner)
+  }, 15_000)
 
   it('times out on a live native lock and writes successfully after release', async () => {
     const { root, store, record, lockPath } = await createSession()

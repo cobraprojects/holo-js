@@ -33,6 +33,7 @@ export {
   resetDatabaseQueryCacheBridge,
   queryCacheInternals,
 } from './cache'
+export { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 export {
   DatabaseError,
   ConfigurationError,
@@ -318,6 +319,7 @@ export type {
   MigrationStatus,
   MigrationTemplateKind,
   MigrationTemplateOptions,
+  IsolatedMigrationResult,
   MigrateOptions,
   RollbackOptions,
 } from './migrations'

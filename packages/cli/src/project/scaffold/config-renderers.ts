@@ -70,9 +70,12 @@ export function renderStorageConfig(): string {
 
 export function renderMediaConfig(): string {
   return [
+    'import { env } from \'@holo-js/config\'',
     'import { defineMediaConfig } from \'@holo-js/media/config\'',
     '',
-    'export default defineMediaConfig({})',
+    'export default defineMediaConfig({',
+    '  disk: env(\'MEDIA_DISK\', \'public\'),',
+    '})',
     '',
   ].join('\n')
 }
@@ -174,6 +177,7 @@ export function renderCacheConfig(
     '    },',
     '    redis: {',
     '      driver: \'redis\',',
+    '      connection: \'cache\',',
     '    },',
   ]
 
@@ -197,9 +201,36 @@ export function renderCacheConfig(
   return lines.join('\n')
 }
 
+export const REDIS_CONFIG_ENV_IMPORT = 'import { env } from \'@holo-js/config\''
+export function renderRedisCacheConnectionLines(moduleFormat: ConfigModuleFormat = 'esm'): readonly string[] {
+  if (moduleFormat === 'cjs') {
+    return [
+      '    cache: {',
+      '      url: process.env.REDIS_URL || undefined,',
+      '      host: process.env.REDIS_HOST || \'127.0.0.1\',',
+      '      port: Number(process.env.REDIS_PORT || 6379),',
+      '      username: process.env.REDIS_USERNAME || undefined,',
+      '      password: process.env.REDIS_PASSWORD || undefined,',
+      '      db: Number(process.env.REDIS_CACHE_DB || 1),',
+      '    },',
+    ]
+  }
+
+  return [
+    '    cache: {',
+    '      url: env(\'REDIS_URL\') || undefined,',
+    '      host: env(\'REDIS_HOST\', \'127.0.0.1\'),',
+    '      port: env(\'REDIS_PORT\', 6379),',
+    '      username: env(\'REDIS_USERNAME\'),',
+    '      password: env(\'REDIS_PASSWORD\'),',
+    '      db: env(\'REDIS_CACHE_DB\', 1),',
+    '    },',
+  ]
+}
+
 export function renderRedisConfig(): string {
   return [
-    'import { env } from \'@holo-js/config\'',
+    REDIS_CONFIG_ENV_IMPORT,
     'import { defineRedisConfig } from \'@holo-js/kernel\'',
     '',
     'export default defineRedisConfig({',
@@ -213,6 +244,7 @@ export function renderRedisConfig(): string {
     '      password: env(\'REDIS_PASSWORD\'),',
     '      db: env(\'REDIS_DB\', 0),',
     '    },',
+    ...renderRedisCacheConnectionLines(),
     '  },',
     '})',
     '',

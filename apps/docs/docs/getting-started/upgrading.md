@@ -51,9 +51,27 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+### Lifecycle, factories, and seeders
+
+Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.
+
+`save()` on a model with no changes now fires `saving` and `saved`, as in Laravel, and writes nothing. Clean saves no longer write `updated_at` or fire `updating` and `updated`; before, a timestamped model's clean save did both. An `updating` handler that reverts every change fires `saved` without an `UPDATE`. After a save, `wasChanged()` and `getChanges()` report what the save wrote, so edits a `saved` handler makes don't appear there. A save that creates a record reports no changes, as in Laravel. Lifecycle handlers now receive the model you called `save()` on rather than a copy, and after `save()` returns the model is clean even when a `saved` handler changed an attribute: that change is not written. If your `saving` or `saved` handler assumed a clean save runs no code, guard it on `isDirty()`.
+
+Models loaded with `withCount()` or `withExists()` save without error, and their computed values are never written. Changes made in place to JSON and date attributes, such as pushing onto a JSON array, are detected and saved.
+
+Factories and `holo seed` now run without mass-assignment guards, as in Laravel. Remove `unguarded()` wrappers around factories and seeders; code outside them still follows the guards.
+
 ### Error reporting
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
+
+### Unexpected SvelteKit errors
+
+Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).
+
+### Debug defaults to false
+
+`debug` in `config/app.ts` now defaults to `false` when `APP_DEBUG` is unset, as in Laravel. Before, it defaulted to `true`, so apps without `APP_DEBUG` showed the messages of unexpected errors in SvelteKit responses. Set `APP_DEBUG=true` in your local `.env` file to keep those messages during development. Apps that set `APP_DEBUG` already, including the scaffold's `.env`, keep their value. SvelteKit error responses and Nuxt's `useHoloDebug()` follow the same setting. Next.js doesn't read it. See [Configuration](/reference/config#app-ts).
 
 ### Broadcast subscription errors and channel authorization
 
@@ -78,6 +96,12 @@ An interrupted run counts as an attempt on both the `redis` and `database` drive
 A `redis` or `database` connection's `retryAfter` must now be at least `1`. Before, `0` was accepted; now the config fails to load with `retryAfter must be greater than or equal to 1.` If you set it to `0`, remove it to use the default `90`, or set another whole number of seconds.
 
 A job whose name isn't registered now fails into the failed jobs table and the worker keeps going. Before, the worker stopped with an error and left the job reserved. If you rename or delete jobs, drain their queued jobs first or retry them later with `npx holo queue:retry`. See [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly).
+
+### queue:listen waits for its worker
+
+`queue:listen` now passes `Ctrl+C`, `SIGINT`, and `SIGTERM` to its worker and exits only after the worker has closed, so stopping `queue:listen` no longer leaves a worker running. A change that restarts the worker waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error instead of starting a replacement. Before, it started one.
+
+If you run `queue:listen` under a process manager, check that it stops when the manager sends `SIGTERM`. Your code doesn't change. See [Develop with queue:listen](/queue/workers#develop-with-queue-listen).
 
 ### Sensitive input in validation failures
 
@@ -148,6 +172,37 @@ On every framework, local disks now refuse to delete through symlinks that lead 
 
 New files and folders on local disks use Laravel's permissions: `0600` files and `0700` folders on private disks, and `0644` files and `0755` folders on public disks. Existing files and folders keep their permissions. If another OS user serves your public files, check that it can still read them.
 
+### Media strings are file paths
+
+`addMedia()` no longer downloads a string that starts with `http://` or `https://`. A string is always a local file path, so `post.addMedia('https://example.com/photo.jpg')` now throws instead of downloading the file. Replace it with `addMediaFromUrl()`:
+
+```ts
+// Before
+await post.addMedia('https://example.com/photo.jpg').toMediaCollection('images')
+
+// After
+await post.addMediaFromUrl('https://example.com/photo.jpg').toMediaCollection('images')
+```
+
+`addMedia({ url })` is also removed. Use `addMediaFromUrl(url)` in its place.
+
+Remote downloads now have a 30-second limit for the whole download, including reading the file. Slow downloads throw an error instead of waiting indefinitely.
+
+Collections without `disk()` now use the media disk, which is `public` unless `config/media.ts` sets `disk`. Before 0.4.0 they used the default storage disk when it was public, and otherwise the `public` disk if one existed. Projects created before 0.4.0 have an empty `config/media.ts`, and that file doesn't read `MEDIA_DISK`, so setting the variable does nothing until you change the file to:
+
+```ts [config/media.ts]
+import { env } from '@holo-js/config'
+import { defineMediaConfig } from '@holo-js/media/config'
+
+export default defineMediaConfig({
+  disk: env('MEDIA_DISK', 'public'),
+})
+```
+
+Check this before deploying if your default storage disk is private or S3, since uploads otherwise go to `public`.
+
+Image conversions reject images over 40 million pixels or 1,000 frames, the same limits upload validation uses. Holo generates images before its own database transaction starts. If your code calls `addMedia()` inside your own transaction, the image work still runs inside that transaction, so upload after it commits. Use `addMediaFromDisk(path, disk)` to attach a file that's already on a storage disk.
+
 ### Database queue workers on MySQL
 
 The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
@@ -209,6 +264,15 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 `holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
+### Destructive commands confirm in production
+
+`migrate:fresh`, `migrate:rollback`, and `seed` now ask you to confirm when the application environment is `production`. The prompt appears only in a terminal. Without one, the command stops with an error unless you pass `--force`. `migrate:rollback` accepts `--force` now; before, it ignored the flag. `--force` skips the prompt for all three commands.
+
+Before upgrading, check every deploy script, CI job, and cron entry that runs these commands with `APP_ENV=production`, and add `--force` to them. Otherwise they stop instead of running. The `npx holo seed --only roles --force` example in the seeding guide shows the flag in use.
+
+### Migration runs can be isolated
+
+`npx holo migrate --isolated` takes a database lock, so replicas that migrate at deploy time don't apply the same migrations. A replica that finds the lock held skips the migrations and exits successfully. Holo creates a `_holo_migration_locks` table the first time an isolated run starts. The lock expires an hour after it was last renewed, and a single migration that runs longer than an hour can let another runner in. Plain `migrate` doesn't use the lock. Use `--isolated` in your deploy step if more than one replica runs it.
 ### Generated broadcast credentials and strict env values
 
 Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. Without them, your config still loads and `holo prepare` still runs. The broadcast worker, publishing, and channel authorization fail with an error that names the variables. `holo new` writes generated values into `.env`, and existing apps get them the same way:
@@ -221,7 +285,7 @@ The command adds `BROADCAST_APP_*` lines that `.env` doesn't have yet. It leaves
 
 Holo also throws when a typed `env()` value doesn't convert: `APP_DEBUG=maybe` with a boolean fallback, or `APP_PORT=abc` with a number fallback. Previously Holo used the fallback. Fix or remove those values before deploying.
 
-If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached and still load live, so their env values come from the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
+If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, still load from their files, and the `env()` values they read while loading are frozen in the cache as well. Code that calls `env()` after startup, such as a reporter's body, reads the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
 
 ### Encrypted session, remember-me, and CSRF cookies
 
@@ -269,6 +333,32 @@ For a separate frontend using `useForm({ csrf: { endpoint } })`, your token endp
 Social sign-in no longer signs in as an existing user whose email isn't verified. When a provider's verified email matches such a user, `callback()` from `@holo-js/auth-social` throws `SocialAuthConflictError`. Catch it in your callback routes and ask the user to sign in with their password and verify their email; their next social sign-in links the accounts. See [Link an existing account](/auth/social-login#link-an-existing-account).
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
+
+### Cache flushes clear the whole store
+
+`cache.flush()` and `npx holo cache:clear` now delete everything in the store, as Laravel does, and a key `prefix` no longer limits them. A Redis store flushes its whole Redis database, a `database` store empties its cache table, and a `file` store empties its folder. If your Redis cache shares a database with queues or sessions, move it to its own database before you flush, or the flush deletes that data too.
+
+Add a `cache` connection to `config/redis.ts` on a database that holds nothing else, and point the Redis store at it. The scaffold uses database `1`:
+
+```ts [config/redis.ts]
+cache: {
+  url: env('REDIS_URL') || undefined,
+  host: env('REDIS_HOST', '127.0.0.1'),
+  port: env('REDIS_PORT', 6379),
+  username: env('REDIS_USERNAME'),
+  password: env('REDIS_PASSWORD'),
+  db: env('REDIS_CACHE_DB', 1),
+},
+```
+
+```ts [config/cache.ts]
+redis: {
+  driver: 'redis',
+  connection: 'cache',
+}
+```
+
+Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
 
 ## Earlier 0.3.x releases
 
