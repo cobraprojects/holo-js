@@ -31,7 +31,7 @@ Server subscriptions now authorize and execute independently, including subscrip
 
 ### Realtime hidden foreign keys
 
-A Realtime query whose root model hides, shows only some, casts, or appends attributes, and that also loads a belongs-to relation, is re-run when the foreign key changes instead of patched. Its serialized rows no longer carry the raw foreign key, so the value the model hides stays out of every patch. No code changes are required. Subscriptions to those queries run the handler on each foreign-key change. Models without serialization rules keep incremental patching.
+Realtime re-runs a query when a belongs-to foreign key changes, if the query's model hides, shows only some, casts, or appends attributes. Before, Holo could patch the raw foreign key into the result, which exposed a hidden value. Models without these rules keep incremental patching. No code changes are required, but subscriptions to those queries run the handler more often.
 
 ### Model scope grouping
 

@@ -637,7 +637,10 @@ export function rebindDatabaseQueryObservationCursorPagination(
   }
 }
 
-export function disableDatabaseQueryObservationPatching(source: unknown, serialized = false): void {
+export function disableDatabaseQueryObservationPatching(
+  source: unknown,
+  options: { readonly serialized?: boolean } = {},
+): void {
   const state = databaseDependencyCollector.getStore()
   if (!state) {
     return
@@ -669,7 +672,7 @@ export function disableDatabaseQueryObservationPatching(source: unknown, seriali
       scalarListColumn: query.scalarListColumn,
       scalarListRows: query.scalarListRows,
       selections: query.selections,
-      serialized: serialized || query.serialized,
+      serialized: options.serialized || query.serialized,
     })
     return
   }
