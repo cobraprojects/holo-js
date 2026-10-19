@@ -47,7 +47,7 @@ function presenceRuntime() {
   return createRuntime({
     channelAuth: {
       resolveUser: ({ socketId }) => ({ id: socketId }),
-      definitions: [defineChannel('room.1', { type: 'presence', authorize: user => typeof user === 'object' && user !== null && 'id' in user ? { id: user.id } : false })],
+      definitions: [defineChannel('room.1', { type: 'presence', authorize: user => typeof user === 'object' && user !== null && 'id' in user && typeof user.id === 'string' ? { id: user.id } : false })],
     },
   })
 }
@@ -207,7 +207,7 @@ it('counts presence channels whose failed subscription is still pending cleanup 
   const runtime = createRuntime({
     channelAuth: {
       resolveUser: ({ socketId }) => ({ id: socketId }),
-      definitions: [defineChannel('room.{id}', { type: 'presence', authorize: user => typeof user === 'object' && user !== null && 'id' in user ? { id: user.id } : false })],
+      definitions: [defineChannel('room.{id}', { type: 'presence', authorize: user => typeof user === 'object' && user !== null && 'id' in user && typeof user.id === 'string' ? { id: user.id } : false })],
     },
     scaling: {
       driver: 'redis',
