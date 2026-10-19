@@ -282,7 +282,7 @@ Every transaction method accepts an options object as its last argument.
 | --- | --- | --- |
 | `mode` | `'deferred' \| 'immediate' \| 'exclusive'` | SQLite lock mode. Other drivers throw a `CapabilityError` |
 | `attempts` | positive integer | Runs the transaction again after a deadlock, lock wait timeout, or busy SQLite database. Default `1` |
-| `timeoutMs` | positive integer | Throws a `TransactionError` when starting the transaction takes longer. Commit and rollback are never interrupted |
+| `timeoutMs` | positive integer | Throws a `TransactionError` when starting the transaction takes longer |
 | `signal` | `AbortSignal` | Throws a `TransactionError` when aborted before the transaction starts |
 
 Pass the connection name before the options when you use a named connection, as shown in [Transactions on a named connection](#transactions-on-a-named-connection).

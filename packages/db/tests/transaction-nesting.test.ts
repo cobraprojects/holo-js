@@ -6,6 +6,7 @@ import { openDatabase } from './support/database'
 beforeEach(() => resetDB())
 
 const drivers = ['sqlite', 'postgres', 'mysql'] as const
+type Driver = (typeof drivers)[number]
 const concurrencyCodes = { sqlite: 'SQLITE_BUSY', postgres: '40P01', mysql: 'ER_LOCK_DEADLOCK' } as const
 
 function withAdapterOverrides(adapter: DriverAdapter, overrides: Partial<DriverAdapter>): DriverAdapter {
@@ -15,6 +16,14 @@ function withAdapterOverrides(adapter: DriverAdapter, overrides: Partial<DriverA
       const value: unknown = Reflect.get(target, property, target)
       return typeof value === 'function' ? value.bind(target) : value
     },
+  })
+}
+
+function createOverriddenDatabase(driver: Driver, adapter: DriverAdapter, overrides: Partial<DriverAdapter>) {
+  return createDatabase({
+    connectionName: 'default',
+    adapter: withAdapterOverrides(adapter, overrides),
+    dialect: createDialect(driver),
   })
 }
 
@@ -70,16 +79,37 @@ describe('transaction nesting and commit integrity', () => {
     expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['First'])
   })
 
+  it.each(drivers)('nests a transaction call made from inside a savepoint of the same transaction on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.transaction(async outer => {
+      await outer.transaction(async inner => {
+        await outer.transaction(async work => {
+          await work.table(table).insert({ id: 1, name: 'Nested' })
+        })
+        await inner.table(table).insert({ id: 2, name: 'Inner' })
+      })
+    })
+    expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Nested', 'Inner'])
+  }, 5_000)
+
+  it.each(drivers)('rolls back a savepoint that failed with a concurrency error even when the caller catches it on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.transaction(async tx => {
+      await tx.table(table).insert({ id: 1, name: 'Outer' })
+      await tx.transaction(async nested => {
+        await nested.table(table).insert({ id: 2, name: 'Discarded' })
+        throw Object.assign(new Error('lock wait timeout'), { code: concurrencyCodes[driver] })
+      }).catch(() => undefined)
+    })
+    expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Outer'])
+  })
+
   it.each(drivers)('does not apply transaction timeouts to commit on %s', async driver => {
     const { db, table, adapter } = await openDatabase(driver)
-    const slowDb = createDatabase({
-      connectionName: 'default',
-      adapter: withAdapterOverrides(adapter, { commit: async () => {
-        await setTimeout(300)
-        return adapter.commit()
-      } }),
-      dialect: createDialect(driver),
-    })
+    const slowDb = createOverriddenDatabase(driver, adapter, { commit: async () => {
+      await setTimeout(300)
+      return adapter.commit()
+    } })
     const committed: string[] = []
     await slowDb.transaction(async tx => {
       tx.afterCommit(() => { committed.push('committed') })
@@ -91,14 +121,10 @@ describe('transaction nesting and commit integrity', () => {
 
   it.each(drivers)('does not apply transaction timeouts to rollback on %s', async driver => {
     const { db, table, adapter } = await openDatabase(driver)
-    const slowDb = createDatabase({
-      connectionName: 'default',
-      adapter: withAdapterOverrides(adapter, { rollback: async () => {
-        await setTimeout(300)
-        return adapter.rollback()
-      } }),
-      dialect: createDialect(driver),
-    })
+    const slowDb = createOverriddenDatabase(driver, adapter, { rollback: async () => {
+      await setTimeout(300)
+      return adapter.rollback()
+    } })
     const rolledBack: string[] = []
     await expect(slowDb.transaction(async tx => {
       tx.afterRollback(() => { rolledBack.push('rolled back') })
@@ -111,13 +137,9 @@ describe('transaction nesting and commit integrity', () => {
 
   it.each(drivers)('does not run rollback callbacks when commit fails before committing on %s', async driver => {
     const { db, table, adapter } = await openDatabase(driver)
-    const failingDb = createDatabase({
-      connectionName: 'default',
-      adapter: withAdapterOverrides(adapter, { commit: async () => {
-        throw new Error('commit rejected')
-      } }),
-      dialect: createDialect(driver),
-    })
+    const failingDb = createOverriddenDatabase(driver, adapter, { commit: async () => {
+      throw new Error('commit rejected')
+    } })
     const callbacks: string[] = []
     await expect(failingDb.transaction(async tx => {
       tx.afterCommit(() => { callbacks.push('commit') })
@@ -130,14 +152,10 @@ describe('transaction nesting and commit integrity', () => {
 
   it.each(drivers)('never reports a committed transaction as rolled back when commit reply fails on %s', async driver => {
     const { db, table, adapter } = await openDatabase(driver)
-    const flakyDb = createDatabase({
-      connectionName: 'default',
-      adapter: withAdapterOverrides(adapter, { commit: async () => {
-        await adapter.commit()
-        throw new Error('commit reply lost')
-      } }),
-      dialect: createDialect(driver),
-    })
+    const flakyDb = createOverriddenDatabase(driver, adapter, { commit: async () => {
+      await adapter.commit()
+      throw new Error('commit reply lost')
+    } })
     const callbacks: string[] = []
     await expect(flakyDb.transaction(async tx => {
       tx.afterRollback(() => { callbacks.push('rollback') })
@@ -158,6 +176,18 @@ describe('transaction nesting and commit integrity', () => {
     })).rejects.toBe(failure)
     expect(calls).toEqual([])
     expect(await db.table(table).pluck('name')).toEqual(['Durable'])
+  })
+
+  it.each(drivers)('does not retry a committed transaction when an after-commit callback fails with a concurrency error on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    let calls = 0
+    await expect(db.transaction(async tx => {
+      calls += 1
+      tx.afterCommit(() => { throw Object.assign(new Error('notification busy'), { code: concurrencyCodes[driver] }) })
+      await tx.table(table).insert({ id: calls, name: `Attempt ${calls}` })
+    }, { attempts: 2 })).rejects.toThrow('notification busy')
+    expect(calls).toBe(1)
+    expect(await db.table(table).pluck('name')).toEqual(['Attempt 1'])
   })
 
   it.each(drivers)('retries concurrency errors up to the attempt limit and then rethrows on %s', async driver => {

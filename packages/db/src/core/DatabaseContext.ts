@@ -61,6 +61,12 @@ type TransactionFrame = {
   open: boolean
 }
 
+type CommittedRootTransaction<T> = {
+  value: T
+  transaction: DatabaseContext
+  entry: TransactionLog
+}
+
 type ContextInternals = {
   rootContext: DatabaseContext
   contextId: number
@@ -78,6 +84,7 @@ type ContextInternals = {
   scope: ScopeState
   transactionCallbacks?: TransactionCallbackState
   transactionFrame?: TransactionFrame
+  parent?: DatabaseContext
 }
 
 function runSerialized<T>(queue: SerialQueue, callback: () => Promise<T>): Promise<T> {
@@ -114,6 +121,7 @@ export class DatabaseContext {
   private readonly _scope: ScopeState
   private readonly _transactionCallbacks?: TransactionCallbackState
   private readonly _transactionFrame?: TransactionFrame
+  private readonly _parent?: DatabaseContext
   private readonly _savepointQueue: SerialQueue = { tail: Promise.resolve() }
   private _migrationService?: MigrationService
   private _factoryService?: FactoryService
@@ -152,6 +160,7 @@ export class DatabaseContext {
     this._scope = 'scope' in options ? options.scope : { kind: 'root', depth: 0 }
     this._transactionCallbacks = 'transactionCallbacks' in options ? options.transactionCallbacks : undefined
     this._transactionFrame = 'transactionFrame' in options ? options.transactionFrame : undefined
+    this._parent = 'parent' in options ? options.parent : undefined
     registerDatabaseContext(this, 'rootContext' in options ? options.rootContext : this)
   }
 
@@ -344,16 +353,17 @@ export class DatabaseContext {
     options?: DatabaseTransactionOptions,
   ): Promise<T> {
     await this.initialize()
-    const target = this._scope.kind === 'root' ? this._findAmbientTransaction() ?? this : this
-    target._assertValidOperationOptions(options)
-    target._assertValidTransactionOptions(options)
-    target._throwIfAborted(options?.signal, 'transaction')
+    const active = this._findAmbientTransaction()
+    const executor = active && (this._scope.kind === 'root' || active._isDescendantOf(this)) ? active : this
+    executor._assertValidOperationOptions(options)
+    executor._assertValidTransactionOptions(options)
+    executor._throwIfAborted(options?.signal, 'transaction')
 
-    if (target._scope.kind === 'root') {
+    if (executor._scope.kind === 'root') {
       return this._runRootTransactionWithAttempts(callback, options)
     }
 
-    return target._runNestedTransaction(callback, options)
+    return executor._runNestedTransaction(callback, options)
   }
 
   async writeTransaction<T>(
@@ -379,20 +389,26 @@ export class DatabaseContext {
     const maxAttempts = options?.attempts ?? 1
 
     for (let attempt = 1; ; attempt += 1) {
+      let committed: CommittedRootTransaction<T>
       try {
-        return await this._runRootTransaction(callback, options)
+        committed = await this._attemptRootTransaction(callback, options)
       } catch (error) {
         if (attempt >= maxAttempts || !isDatabaseConcurrencyError(error)) {
           throw error
         }
+        continue
       }
+
+      await committed.transaction._runAfterCommitCallbacks()
+      await this._logger?.onTransactionCommit?.(committed.entry)
+      return committed.value
     }
   }
 
-  private async _runRootTransaction<T>(
+  private async _attemptRootTransaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
     options?: DatabaseTransactionOptions,
-  ): Promise<T> {
+  ): Promise<CommittedRootTransaction<T>> {
     const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
       ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
 
@@ -401,28 +417,28 @@ export class DatabaseContext {
       depth: 1,
     }
     const frame: TransactionFrame = { open: true }
-    let tx: DatabaseContext | undefined
-    let outcome: 'rolled-back' | 'commit-failed' | 'committed' = 'rolled-back'
+    let transaction: DatabaseContext | undefined
+    let commitStarted = false
 
-    const runTransaction = async (): Promise<T> => {
+    const runTransaction = async (): Promise<CommittedRootTransaction<T>> => {
       await this._logger?.onTransactionStart?.(entry)
       return runWithinScope(async () => {
         await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
-        const transaction = this._createChildContext(
+        const child = this._createChildContext(
           { kind: 'transaction', depth: 1 },
           this._createTransactionCallbackState(),
           frame,
         )
-        tx = transaction
+        transaction = child
 
-        beginSchemaMutationScope(transaction, this)
+        beginSchemaMutationScope(child, this)
         let value: T
         try {
-          value = await this._runTransactionCallback(transaction, callback)
+          value = await this._runTransactionCallback(child, callback)
         } catch (error) {
           try {
             await this._callTransactionHook('rollback', () => this._adapter.rollback())
-            rollbackSchemaMutationScope(transaction)
+            rollbackSchemaMutationScope(child)
           } catch (rollbackError) {
             await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
             throw rollbackError
@@ -431,40 +447,37 @@ export class DatabaseContext {
           throw error
         }
 
+        commitStarted = true
         try {
           await this._callTransactionHook('commit', () => this._adapter.commit())
         } catch (commitError) {
-          outcome = 'commit-failed'
           await this._adapter.rollback().catch(() => undefined)
-          rollbackSchemaMutationScope(transaction)
+          rollbackSchemaMutationScope(child)
           throw commitError
         }
 
-        outcome = 'committed'
-        commitSchemaMutationScope(transaction)
-        return value
+        commitSchemaMutationScope(child)
+        return { value, transaction: child, entry }
       })
     }
 
-    let result: T
+    let committed: CommittedRootTransaction<T>
     try {
-      result = await (this._adapter.supportsConcurrentTransactionScopes === true
+      committed = await (this._adapter.supportsConcurrentTransactionScopes === true
         ? this._runtime.scheduler.transaction(runTransaction)
         : this._adapter.runWithTransactionScope
           ? this._runtime.scheduler.exclusive(runTransaction)
           : runSerialized(this._runtime.rootTransactionQueue, () => this._runtime.scheduler.exclusive(runTransaction)))
     } catch (error) {
       frame.open = false
-      if (outcome === 'rolled-back') {
-        await this._settleRolledBackTransaction(tx, entry, error)
+      if (!commitStarted) {
+        await this._settleRolledBackTransaction(transaction, entry, error)
       }
       throw error
     }
 
     frame.open = false
-    await tx?._runAfterCommitCallbacks()
-    await this._logger?.onTransactionCommit?.(entry)
-    return result
+    return committed
   }
 
   private async _settleRolledBackTransaction(
@@ -545,12 +558,6 @@ export class DatabaseContext {
         throw error
       }
 
-      if (isDatabaseConcurrencyError(error)) {
-        rollbackSchemaMutationScope(tx)
-        await this._settleRolledBackTransaction(tx, entry, error)
-        throw error
-      }
-
       try {
         await this._callTransactionHook(
           'rollbackToSavepoint',
@@ -560,6 +567,10 @@ export class DatabaseContext {
         )
       } catch (rollbackError) {
         await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
+        if (isDatabaseConcurrencyError(error)) {
+          rollbackSchemaMutationScope(tx)
+          throw error
+        }
         throw rollbackError
       }
       rollbackSchemaMutationScope(tx)
@@ -590,7 +601,16 @@ export class DatabaseContext {
       scope,
       transactionCallbacks,
       transactionFrame,
+      parent: this,
     })
+  }
+
+  private _isDescendantOf(ancestor: DatabaseContext): boolean {
+    for (let current = this._parent; current; current = current._parent) {
+      if (current === ancestor) return true
+    }
+
+    return false
   }
 
   private _runTransactionCallback<T>(
@@ -635,8 +655,8 @@ export class DatabaseContext {
     }
 
     const callbackConnection = this._createCallbackConnection()
-    while (callbacks.length > 0) {
-      await this._runCallbackOn(callbackConnection, callbacks.shift()!)
+    for (let callback = callbacks.shift(); callback; callback = callbacks.shift()) {
+      await this._runCallbackOn(callbackConnection, callback)
     }
   }
 
@@ -648,9 +668,9 @@ export class DatabaseContext {
 
     const callbackConnection = this._createCallbackConnection()
     const failures: unknown[] = []
-    while (callbacks.length > 0) {
+    for (let callback = callbacks.pop(); callback; callback = callbacks.pop()) {
       try {
-        await this._runCallbackOn(callbackConnection, callbacks.pop()!)
+        await this._runCallbackOn(callbackConnection, callback)
       } catch (error) {
         failures.push(error)
       }
