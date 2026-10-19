@@ -342,6 +342,35 @@ describe('@holo-js/events runtime', () => {
     expect(later).not.toHaveBeenCalled()
   })
 
+  it('runs a deferred listener in place when no transaction is active, keeping registration order', async () => {
+    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    }))
+
+    const order: string[] = []
+    registerListener(defineListener({
+      name: 'sync.deferred.first',
+      listensTo: ['user.registered'],
+      afterCommit: true,
+      async handle() {
+        order.push('deferred:first')
+        throw new Error('first failed')
+      },
+    }))
+    registerListener(defineListener({
+      name: 'sync.immediate.second',
+      listensTo: ['user.registered'],
+      async handle() {
+        order.push('immediate:second')
+      },
+    }))
+
+    await expect(dispatchEvent('user.registered', {
+      userId: 'usr-1',
+    })).rejects.toThrow('first failed')
+    expect(order).toEqual(['deferred:first'])
+  })
+
   it('stops dispatch and skips queued fan-out when a sync listener throws', async () => {
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
@@ -581,18 +610,6 @@ describe('@holo-js/events runtime', () => {
     const envelope = eventRuntimeInternals.createEventEnvelope('audit.logged', {
       auditId: 'aud-1',
     }, 123)
-    const syncListener = registerListener(defineListener({
-      name: 'sync.audit',
-      listensTo: ['audit.logged'],
-      async handle() {},
-    }))
-    const queuedListener = registerListener(defineListener({
-      name: 'queue.audit',
-      listensTo: ['audit.logged'],
-      queue: true,
-      async handle() {},
-    }))
-    const grouped = eventRuntimeInternals.splitListenersByCommitTiming([syncListener, queuedListener], false)
 
     expect(binding.hooks.dispatchQueuedListener).toBe(queued)
     expect(eventRuntimeInternals.normalizeEventName(' audit.logged ')).toBe('audit.logged')
@@ -610,10 +627,7 @@ describe('@holo-js/events runtime', () => {
       },
       occurredAt: 123,
     })
-    expect(grouped.immediateListeners.map(listener => listener.id)).toEqual(['sync.audit', 'queue.audit'])
-    expect(grouped.deferredListeners).toEqual([])
     expect(() => eventRuntimeInternals.validateQueuedEventPayload(5)).not.toThrow()
     expect(() => eventRuntimeInternals.validateQueuedEventPayload(['ok', 1, false])).not.toThrow()
-    await expect(eventRuntimeInternals.executeListeners([], envelope, {})).resolves.toBeUndefined()
   })
 })

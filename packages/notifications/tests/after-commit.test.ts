@@ -29,6 +29,16 @@ async function configureTestDB() {
   return adapter
 }
 
+function deferToActiveTransaction(callback: () => Promise<void>): boolean {
+  const connection = connectionAsyncContext.getActive()?.connection
+  if (!connection || connection.getScope().kind === 'root') {
+    return false
+  }
+
+  connection.afterCommit(callback)
+  return true
+}
+
 const definition = {
   via: () => ['flaky', 'slack'],
   build: {
@@ -71,15 +81,7 @@ describe('@holo-js/notifications after-commit delivery', () => {
       send: slackSend,
     })
     configureNotificationsRuntime({
-      deferAfterCommit(callback) {
-        const connection = connectionAsyncContext.getActive()?.connection
-        if (!connection || connection.getScope().kind === 'root') {
-          return false
-        }
-
-        connection.afterCommit(callback)
-        return true
-      },
+      deferAfterCommit: deferToActiveTransaction,
     })
 
     await DB.transaction(async () => {
@@ -112,15 +114,7 @@ describe('@holo-js/notifications after-commit delivery', () => {
     registerNotificationChannel('flaky', { send: flakySend })
     registerNotificationChannel('slack', { send: vi.fn(async () => 'delivered') })
     configureNotificationsRuntime({
-      deferAfterCommit(callback) {
-        const connection = connectionAsyncContext.getActive()?.connection
-        if (!connection || connection.getScope().kind === 'root') {
-          return false
-        }
-
-        connection.afterCommit(callback)
-        return true
-      },
+      deferAfterCommit: deferToActiveTransaction,
     })
 
     await expect(DB.transaction(async () => {

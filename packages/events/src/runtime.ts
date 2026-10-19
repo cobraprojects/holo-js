@@ -171,7 +171,7 @@ function createEventEnvelope<TPayload>(
 
 function splitListenersByCommitTiming(
   listeners: readonly RegisteredListener[],
-  forceAfterCommit: boolean,
+  shouldDeferAll: boolean,
 ): {
   readonly immediateListeners: readonly RegisteredListener[]
   readonly deferredListeners: readonly RegisteredListener[]
@@ -180,7 +180,7 @@ function splitListenersByCommitTiming(
   const deferredListeners: RegisteredListener[] = []
 
   for (const listener of listeners) {
-    if (forceAfterCommit || listener.definition.afterCommit === true) {
+    if (shouldDeferAll || listener.definition.afterCommit === true) {
       deferredListeners.push(listener)
       continue
     }
@@ -233,7 +233,7 @@ async function dispatchQueuedListener<TPayload>(
   await dispatcher(createQueuedListenerDispatch(listener, event, options))
 }
 
-async function executeListeners<TPayload>(
+async function runListenersInOrder<TPayload>(
   listeners: readonly RegisteredListener[],
   event: EventEnvelope<string, TPayload>,
   options: PendingOptions,
@@ -268,37 +268,45 @@ async function executeDispatch<TPayload>(
   requireRegisteredEvent(eventName)
   const envelope = createEventEnvelope(eventName, payload)
   const listeners = listRegisteredListenersForEvent(eventName)
-  const hasQueuedListeners = listeners.some(listener => listener.definition.queue === true)
-  if (hasQueuedListeners) {
+  const queuedListeners = listeners.filter(listener => listener.definition.queue === true).length
+  if (queuedListeners > 0) {
     validateQueuedEventPayload(envelope.payload)
   }
+
+  const createResult = (deferred: boolean): EventDispatchResult => Object.freeze({
+    eventName,
+    occurredAt: envelope.occurredAt,
+    deferred,
+    syncListeners: listeners.length - queuedListeners,
+    queuedListeners,
+  })
 
   const { immediateListeners, deferredListeners } = splitListenersByCommitTiming(
     listeners,
     options.afterCommit === true,
   )
-
-  await executeListeners(immediateListeners, envelope, options)
-
-  let deferred = false
-  if (deferredListeners.length > 0) {
-    const callback = async () => {
-      await executeListeners(deferredListeners, envelope, options)
-    }
-
-    deferred = scheduleDeferredDispatch(callback, eventName)
-    if (!deferred) {
-      await callback()
-    }
+  if (deferredListeners.length === 0) {
+    await runListenersInOrder(listeners, envelope, options)
+    return createResult(false)
   }
 
-  return Object.freeze({
-    eventName,
-    occurredAt: envelope.occurredAt,
-    deferred,
-    syncListeners: listeners.filter(listener => listener.definition.queue !== true).length,
-    queuedListeners: listeners.filter(listener => listener.definition.queue === true).length,
-  })
+  // The deferred callback is registered before the immediate listeners run, so it stays
+  // gated on their completion: a failing immediate listener leaves nothing queued to run.
+  let immediatePhaseCompleted = false
+  const scheduled = scheduleDeferredDispatch(async () => {
+    if (immediatePhaseCompleted) {
+      await runListenersInOrder(deferredListeners, envelope, options)
+    }
+  }, eventName)
+
+  if (!scheduled) {
+    await runListenersInOrder(listeners, envelope, options)
+    return createResult(false)
+  }
+
+  await runListenersInOrder(immediateListeners, envelope, options)
+  immediatePhaseCompleted = true
+  return createResult(true)
 }
 
 class PendingEventDispatch<TPayload> implements EventPendingDispatch<TPayload> {
@@ -416,7 +424,7 @@ export const eventRuntimeInternals = {
   dispatchQueuedListener,
   executeDispatch,
   executeListener,
-  executeListeners,
+  runListenersInOrder,
   getRuntimeState,
   isPlainObject,
   normalizeEventName,
