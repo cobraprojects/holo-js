@@ -108,9 +108,9 @@ The ID matters most for [queued listeners](/events/queued-listeners): the queued
 
 ## Order and errors
 
-For each dispatch, Holo runs sync listeners first, one after another, in registration order. Then it sends queued listeners to the queue.
+For each dispatch, Holo runs the listeners in registration order, one after another. Sync listeners run inline. Queued listeners are sent to the queue at their place in the order, so a queued listener registered between two sync listeners is sent after the first one runs and before the second one runs.
 
-If a sync listener throws, the dispatch rejects with that error. Later sync listeners don't run, and no queued listeners are sent.
+If a listener throws, or a queued listener can't be sent, the dispatch rejects with that error. Listeners after it don't run, including queued listeners that would have been sent. Listeners before it have already run.
 
 ## Listener options
 

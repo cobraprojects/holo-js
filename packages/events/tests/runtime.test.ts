@@ -228,6 +228,120 @@ describe('@holo-js/events runtime', () => {
     expect(handled).toHaveBeenCalledTimes(1)
   })
 
+  it('runs sync and queued listeners interleaved in registration order', async () => {
+    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    }))
+
+    const order: string[] = []
+    configureEventsRuntime({
+      dispatchQueuedListener: async (dispatch) => {
+        order.push(`queued:${dispatch.listenerId}`)
+      },
+    })
+    registerListener(defineListener({
+      name: 'sync.first',
+      listensTo: ['user.registered'],
+      async handle() {
+        order.push('sync:first')
+      },
+    }))
+    registerListener(defineListener({
+      name: 'queued.second',
+      listensTo: ['user.registered'],
+      queue: true,
+      async handle() {},
+    }))
+    registerListener(defineListener({
+      name: 'sync.third',
+      listensTo: ['user.registered'],
+      async handle() {
+        order.push('sync:third')
+      },
+    }))
+
+    const result = await dispatchEvent('user.registered', {
+      userId: 'usr-1',
+    })
+
+    expect(order).toEqual(['sync:first', 'queued:queued.second', 'sync:third'])
+    expect(result).toMatchObject({
+      syncListeners: 2,
+      queuedListeners: 1,
+    })
+  })
+
+  it('stops at a failing queued dispatch and skips every later listener', async () => {
+    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    }))
+
+    const later = vi.fn(async () => {})
+    configureEventsRuntime({
+      dispatchQueuedListener: async () => {
+        throw new Error('queue unavailable')
+      },
+    })
+    registerListener(defineListener({
+      name: 'queued.fails',
+      listensTo: ['user.registered'],
+      queue: true,
+      async handle() {},
+    }))
+    registerListener(defineListener({
+      name: 'sync.after',
+      listensTo: ['user.registered'],
+      async handle() {
+        await later()
+      },
+    }))
+
+    await expect(dispatchEvent('user.registered', {
+      userId: 'usr-1',
+    })).rejects.toThrow('queue unavailable')
+    expect(later).not.toHaveBeenCalled()
+  })
+
+  it('dispatches queued listeners registered before a failing sync listener and skips the rest', async () => {
+    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    }))
+
+    const queued = vi.fn(async () => {})
+    const later = vi.fn(async () => {})
+    configureEventsRuntime({
+      dispatchQueuedListener: queued,
+    })
+    registerListener(defineListener({
+      name: 'queued.before',
+      listensTo: ['user.registered'],
+      queue: true,
+      async handle() {},
+    }))
+    registerListener(defineListener({
+      name: 'sync.fails',
+      listensTo: ['user.registered'],
+      async handle() {
+        throw new Error('sync failed')
+      },
+    }))
+    registerListener(defineListener({
+      name: 'queued.after',
+      listensTo: ['user.registered'],
+      queue: true,
+      async handle() {
+        await later()
+      },
+    }))
+
+    await expect(dispatchEvent('user.registered', {
+      userId: 'usr-1',
+    })).rejects.toThrow('sync failed')
+    expect(queued).toHaveBeenCalledTimes(1)
+    expect(queued).toHaveBeenCalledWith(expect.objectContaining({ listenerId: 'queued.before' }))
+    expect(later).not.toHaveBeenCalled()
+  })
+
   it('stops dispatch and skips queued fan-out when a sync listener throws', async () => {
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
@@ -478,7 +592,7 @@ describe('@holo-js/events runtime', () => {
       queue: true,
       async handle() {},
     }))
-    const grouped = eventRuntimeInternals.splitRegisteredListeners([syncListener, queuedListener])
+    const grouped = eventRuntimeInternals.splitListenersByCommitTiming([syncListener, queuedListener], false)
 
     expect(binding.hooks.dispatchQueuedListener).toBe(queued)
     expect(eventRuntimeInternals.normalizeEventName(' audit.logged ')).toBe('audit.logged')
@@ -496,14 +610,10 @@ describe('@holo-js/events runtime', () => {
       },
       occurredAt: 123,
     })
-    expect(grouped.syncListeners.map(listener => listener.id)).toEqual(['sync.audit'])
-    expect(grouped.queuedListeners.map(listener => listener.id)).toEqual(['queue.audit'])
+    expect(grouped.immediateListeners.map(listener => listener.id)).toEqual(['sync.audit', 'queue.audit'])
+    expect(grouped.deferredListeners).toEqual([])
     expect(() => eventRuntimeInternals.validateQueuedEventPayload(5)).not.toThrow()
     expect(() => eventRuntimeInternals.validateQueuedEventPayload(['ok', 1, false])).not.toThrow()
-    await expect(eventRuntimeInternals.dispatchQueuedListeners([], envelope, {})).resolves.toBe(0)
-    await expect(eventRuntimeInternals.executeListenerGroups([], [], envelope, {})).resolves.toEqual({
-      syncCount: 0,
-      queuedCount: 0,
-    })
+    await expect(eventRuntimeInternals.executeListeners([], envelope, {})).resolves.toBeUndefined()
   })
 })
