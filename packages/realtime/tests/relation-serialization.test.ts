@@ -11,6 +11,21 @@ import { describe, expect, it } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { executeRealtimeMutation, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
+import type { RealtimeSubscriptionPatch } from '../src/runtime/state'
+
+type SubscriptionObserver = {
+  readonly onData: (snapshot: { readonly data: unknown }) => void
+  readonly onPatch: (patch: RealtimeSubscriptionPatch) => void
+  readonly onError: (error: unknown) => void
+}
+
+function observePatches(patches: RealtimeSubscriptionPatch[], snapshots: unknown[] = []): SubscriptionObserver {
+  return {
+    onData: snapshot => { snapshots.push(snapshot.data) },
+    onPatch: patch => { patches.push(patch) },
+    onError: error => { throw error },
+  }
+}
 
 type RealtimeTestDatabase = Awaited<ReturnType<typeof openRealtimeDatabase>>
 
@@ -61,7 +76,7 @@ describe('realtime relation serialization', () => {
     })
     const handler = () => db.model(Post).query().with('author').orderBy('id').getJson()
     const snapshots: unknown[] = []
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     let reads = 0
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
@@ -69,11 +84,7 @@ describe('realtime relation serialization', () => {
         reads += 1
         return handler()
       },
-    }), {}, {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches, snapshots))
     const verify = async () => {
       expect(snapshots.at(-1)).toEqual(await handler())
       expect(patches).toEqual([])
@@ -115,7 +126,7 @@ describe('realtime relation serialization', () => {
     })
     const handler = () => db.model(Author).query().with('posts').orderBy('id').getJson()
     const snapshots: unknown[] = []
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     let reads = 0
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
@@ -123,11 +134,7 @@ describe('realtime relation serialization', () => {
         reads += 1
         return handler()
       },
-    }), {}, {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches, snapshots))
     const verify = async () => {
       expect(snapshots.at(-1)).toEqual(await handler())
       expect(patches).toEqual([])
@@ -164,7 +171,7 @@ describe('realtime relation serialization', () => {
     })
     const handler = () => db.model(Author).query().with('profile').orderBy('id').getJson()
     const snapshots: unknown[] = []
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     let reads = 0
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
@@ -172,11 +179,7 @@ describe('realtime relation serialization', () => {
         reads += 1
         return handler()
       },
-    }), {}, {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches, snapshots))
     const mutations = [
       () => db.table('profiles').insert({ id: 2, author_id: 2, bio: 'Bio two', note: 'note-secret-two' }),
       () => db.table('profiles').where('id', 1).update({ bio: 'Changed bio' }),
@@ -211,7 +214,7 @@ describe('realtime relation serialization', () => {
     })
     const handler = () => db.model(Author).query().with('tags').orderBy('id').getJson()
     const snapshots: unknown[] = []
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     let reads = 0
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
@@ -219,11 +222,7 @@ describe('realtime relation serialization', () => {
         reads += 1
         return handler()
       },
-    }), {}, {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches, snapshots))
     const mutations = [
       () => db.table('author_tags').insert({ author_id: 1, tag_id: 2 }),
       () => db.table('tags').where('id', 1).update({ label: 'Changed news' }),
@@ -260,12 +259,8 @@ describe('realtime relation serialization', () => {
       .orderBy('id')
       .getJson()
     const snapshots: unknown[] = []
-    const patches: unknown[] = []
-    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    const patches: RealtimeSubscriptionPatch[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, observePatches(patches, snapshots))
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
@@ -323,16 +318,18 @@ describe('realtime relation serialization', () => {
     await adapter.execute('ALTER TABLE posts ADD COLUMN parent_id INTEGER')
     await adapter.execute('INSERT INTO posts VALUES (2, \'Child\', 1, 1)')
     const Hidden = defineModel(authorsTable(), { timestamps: false, hidden: ['password'] })
-    const Post = defineModel(defineGeneratedTable('posts', {
+    const postColumns = () => ({
       id: column.id(),
       title: column.string(),
       author_id: column.integer().nullable(),
       parent_id: column.integer().nullable(),
-    }), {
+    })
+    const Child = defineModel(defineGeneratedTable('posts', postColumns()), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable('posts', postColumns()), {
       timestamps: false,
       relations: {
         hidden: belongsTo(() => Hidden, 'author_id'),
-        children: hasMany(() => Post, 'parent_id'),
+        children: hasMany(() => Child, 'parent_id'),
       },
     })
     const handler = () => db.model(Post).query().with('hidden', 'children').orderBy('id').getJson()
@@ -435,7 +432,7 @@ describe('realtime relation serialization', () => {
     })
     const handler = () => db.model(Author).query().with('tags').orderBy('id').getJson()
     const snapshots: unknown[] = []
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     let reads = 0
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
@@ -443,11 +440,7 @@ describe('realtime relation serialization', () => {
         reads += 1
         return handler()
       },
-    }), {}, {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches, snapshots))
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
@@ -483,18 +476,14 @@ describe('realtime relation serialization', () => {
       },
     })
     let reads = 0
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
       handler: () => {
         reads += 1
         return db.model(Author).query().with('tags').orderBy('id').getJson()
       },
-    }), {}, {
-      onData: () => {},
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches))
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
@@ -563,18 +552,14 @@ describe('realtime relation serialization', () => {
       relations: { author: belongsTo(() => Author, 'author_id') },
     })
     let reads = 0
-    const patches: unknown[] = []
+    const patches: RealtimeSubscriptionPatch[] = []
     await subscribeRealtimeQuery(defineRealtimeQuery({
       access: 'public',
       handler: () => {
         reads += 1
         return db.model(Post).query().with('author').orderBy('id').getJson()
       },
-    }), {}, {
-      onData: () => {},
-      onPatch: patch => { patches.push(patch) },
-      onError: error => { throw error },
-    })
+    }), {}, observePatches(patches))
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
