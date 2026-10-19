@@ -24,11 +24,19 @@ const validReleaseWorkflow = [
   'jobs:',
   '  publish:',
   '    steps:',
-  '      - run: bun run release',
-  '        env:',
-  `          NPM_CONFIG_PROVENANCE: 'true'`,
+  '      - run: bun run build',
   '      - run: git config user.name "github-actions[bot]"',
   '      - run: git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
+  '      - name: Publish changed packages with npm provenance',
+  '        env:',
+  '          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}',
+  `          NPM_CONFIG_PROVENANCE: 'true'`,
+  '        run: |',
+  '          if [ -z "$NODE_AUTH_TOKEN" ]; then',
+  '            echo "::notice title=Release skipped::NPM_TOKEN is not configured, so no packages were published."',
+  '            exit 0',
+  '          fi',
+  '          bun run release:skip-build',
   '      - run: git push origin --tags',
   '',
 ].join('\n')
@@ -194,7 +202,31 @@ test('release metadata requires the release workflow to run the guarded release 
   }))
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must give NPM_TOKEN only to the publish step.',
     '.github/workflows/release.yml must publish with `bun run release`, which restores package manifests.',
+  ])
+})
+
+test('release metadata gives NPM_TOKEN only to the publish step', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(
+      '      - run: bun run build',
+      '      - run: bun run build\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}',
+    ),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must give NPM_TOKEN only to the publish step.',
+  ])
+})
+
+test('release metadata requires the publish step to skip with a notice when NPM_TOKEN is not configured', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('::notice title=Release skipped::', 'Release skipped: '),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must skip the publish with a notice, not fail, when NPM_TOKEN is not configured.',
   ])
 })
 

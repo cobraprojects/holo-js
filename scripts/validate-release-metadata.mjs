@@ -74,6 +74,14 @@ async function collectReleaseWorkflowFailures(root) {
   if (!/git config user\.name\b/.test(workflow) || !/git config user\.email\b/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must set git user.name and user.email before publishing, because changeset publish creates annotated tags.`)
   }
+  const steps = workflow.split(/\n {6}- /)
+  const tokenSteps = steps.filter(step => step.includes('secrets.NPM_TOKEN'))
+  if (tokenSteps.length !== 1 || !/\bbun run release\b/.test(tokenSteps[0])) {
+    failures.push(`${releaseWorkflowPath} must give NPM_TOKEN only to the publish step.`)
+  }
+  if (!/::notice\b/.test(workflow) || !/-z "\$NODE_AUTH_TOKEN"/.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must skip the publish with a notice, not fail, when NPM_TOKEN is not configured.`)
+  }
   if (!/git push origin --tags/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must push the tags that changeset publish creates with \`git push origin --tags\`.`)
   }

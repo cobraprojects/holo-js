@@ -29,15 +29,22 @@ jobs:
         with:
           bun-version: 1.3.9
       - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build packages
+        run: bun run build
       - name: Configure the git identity for release tags
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Publish changed packages with npm provenance
-        run: bun run release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice title=Release skipped::NPM_TOKEN is not configured, so no packages were published."
+            exit 0
+          fi
+          bun run release:skip-build
       - name: Push the release tags, including after a partial publish failure
         if: always()
         run: git push origin --tags
