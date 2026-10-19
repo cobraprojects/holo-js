@@ -97,6 +97,24 @@ describe('@holo-js/queue jobs', () => {
     }
   })
 
+  it('accepts failOnTimeout and caps job timeouts at the Node timer limit', () => {
+    expect(defineJob({
+      timeout: 2_147_483,
+      failOnTimeout: true,
+      async handle() {},
+    })).toMatchObject({ timeout: 2_147_483, failOnTimeout: true })
+
+    expect(() => defineJob({
+      timeout: 2_147_484,
+      async handle() {},
+    })).toThrow('Job timeout must be less than or equal to 2147483.')
+
+    expect(() => defineJob({
+      failOnTimeout: 'yes' as unknown as boolean,
+      async handle() {},
+    })).toThrow('Job failOnTimeout must be a boolean when provided.')
+  })
+
   it('rejects invalid job metadata and malformed definitions', () => {
     expect(() => defineJob({
       tries: 0,

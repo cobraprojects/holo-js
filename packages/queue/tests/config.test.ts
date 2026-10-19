@@ -96,6 +96,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          afterCommit: false,
           connection: 'cache',
           queue: 'emails',
           retryAfter: 120,
@@ -112,6 +113,7 @@ describe('@holo-js/queue config', () => {
         database: {
           name: 'database',
           driver: 'database',
+          afterCommit: false,
           queue: 'reports',
           retryAfter: 45,
           sleep: 3,
@@ -151,6 +153,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          afterCommit: false,
           connection: 'redis',
           queue: 'critical',
           retryAfter: 60,
@@ -184,6 +187,7 @@ describe('@holo-js/queue config', () => {
     }, sharedRedisConfig).connections.redis).toEqual({
       name: 'redis',
       driver: 'redis',
+      afterCommit: false,
       connection: 'cache',
       queue: 'default',
       retryAfter: 90,
@@ -392,11 +396,13 @@ describe('@holo-js/queue config', () => {
         sync: {
           name: 'sync',
           driver: 'sync',
+          afterCommit: false,
           queue: 'default',
         },
         redis: {
           name: 'redis',
           driver: 'redis',
+          afterCommit: false,
           connection: 'default',
           queue: 'default',
           retryAfter: 90,
@@ -412,6 +418,7 @@ describe('@holo-js/queue config', () => {
         database: {
           name: 'database',
           driver: 'database',
+          afterCommit: false,
           queue: 'default',
           retryAfter: 90,
           sleep: 1,
@@ -439,6 +446,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          afterCommit: false,
           connection: 'cache',
           queue: 'default',
           retryAfter: 90,
@@ -510,6 +518,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          afterCommit: false,
           connection: 'redis-primary',
           queue: 'notifications',
           retryAfter: 90,
@@ -717,6 +726,7 @@ describe('@holo-js/queue config', () => {
     }, sharedRedisConfig).connections.redis).toEqual({
       name: 'redis',
       driver: 'redis',
+      afterCommit: false,
       connection: 'cache',
       queue: 'default',
       retryAfter: 90,
@@ -759,6 +769,7 @@ describe('@holo-js/queue config', () => {
     }).connections.redis).toEqual({
       name: 'redis',
       driver: 'redis',
+      afterCommit: false,
       connection: 'cluster',
       queue: 'default',
       retryAfter: 90,
@@ -823,6 +834,39 @@ describe('@holo-js/queue config', () => {
 
   it('exposes parseInteger fallback behavior for undefined values', () => {
     expect(queueInternals.parseInteger(undefined, 7, 'sleep')).toBe(7)
+  })
+
+  it('caps database sleep at the Node timer limit', () => {
+    expect(normalizeQueueConfig({
+      connections: {
+        database: { driver: 'database', sleep: 2_147_483 },
+      },
+    }).connections.database).toMatchObject({ sleep: 2_147_483 })
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        database: { driver: 'database', sleep: 2_147_484 },
+      },
+    })).toThrow('queue connection "database" sleep must be less than or equal to 2147483.')
+  })
+
+  it('defaults connection afterCommit to false and accepts an explicit value', () => {
+    const config = normalizeQueueConfig({
+      connections: {
+        sync: { driver: 'sync' },
+        database: { driver: 'database' },
+        deferred: { driver: 'database', afterCommit: true },
+      },
+    })
+
+    expect(config.connections.sync).toMatchObject({ afterCommit: false })
+    expect(config.connections.database).toMatchObject({ afterCommit: false })
+    expect(config.connections.deferred).toMatchObject({ afterCommit: true })
+    expect(() => normalizeQueueConfig({
+      connections: {
+        database: { driver: 'database', afterCommit: 'yes' as unknown as boolean },
+      },
+    })).toThrow('queue connection "database" afterCommit must be a boolean.')
   })
 
   it('freezes defined jobs', () => {

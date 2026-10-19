@@ -35,6 +35,8 @@ export type ResolvedChannelPlan = {
   readonly queue?: string
   readonly delay?: NotificationDelayValue
   readonly afterCommit: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 type PlannedDelivery = {
@@ -134,6 +136,8 @@ function resolveChannelDispatchPlan(
   const afterCommit = options.afterCommit
     ?? notificationQueueOptions?.afterCommit
     ?? (queued ? config.queue.afterCommit : false)
+  const tries = queued ? notificationQueueOptions?.tries ?? config.queue.tries : undefined
+  const backoff = queued ? notificationQueueOptions?.backoff ?? config.queue.backoff : undefined
 
   return Object.freeze({
     channel,
@@ -144,6 +148,8 @@ function resolveChannelDispatchPlan(
       ? new Date(resolvedDelay.getTime())
       : queued ? resolvedDelay : undefined,
     afterCommit,
+    tries,
+    backoff,
   })
 }
 

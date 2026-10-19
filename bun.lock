@@ -998,11 +998,18 @@
         "@holo-js/kernel": "catalog:",
       },
       "devDependencies": {
+        "@holo-js/db": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
+      "peerDependencies": {
+        "@holo-js/db": "catalog:",
+      },
+      "optionalPeers": [
+        "@holo-js/db",
+      ],
     },
     "packages/queue-db": {
       "name": "@holo-js/queue-db",
