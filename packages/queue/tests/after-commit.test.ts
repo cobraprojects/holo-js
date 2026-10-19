@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB } from '@holo-js/db'
 import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
-import { dispatch, dispatchSync, registerQueueJob, resetQueueRegistry } from '../src'
+import { configureQueueRuntime, dispatch, dispatchSync, registerQueueJob, resetQueueRegistry, type QueueDispatchResult, type QueueDriver } from '../src'
 
 async function openHarness(connectionAfterCommit?: boolean) {
   const harness = await createSQLiteQueueHarness({
@@ -133,5 +133,66 @@ describe('@holo-js/queue after-commit dispatch', () => {
 
     await expect(dispatchSync('slow-inline', {})).resolves.toBeUndefined()
     expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it('reports the same synchronous flag and job id to the awaited result and onComplete on the sync driver', async () => {
+    const harness = await createSQLiteQueueHarness({
+      queueConfig: {
+        default: 'sync',
+        failed: false,
+        connections: {
+          database: { driver: 'database', connection: 'default', table: 'jobs', queue: 'default' },
+          sync: { driver: 'sync', queue: 'default', afterCommit: true },
+        },
+      },
+    })
+    onTestFinished(() => harness.cleanup())
+    registerQueueJob({ handle() {} }, { name: 'receipt-sent' })
+    const completed: QueueDispatchResult[] = []
+
+    const awaited = await DB.transaction(async () => dispatch('receipt-sent', {})
+      .onComplete(result => {
+        completed.push(result)
+      })
+      .dispatch())
+
+    expect(completed).toEqual([awaited])
+  })
+
+  // Known gap: the awaited result must return the caller's job ID before commit, but a driver that assigns its own ID
+  // only reports it at commit. Fixing this changes QueueDispatchResult.jobId, so this stays a failing expectation until then.
+  it.fails('reports the job id a driver assigns to the awaited result and onComplete', async () => {
+    await openHarness()
+    const driver: QueueDriver = {
+      name: 'assigns-ids',
+      driver: 'assigns-ids',
+      mode: 'sync',
+      async dispatch() {
+        return { jobId: 'assigned-by-driver', synchronous: true }
+      },
+      async clear() {
+        return 0
+      },
+      async close() {},
+    }
+    configureQueueRuntime({
+      config: {
+        default: 'assigns',
+        failed: false,
+        connections: {
+          assigns: { driver: 'assigns-ids', queue: 'default', afterCommit: true },
+        },
+      },
+      driverFactories: [{ driver: 'assigns-ids', create: () => driver }],
+    })
+    const completed: QueueDispatchResult[] = []
+
+    const awaited = await DB.transaction(async () => dispatch('receipt-sent', {})
+      .onComplete(result => {
+        completed.push(result)
+      })
+      .dispatch())
+
+    expect(completed).toEqual([awaited])
   })
 })

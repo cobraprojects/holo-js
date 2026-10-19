@@ -588,11 +588,12 @@ async function dispatchRecord(
         }
       })
 
+      // The driver runs at commit, so report how it will run now, not after commit.
       return {
         jobId: envelope.id,
         connection: envelope.connection,
         queue: envelope.queue,
-        synchronous: false,
+        synchronous: driver.mode === 'sync',
       }
     }
 
