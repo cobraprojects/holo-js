@@ -59,7 +59,7 @@ if (command === '--worker') {
   for (const variant of ['direct', 'blob', 'validation']) {
     for (let run = 0; run < runs; run += 1) {
       const child = spawnSync(process.execPath, ['--expose-gc', '--import', 'tsx', fileURLToPath(import.meta.url), '--worker', String(uploadMiB), variant], { encoding: 'utf8' })
-      assert.equal(child.status, 0, child.stderr)
+      assert.equal(child.status, 0, `signal: ${child.signal}; error: ${child.error?.message}; stderr: ${child.stderr}`)
       samples.push(JSON.parse(child.stdout))
     }
   }
