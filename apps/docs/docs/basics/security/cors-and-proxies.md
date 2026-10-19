@@ -87,7 +87,7 @@ export async function GET(request: Request) {
 
 Holo identifies each visitor by the address of their connection. That works out of the box when visitors connect straight to your app.
 
-Behind a load balancer, CDN, or reverse proxy such as nginx, every connection comes from the proxy. The proxy passes the visitor's address, protocol, and host in headers like `X-Forwarded-For` and `X-Forwarded-Proto`. Tell Holo which proxies to believe in `config/security.ts`:
+Behind a load balancer, CDN, or reverse proxy such as nginx, every connection comes from the proxy. The proxy passes the visitor's address, protocol, and host in `X-Forwarded-*` headers. Tell Holo which proxies to believe in `config/security.ts`:
 
 ```ts [config/security.ts]
 import { defineSecurityConfig } from '@holo-js/security'
@@ -99,15 +99,27 @@ export default defineSecurityConfig({
 
 This is the setup for nginx on the same server. List IP addresses or CIDR ranges, such as `'10.0.0.0/8'`. The default is `[]`, which trusts no proxy.
 
+When a Nuxt app receives a request over a Unix socket, as it does behind `nuxt dev`, Holo treats the connection as coming from `127.0.0.1`. If you serve Nuxt behind a proxy over a Unix socket, add `'127.0.0.1'` to `trustedProxies`. Otherwise Holo ignores the proxy's headers, and every visitor shares the address `127.0.0.1`, including for rate limiting.
+
 ### How Holo finds the visitor
 
-Holo reads forwarded headers only when the connection comes from a trusted proxy. Then it reads `X-Forwarded-For` from right to left, skipping trusted proxies, and stops at the first address it doesn't trust. That address is the visitor.
+Holo reads forwarded headers only when the connection comes from a trusted proxy, the same way Laravel's `TrustProxies` middleware does. Then it reads `X-Forwarded-For` from right to left, skipping trusted proxies and entries that aren't IP addresses, and stops at the first address it doesn't trust. That address is the visitor.
 
 Proxies such as nginx add the address they saw to the end of the list. Anything a visitor sends in their own `X-Forwarded-For` stays to the left of it, so a visitor can't pretend to be someone else.
 
-Holo takes the protocol and host from the nearest trusted proxy. The protocol decides whether cookies, including the CSRF cookie, get the `Secure` flag.
+Holo honors these headers from a trusted proxy. Apart from `X-Forwarded-For`, it takes the first value when a header lists several:
 
-Holo understands both `X-Forwarded-*` headers and the standard `Forwarded` header. If a request carries both and they describe different clients, Holo answers `400 Bad Request`. It also answers `400` when a trusted header has a malformed value, such as an unknown protocol or a host with spaces.
+| Header | Used for |
+|---|---|
+| `X-Forwarded-For` | The visitor's IP address. |
+| `X-Forwarded-Proto` | The protocol. `https`, `on`, `ssl`, and `1` mean HTTPS; anything else means HTTP. The protocol decides whether cookies, including the CSRF cookie, get the `Secure` flag. |
+| `X-Forwarded-Host` | The host, with an optional port. |
+| `X-Forwarded-Port` | The port. It replaces any port in the host. |
+| `X-Forwarded-Prefix` | A path the proxy serves your app under, such as `/blog`. It's added in front of the path in [the public URL](#read-the-public-url). Route matching, such as CSRF `except` and CORS `paths`, still uses the path without the prefix. |
+
+The standard `Forwarded` header is ignored, as in Laravel. Configure your proxy to send `X-Forwarded-*` headers instead.
+
+Holo answers `400 Bad Request` when a trusted header has a malformed value, such as a host with spaces, a port that isn't a number, or a prefix that doesn't start with a single `/`.
 
 ### Behind Cloudflare
 
@@ -130,7 +142,7 @@ The example lists two of Cloudflare's ranges. Copy the full current list from Cl
 
 ### Trust the proxy in front: `'*'`
 
-Use `'*'` when your app is only reachable through one proxy, but you don't know its address in advance, as on many hosting platforms. Holo then trusts whatever connects to it and takes the visitor from the last `X-Forwarded-For` entry:
+Use `'*'` when your app is only reachable through one proxy, but you don't know its address in advance, as on many hosting platforms. Holo then trusts whatever connects to it and takes the visitor from the last `X-Forwarded-For` entry. It also trusts forwarded headers when the framework doesn't tell Holo the connection address:
 
 ```ts [config/security.ts]
 import { defineSecurityConfig } from '@holo-js/security'
@@ -142,12 +154,14 @@ export default defineSecurityConfig({
 
 ### Next.js
 
-Next.js doesn't tell Holo the address of the connection. Without trusted proxies, Holo can't identify visitors in a Next.js app, and rate limiting by IP throws an error that tells you to set `trustedProxies`.
+Next.js doesn't tell Holo the address of the connection, so Holo can't check it against a list of proxies. In a Next.js app, Holo reads forwarded headers only with `trustedProxies: '*'`. With a list, or without `trustedProxies`, Holo ignores forwarded headers, and rate limiting by IP throws an error that tells you to set `'*'`.
 
-New Next.js projects start with `trustedProxies: '*'`. Deploy them behind a proxy or a platform such as Vercel that sets `X-Forwarded-For`. If you know your proxy's addresses, list them instead.
+New Next.js projects start with `trustedProxies: '*'`. Deploy them behind a proxy or a platform such as Vercel that sets `X-Forwarded-For`.
+
+Next.js itself applies `X-Forwarded-Proto` to the request URL before Holo sees it, whatever `trustedProxies` says.
 
 ::: warning
-Only trust proxies that every request has to pass through. If visitors can reach your app directly, a trusted `'*'` lets them choose their own IP address and dodge rate limits.
+`'*'` is safe only when your app is reachable through your proxy and nothing else. Block direct access to the port your Next.js server listens on, for example with a firewall or by listening on `127.0.0.1` behind nginx. If visitors can reach your app directly, they can send their own `X-Forwarded-*` headers to choose their IP address, dodge rate limits, and change the host and protocol Holo sees.
 :::
 
 ### Read the public URL
@@ -161,7 +175,7 @@ const url = resolveRequestUrl(request)
 const resetLink = new URL('/reset-password', url.origin)
 ```
 
-It accepts a `Request`, a Nuxt `event`, or a SvelteKit request event, and doesn't read the body. It throws on hosts with invalid characters, non-HTTP protocols, and URLs with credentials.
+It accepts a `Request`, a Nuxt `event`, or a SvelteKit request event, and doesn't read the body. Behind a trusted proxy that sends `X-Forwarded-Prefix: /blog`, a request for `/login` resolves to `/blog/login`. It throws on hosts with invalid characters, non-HTTP protocols, and URLs with credentials.
 
 ## Signed tokens
 

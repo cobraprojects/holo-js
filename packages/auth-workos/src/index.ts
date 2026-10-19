@@ -921,12 +921,6 @@ function getRecordField(input: Readonly<Record<string, unknown>>, name: string):
     : undefined
 }
 
-function getRequestIpAddress(request: Request): string | undefined {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')?.trim()
-    || undefined
-}
-
 async function authenticateWorkosCode(
   request: Request,
   code: string,
@@ -938,7 +932,7 @@ async function authenticateWorkosCode(
     client_id: clientId,
     client_secret: apiKey,
     code,
-    ip_address: getRequestIpAddress(request),
+    ip_address: authRuntimeInternals.resolveClientAddress(request),
     user_agent: request.headers.get('user-agent')?.trim() || undefined,
   }
 
