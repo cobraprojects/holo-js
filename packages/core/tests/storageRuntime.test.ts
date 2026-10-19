@@ -296,3 +296,108 @@ describe('@holo-js/core local storage safety', () => {
     expect(paths).toEqual(['a-b.txt', 'a.txt', 'a/x.txt', 'ab.txt', 'b/c.txt', 'b/c/d.txt'])
   })
 })
+
+describe('local storage name decoding', () => {
+  async function createDisk(): Promise<{ readonly root: string, readonly outside: string }> {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'holo-storage-decode-')))
+    tempDirs.push(base)
+    const root = join(base, 'disk')
+    const outside = join(base, 'outside')
+    await Promise.all([mkdir(root), mkdir(outside)])
+    return { root, outside }
+  }
+
+  it('skips names Windows cannot store, reports why, and renames the rest', async () => {
+    const { root } = await createDisk()
+    for (const name of ['report%3A2026.txt', 'what%3F.txt', 'NUL%20.txt', 'CON%20', 'trail%2E%2E%2E', 'a%20.', 'a%0Ab.txt', 'plain%20name.txt']) {
+      await writeFile(join(root, name), name)
+    }
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'win32' })
+
+    expect(result.renamed).toEqual([{ from: 'plain%20name.txt', to: 'plain name.txt' }])
+    expect(result.skipped).toEqual(expect.arrayContaining([
+      { path: 'report%3A2026.txt', reason: expect.stringContaining('Windows') },
+      { path: 'what%3F.txt', reason: expect.stringContaining('Windows') },
+      { path: 'NUL%20.txt', reason: expect.stringContaining('device name') },
+      { path: 'CON%20', reason: expect.stringContaining('dot or a space') },
+      { path: 'a%20.', reason: expect.stringContaining('dot or a space') },
+      { path: 'a%0Ab.txt', reason: expect.stringContaining('Windows') },
+    ]))
+    expect(result.skipped).toHaveLength(6)
+    expect((await readdir(root)).sort()).toEqual([
+      'CON%20', 'NUL%20.txt', 'a%0Ab.txt', 'a%20.', 'plain name.txt', 'report%3A2026.txt', 'trail%2E%2E%2E', 'what%3F.txt',
+    ])
+  })
+
+  it('renames names that are valid on POSIX, including ones with a colon', async () => {
+    const { root } = await createDisk()
+    await writeFile(join(root, 'report%3A2026.txt'), 'colon')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result).toEqual({ renamed: [{ from: 'report%3A2026.txt', to: 'report:2026.txt' }], skipped: [] })
+    await expect(readFile(join(root, 'report:2026.txt'), 'utf8')).resolves.toBe('colon')
+  })
+
+  it('never follows a symbolic link and skips its metadata sidecar with it', async () => {
+    const { root, outside } = await createDisk()
+    await writeFile(join(outside, 'secret.txt'), 'private')
+    await symlink(join(outside, 'secret.txt'), join(root, 'link%20name.txt'))
+    await writeFile(join(root, 'link%20name.txt$'), '{"owner":"ops"}')
+    await writeFile(join(root, 'plain%20file.txt'), 'data')
+    await writeFile(join(root, 'plain%20file.txt$'), '{"owner":"billing"}')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([
+      { from: 'plain%20file.txt', to: 'plain file.txt' },
+      { from: 'plain%20file.txt$', to: 'plain file.txt$' },
+    ])
+    expect(result.skipped).toEqual([
+      { path: 'link%20name.txt', reason: expect.stringContaining('symbolic link') },
+      { path: 'link%20name.txt$', reason: expect.stringContaining('symbolic link') },
+    ])
+    expect((await lstat(join(root, 'link%20name.txt'))).isSymbolicLink()).toBe(true)
+    await expect(readFile(join(root, 'link%20name.txt$'), 'utf8')).resolves.toBe('{"owner":"ops"}')
+    await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('private')
+  })
+
+  it('keeps the file and its metadata together when the metadata is a symbolic link', async () => {
+    const { root, outside } = await createDisk()
+    await writeFile(join(outside, 'meta.json'), '{"owner":"ops"}')
+    await writeFile(join(root, 'report%20one.txt'), 'data')
+    await symlink(join(outside, 'meta.json'), join(root, 'report%20one.txt$'))
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([])
+    expect(result.skipped).toEqual([
+      { path: 'report%20one.txt', reason: expect.stringContaining('metadata is a symbolic link') },
+      { path: 'report%20one.txt$', reason: expect.stringContaining('symbolic link') },
+    ])
+    expect((await readdir(root)).sort()).toEqual(['report%20one.txt', 'report%20one.txt$'])
+  })
+
+  it.skipIf(!canRestrictPermissions)('reports a failed rename and keeps renaming the rest', async () => {
+    const { root } = await createDisk()
+    await mkdir(join(root, 'locked%20dir'))
+    await writeFile(join(root, 'locked%20dir', 'inner%20file.txt'), 'inner')
+    await writeFile(join(root, 'after%20file.txt'), 'after')
+    await chmod(join(root, 'locked%20dir'), 0o555)
+
+    try {
+      const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+      expect(result.renamed).toEqual(expect.arrayContaining([
+        { from: 'after%20file.txt', to: 'after file.txt' },
+        { from: 'locked%20dir', to: 'locked dir' },
+      ]))
+      expect(result.skipped).toEqual([
+        { path: 'locked dir/inner%20file.txt', reason: expect.stringContaining('rename failed') },
+      ])
+    } finally {
+      await chmod(join(root, 'locked dir'), 0o755)
+    }
+  })
+})

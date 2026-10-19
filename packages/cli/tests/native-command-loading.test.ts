@@ -263,3 +263,24 @@ it('decodes URL-encoded local storage names through the actual CLI once', async 
     await rm(root, { recursive: true, force: true })
   }
 }, 30000)
+
+it('leaves a symbolic link and its metadata sidecar in place through the actual CLI', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/storage.ts', "import { defineStorageConfig } from '@holo-js/storage'; export default defineStorageConfig({ defaultDisk: 'local', disks: { local: { driver: 'local', root: './storage/app' } } })")
+    await write('outside/secret.txt', 'private')
+    await mkdir(join(root, 'storage/app'), { recursive: true })
+    await symlink(join(root, 'outside/secret.txt'), join(root, 'storage/app/link%20name.txt'))
+    await write('storage/app/link%20name.txt$', '{"owner":"ops"}')
+
+    const { stdout } = await execute(process.execPath, [cli, 'storage:decode-names', '--disk=local'], { cwd: root })
+
+    expect(stdout).toContain('[storage] Skipped "link%20name.txt": symbolic links are never followed.')
+    expect(stdout).toContain('[storage] Skipped "link%20name.txt$": its file is a symbolic link.')
+    expect(stdout).toContain('[storage] Renamed 0 names on disk "local".')
+    expect((await readdir(join(root, 'storage/app'))).sort()).toEqual(['link%20name.txt', 'link%20name.txt$'])
+    await expect(readFile(join(root, 'outside/secret.txt'), 'utf8')).resolves.toBe('private')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)

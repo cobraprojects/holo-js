@@ -179,9 +179,38 @@ function decodeLegacyStorageEntryName(entry: Dirent): string | null {
   return decodeLegacyStorageName(entry.name)
 }
 
-function storageNameDecodingSkipReason(entry: Dirent, decoded: string): string | null {
+const WINDOWS_DEVICE_NAMES = new Set([
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`),
+])
+
+function windowsStorageNameProblem(name: string): string | null {
+  const hasControlCharacter = Array.from(name).some(character => character.charCodeAt(0) < 32)
+  if (hasControlCharacter || /[<>:"|?*]/u.test(name)) {
+    return 'Windows file names cannot contain < > : " | ? * or control characters'
+  }
+  if (/[. ]$/u.test(name)) {
+    return 'Windows file names cannot end with a dot or a space'
+  }
+  const baseName = (name.split('.', 1)[0] ?? '').replace(/ +$/u, '').toUpperCase()
+  if (WINDOWS_DEVICE_NAMES.has(baseName)) {
+    return 'Windows reserves this device name'
+  }
+
+  return null
+}
+
+function storageNameDecodingSkipReason(entry: Dirent, decoded: string, platform: NodeJS.Platform): string | null {
   if (decoded === '.' || decoded === '..' || /[\\/]/u.test(decoded) || decoded.includes('\u0000')) {
     return 'the decoded name is not a valid file name'
+  }
+  if (platform === 'win32') {
+    const windowsProblem = windowsStorageNameProblem(decoded)
+    if (windowsProblem) return windowsProblem
   }
   const isMetadata = entry.isFile() && entry.name.endsWith('$')
   if (!isMetadata && entry.isFile() && decoded.endsWith('$')) {
@@ -204,7 +233,11 @@ async function storagePathExists(path: string): Promise<boolean> {
   }
 }
 
-async function decodeLocalStorageNames(root: string): Promise<StorageNameDecodingResult> {
+async function decodeLocalStorageNames(
+  root: string,
+  options: { readonly platform?: NodeJS.Platform } = {},
+): Promise<StorageNameDecodingResult> {
+  const platform = options.platform ?? process.platform
   const renamed: DecodedStorageName[] = []
   const skipped: SkippedStorageName[] = []
   const resolvedRoot = await resolveExistingRealPath(resolve(root))
@@ -217,26 +250,42 @@ async function decodeLocalStorageNames(root: string): Promise<StorageNameDecodin
     }
 
     const entries = (await readdir(resolvedDirectory, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory() || entry.isFile())
+      .filter(entry => entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())
       .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    const symbolicLinkNames = new Set(entries.filter(entry => entry.isSymbolicLink()).map(entry => entry.name))
     const skippedNames = new Set<string>()
     for (const entry of entries) {
       let name = entry.name
+      if (entry.isSymbolicLink()) {
+        if (decodeLegacyStorageName(entry.name.endsWith('$') ? entry.name.slice(0, -1) : entry.name) !== null) {
+          skippedNames.add(entry.name)
+          skipped.push({ path: [...segments, entry.name].join('/'), reason: 'symbolic links are never followed' })
+        }
+        continue
+      }
+
       const decoded = decodeLegacyStorageEntryName(entry)
       if (decoded !== null) {
         const from = [...segments, entry.name].join('/')
         const to = [...segments, decoded].join('/')
         const isMetadata = entry.isFile() && entry.name.endsWith('$')
-        const reason = storageNameDecodingSkipReason(entry, decoded)
+        const reason = storageNameDecodingSkipReason(entry, decoded, platform)
+          ?? (isMetadata && symbolicLinkNames.has(entry.name.slice(0, -1)) ? 'its file is a symbolic link' : null)
+          ?? (!isMetadata && symbolicLinkNames.has(`${entry.name}$`) ? 'its metadata is a symbolic link' : null)
           ?? (isMetadata && skippedNames.has(entry.name.slice(0, -1)) ? 'its file was skipped' : null)
           ?? (await storagePathExists(join(resolvedDirectory, decoded)) ? `"${to}" already exists` : null)
         if (reason) {
           skippedNames.add(entry.name)
           skipped.push({ path: from, reason })
         } else {
-          await rename(join(resolvedDirectory, entry.name), join(resolvedDirectory, decoded))
-          renamed.push({ from, to })
-          name = decoded
+          try {
+            await rename(join(resolvedDirectory, entry.name), join(resolvedDirectory, decoded))
+            renamed.push({ from, to })
+            name = decoded
+          } catch (error) {
+            skippedNames.add(entry.name)
+            skipped.push({ path: from, reason: `rename failed: ${(error as NodeJS.ErrnoException).code ?? 'unknown error'}` })
+          }
         }
       }
       if (entry.isDirectory()) await visit(join(resolvedDirectory, name), [...segments, name])

@@ -772,7 +772,9 @@ It prints every rename and every file it skips, then the total. Running it again
 
 - a name that still looks URL-encoded after decoding, such as `100%2520off.txt`, because Holo can't tell what the original name was;
 - a name whose decoded form already exists;
-- a file whose decoded name ends in `$`, because local disks use that ending for metadata.
+- a file whose decoded name ends in `$`, because local disks use that ending for metadata;
+- on Windows, a name Windows can't store, such as one with `:` or `?`, one ending in a dot or space, or a device name such as `CON`;
+- a symbolic link, which is never followed, along with its metadata file.
 
 It never follows a symlink inside the disk, so files outside the disk root are never renamed. The disk's `root` in `config/storage.ts` is used as the disk, including when that path is itself a symlink, as the rest of the disk does. Rename skipped files by hand. S3 disks are not supported; see [S3 file names with special characters](/getting-started/upgrading#s3-file-names-with-special-characters).
 
