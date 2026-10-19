@@ -230,10 +230,6 @@ function getNitroStorage(nuxt: NuxtHarness): Record<string, unknown> | undefined
   return nuxt.options.nitro?.storage
 }
 
-function getHoloStorageRuntimeConfig(nuxt: NuxtHarness): Record<string, unknown> | undefined {
-  return nuxt.options.runtimeConfig?.holoStorage as Record<string, unknown> | undefined
-}
-
 function getOptimizeDepsInclude(nuxt: NuxtHarness): readonly string[] {
   return nuxt.options.vite?.optimizeDeps?.include ?? []
 }
@@ -553,35 +549,10 @@ export default defineStorageConfig({
     await module.setup({}, nuxt)
     await nuxt.callHook('modules:done')
 
-    expect(getNitroStorage(nuxt)).toEqual({
-      'holo:local': {
-        driver: 'fs',
-        base: './storage/app',
-      },
-      'holo:public': {
-        driver: 'fs',
-        base: './storage/app/public',
-      },
-      'holo:assets': {
-        driver: 'fs',
-        base: './storage/assets',
-      },
-      'holo:media': {
-        driver: resolve(packageDir, 'src/runtime/drivers/s3.js'),
-        bucket: 'media-bucket',
-        region: 'us-east-1',
-        endpoint: 'https://s3.us-east-1.amazonaws.com',
-        accessKeyId: 'AKIAEXAMPLE',
-        secretAccessKey: 'supersecretkey',
-        sessionToken: 'session-token',
-        forcePathStyleEndpoint: true,
-      },
-    })
-    expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('media')
-    expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/files')
+    expect(getNitroStorage(nuxt)).toBeUndefined()
     expect(nuxt.options.build.transpile).toContain(resolve(packageDir, 'src/runtime'))
     expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/files/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
-    expect(registeredServerPlugins(nuxt)).toContain(resolve(packageDir, 'src/runtime/plugins/storage'))
+    expect(registeredServerPlugins(nuxt)).not.toContain(resolve(packageDir, 'src/runtime/plugins/storage'))
     expect(registeredServerPlugins(nuxt)).toContain(resolve(packageDir, 'src/runtime/plugins/init'))
     expect(registeredServerPlugins(nuxt)).toContain(resolve(packageDir, 'src/runtime/plugins/forms'))
 
@@ -603,18 +574,7 @@ export default defineStorageConfig({
     await module.setup({}, nuxt)
     await nuxt.callHook('modules:done')
 
-    expect(getNitroStorage(nuxt)).toEqual({
-      'holo:local': {
-        driver: 'fs',
-        base: './storage/app',
-      },
-      'holo:public': {
-        driver: 'fs',
-        base: './storage/app/public',
-      },
-    })
-    expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('local')
-    expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/storage')
+    expect(getNitroStorage(nuxt)).toBeUndefined()
     expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/storage/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
   }, 30000)
 
@@ -651,7 +611,7 @@ export default defineStorageConfig({
     expect(nuxt.options.plugins.filter(plugin => typeof plugin !== 'string' && plugin.src === resolve(packageDir, 'src/runtime/plugins/realtime.ts'))).toHaveLength(1)
   }, 30000)
 
-  it('preserves existing storage until native module finalization', async () => {
+  it('leaves application Nitro storage mounts untouched', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `
 import { defineStorageConfig } from ${storageEntry}
@@ -690,64 +650,12 @@ export default defineStorageConfig({
 
     await nuxt.callHook('modules:done')
 
-    expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('media')
     expect(getNitroStorage(nuxt)).toEqual({
-      'holo:local': {
+      'holo:legacy': {
         driver: 'fs',
-        base: './storage/app',
-      },
-      'holo:public': {
-        driver: 'fs',
-        base: './storage/app/public',
-      },
-      'holo:media': {
-        driver: resolve(packageDir, 'src/runtime/drivers/s3.js'),
-        bucket: 'media-bucket',
-        region: 'us-east-1',
-        endpoint: 'https://s3.us-east-1.amazonaws.com',
-        accessKeyId: undefined,
-        secretAccessKey: undefined,
-        sessionToken: undefined,
-        forcePathStyleEndpoint: false,
+        base: './legacy',
       },
     })
     expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({ route: '/storage/**', handler: resolve(packageDir, 'src/runtime/server/routes/storage') }))
-  }, 30000)
-
-  it('initializes nitro storage containers when nitro exists without a storage map', async () => {
-    const root = await createProject()
-    await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${storageEntry}
-
-export default defineStorageConfig({
-  disks: {
-    media: {
-      driver: 's3',
-      bucket: 'media-bucket',
-      region: 'us-east-1',
-    },
-  },
-})
-`, 'utf8')
-
-    const { module } = await loadAdapterModule()
-    const nuxt = await createNuxtHarness(root)
-    nuxt.options.nitro = {}
-
-    await module.setup({}, nuxt)
-
-    expect(getNitroStorage(nuxt)).toMatchObject({
-      'holo:local': {
-        driver: 'fs',
-        base: './storage/app',
-      },
-      'holo:public': {
-        driver: 'fs',
-        base: './storage/app/public',
-      },
-      'holo:media': {
-        driver: resolve(packageDir, 'src/runtime/drivers/s3.js'),
-      },
-    })
   }, 30000)
 })

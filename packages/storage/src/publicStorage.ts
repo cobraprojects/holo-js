@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { type FileHandle, open, realpath, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { type FileContentInspection, fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
+import { localStoragePathInternals } from '@holo-js/kernel'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
@@ -39,7 +40,7 @@ function isPublicLocalDisk(disk: RuntimeDiskConfig | undefined): disk is PublicL
 
 function resolveAbsolutePath(projectRoot: string, disk: PublicLocalDisk, fileSegments: string[]): string | null {
   const root = resolve(projectRoot, disk.root)
-  const absolutePath = resolve(root, ...fileSegments.map(encodeURIComponent))
+  const absolutePath = resolve(root, ...fileSegments)
   if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
     return null
   }
@@ -130,16 +131,18 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
 
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
-  if (!segments?.length || segments.some(segment => segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
-    return null
-  }
+  return segments?.length ? segments : null
+}
 
-  return segments
+function areValidFileSegments(segments: readonly string[]): boolean {
+  return segments.length > 0
+    && !segments.at(-1)?.endsWith('$')
+    && segments.every(segment => localStoragePathInternals.segmentProblem(segment) === null)
 }
 
 function resolveDefaultPublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, segments: string[]): ResolvedPublicStorageRequest | null {
   const disk = isPublicLocalDisk(config.disks.public) ? config.disks.public : undefined
-  if (!disk) {
+  if (!disk || !areValidFileSegments(segments)) {
     return null
   }
 
@@ -161,7 +164,7 @@ function resolveNamedPublicStorageRequest(projectRoot: string, config: HoloStora
   }
 
   const fileSegments = usesReservedNamespace ? segments.slice(2) : segments.slice(1)
-  if (fileSegments.length === 0) {
+  if (!areValidFileSegments(fileSegments)) {
     return null
   }
 
