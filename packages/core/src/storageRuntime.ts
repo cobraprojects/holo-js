@@ -170,15 +170,6 @@ function decodeLegacyStorageName(name: string): string | null {
   }
 }
 
-function decodeLegacyStorageEntryName(entry: Dirent): string | null {
-  if (entry.isFile() && entry.name.endsWith('$')) {
-    const decoded = decodeLegacyStorageName(entry.name.slice(0, -1))
-    return decoded === null ? null : `${decoded}$`
-  }
-
-  return decodeLegacyStorageName(entry.name)
-}
-
 const WINDOWS_DEVICE_NAMES = new Set([
   'CON',
   'PRN',
@@ -204,7 +195,21 @@ function windowsStorageNameProblem(name: string): string | null {
   return null
 }
 
+function isStorageMetadataEntry(entry: Dirent): boolean {
+  return !entry.isDirectory() && entry.name.endsWith('$')
+}
+
+function decodeLegacyStorageEntry(entry: Dirent): string | null {
+  if (isStorageMetadataEntry(entry)) {
+    const decoded = decodeLegacyStorageName(entry.name.slice(0, -1))
+    return decoded === null ? null : `${decoded}$`
+  }
+
+  return decodeLegacyStorageName(entry.name)
+}
+
 function storageNameDecodingSkipReason(entry: Dirent, decoded: string, platform: NodeJS.Platform): string | null {
+  const isMetadata = isStorageMetadataEntry(entry)
   if (decoded === '.' || decoded === '..' || /[\\/]/u.test(decoded) || decoded.includes('\u0000')) {
     return 'the decoded name is not a valid file name'
   }
@@ -212,8 +217,7 @@ function storageNameDecodingSkipReason(entry: Dirent, decoded: string, platform:
     const windowsProblem = windowsStorageNameProblem(decoded)
     if (windowsProblem) return windowsProblem
   }
-  const isMetadata = entry.isFile() && entry.name.endsWith('$')
-  if (!isMetadata && entry.isFile() && decoded.endsWith('$')) {
+  if (entry.isFile() && !isMetadata && decoded.endsWith('$')) {
     return 'local file names ending in "$" are reserved for metadata'
   }
   if (decodeLegacyStorageName(isMetadata ? decoded.slice(0, -1) : decoded) !== null) {
@@ -233,11 +237,47 @@ async function storagePathExists(path: string): Promise<boolean> {
   }
 }
 
+interface StorageNameDecodingOptions {
+  readonly platform?: NodeJS.Platform
+  readonly rename?: (from: string, to: string) => Promise<void>
+}
+
+interface DecodeRename {
+  readonly entry: Dirent
+  readonly from: string
+  readonly to: string
+  readonly decodedName: string
+  reason: string | null
+}
+
+function errorCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code ?? 'unknown error'
+}
+
+async function planDecodeRename(
+  entry: Dirent,
+  directory: string,
+  segments: readonly string[],
+  platform: NodeJS.Platform,
+): Promise<DecodeRename | null> {
+  const decodedName = decodeLegacyStorageEntry(entry)
+  if (decodedName === null) return null
+
+  const from = [...segments, entry.name].join('/')
+  const to = [...segments, decodedName].join('/')
+  if (entry.isSymbolicLink()) return { entry, from, to, decodedName, reason: 'symbolic links are never followed' }
+
+  const reason = storageNameDecodingSkipReason(entry, decodedName, platform)
+    ?? (await storagePathExists(join(directory, decodedName)) ? `"${to}" already exists` : null)
+  return { entry, from, to, decodedName, reason }
+}
+
 async function decodeLocalStorageNames(
   root: string,
-  options: { readonly platform?: NodeJS.Platform } = {},
+  options: StorageNameDecodingOptions = {},
 ): Promise<StorageNameDecodingResult> {
   const platform = options.platform ?? process.platform
+  const renamePath = options.rename ?? rename
   const renamed: DecodedStorageName[] = []
   const skipped: SkippedStorageName[] = []
   const resolvedRoot = await resolveExistingRealPath(resolve(root))
@@ -252,43 +292,81 @@ async function decodeLocalStorageNames(
     const entries = (await readdir(resolvedDirectory, { withFileTypes: true }))
       .filter(entry => entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())
       .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
-    const symbolicLinkNames = new Set(entries.filter(entry => entry.isSymbolicLink()).map(entry => entry.name))
-    const skippedNames = new Set<string>()
+    const byName = new Map(entries.map(entry => [entry.name, entry]))
+
+    const units: Dirent[][] = []
     for (const entry of entries) {
-      let name = entry.name
-      if (entry.isSymbolicLink()) {
-        if (decodeLegacyStorageName(entry.name.endsWith('$') ? entry.name.slice(0, -1) : entry.name) !== null) {
-          skippedNames.add(entry.name)
-          skipped.push({ path: [...segments, entry.name].join('/'), reason: 'symbolic links are never followed' })
+      if (isStorageMetadataEntry(entry)) {
+        const owner = byName.get(entry.name.slice(0, -1))
+        if (owner && !isStorageMetadataEntry(owner)) continue
+      }
+      const metadata = byName.get(`${entry.name}$`)
+      units.push(metadata && isStorageMetadataEntry(metadata) && !isStorageMetadataEntry(entry) ? [entry, metadata] : [entry])
+    }
+
+    const plans: DecodeRename[][] = []
+    for (const unit of units) {
+      const members: DecodeRename[] = []
+      for (const entry of unit) {
+        const member = await planDecodeRename(entry, resolvedDirectory, segments, platform)
+        if (member) members.push(member)
+      }
+      const [data, metadata] = members
+      if (data && metadata) {
+        if (data.reason === null && metadata.reason !== null) {
+          data.reason = metadata.entry.isSymbolicLink() ? 'its metadata is a symbolic link' : 'its metadata was skipped'
         }
+        if (metadata.reason === null && data.reason !== null) {
+          metadata.reason = data.entry.isSymbolicLink() ? 'its file is a symbolic link' : 'its file was skipped'
+        }
+      }
+      if (members.length > 0) plans.push(members)
+    }
+
+    const renamedFolders = new Map<string, string>()
+    for (const members of plans) {
+      if (members.some(member => member.reason !== null)) {
+        for (const member of members) skipped.push({ path: member.from, reason: member.reason ?? 'its file was skipped' })
         continue
       }
 
-      const decoded = decodeLegacyStorageEntryName(entry)
-      if (decoded !== null) {
-        const from = [...segments, entry.name].join('/')
-        const to = [...segments, decoded].join('/')
-        const isMetadata = entry.isFile() && entry.name.endsWith('$')
-        const reason = storageNameDecodingSkipReason(entry, decoded, platform)
-          ?? (isMetadata && symbolicLinkNames.has(entry.name.slice(0, -1)) ? 'its file is a symbolic link' : null)
-          ?? (!isMetadata && symbolicLinkNames.has(`${entry.name}$`) ? 'its metadata is a symbolic link' : null)
-          ?? (isMetadata && skippedNames.has(entry.name.slice(0, -1)) ? 'its file was skipped' : null)
-          ?? (await storagePathExists(join(resolvedDirectory, decoded)) ? `"${to}" already exists` : null)
-        if (reason) {
-          skippedNames.add(entry.name)
-          skipped.push({ path: from, reason })
-        } else {
+      const done: DecodeRename[] = []
+      try {
+        for (const member of members) {
+          await renamePath(join(resolvedDirectory, member.entry.name), join(resolvedDirectory, member.decodedName))
+          done.push(member)
+        }
+        for (const member of members) {
+          renamed.push({ from: member.from, to: member.to })
+          if (member.entry.isDirectory()) renamedFolders.set(member.entry.name, member.decodedName)
+        }
+      } catch (error) {
+        const code = errorCode(error)
+        const restoreFailures = new Map<DecodeRename, string>()
+        for (const member of [...done].reverse()) {
           try {
-            await rename(join(resolvedDirectory, entry.name), join(resolvedDirectory, decoded))
-            renamed.push({ from, to })
-            name = decoded
-          } catch (error) {
-            skippedNames.add(entry.name)
-            skipped.push({ path: from, reason: `rename failed: ${(error as NodeJS.ErrnoException).code ?? 'unknown error'}` })
+            await renamePath(join(resolvedDirectory, member.decodedName), join(resolvedDirectory, member.entry.name))
+          } catch (restoreError) {
+            restoreFailures.set(member, errorCode(restoreError))
+            if (member.entry.isDirectory()) renamedFolders.set(member.entry.name, member.decodedName)
           }
         }
+        for (const member of members) {
+          const restoreFailure = restoreFailures.get(member)
+          skipped.push({
+            path: member.from,
+            reason: restoreFailure === undefined
+              ? `rename failed: ${code}; the name was left unchanged`
+              : `rename failed: ${code}; could not restore its name: ${restoreFailure}`,
+          })
+        }
       }
-      if (entry.isDirectory()) await visit(join(resolvedDirectory, name), [...segments, name])
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const currentName = renamedFolders.get(entry.name) ?? entry.name
+      await visit(join(resolvedDirectory, currentName), [...segments, currentName])
     }
   }
 

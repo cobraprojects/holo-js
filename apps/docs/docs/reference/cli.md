@@ -776,6 +776,8 @@ It prints every rename and every file it skips, then the total. Running it again
 - on Windows, a name Windows can't store, such as one with `:` or `?`, one ending in a dot or space, or a device name such as `CON`;
 - a symbolic link, which is never followed, along with its metadata file.
 
+A file and its metadata are checked together before either is renamed. If either name must be skipped, both are skipped. If the second rename fails, the command attempts to restore the first name and reports any failure.
+
 It never follows a symlink inside the disk, so files outside the disk root are never renamed. The disk's `root` in `config/storage.ts` is used as the disk, including when that path is itself a symlink, as the rest of the disk does. Rename skipped files by hand. S3 disks are not supported; see [S3 file names with special characters](/getting-started/upgrading#s3-file-names-with-special-characters).
 
 ## Broadcast commands

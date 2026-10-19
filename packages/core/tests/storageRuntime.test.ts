@@ -401,3 +401,135 @@ describe('local storage name decoding', () => {
     }
   })
 })
+
+describe('local storage name decoding pairs', () => {
+  async function createPairDisk(): Promise<string> {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'holo-storage-pairs-')))
+    tempDirs.push(base)
+    const root = join(base, 'disk')
+    await mkdir(root)
+    return root
+  }
+
+  it('keeps a file and its metadata together when only the metadata destination exists', async () => {
+    const root = await createPairDisk()
+    await writeFile(join(root, 'report%20one.txt'), 'data')
+    await writeFile(join(root, 'report%20one.txt$'), '{"owner":"ops"}')
+    await writeFile(join(root, 'report one.txt$'), '{"owner":"existing"}')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([])
+    expect(result.skipped).toEqual([
+      { path: 'report%20one.txt', reason: expect.stringContaining('its metadata was skipped') },
+      { path: 'report%20one.txt$', reason: expect.stringContaining('"report one.txt$" already exists') },
+    ])
+    expect((await readdir(root)).sort()).toEqual(['report one.txt$', 'report%20one.txt', 'report%20one.txt$'])
+    await expect(readFile(join(root, 'report%20one.txt$'), 'utf8')).resolves.toBe('{"owner":"ops"}')
+  })
+
+  it('keeps a file and its metadata together when only the data destination exists', async () => {
+    const root = await createPairDisk()
+    await writeFile(join(root, 'report%20two.txt'), 'data')
+    await writeFile(join(root, 'report%20two.txt$'), '{"owner":"ops"}')
+    await writeFile(join(root, 'report two.txt'), 'existing')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([])
+    expect(result.skipped).toEqual([
+      { path: 'report%20two.txt', reason: expect.stringContaining('"report two.txt" already exists') },
+      { path: 'report%20two.txt$', reason: expect.stringContaining('its file was skipped') },
+    ])
+    expect((await readdir(root)).sort()).toEqual(['report two.txt', 'report%20two.txt', 'report%20two.txt$'])
+  })
+
+  it('decodes files inside folders whose own names are not encoded', async () => {
+    const root = await createPairDisk()
+    await mkdir(join(root, 'plain folder'))
+    await writeFile(join(root, 'plain folder', 'inner%20file.txt'), 'inner')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result).toEqual({
+      renamed: [{ from: 'plain folder/inner%20file.txt', to: 'plain folder/inner file.txt' }],
+      skipped: [],
+    })
+    await expect(readFile(join(root, 'plain folder', 'inner file.txt'), 'utf8')).resolves.toBe('inner')
+  })
+
+  it('decodes directory names ending in the metadata suffix', async () => {
+    const root = await createPairDisk()
+    await mkdir(join(root, 'prices%24'))
+    await writeFile(join(root, 'prices%24', 'report.txt'), 'data')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result).toEqual({ renamed: [{ from: 'prices%24', to: 'prices$' }], skipped: [] })
+    await expect(readFile(join(root, 'prices$', 'report.txt'), 'utf8')).resolves.toBe('data')
+  })
+
+  it('renames a pair together when both destinations are free', async () => {
+    const root = await createPairDisk()
+    await writeFile(join(root, 'report%20three.txt'), 'data')
+    await writeFile(join(root, 'report%20three.txt$'), '{"owner":"ops"}')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([
+      { from: 'report%20three.txt', to: 'report three.txt' },
+      { from: 'report%20three.txt$', to: 'report three.txt$' },
+    ])
+    expect(result.skipped).toEqual([])
+    await expect(readFile(join(root, 'report three.txt$'), 'utf8')).resolves.toBe('{"owner":"ops"}')
+  })
+
+  it('reports a failed folder rollback and continues inside its current name', async () => {
+    const root = await createPairDisk()
+    await mkdir(join(root, 'report%20folder'))
+    await writeFile(join(root, 'report%20folder', 'inner%20file.txt'), 'inner')
+    await writeFile(join(root, 'report%20folder$'), '{}')
+    const { rename } = await import('node:fs/promises')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, {
+      platform: 'linux',
+      rename: async (from, to) => {
+        if (to.endsWith('$') || to.endsWith('report%20folder')) {
+          throw Object.assign(new Error('injected'), { code: 'EIO' })
+        }
+        await rename(from, to)
+      },
+    })
+
+    expect(result.skipped).toEqual([
+      { path: 'report%20folder', reason: expect.stringContaining('could not restore its name: EIO') },
+      { path: 'report%20folder$', reason: expect.stringContaining('rename failed: EIO') },
+    ])
+    expect(result.renamed).toEqual([
+      { from: 'report folder/inner%20file.txt', to: 'report folder/inner file.txt' },
+    ])
+    await expect(readFile(join(root, 'report folder', 'inner file.txt'), 'utf8')).resolves.toBe('inner')
+  })
+
+  it('restores the file when the metadata rename fails after it succeeded', async () => {
+    const root = await createPairDisk()
+    await writeFile(join(root, 'report%20four.txt'), 'data')
+    await writeFile(join(root, 'report%20four.txt$'), '{"owner":"ops"}')
+    const { rename } = await import('node:fs/promises')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, {
+      platform: 'linux',
+      rename: async (from, to) => {
+        if (to.endsWith('$')) throw Object.assign(new Error('injected'), { code: 'EIO' })
+        await rename(from, to)
+      },
+    })
+
+    expect(result.renamed).toEqual([])
+    expect(result.skipped).toEqual([
+      { path: 'report%20four.txt', reason: expect.stringContaining('rename failed: EIO') },
+      { path: 'report%20four.txt$', reason: expect.stringContaining('rename failed: EIO') },
+    ])
+    expect((await readdir(root)).sort()).toEqual(['report%20four.txt', 'report%20four.txt$'])
+  })
+})
