@@ -40,7 +40,7 @@ S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, s
 
 ### Database queue workers on MySQL
 
-The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so two workers no longer take the same job at the same time. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
+The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
 
 ### Node.js 22.14 or newer
 
