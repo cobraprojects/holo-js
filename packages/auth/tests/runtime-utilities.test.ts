@@ -140,13 +140,24 @@ describe('auth runtime utilities', () => {
       },
     })
     expect(proxied.url).toBe('https://app.test/auth')
-    expect(() => normalizeRequestInput({
+    expect(normalizeRequestInput({
       path: '/auth',
       headers: {
         host: 'internal.test',
         'x-forwarded-proto': 'javascript',
       },
-    })).toThrow('protocols must be http or https')
+    }).url).toBe('http://internal.test/auth')
+    const proxiedHeaders = new Map([
+      ['host', 'internal.test'],
+      ['x-forwarded-proto', 'https'],
+      ['x-forwarded-host', 'app.test'],
+      ['x-forwarded-port', '8443'],
+      ['x-forwarded-prefix', '/blog'],
+      ['forwarded', 'host=attacker.test'],
+    ])
+    const getOnly = normalizeRequestInput({ path: '/auth', headers: { get: (name: string) => proxiedHeaders.get(name) } })
+    expect(getOnly.url).toBe('https://app.test:8443/auth')
+    expect(getOnly.headers.has('forwarded')).toBe(false)
   })
 
   it('parses, validates, verifies, caches, refreshes, and retries JWT data', async () => {
