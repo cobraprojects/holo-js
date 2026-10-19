@@ -13,6 +13,7 @@
 
 - Add optional `AuthRuntimeContext.getRequestScope()` for request-isolated remember-me state and concurrent guard restoration. Remember-cookie writes require a scope; unscoped custom contexts retain uncached sequential restoration.
 
+- Add `addMediaFromDisk(path, disk)` to attach a file already on a storage disk. Holo copies it to the collection's disk and leaves the original in place. `config/media.ts` reads `MEDIA_DISK` as `disk`, which sets the disk for collections without `disk()` and defaults to `public`. See [Media](apps/docs/docs/media/index.md#add-media-from-a-disk).
 - Add `holo migrate --isolated`, which takes a database lock so concurrent runners, such as deploy replicas, don't apply the same migrations. A run that finds the lock held skips the migrations and exits successfully. The lock lives in `_holo_migration_locks`, expires an hour after it was last renewed if a runner stops, and is renewed before each migration. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
 - Add `--force` to `holo migrate:rollback`.
 - Add `.afterCommit()` to queue dispatches and `afterCommit` to queue connections (default `false`), so a job dispatched inside a database transaction is queued only after it commits.
@@ -64,6 +65,7 @@
 
 ### Changed
 
+- Media treats `addMedia()` strings as local file paths and never downloads them. `addMediaFromUrl(url)` is the only way to download a remote file, and `addMedia({ url })` is removed. Remote downloads must finish within 30 seconds, including the body. Image conversions reject images over 40 million pixels or 1,000 frames and generate before the database transaction starts. See [Media strings are file paths](apps/docs/docs/getting-started/upgrading.md#media-strings-are-file-paths).
 - `holo migrate:fresh`, `holo migrate:rollback` and `holo seed` ask for confirmation when `APP_ENV` is `production`, as Laravel's confirmable commands do. Without a terminal they stop with an error unless `--force` is passed, and `--force` is honored by all three. `migrate:rollback` previously ignored `--force`.
 - `@holo-js/core` and `@holo-js/adapter-nuxt` decide whether to read the config cache from the resolved application environment instead of `NODE_ENV`, so `APP_ENV` in `.env` selects the cache the same way it selects env files. Nuxt project accessors cache the loaded project under the same rule.
 - Realtime queries and mutations on Next.js, Nuxt and SvelteKit resolve definitions only from the prebuilt list, and never scan or bundle realtime files per request. A name missing from that list answers `404` instead of `400`. Nuxt generates the list from `server/realtime`, as Next.js and SvelteKit already do.

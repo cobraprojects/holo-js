@@ -6,7 +6,14 @@ import sharp from 'sharp'
 import { beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { createNativeRedisQueue } from '../../queue-redis/tests/support/native-queue'
 import { createNativeMediaStorage, storageFiles } from './support/native-storage'
-import { Storage } from '@holo-js/storage/runtime'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
+import {
+  Storage,
+  StorageMetadataUnsupportedError,
+  StorageStreamingUnsupportedError,
+  type StorageDisk,
+  type StorageFileMetadata,
+} from '@holo-js/storage/runtime'
 import {
   belongsTo,
   column,
@@ -212,6 +219,70 @@ async function createImageBuffer(
     : base.jpeg().toBuffer()
 }
 
+async function* countStreamedBytes(
+  chunks: AsyncIterable<Uint8Array>,
+  observed: { streamedBytes: number },
+): AsyncGenerator<Uint8Array> {
+  for await (const chunk of chunks) {
+    observed.streamedBytes += chunk.byteLength
+    yield chunk
+  }
+}
+
+function observeDiskReads(overrides: {
+  readonly disk?: string
+  readonly stat?: (path: string) => Promise<StorageFileMetadata | null>
+  readonly streaming?: boolean
+} = {}): { streamedBytes: number, fullReads: number } {
+  const observed = { streamedBytes: 0, fullReads: 0 }
+  const watched = overrides.disk ?? 'local'
+  const openDisk = Storage.disk.bind(Storage)
+  vi.spyOn(Storage, 'disk').mockImplementation((diskName?: string) => {
+    const disk = openDisk(diskName)
+    if (diskName !== watched) return disk
+    return {
+      ...disk,
+      stat: overrides.stat ?? (async path => await disk.stat(path)),
+      getBytes: async (path: string) => {
+        observed.fullReads += 1
+        return await disk.getBytes(path)
+      },
+      readStream: async (path: string, streamOptions?: Parameters<StorageDisk['readStream']>[1]) => {
+        if (overrides.streaming === false) throw new StorageStreamingUnsupportedError()
+        const chunks = await disk.readStream(path, streamOptions)
+        return chunks ? countStreamedBytes(chunks, observed) : null
+      },
+    } as StorageDisk
+  })
+  onTestFinished(() => { vi.restoreAllMocks() })
+  return observed
+}
+
+function recordConversionWrites(events: string[]): void {
+  const openDisk = Storage.disk.bind(Storage)
+  vi.spyOn(Storage, 'disk').mockImplementation((diskName?: string) => {
+    const disk = openDisk(diskName)
+    return {
+      ...disk,
+      put: async (path: string, contents: Parameters<StorageDisk['put']>[1]) => {
+        events.push(`write:${path.split('/').pop()?.replace(/\.txt$/, '') ?? path}`)
+        return await disk.put(path, contents)
+      },
+    } as StorageDisk
+  })
+  onTestFinished(() => { vi.restoreAllMocks() })
+}
+
+function createAnimatedGif(frameCount: number): Buffer {
+  const frame = Buffer.from([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0x00])
+  return Buffer.concat([
+    Buffer.from('GIF89a', 'ascii'),
+    Buffer.from([1, 0, 1, 0, 0, 0, 0]),
+    ...Array.from({ length: frameCount }, () => frame),
+    Buffer.from([0x3b]),
+  ])
+}
+
 async function createRemoteMediaServer(handler: RequestListener) {
   const server = createServer(handler)
   await new Promise<void>(resolveListening => server.listen(0, '127.0.0.1', resolveListening))
@@ -221,9 +292,10 @@ async function createRemoteMediaServer(handler: RequestListener) {
     server.close(error => error ? reject(error) : resolveClosed())
     server.closeAllConnections()
   }))
-  mediaAdderInternals.setRemoteMediaDownloader(async url => await mediaAdderInternals.requestRemoteMedia(
+  mediaAdderInternals.setRemoteMediaDownloader(async (url, signal) => await mediaAdderInternals.requestRemoteMedia(
     new URL(`${url.pathname}${url.search}`, `http://media.test:${address.port}`),
     { address: '127.0.0.1', family: 4 },
+    signal,
   ))
 }
 
@@ -1866,6 +1938,470 @@ describe('@holo-js/media', () => {
     expect(new MediaItem(relativeUrlMedia).getPath()).toBe('/assets/relative/original.txt')
   })
 
+  it('treats string sources as local paths and never downloads them', async () => {
+    let requests = 0
+    await createRemoteMediaServer((_request, response) => {
+      requests += 1
+      response.end(pngPixel)
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    const post = await Post.create({ title: 'String source' })
+    await expect(post.addMedia('https://example.test/photo.png').toMediaCollection('images'))
+      .rejects.toThrow('Use addMediaFromUrl() to download a URL.')
+    await expect(post.addMedia({ url: 'https://example.test/photo.png' } as never).toMediaCollection('images'))
+      .rejects.toThrow('Use addMediaFromUrl() to download a URL.')
+    expect(requests).toBe(0)
+    expect(await post.getMedia('images')).toEqual([])
+  })
+
+  it('attaches files already on a storage disk and leaves the source in place', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const post = await Post.create({ title: 'From disk' })
+
+    const media = await expectMediaAdded(
+      post.addMediaFromDisk('uploads/photo.png', 'local')
+        .usingName('Disk Photo')
+        .toMediaCollection('images'),
+    )
+
+    expect(media.record.disk).toBe('public')
+    expect(media.fileName).toBe('photo.png')
+    expect(media.record.name).toBe('Disk Photo')
+    expect(media.mimeType).toBe('image/png')
+    expect(await Storage.disk('local').exists('uploads/photo.png')).toBe(true)
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+
+    await expect(post.addMediaFromDisk('uploads/missing.png', 'local').toMediaCollection('images'))
+      .rejects.toThrow('"uploads/missing.png" was not found on disk "local"')
+  })
+
+  it('rejects oversize disk files from their metadata without reading the body', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(2 * 1024 * 1024, 1))
+    const observed = observeDiskReads()
+    const post = await Post.create({ title: 'Oversize disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.data).toBeNull()
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(result.error?.actualSize).toBe(2 * 1024 * 1024)
+    expect(observed).toEqual({ streamedBytes: 0, fullReads: 0 })
+  })
+
+  it('stops streaming an oversize disk file once it passes the limit when metadata is unavailable', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(1024 * 1024, 1))
+    const observed = observeDiskReads({
+      stat: async () => {
+        throw new StorageMetadataUnsupportedError()
+      },
+    })
+    const post = await Post.create({ title: 'Unknown size disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(observed.fullReads).toBe(0)
+    expect(observed.streamedBytes).toBeGreaterThan(0)
+    expect(observed.streamedBytes).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it('stops streaming a disk file whose stored metadata understates its size', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(1024 * 1024, 1))
+    const observed = observeDiskReads({
+      stat: async () => ({ size: 512, mimeType: null }),
+    })
+    const post = await Post.create({ title: 'Stale size disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(observed.fullReads).toBe(0)
+    expect(observed.streamedBytes).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it('names disk files from a backslash-separated path the way storage reads them', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const post = await Post.create({ title: 'Backslash path' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads\\photo.png', 'local').toMediaCollection('images'))
+
+    expect(media.fileName).toBe('photo.png')
+    expect(media.mimeType).toBe('image/png')
+  })
+
+  it('reads disk files through getBytes when the backend cannot stream and no maxSize is set', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const observed = observeDiskReads({
+      streaming: false,
+      stat: async () => {
+        throw new StorageMetadataUnsupportedError()
+      },
+    })
+    const post = await Post.create({ title: 'Unstreamed disk file' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads/photo.png', 'local').toMediaCollection('images'))
+
+    expect(media.fileName).toBe('photo.png')
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+    expect(observed.fullReads).toBe(1)
+  })
+
+  it('reads a disk file through getBytes after stat confirms it is within the limit when the backend cannot stream', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/small.png', pngPixel)
+    const observed = observeDiskReads({ streaming: false })
+    const post = await Post.create({ title: 'Stat-checked disk file' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads/small.png', 'local').toMediaCollection('images'))
+
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+    expect(observed.fullReads).toBe(1)
+  })
+
+  it('rejects oversize disk files from stat without reading them when the backend cannot stream', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(2 * 1024 * 1024, 1))
+    const observed = observeDiskReads({ streaming: false })
+    const post = await Post.create({ title: 'Unstreamed oversize disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(observed.fullReads).toBe(0)
+  })
+
+  it('rejects a disk file that stat understated after reading it whole when the backend cannot stream', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(1024 * 1024, 1))
+    const observed = observeDiskReads({
+      streaming: false,
+      stat: async () => ({ size: 512, mimeType: null }),
+    })
+    const post = await Post.create({ title: 'Stale unstreamed disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(result.error?.actualSize).toBe(1024 * 1024)
+    expect(observed.fullReads).toBe(1)
+  })
+
+  it('explains that a size-limited collection needs stat or streaming when the backend has neither', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const observed = observeDiskReads({
+      streaming: false,
+      stat: async () => {
+        throw new StorageMetadataUnsupportedError()
+      },
+    })
+    const post = await Post.create({ title: 'Unbounded disk file' })
+
+    await expect(post.addMediaFromDisk('uploads/photo.png', 'local').toMediaCollection('images'))
+      .rejects.toThrow('needs a disk that supports file metadata or streaming')
+    expect(observed.fullReads).toBe(0)
+  })
+
+  it('attaches disk files that fit the collection limit', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/small.png', pngPixel)
+    const post = await Post.create({ title: 'Small disk file' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads/small.png', 'local').toMediaCollection('images'))
+
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+  })
+
+  it('stores collections without a disk on the configured media disk', async () => {
+    configureConfigRuntime({ app: { timezone: 'UTC' }, media: { disk: 'local' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images')],
+    })
+
+    const post = await Post.create({ title: 'Configured disk' })
+    const media = await expectMediaAdded(post.addMedia(pngPixel).toMediaCollection('images'))
+
+    expect(media.record.disk).toBe('local')
+    expect(await Storage.disk('local').exists(media.record.path)).toBe(true)
+  })
+
+  it('abandons remote downloads that run longer than thirty seconds', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    const post = await Post.create({ title: 'Slow remote' })
+    let downloadSignal: AbortSignal | undefined
+    let downloadStarted: () => void = () => {}
+    const started = new Promise<void>((resolveStarted) => {
+      downloadStarted = resolveStarted
+    })
+    mediaAdderInternals.setRemoteMediaDownloader((_url, signal) => {
+      downloadSignal = signal
+      downloadStarted()
+      return new Promise<Response>(() => {})
+    })
+
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+
+    const upload = post.addMediaFromUrl('https://example.test/slow.png').toMediaCollection('images')
+    const assertion = expect(upload).rejects.toThrow('must finish within 30 seconds')
+    await started
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(downloadSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(downloadSignal?.aborted).toBe(true)
+  })
+
+  it('closes a stalled remote response when the download deadline passes', async () => {
+    let closeServerResponse: () => void = () => {}
+    const serverResponseClosed = new Promise<void>((resolveClosed) => {
+      closeServerResponse = resolveClosed
+    })
+    let respond: () => void = () => {}
+    const serverResponded = new Promise<void>((resolveResponded) => {
+      respond = resolveResponded
+    })
+    await createRemoteMediaServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'image/png', 'content-length': '4096' })
+      response.write(pngPixel)
+      response.on('close', () => closeServerResponse())
+      respond()
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    const post = await Post.create({ title: 'Stalled remote' })
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+
+    const upload = post.addMediaFromUrl('https://example.test/stalled.png').toMediaCollection('images')
+    const assertion = expect(upload).rejects.toThrow('must finish within 30 seconds')
+    await serverResponded
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    await assertion
+    await serverResponseClosed
+  })
+
+  it('generates image conversions before opening the database write transaction', async () => {
+    const scopes: string[] = []
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        scopes.push(DB.connection().getScope().kind)
+        return {
+          contents: Buffer.from(conversion.name),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Transaction scope' })
+    const media = await expectMediaAdded(post.addMedia(await createImageBuffer()).toMediaCollection('images'))
+
+    expect(scopes).toEqual(['root'])
+    expect(media.getAvailableConversions()).toEqual(['thumb'])
+  })
+
+  it('writes each conversion to disk before generating the next one', async () => {
+    const events: string[] = []
+    recordConversionWrites(events)
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        events.push(`generate:${conversion.name}`)
+        return {
+          contents: Buffer.from(conversion.name),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [
+        conversion('thumb').performOnCollections('images'),
+        conversion('card').performOnCollections('images'),
+        conversion('wide').performOnCollections('images'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Sequential conversions' })
+    await expectMediaAdded(post.addMedia(await createImageBuffer()).toMediaCollection('images'))
+
+    expect(events.filter(event => /thumb|card|wide/.test(event))).toEqual([
+      'generate:thumb',
+      'write:thumb',
+      'generate:card',
+      'write:card',
+      'generate:wide',
+      'write:wide',
+    ])
+  })
+
+  it('rejects image conversions whose decoded size exceeds the upload pixel limit', async () => {
+    const oversized = await sharp({
+      create: {
+        width: 7001,
+        height: 5715,
+        channels: 3,
+        background: { r: 20, g: 40, b: 60 },
+      },
+    }).jpeg().toBuffer()
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Oversized' })
+    await expect(post.addMedia(oversized).toMediaCollection('images'))
+      .rejects.toThrow('Failed to generate conversion "thumb"')
+    expect(await post.getMedia('images')).toEqual([])
+    expect(await storageFiles('public')).toEqual([])
+  })
+
+  it('rejects animated image conversions with more frames than the upload limit', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Too many frames' })
+    await expect(post.addMedia(createAnimatedGif(1_000)).toMediaCollection('images')).resolves.toMatchObject({ error: null })
+    await expect(post.addMedia(createAnimatedGif(1_001)).toMediaCollection('images'))
+      .rejects.toThrow('Failed to generate conversion "thumb"')
+    expect(await post.getMedia('images')).toHaveLength(1)
+  })
+
   it('supports remote uploads and selective regeneration', async () => {
     const imageBytes = await createImageBuffer()
     await createRemoteMediaServer((request, response) => {
@@ -1923,18 +2459,18 @@ describe('@holo-js/media', () => {
       revision = 'v2'
       await media.regenerate('thumb')
 
-      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v2:thumb')
+      expect(await Storage.disk('public').get(media.record.generated_conversions.thumb!.path)).toBe('v2:thumb')
       expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v1:card')
 
       revision = 'v3'
       await post.regenerateMedia('images', 'card')
 
-      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v3:card')
+      expect(await Storage.disk('public').get((await post.getFirstMedia('images'))!.record.generated_conversions.card!.path)).toBe('v3:card')
 
       await expect(post.regenerateMedia('images', 'missing' as never)).rejects.toThrow('Unknown media conversion')
 
       const download = await post
-        .addMedia('https://example.test')
+        .addMediaFromUrl('https://example.test')
         .toMediaCollection('downloads')
 
       expect(download.fileName).toBe('media.bin')
@@ -1943,7 +2479,7 @@ describe('@holo-js/media', () => {
       await expect(post.addMediaFromUrl('%%%%').toMediaCollection('downloads')).rejects.toThrow('valid absolute URLs')
 
       const renamedRemoteImage = await post
-        .addMedia({ url: 'https://example.test/override' })
+        .addMediaFromUrl('https://example.test/override')
         .usingFileName('override.png')
         .toMediaCollection('downloads')
 
@@ -1959,14 +2495,14 @@ describe('@holo-js/media', () => {
       revision = 'v4'
       await media.regenerate()
 
-      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v4:thumb')
-      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v4:card')
+      expect(await Storage.disk('public').get(media.record.generated_conversions.thumb!.path)).toBe('v4:thumb')
+      expect(await Storage.disk('public').get((await post.getFirstMedia('images'))!.record.generated_conversions.card!.path)).toBe('v4:card')
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
-  it('restores overwritten conversion storage when regeneration transaction rolls back', async () => {
+  it('keeps regenerated conversion storage when a regeneration transaction rolls back', async () => {
     let revision = 'v1'
 
     setMediaConversionExecutor({
@@ -2001,10 +2537,12 @@ describe('@holo-js/media', () => {
     expect(thumbPath).toBeTruthy()
 
     revision = 'v2'
+    let regeneratedPath = ''
     await expect(DB.transaction(async () => {
       const [transactionMedia] = await post.getMedia('images')
       await transactionMedia!.regenerate('thumb')
-      expect(await Storage.disk('public').get(thumbPath!)).toBe('v2:thumb')
+      regeneratedPath = transactionMedia!.record.generated_conversions.thumb!.path
+      expect(await Storage.disk('public').get(regeneratedPath)).toBe('v2:thumb')
 
       throw new Error('rollback conversion regeneration')
     })).rejects.toThrow('rollback conversion regeneration')
@@ -2012,6 +2550,42 @@ describe('@holo-js/media', () => {
     await media.getEntity().refresh()
     expect(media.record.generated_conversions.thumb?.path).toBe(thumbPath)
     expect(await Storage.disk('public').get(thumbPath!)).toBe('v1:thumb')
+    expect(await Storage.disk('public').exists(regeneratedPath)).toBe(false)
+  })
+
+  it('resolves a regenerated conversion URL to its new stored file', async () => {
+    let revision = 'v1'
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        return {
+          contents: Buffer.from(`${revision}:${conversion.name}`),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Regenerated URL' })
+    const media = await expectMediaAdded(post.addMedia(await createImageBuffer()).toMediaCollection('images'))
+    const previousUrl = media.getUrl('thumb')
+
+    revision = 'v2'
+    await media.regenerate('thumb')
+    const storedPath = media.record.generated_conversions.thumb!.path
+
+    expect(media.getUrl('thumb')).toBe(Storage.disk('public').url(storedPath))
+    expect(media.getUrl('thumb')).not.toBe(previousUrl)
+    expect(await Storage.disk('public').get(storedPath)).toBe('v2:thumb')
+    expect((await post.getFirstMedia('images'))!.getUrl('thumb')).toBe(media.getUrl('thumb'))
   })
 
   it('rejects oversized remote uploads before buffering the response body', async () => {
@@ -2841,10 +3415,12 @@ describe('@holo-js/media', () => {
       order_column: 1,
     })
 
-    await new MediaItem(legacy).regenerate('thumb')
+    const item = new MediaItem(legacy)
+    await item.regenerate('thumb')
 
+    expect(item.record.generated_conversions.thumb!.path).not.toBe('media/legacy/conversions/thumb.txt')
     expect(
-      await Storage.disk('public').get('media/legacy/conversions/thumb.txt'),
+      await Storage.disk('public').get(item.record.generated_conversions.thumb!.path),
     ).toBe('legacy-thumb')
   })
 
@@ -2990,7 +3566,7 @@ describe('@holo-js/media', () => {
     await item.regenerate()
 
     expect(item.getAvailableConversions()).toEqual(['global'])
-    expect(await Storage.disk('public').exists('media/ghost/conversions/global.txt')).toBe(true)
+    expect(await Storage.disk('public').exists(item.record.generated_conversions.global!.path)).toBe(true)
   })
 
   it('covers default disk, null metadata, and item fallback branches', async () => {
