@@ -3595,7 +3595,7 @@ it.each(['shutdown', 'rollback'] as const)('restores the actual borrowed durable
     readMany: (identities: Parameters<typeof nativeStore.readMany>[0]) => connectionAsyncContext.run(scope, () => nativeStore.readMany(identities)),
     revokeOthers: (...args: Parameters<typeof nativeStore.revokeOthers>) => connectionAsyncContext.run(scope, () => nativeStore.revokeOthers(...args)),
   }
-  const context = createAsyncAuthContext()
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
   const user = { id: 1, email: 'borrowed@app.test' }
   configureSessionRuntime({ appKey: 'holo-test-app-key', config: normalizeSessionConfig(), stores: { file: createFileSessionStore(join(root, 'borrowed-sessions')) } })
   configureAuthRuntime({

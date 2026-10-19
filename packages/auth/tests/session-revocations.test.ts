@@ -229,7 +229,6 @@ it('restores a valid remembered identity into a session with current revocation 
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const validRemember = {
     ...authRuntimeInternals.createMemoryAuthContext(),
-    appendResponseCookie: () => undefined,
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
     appendResponseCookie: () => undefined,
   }

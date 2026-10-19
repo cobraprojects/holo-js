@@ -2906,7 +2906,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     const restartedContext = Object.freeze({
       ...authRuntimeInternals.createMemoryAuthContext(),
-      appendResponseCookie: () => undefined,
       getRequestCookie(name: string) {
         if (name === 'holo_session_remember') {
           return rememberCookieValue(remembered.rememberToken)
