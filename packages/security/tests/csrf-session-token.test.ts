@@ -8,6 +8,7 @@ import {
   type SecurityCsrfSessionAccessor,
 } from '../src'
 import { csrfProtection } from '../src/sveltekit/server'
+import { flipCiphertextBit } from './support/ciphertext'
 import { memoryCsrfSessions as memorySessions } from './support/csrf-session'
 
 const appKey = 'csrf-session-token-key'
@@ -142,7 +143,7 @@ describe('session-stored CSRF token', () => {
     sessions.tokens.set('browser-a', 'session-token-a')
     configure(sessions)
     const encrypted = xsrfCookieOf(await csrf.cookie(post('browser-a')))
-    const tampered = `${encrypted.slice(0, -2)}xx`
+    const tampered = flipCiphertextBit(encrypted)
 
     await expect(csrf.verify(post('browser-a', { field: tampered }))).rejects.toBeInstanceOf(SecurityCsrfError)
     await expect(csrf.verify(post('browser-a', { csrfHeader: tampered }))).rejects.toBeInstanceOf(SecurityCsrfError)
