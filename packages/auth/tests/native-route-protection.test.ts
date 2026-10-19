@@ -18,7 +18,7 @@ async function nativeAuth() {
   const persistence = await createNativeAuthPersistence()
   const context = createAsyncAuthContext()
   const sessionStore = createNativeSessionStore()
-  configureSessionRuntime({ config: persistence.loadedConfig.session, stores: { file: sessionStore } })
+  configureSessionRuntime({ appKey: 'holo-test-app-key', config: persistence.loadedConfig.session, stores: { file: sessionStore } })
   type User = ReturnType<NonNullable<Awaited<ReturnType<typeof NativeUser.find>>>['toAttributes']>
   const users = persistence.providers.users as AuthProviderAdapter<User>
   const admins = persistence.providers.admins as AuthProviderAdapter<User>

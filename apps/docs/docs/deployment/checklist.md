@@ -5,7 +5,7 @@ Go through this list before your first production deploy, and again when you add
 ## App and environment
 
 - [ ] `APP_ENV` is `production` or unset on the server, and the server's `.env` doesn't set `APP_ENV=development`. Holo then loads `.env.production`. See [Environment Variables](/reference/environment#env-files-and-loading-order).
-- [ ] `APP_KEY` is set to a value from `npx holo key:generate`, and stays the same across deploys. Changing it breaks CSRF tokens, signed storage URLs, and encrypted social login tokens.
+- [ ] `APP_KEY` is set to a value from `npx holo key:generate`, and stays the same across deploys. Changing it signs every user out, and breaks CSRF tokens, signed storage URLs, and encrypted social login tokens.
 - [ ] `APP_DEBUG=false`, so errors don't show internal details.
 - [ ] `APP_URL` is the public HTTPS URL.
 - [ ] `.env` files with secrets are not committed. Only `.env.example` is.

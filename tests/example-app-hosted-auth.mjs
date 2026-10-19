@@ -117,7 +117,7 @@ export async function assertExampleAppHostedAuthBehavior(projectRoot, DB, servic
       sessionId = sessionIds[0]
       assert.ok(sessionId)
       await context.run(async () => {
-        const result = await hosted.authenticate(new Request(request, { headers: { authorization: `Bearer ${token}`, cookie: `holo_session=${sessionId}` } }))
+        const result = await hosted.authenticate(new Request(request, { headers: { authorization: `Bearer ${token}`, cookie: getSessionRuntime().sessionCookie(sessionId).split(';', 1)[0] } }))
         assert.equal(result.status, 'linked', `${provider}: repeated login must reuse the existing identity`)
         assert.equal(result.authSession.sessionId, sessionId)
       })
@@ -144,7 +144,7 @@ export async function assertExampleAppHostedAuthBehavior(projectRoot, DB, servic
         await assert.rejects(hosted.verifySession(service.token({ sub: id, sid: `session_${id}`, aud: 'another-client' })), /audience/i)
       } else {
         await context.run(async () => {
-          const response = await hosted.logoutWithClerk(new Request('http://localhost/logout', { method: 'POST', headers: { cookie: `holo_session=${sessionId}` } }))
+          const response = await hosted.logoutWithClerk(new Request('http://localhost/logout', { method: 'POST', headers: { cookie: getSessionRuntime().sessionCookie(sessionId).split(';', 1)[0] } }))
           assert.equal(response.status, 303)
         })
         assert.ok(service.requests.some(request => request.path === `/v1/sessions/session_${id}/revoke` && request.method === 'POST' && request.authorization === 'Bearer holo-test-secret'))

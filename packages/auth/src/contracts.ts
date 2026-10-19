@@ -626,6 +626,7 @@ export interface AuthSessionRuntime {
     value: string,
     options?: Record<string, unknown>,
   ): string
+  decryptCookie(name: string, value: string): string | undefined
 }
 
 export interface AuthRuntimeContext {

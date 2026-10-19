@@ -1666,7 +1666,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     try {
       managedSessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)
 
-      const sessionBindings = { config: loadedConfig.session, stores: managedSessionStores.stores }
+      const sessionBindings = { config: loadedConfig.session, stores: managedSessionStores.stores, appKey: loadedConfig.app.key }
       sessionModule.configureSessionRuntime(sessionBindings)
 
       if (existingManagedSessionRedisAdapters) {

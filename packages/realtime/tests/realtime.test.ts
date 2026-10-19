@@ -17785,6 +17785,7 @@ describe('@holo-js/realtime', () => {
     const store = createNativeSessionStore()
     const context = createAsyncAuthContext()
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: { ...persistence.loadedConfig.session, driver: 'file', stores: { file: { name: 'file', driver: 'file', path: store.path } } },
       stores: { file: store },
     })

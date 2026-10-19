@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   configureSecurityRuntime,
   csrf,
+  csrfInternals,
   defineSecurityConfig,
   resetSecurityRuntime,
 } from '../src'
@@ -113,7 +114,7 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
     expect(writes).toEqual([
       {
         name: 'XSRF-TOKEN',
-        value: input.value,
+        value: expect.stringMatching(/^[\w-]+$/),
         options: {
           httpOnly: false,
           path: '/',
@@ -138,22 +139,20 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
         },
       },
     ])
-    expect(input).toEqual({
-      type: 'hidden',
-      name: '_token',
-      value: writes[0]?.value,
-    })
+    expect(writes[0]?.value).not.toBe(input.value)
+    expect(csrfInternals.decryptCsrfToken(writes[0]?.value ?? '')).toBe(input.value)
   })
 
   it('preserves current cookies and refreshes only stale client configuration before rendering', async () => {
     configureSecurity()
     const token = await csrf.token(new Request('https://app.test/login'))
+    const encryptedToken = csrfInternals.encryptCsrfToken(token)
     const clientConfig = '{"csrf":{"field":"_token","cookie":"XSRF-TOKEN","header":"X-CSRF-TOKEN"}}'
     for (const configuration of [clientConfig, 'stale']) {
       const request = new Request('https://app.test/login', {
-        headers: { cookie: `XSRF-TOKEN=${token}` },
+        headers: { cookie: `XSRF-TOKEN=${encryptedToken}` },
       })
-      const { event, writes } = createEvent(request, token)
+      const { event, writes } = createEvent(request, encryptedToken)
       const configuredEvent = {
         ...event,
         cookies: {

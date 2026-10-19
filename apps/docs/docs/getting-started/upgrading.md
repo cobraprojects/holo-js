@@ -79,6 +79,16 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 `holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
+### Encrypted session, remember-me, and CSRF cookies
+
+Holo now encrypts the cookies it sets: the session cookie, the remember-me cookie, and `XSRF-TOKEN`. It uses AES-256-GCM with a key derived from `APP_KEY`, and rejects any cookie that was changed. Your own cookies, including ones written with `cookie()` or `cookies.make()`, are not encrypted.
+
+Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out once, remember-me cookies stop working, and the first form each browser submits with an old `XSRF-TOKEN` gets a `419` response. The next page load issues new cookies.
+
+`APP_KEY` must be set wherever Holo sets these cookies. Without it, signing in and issuing the CSRF cookie throw an error. Run `npx holo key:generate` if your `.env` has no key. Changing `APP_KEY` later signs everyone out again.
+
+If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

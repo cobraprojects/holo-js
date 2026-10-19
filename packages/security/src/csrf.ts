@@ -1,5 +1,5 @@
-import { resolveRequestUrl } from '@holo-js/kernel'
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { decryptCookieValue, encryptCookieValue, resolveRequestUrl } from '@holo-js/kernel'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   SecurityCsrfError,
   type SecurityCsrfFacade,
@@ -92,55 +92,32 @@ function createCsrfToken(): string {
   return randomBytes(32).toString('base64url')
 }
 
-function getCsrfSigningKey(): string {
-  const configured = getSecurityRuntime().csrfSigningKey?.trim()
-  if (configured) {
-    return configured
-  }
-
-  throw new Error('[@holo-js/security] CSRF signing key is not configured.')
+function csrfCookieName(): string {
+  return getSecurityRuntime().config.csrf.cookie
 }
 
-function signCsrfNonce(nonce: string): string {
-  return createHmac('sha256', getCsrfSigningKey())
-    .update(nonce)
-    .digest('base64url')
+function encryptCsrfToken(token: string): string {
+  return encryptCookieValue(csrfCookieName(), token, getSecurityRuntime().csrfSigningKey)
 }
 
-function encodeCsrfToken(nonce: string): string {
-  return `${nonce}.${signCsrfNonce(nonce)}`
+function decryptCsrfToken(value: string): string | undefined {
+  return decryptCookieValue(csrfCookieName(), value, getSecurityRuntime().csrfSigningKey)
 }
 
-function decodeCsrfToken(token: string): { readonly nonce: string, readonly signature: string } | null {
-  const separator = token.lastIndexOf('.')
-  if (separator <= 0 || separator === token.length - 1) {
-    return null
-  }
-
-  return Object.freeze({
-    nonce: token.slice(0, separator),
-    signature: token.slice(separator + 1),
-  })
-}
-
-function isValidSignedCsrfToken(token: string): boolean {
-  const decoded = decodeCsrfToken(token)
-  if (!decoded) {
+function tokensMatch(expected: string, submitted: string | undefined): boolean {
+  if (!submitted) {
     return false
   }
 
-  const expected = Buffer.from(signCsrfNonce(decoded.nonce))
-  const received = Buffer.from(decoded.signature)
-  if (expected.length !== received.length) {
-    return false
-  }
-
-  return timingSafeEqual(expected, received)
+  const plain = decryptCsrfToken(submitted) ?? submitted
+  const expectedBytes = Buffer.from(expected)
+  const submittedBytes = Buffer.from(plain)
+  return expectedBytes.length === submittedBytes.length && timingSafeEqual(expectedBytes, submittedBytes)
 }
 
 function getCookieToken(request: Request): string | undefined {
-  const { cookie } = getSecurityRuntime().config.csrf
-  return parseCookieHeader(request.headers.get('cookie'))[cookie]
+  const value = parseCookieHeader(request.headers.get('cookie'))[csrfCookieName()]
+  return value ? decryptCsrfToken(value) : undefined
 }
 
 function getHeaderToken(request: Request): string | undefined {
@@ -172,21 +149,12 @@ async function verifyRequest(
   }
 
   const cookieToken = getCookieToken(request)
-  if (!cookieToken || !isValidSignedCsrfToken(cookieToken)) {
+  if (!cookieToken) {
     throw new SecurityCsrfError()
   }
 
-  const headerToken = getHeaderToken(request)
-  if (headerToken) {
-    if (headerToken !== cookieToken) {
-      throw new SecurityCsrfError()
-    }
-
-    return
-  }
-
-  const requestToken = await readFormToken(request)
-  if (requestToken !== cookieToken) {
+  const submittedToken = getHeaderToken(request) ?? await readFormToken(request)
+  if (!tokensMatch(cookieToken, submittedToken)) {
     throw new SecurityCsrfError()
   }
 }
@@ -218,7 +186,7 @@ function resolveShouldProtect(request: Request, options: SecurityProtectOptions 
 
 export async function token(request: Request): Promise<string> {
   const cookieToken = getCookieToken(request)
-  if (cookieToken && isValidSignedCsrfToken(cookieToken)) {
+  if (cookieToken) {
     return cookieToken
   }
 
@@ -227,7 +195,7 @@ export async function token(request: Request): Promise<string> {
     return cached
   }
 
-  const created = encodeCsrfToken(createCsrfToken())
+  const created = createCsrfToken()
   generatedTokenCache.set(request, created)
   return created
 }
@@ -250,12 +218,12 @@ export async function input(request: Request): Promise<SecurityCsrfInput> {
   })
 }
 
+export async function encryptedToken(request: Request, explicitToken?: string): Promise<string> {
+  return encryptCsrfToken(explicitToken || await token(request))
+}
+
 export async function cookie(request: Request, explicitToken?: string): Promise<string> {
-  const config = getSecurityRuntime().config.csrf
-  const value = explicitToken
-    ? (isValidSignedCsrfToken(explicitToken) ? explicitToken : encodeCsrfToken(explicitToken))
-    : await token(request)
-  return serializeCookie(config.cookie, value, {
+  return serializeCookie(csrfCookieName(), await encryptedToken(request, explicitToken), {
     secure: isSecureRequest(request),
   })
 }
@@ -296,8 +264,6 @@ export const csrfInternals = {
   matchesPathPattern,
   parseCookieHeader,
   serializeCookie,
-  decodeCsrfToken,
-  encodeCsrfToken,
-  getCsrfSigningKey,
-  isValidSignedCsrfToken,
+  decryptCsrfToken,
+  encryptCsrfToken,
 }
