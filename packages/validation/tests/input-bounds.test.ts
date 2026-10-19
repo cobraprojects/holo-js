@@ -45,6 +45,21 @@ describe('Validation input bounds', () => {
     expect(result.valid).toBe(true)
   })
 
+  it.each(['form data', 'multipart request'])('limits uploaded files separately from non-file variables in %s', async (format) => {
+    const formData = formWith([['name', 'Ava'], ...variables(999)])
+    const file = new File(['report'], 'report.txt')
+    for (let index = 0; index < 1_000; index += 1) formData.append('attachments[]', file)
+    const definition = schema({ name: field.string().required(), attachments: field.array(field.file()) })
+    const input = () => format === 'form data' ? formData : new Request('https://example.com/', { method: 'POST', body: formData })
+
+    const accepted = await safeParse(input(), definition)
+    expect(accepted.valid).toBe(true)
+    if (accepted.valid) expect(accepted.data.attachments).toHaveLength(1_000)
+
+    formData.append('attachments[]', file)
+    expect(await rootErrors(input(), definition)).toEqual(['The request contains too many input variables.'])
+  })
+
   it('requires every array index to be lower than the entries submitted for that array', async () => {
     const definition = schema({
       tags: field.array(field.string()).optional(),
@@ -323,6 +338,29 @@ describe('Validation input bounds', () => {
     if (list.valid) expect(list.data.tag).toEqual(expected)
   })
 
+  it.each([
+    'tags[0]=a&tags[0][]=b',
+    'tags[0][]=b&tags[0]=a',
+    'tags[0]=a&tags[0]=b&tags[0][]=c',
+    'tags[0]=a&tags[0][]=c&tags[0]=b',
+    'tags[0]=b&tags[0]=a&tags[0][]=c',
+    'tags[0]=b&tags[0][]=c&tags[0]=a',
+    'tags[0][]=c&tags[0]=a&tags[0]=b',
+    'tags[0][]=c&tags[0]=b&tags[0]=a',
+  ])('rejects scalar/append collisions at numbered slots in %s', async (query) => {
+    expect(await rootErrors(new URLSearchParams(query), schema({ tags: field.array(field.string()) })))
+      .toEqual(['The request contains an invalid field name.'])
+  })
+
+  it.each([
+    ['tags[0]=a&tags[0]=b', 'b'],
+    ['tags[0]=b&tags[0]=a', 'a'],
+  ])('retains the last repeated numbered scalar in %s', async (query, expected) => {
+    const result = await safeParse(new URLSearchParams(query), schema({ tags: field.array(field.string()) }))
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.data.tags).toEqual([expected])
+  })
+
   it('gives every order of colliding names the same outcome', async () => {
     const forms: readonly ((value: string) => string)[] = [
       value => `x=${value}`,
@@ -411,6 +449,36 @@ describe('Validation input bounds', () => {
     const result = await safeParse({ avatar }, schema({ avatar: field.file().required().image().maxSize('1kb') }))
 
     expect(fullReads).toBe(0)
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be 1 KB or smaller.'])
+  })
+
+  it('decodes a transformed valid image without applying a bound from the previous value', async () => {
+    const original = new File([pngPixel], 'small.png', { type: 'image/png' })
+    const replacement = new File([pngPixel, new Uint8Array(4096)], 'large.png', { type: 'image/png' })
+    const result = await safeParse({ avatar: original }, schema({
+      avatar: field.file().maxSize('1kb').transform(() => replacement).image(),
+    }))
+
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.data.avatar).toBe(replacement)
+  })
+
+  it.each(['bounded first', 'bounded last'])('keeps image verification separate across transforms with the same file (%s)', async (order) => {
+    let fullReads = 0
+    class TrackedFile extends File {
+      override arrayBuffer(): Promise<ArrayBuffer> {
+        fullReads += 1
+        return super.arrayBuffer()
+      }
+    }
+    const avatar = new TrackedFile([pngPixel, new Uint8Array(4096)], 'avatar.png', { type: 'image/png' })
+    const definition = order === 'bounded first'
+      ? field.file().image().maxSize('1kb').transform(value => value).imageAspectRatio('1:1')
+      : field.file().image().transform(value => value).imageAspectRatio('2:1').maxSize('1kb')
+    const result = await safeParse({ avatar }, schema({ avatar: definition }))
+
+    expect(fullReads).toBe(1)
     expect(result.valid).toBe(false)
     if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be 1 KB or smaller.'])
   })

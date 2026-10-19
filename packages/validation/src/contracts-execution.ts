@@ -21,7 +21,7 @@ export type FieldExecution = {
   readonly checks: RuleValue[]
   readonly customIssues: Map<FieldRule, string>
   readonly confirmationResults: Map<FieldRule, boolean>
-  readonly imageVerifications: Map<Blob, Promise<DecodedImageVerification | undefined>>
+  readonly imageVerifications: Map<Blob, Map<FieldRule, Promise<DecodedImageVerification | undefined>>>
 }
 
 export type ExecutionNode = {
@@ -39,8 +39,17 @@ export function resolveRuleMessage(rule: FieldRule | undefined, fallback: string
 
 const decodableImageMimeTypes = new Set(['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/tiff', 'image/webp'])
 
-function exceedsDeclaredFileSize(definition: FieldDefinition, value: Blob): boolean {
-  return definition.rules.some(rule => (rule.name === 'max' && (typeof rule.args[0] === 'number' || typeof rule.args[0] === 'string') && value.size > parseByteSize(rule.args[0]))
+function imageRuleSegment(definition: FieldDefinition, rule: FieldRule): readonly FieldRule[] {
+  const index = definition.rules.indexOf(rule)
+  let start = index
+  let end = index + 1
+  while (start > 0 && definition.rules[start - 1]!.name !== 'transform') start -= 1
+  while (end < definition.rules.length && definition.rules[end]!.name !== 'transform') end += 1
+  return definition.rules.slice(start, end)
+}
+
+function exceedsDeclaredFileSize(rules: readonly FieldRule[], value: Blob): boolean {
+  return rules.some(rule => (rule.name === 'max' && (typeof rule.args[0] === 'number' || typeof rule.args[0] === 'string') && value.size > parseByteSize(rule.args[0]))
     || (rule.name === 'size' && typeof rule.args[0] === 'number' && value.size > rule.args[0]))
 }
 
@@ -65,17 +74,21 @@ export async function executeCustomRule(field: FieldExecution, rule: FieldRule, 
       field.customIssues.set(rule, result)
     }
   } else if (validator === 'image' || validator === 'imageAspectRatio') {
-    const ratioRules = field.definition.rules.filter(candidate => candidate.name === 'custom' && candidate.args[0] === 'imageAspectRatio')
+    const segment = imageRuleSegment(field.definition, rule)
+    const ratioRules = segment.filter(candidate => candidate.name === 'custom' && candidate.args[0] === 'imageAspectRatio')
     let verification: DecodedImageVerification | undefined = { valid: false, aspectRatios: [] }
     if (value instanceof Blob) {
-      let pending = field.imageVerifications.get(value)
+      const verifications = field.imageVerifications.get(value) ?? new Map<FieldRule, Promise<DecodedImageVerification | undefined>>()
+      field.imageVerifications.set(value, verifications)
+      const segmentKey = segment[0]!
+      let pending = verifications.get(segmentKey)
       if (!pending) {
         pending = verifyRasterImage(
           value,
           ratioRules.map(candidate => candidate.args.slice(1).filter((ratio): ratio is number => typeof ratio === 'number')),
-          !exceedsDeclaredFileSize(field.definition, value),
+          !exceedsDeclaredFileSize(segment, value),
         )
-        field.imageVerifications.set(value, pending)
+        verifications.set(segmentKey, pending)
       }
       verification = await pending
     }

@@ -51,7 +51,7 @@ In Nuxt, the cookie that flashes errors after a native form post no longer conta
 
 ### Validation input limits
 
-Form bodies and query strings are now limited to 1,000 fields, not counting uploaded files, and a list index must be lower than the number of different indexes sent for that list. Requests that break these limits, or that use `__proto__`, `constructor`, `prototype`, or the same name used with two shapes (an object and a list, or numbered indexes and `[]`) in any order, fail validation with a 422 instead of throwing. If a form sends more than 1,000 fields, split it or send JSON. See [Input limits](/basics/validation/#input-limits).
+Form bodies and query strings are now limited to 1,000 non-file fields, with a separate limit of 1,000 uploaded-file entries per form, and a list index must be lower than the number of different indexes sent for that list. Requests that break these limits, or that use `__proto__`, `constructor`, `prototype`, or the same name used with two shapes (an object and a list, or numbered indexes and `[]`) in any order, fail validation with a 422 instead of throwing. Split forms that exceed either limit into smaller submissions; JSON can be used for larger non-file payloads. See [Input limits](/basics/validation/#input-limits).
 
 A JSON or form body that can't be parsed is now validated as `{}` instead of throwing.
 

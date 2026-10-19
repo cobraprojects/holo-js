@@ -20,6 +20,7 @@ const repeatedFormValues = new WeakSet<unknown[]>()
 const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 
 const MAX_INPUT_VARIABLES = 1_000
+const MAX_UPLOADED_FILES = 1_000
 
 export class MalformedInputError extends Error {
   constructor(message: string) {
@@ -315,7 +316,7 @@ function joinSlotKinds(established: SlotKind, requested: SlotKind, replaceValues
     return established === 'value' && !replaceValues ? 'appended' : established
   }
 
-  if ((established === 'value' && requested === 'appended') || (established === 'appended' && requested === 'value')) {
+  if (!replaceValues && ((established === 'value' && requested === 'appended') || (established === 'appended' && requested === 'value'))) {
     return 'appended'
   }
 
@@ -445,13 +446,16 @@ export function normalizeFormData(input: FormData | URLSearchParams): Record<str
   const indexes: ArrayIndexes = new Map()
   let entryCount = 0
   let variableCount = 0
+  let fileCount = 0
   for (const [, value] of input.entries()) {
     entryCount += 1
-    if (!isBlobLike(value)) {
+    if (isBlobLike(value)) {
+      fileCount += 1
+    } else {
       variableCount += 1
-      if (variableCount > MAX_INPUT_VARIABLES) {
-        throw new MalformedInputError('The request contains too many input variables.')
-      }
+    }
+    if (variableCount > MAX_INPUT_VARIABLES || fileCount > MAX_UPLOADED_FILES) {
+      throw new MalformedInputError('The request contains too many input variables.')
     }
   }
 
