@@ -55,8 +55,8 @@ function getFlashPath(recordPath: string): string {
   return `${recordPath}.flash`
 }
 
-const BUSY_RENAME_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
-const BUSY_RENAME_RETRY_MS = 1_000
+const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const BUSY_FILE_RETRY_MS = 1_000
 
 function errorCode(error: unknown): string | undefined {
   return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
@@ -64,6 +64,10 @@ function errorCode(error: unknown): string | undefined {
 
 function isMissingFileError(error: unknown): boolean {
   return errorCode(error) === 'ENOENT'
+}
+
+function isBusyFileError(error: unknown): boolean {
+  return BUSY_FILE_ERROR_CODES.has(errorCode(error) ?? '')
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -120,7 +124,7 @@ async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdent
   try {
     fileName = (await readdir(lockPath)).find(name => name.startsWith('owner.') && name.endsWith('.json'))
   } catch (error) {
-    if (isMissingFileError(error)) return undefined
+    if (isMissingFileError(error) || isBusyFileError(error)) return undefined
     throw error
   }
   const identityPath = fileName ? join(lockPath, fileName) : lockPath
@@ -130,6 +134,7 @@ async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdent
       owner = parseRecordLockOwner(JSON.parse(await readFile(identityPath, 'utf8')) as unknown)
       if (owner && recordLockOwnerFileName(owner) !== fileName) owner = undefined
     } catch (error) {
+      if (isBusyFileError(error)) return undefined
       if (!(error instanceof SyntaxError) && !isMissingFileError(error)) throw error
     }
   }
@@ -147,17 +152,32 @@ function recordLockIdentityMatches(left: RecordLockIdentity, right: RecordLockId
     && left.owner?.token === right.owner?.token
 }
 
-async function removeRecordLock(lockPath: string, fileName?: string): Promise<boolean> {
+async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 0): Promise<boolean> {
+  const deadline = Date.now() + settleMs
   if (fileName) {
-    try { await unlink(join(lockPath, fileName)) } catch (error) { if (!isMissingFileError(error)) throw error }
+    for (;;) {
+      try {
+        await unlink(join(lockPath, fileName))
+        break
+      } catch (error) {
+        if (isMissingFileError(error)) break
+        if (!isBusyFileError(error)) throw error
+        if (Date.now() >= deadline) return false
+        await sleep(5)
+      }
+    }
   }
-  try {
-    await rmdir(lockPath)
-    return true
-  } catch (error) {
-    const code = errorCode(error)
-    if (code === 'ENOENT' || code === 'ENOTEMPTY' || code === 'EEXIST') return false
-    throw error
+  for (;;) {
+    try {
+      await rmdir(lockPath)
+      return true
+    } catch (error) {
+      const code = errorCode(error)
+      if (code === 'ENOENT') return false
+      if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && !isBusyFileError(error)) throw error
+      if (Date.now() >= deadline) return false
+      await sleep(5)
+    }
   }
 }
 
@@ -205,8 +225,8 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
       } catch (error) {
         const code = errorCode(error)
         const contended = code === 'EEXIST' || code === 'ENOTEMPTY'
-          || (BUSY_RENAME_ERROR_CODES.has(code ?? '') && await pathExists(lockPath))
-        if (!contended && !BUSY_RENAME_ERROR_CODES.has(code ?? '')) throw error
+          || (isBusyFileError(error) && await pathExists(lockPath))
+        if (!contended && !isBusyFileError(error)) throw error
         if (contended) {
           const reclaimable = await reclaimableRecordLock(lockPath)
           if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
@@ -226,7 +246,7 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
     heartbeat.unref()
     return async () => {
       clearInterval(heartbeat)
-      await removeRecordLock(lockPath, ownerFileName)
+      await removeRecordLock(lockPath, ownerFileName, BUSY_FILE_RETRY_MS)
     }
   } catch (error) {
     if (acquired) await removeRecordLock(lockPath, ownerFileName)
@@ -236,13 +256,25 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
 }
 
 async function renameReplacing(source: string, target: string): Promise<void> {
-  const deadline = Date.now() + BUSY_RENAME_RETRY_MS
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
   for (;;) {
     try {
       await rename(source, target)
       return
     } catch (error) {
-      if (!BUSY_RENAME_ERROR_CODES.has(errorCode(error) ?? '') || Date.now() >= deadline) throw error
+      if (!isBusyFileError(error) || Date.now() >= deadline) throw error
+      await sleep(5)
+    }
+  }
+}
+
+async function readFileSettled(path: string): Promise<string> {
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  for (;;) {
+    try {
+      return await readFile(path, 'utf8')
+    } catch (error) {
+      if (!isBusyFileError(error) || Date.now() >= deadline) throw error
       await sleep(5)
     }
   }
@@ -273,7 +305,7 @@ function deserializeFlashEntries(raw: string): Map<string, unknown> {
 
 async function readFlashEntries(recordPath: string): Promise<Map<string, unknown>> {
   try {
-    return deserializeFlashEntries(await readFile(getFlashPath(recordPath), 'utf8'))
+    return deserializeFlashEntries(await readFileSettled(getFlashPath(recordPath)))
   } catch (error) {
     if (isMissingFileError(error)) return new Map()
     throw error
@@ -282,7 +314,7 @@ async function readFlashEntries(recordPath: string): Promise<Map<string, unknown
 
 async function readActiveRecord(recordPath: string): Promise<SessionRecord | null> {
   try {
-    const record = deserializeRecord(await readFile(recordPath, 'utf8'))
+    const record = deserializeRecord(await readFileSettled(recordPath))
     return record.expiresAt.getTime() > Date.now() ? record : null
   } catch (error) {
     if (isMissingFileError(error)) return null
@@ -327,7 +359,7 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
   return {
     async read(sessionId) {
       try {
-        return deserializeRecord(await readFile(getRecordPath(root, sessionId), 'utf8'))
+        return deserializeRecord(await readFileSettled(getRecordPath(root, sessionId)))
       } catch (error) {
         if (isMissingFileError(error)) return null
         throw error
