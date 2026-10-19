@@ -736,12 +736,14 @@ export function renderCacheEnvFiles(
         'CACHE_PREFIX=',
         '',
         ...redis.env,
+        'REDIS_CACHE_DB=1',
       ],
       example: [
         `CACHE_DRIVER=${driver}`,
         'CACHE_PREFIX=',
         '',
         ...redis.example,
+        'REDIS_CACHE_DB=',
       ],
     }
   }

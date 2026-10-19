@@ -261,7 +261,7 @@ connections: { ...config.connections, alternate: { host: '127.0.0.1', port: 6380
     expect(overridden.redis.default).toBe('alternate')
     expect(overridden.security.rateLimit.driver).toBe('redis')
     expect(overridden.security.rateLimit.redis.connection).toBe('alternate')
-    expect(overridden.cache.drivers.redis).toMatchObject({ connection: 'alternate' })
+    expect(overridden.cache.drivers.redis).toMatchObject({ connection: 'cache' })
     expect(overridden.queue.connections.redis).toMatchObject({ connection: 'alternate', redis: { port: 6380 } })
   })
 

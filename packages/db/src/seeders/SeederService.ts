@@ -1,6 +1,6 @@
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DatabaseError, SecurityError } from '../core/errors'
-import { withoutModelEvents } from '../model/eventState'
+import { withModelGuards, withoutModelEvents, withoutModelGuards } from '../model/eventState'
 import { createSchemaService } from '../schema/SchemaService'
 import { defineSeeder } from './defineSeeder'
 import type { SeederStartLog } from '../core/types'
@@ -77,7 +77,7 @@ export class SeederService {
       const log = this.createSeederLog(seeder.name, options)
       const startedAt = Date.now()
 
-      await this.connection.getLogger()?.onSeederStart?.(log)
+      await withModelGuards(() => this.connection.getLogger()?.onSeederStart?.(log))
 
       try {
         const runSeeder = async (tx: DatabaseContext) => {
@@ -85,7 +85,7 @@ export class SeederService {
           const run = () => connectionAsyncContext.run({
             connectionName: tx.getConnectionName(),
             connection: tx,
-          }, () => Promise.resolve(seeder.run(context)))
+          }, () => withoutModelGuards(() => Promise.resolve(seeder.run(context))))
 
           if (options.quietly) {
             await withoutModelEvents(run)
@@ -102,16 +102,16 @@ export class SeederService {
           await runSeeder(connection)
         }
 
-        await this.connection.getLogger()?.onSeederSuccess?.({
+        await withModelGuards(() => this.connection.getLogger()?.onSeederSuccess?.({
           ...log,
           durationMs: Date.now() - startedAt,
-        })
+        }))
       } catch (error) {
-        await this.connection.getLogger()?.onSeederError?.({
+        await withModelGuards(() => this.connection.getLogger()?.onSeederError?.({
           ...log,
           durationMs: Date.now() - startedAt,
           error,
-        })
+        }))
         throw error
       }
 

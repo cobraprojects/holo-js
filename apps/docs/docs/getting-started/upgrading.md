@@ -51,6 +51,16 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+### Lifecycle, factories, and seeders
+
+Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.
+
+`save()` on a model with no changes now fires `saving` and `saved`, as in Laravel, and writes nothing. Clean saves no longer write `updated_at` or fire `updating` and `updated`; before, a timestamped model's clean save did both. An `updating` handler that reverts every change fires `saved` without an `UPDATE`. After a save, `wasChanged()` and `getChanges()` report what the save wrote, so edits a `saved` handler makes don't appear there. A save that creates a record reports no changes, as in Laravel. Lifecycle handlers now receive the model you called `save()` on rather than a copy, and after `save()` returns the model is clean even when a `saved` handler changed an attribute: that change is not written. If your `saving` or `saved` handler assumed a clean save runs no code, guard it on `isDirty()`.
+
+Models loaded with `withCount()` or `withExists()` save without error, and their computed values are never written. Changes made in place to JSON and date attributes, such as pushing onto a JSON array, are detected and saved.
+
+Factories and `holo seed` now run without mass-assignment guards, as in Laravel. Remove `unguarded()` wrappers around factories and seeders; code outside them still follows the guards.
+
 ### Error reporting
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
@@ -352,6 +362,32 @@ For a separate frontend using `useForm({ csrf: { endpoint } })`, your token endp
 Social sign-in no longer signs in as an existing user whose email isn't verified. When a provider's verified email matches such a user, `callback()` from `@holo-js/auth-social` throws `SocialAuthConflictError`. Catch it in your callback routes and ask the user to sign in with their password and verify their email; their next social sign-in links the accounts. See [Link an existing account](/auth/social-login#link-an-existing-account).
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
+
+### Cache flushes clear the whole store
+
+`cache.flush()` and `npx holo cache:clear` now delete everything in the store, as Laravel does, and a key `prefix` no longer limits them. A Redis store flushes its whole Redis database, a `database` store empties its cache table, and a `file` store empties its folder. If your Redis cache shares a database with queues or sessions, move it to its own database before you flush, or the flush deletes that data too.
+
+Add a `cache` connection to `config/redis.ts` on a database that holds nothing else, and point the Redis store at it. The scaffold uses database `1`:
+
+```ts [config/redis.ts]
+cache: {
+  url: env('REDIS_URL') || undefined,
+  host: env('REDIS_HOST', '127.0.0.1'),
+  port: env('REDIS_PORT', 6379),
+  username: env('REDIS_USERNAME'),
+  password: env('REDIS_PASSWORD'),
+  db: env('REDIS_CACHE_DB', 1),
+},
+```
+
+```ts [config/cache.ts]
+redis: {
+  driver: 'redis',
+  connection: 'cache',
+}
+```
+
+Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
 
 ## Earlier 0.3.x releases
 

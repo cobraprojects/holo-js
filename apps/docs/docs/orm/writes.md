@@ -182,7 +182,9 @@ Like other query writes, this skips model events.
 
 ## Track changes
 
-Before you save, `isDirty()` tells you whether anything changed. After you save, `wasChanged()` tells you what the last save wrote.
+Before you save, `isDirty()` tells you whether anything changed. After you save, `wasChanged()` tells you what the last save wrote. A save that creates a record reports no changes, as in Laravel, and after any save the model is clean: an attribute that a `saved` handler changes is not written and isn't reported as a change.
+
+Changes made in place count too. Pushing onto a JSON array, editing a nested JSON value, or moving a `Date` is detected and saved. Computed values such as `withCount()` results are never written.
 
 ```ts
 const post = await Post.findOrFail(1)
@@ -367,7 +369,7 @@ const admin = await User.unguarded(() => User.create({
 }))
 ```
 
-Inside the callback, mass assignment rules are off for every model, not only `User`. Code running outside the callback, including other requests, is unaffected.
+Inside the callback, mass assignment rules are off for every model, not only `User`. Code running outside the callback, including other requests, is unaffected. Factories and seeders already run this way, so they don't need the wrapper.
 
 ::: danger
 Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
@@ -409,7 +411,7 @@ await Post.createManyQuietly(rows)
 
 ### make()
 
-Builds an unsaved model with the model's `pendingAttributes` applied. Call `save()` to insert it.
+Builds an unsaved model with the model's `pendingAttributes` applied. Mass assignment rules apply, and mutators and casts run when `save()` writes the values, not when `make()` runs. Call `save()` to insert it.
 
 ```ts
 const post = Post.make({ title: 'Draft', user_id: 1 })

@@ -19,6 +19,7 @@ import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
 import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity, getEntityKeyForSave } from './Entity'
+import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
@@ -320,7 +321,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
     return new Entity(
       this,
-      this.sanitizeWritePayload(applyPendingModelAttributes(this.definition, values), 'create'),
+      this.assertMassAssignable(applyPendingModelAttributes(this.definition, values)),
       false,
     )
   }
@@ -1596,21 +1597,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   private async createRecord(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+    return this.insertEntity(new Entity(this, values, false))
+  }
+
+  private async insertEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
     return this.runWriteUnit(async () => {
-      const payload = this.sanitizeWritePayload(
-        this.applyTimestampDefaults(
-          applyGeneratedUniqueIds(
-            this.definition,
-            applyPendingModelAttributes(this.definition, values),
-          ),
-          'create',
-        ),
-        'create',
-        false,
-      )
-      const entity = new Entity(this, payload, false)
+      entity.forceFill(applyGeneratedUniqueIds(this.definition, applyPendingModelAttributes(this.definition, entity.toAttributes())))
+      this.applyWriteMutators(entity, Object.keys(entity.toAttributes()))
       await this.dispatchCancelableEvent('saving', entity)
       await this.dispatchCancelableEvent('creating', entity)
+      const beforeTimestamps = snapshotAttributes(entity.toAttributes())
+      entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
+      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
+      const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false, false)
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
@@ -1622,11 +1621,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           ? { [this.definition.primaryKey]: result.lastInsertId }
           : {}),
       } as Partial<ModelRecord<TTable>>
-      const created = this.hydrate(attributes).syncOriginal()
-      await this.dispatchEvent('created', created)
-      await this.dispatchEvent('saved', created)
-      await this.touchOwners(created)
-      return created
+      entity.forceFill(this.normalizeFromStorage(attributes))
+      entity.recordChanges({})
+      await this.dispatchEvent('created', entity)
+      await this.dispatchEvent('saved', entity)
+      await this.touchOwners(entity)
+      entity.finishSave()
+      return entity
     })
   }
 
@@ -1679,6 +1680,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
     enforceGuards = true,
+    applyMutators = true,
   ): Partial<ModelUpdatePayload<TTable>> {
     const entries = Object.entries(values)
 
@@ -1713,7 +1715,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         return [key, value]
       }
 
-      return [key, this.normalizeForStorage(key, value)]
+      return [key, applyMutators ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
     }))
 
     return sanitized as Partial<ModelUpdatePayload<TTable>>
@@ -1721,7 +1723,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
     if (!entity.exists()) {
-      return this.createRecord(entity.toAttributes())
+      return this.insertEntity(entity)
     }
 
     return this.runWriteUnit(async () => {
@@ -1731,25 +1733,38 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         throw new HydrationError(`Cannot persist ${this.definition.name} without a primary key value.`)
       }
 
-      const dirty = this.sanitizeWritePayload(
-        this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'),
-        'update',
-        false,
-      )
-      if (Object.keys(dirty).length === 0) {
-        return entity
+      this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
+      await this.dispatchCancelableEvent('saving', entity)
+      if (Object.keys(entity.getDirty()).length === 0) {
+        return this.finishUnchangedSave(entity)
       }
 
-      await this.dispatchCancelableEvent('saving', entity)
       await this.dispatchCancelableEvent('updating', entity)
+      const beforeTimestamps = snapshotAttributes(entity.toAttributes())
+      entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
+      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
+      const written = entity.getDirty()
+      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
+      if (Object.keys(dirty).length === 0) {
+        return this.finishUnchangedSave(entity)
+      }
+
       await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
-      const updated = new Entity<TTable>(this, { ...entity.toAttributes(), ...this.normalizeFromStorage(dirty) }, true)
-      updated.syncOriginal()
-      await this.dispatchEvent('updated', updated)
-      await this.dispatchEvent('saved', updated)
-      await this.touchOwners(updated)
-      return updated
+      entity.recordChanges(written)
+      entity.forceFill(this.normalizeFromStorage(dirty))
+      await this.dispatchEvent('updated', entity)
+      await this.dispatchEvent('saved', entity)
+      await this.touchOwners(entity)
+      entity.finishSave()
+      return entity
     })
+  }
+
+  private async finishUnchangedSave(entity: Entity<TTable>): Promise<Entity<TTable>> {
+    entity.recordChanges({})
+    await this.dispatchEvent('saved', entity)
+    entity.finishSave()
+    return entity
   }
 
   async saveEntityQuietly(entity: Entity<TTable>): Promise<Entity<TTable>> {
@@ -3713,7 +3728,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     eventName: Extract<ModelLifecycleEventName, 'saving' | 'creating' | 'updating' | 'deleting' | 'restoring' | 'forceDeleting'>,
     entity: Entity<TTable>,
   ): Promise<void> {
-    await this.eventDispatcher.dispatchCancelable(eventName, entity)
+    await this.eventDispatcher.dispatchCancelable(eventName, entity, (target, before) => {
+      this.applyWriteMutators(target, this.changedKeysSince(target, before))
+    })
   }
 
   private async dispatchEvent(
@@ -3757,6 +3774,25 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   private normalizeForStorage(key: string, value: unknown): unknown {
     return this.valueTransformer.normalizeForStorage(key, value)
+  }
+
+  private castForStorage(key: string, value: unknown): unknown {
+    return this.valueTransformer.castForStorage(key, value)
+  }
+
+  private applyWriteMutators(entity: Entity<TTable>, keys: readonly string[]): void {
+    const attributes = entity.toAttributes() as Record<string, unknown>
+    const mutated = Object.fromEntries(
+      keys
+        .filter(key => this.definition.mutators[key] !== undefined)
+        .map(key => [key, this.valueTransformer.applyMutator(key, attributes[key])]),
+    )
+    entity.forceFill(mutated as never)
+  }
+
+  private changedKeysSince(entity: Entity<TTable>, before: Record<string, unknown>): string[] {
+    const attributes = entity.toAttributes() as Record<string, unknown>
+    return Object.keys(attributes).filter(key => !valuesAreEqual(attributes[key], before[key]))
   }
 
   private applyCastGet(cast: ModelCastDefinition | undefined, value: unknown): unknown {

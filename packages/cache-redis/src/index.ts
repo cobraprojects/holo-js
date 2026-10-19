@@ -24,7 +24,6 @@ type RedisClusterNode =
 export type RedisCacheDriverOptions = {
   readonly name: string
   readonly connectionName: string
-  readonly prefix: string
   readonly redis:
     & {
       readonly username?: string
@@ -92,7 +91,7 @@ type RedisClusterOptions = {
   readonly redisOptions: RedisClientOptions
 }
 
-type RedisClientLike = Pick<Redis, 'get' | 'set' | 'del' | 'scan' | 'incrby' | 'decrby' | 'eval' | 'disconnect'> & {
+type RedisClientLike = Pick<Redis, 'get' | 'set' | 'del' | 'flushdb' | 'incrby' | 'decrby' | 'eval' | 'disconnect'> & {
   readonly isCluster?: boolean
   nodes?(role: 'master'): readonly RedisClientLike[]
 }
@@ -104,7 +103,6 @@ type RedisCtor = typeof Redis & {
   ) => RedisClientLike
 }
 
-const REDIS_SCAN_COUNT = 100
 const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
 const RELEASE_LOCK_SCRIPT = [
   'if redis.call("get", KEYS[1]) == ARGV[1] then',
@@ -127,10 +125,6 @@ function toRedisSocketPath(value: string): string {
   return value.startsWith('unix://')
     ? value.slice('unix://'.length)
     : value
-}
-
-function escapeRedisGlob(value: string): string {
-  return value.replace(/[\\*?[\]]/g, match => `\\${match}`)
 }
 
 function isRedisUrl(value: string): boolean {
@@ -340,19 +334,6 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
   const sleep = options.sleep ?? defaultSleep
   const ownerFactory = options.ownerFactory ?? randomUUID
   const now = options.now ?? Date.now
-  const flushPattern = `${escapeRedisGlob(options.prefix)}*`
-
-  async function flushClient(target: RedisClientLike): Promise<void> {
-    let cursor = '0'
-
-    do {
-      const [nextCursor, keys] = await target.scan(cursor, 'MATCH', flushPattern, 'COUNT', REDIS_SCAN_COUNT)
-      cursor = nextCursor
-      if (keys.length > 0) {
-        await Promise.all(keys.map(async (key) => target.del(key)))
-      }
-    } while (cursor !== '0')
-  }
 
   async function mutateNumericValue(
     key: string,
@@ -414,12 +395,12 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
     async flush(): Promise<void> {
       if (client.isCluster) {
         for (const node of client.nodes?.('master') ?? []) {
-          await flushClient(node)
+          await node.flushdb()
         }
         return
       }
 
-      await flushClient(client)
+      await client.flushdb()
     },
     async increment(key: string, amount: number): Promise<number> {
       return await mutateNumericValue(key, amount, async (targetKey, targetAmount) => await client.incrby(targetKey, targetAmount))
@@ -454,7 +435,6 @@ export const redisCacheDriverInternals = {
   createRedisClientOptions,
   createRedisClusterOptions,
   createRedisLock,
-  escapeRedisGlob,
   isRedisSocketConnectionTarget,
   isRedisNumericMutationError,
   parseClusterNodeUrl,
