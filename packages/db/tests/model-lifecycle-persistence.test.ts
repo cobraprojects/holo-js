@@ -350,6 +350,100 @@ describe('model lifecycle persistence', () => {
     expect(await db.table('members').get()).toMatchObject([{ name: 'Grace', role: 'member' }])
   })
 
+  it('rejects an alias that an earlier handler on the same event sets to a reserved value', async () => {
+    const db = await openDatabase()
+    const members = defineTable('members', { id: column.id(), name: column.string(), role: column.string() })
+    await createTestTable(db, members)
+    const setAliasForMallory = (entity: unknown) => {
+      if (asTestEntity(entity).get('name') === 'Mallory') asTestEntity(entity).set('role', ' ADMIN ')
+    }
+    const rejectAdmin = (entity: unknown) => {
+      if (asTestEntity(entity).get('role') === 'admin') throw new Error('admin is reserved')
+    }
+    const Member = defineModelFromTable(members, {
+      fillable: ['name', 'role'],
+      mutators: { role: value => String(value).trim().toLowerCase() },
+      events: { creating: [setAliasForMallory, rejectAdmin], updating: [setAliasForMallory, rejectAdmin] },
+    })
+
+    await expect(Member.create({ name: 'Mallory', role: 'member' })).rejects.toThrow('admin is reserved')
+    const grace = await Member.create({ name: 'Grace', role: 'member' })
+
+    grace.set('name', 'Mallory')
+    await expect(grace.save()).rejects.toThrow('admin is reserved')
+    expect(await db.table('members').get()).toMatchObject([{ name: 'Grace', role: 'member' }])
+  })
+
+  it('rejects an alias that a saving handler sets when a later creating handler checks it', async () => {
+    const db = await openDatabase()
+    const members = defineTable('members', { id: column.id(), name: column.string(), role: column.string() })
+    await createTestTable(db, members)
+    const setAliasForMallory = (entity: unknown) => {
+      if (asTestEntity(entity).get('name') === 'Mallory') asTestEntity(entity).set('role', ' ADMIN ')
+    }
+    const rejectAdmin = (entity: unknown) => {
+      if (asTestEntity(entity).get('role') === 'admin') throw new Error('admin is reserved')
+    }
+    const Member = defineModelFromTable(members, {
+      fillable: ['name', 'role'],
+      mutators: { role: value => String(value).trim().toLowerCase() },
+      events: { saving: [setAliasForMallory], creating: [rejectAdmin] },
+    })
+
+    await expect(Member.create({ name: 'Mallory', role: 'member' })).rejects.toThrow('admin is reserved')
+    await expect(Member.create({ name: 'Grace', role: 'member' })).resolves.toMatchObject({ role: 'member' })
+    expect(await db.table('members').get()).toMatchObject([{ name: 'Grace', role: 'member' }])
+  })
+
+  it('fires only saving on a clean save of a model without timestamps', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string() })
+    await createTestTable(db, slugged)
+    await db.table('slugged').insert({ id: 1, title: 'Hello' })
+    const events: string[] = []
+    const Post = defineModelFromTable(slugged, {
+      timestamps: false,
+      fillable: ['title'],
+      events: {
+        saving: [() => { events.push('saving') }],
+        updating: [() => { events.push('updating') }],
+        updated: [() => { events.push('updated') }],
+        saved: [() => { events.push('saved') }],
+      },
+    })
+
+    await (await Post.findOrFail(1)).save()
+
+    expect(events).toEqual(['saving'])
+  })
+
+  it('fires the update events on a clean save of a timestamped model because updated_at changes', async () => {
+    const db = await openDatabase()
+    const stamped = defineTable('stamped', {
+      id: column.id(),
+      title: column.string(),
+      created_at: column.timestamp().nullable(),
+      updated_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, stamped)
+    await db.table('stamped').insert({ id: 1, title: 'Hello', created_at: null, updated_at: null })
+    const events: string[] = []
+    const Post = defineModelFromTable(stamped, {
+      fillable: ['title'],
+      events: {
+        saving: [() => { events.push('saving') }],
+        updating: [() => { events.push('updating') }],
+        updated: [() => { events.push('updated') }],
+        saved: [() => { events.push('saved') }],
+      },
+    })
+
+    await (await Post.findOrFail(1)).save()
+
+    expect(events).toEqual(['saving', 'updating', 'updated', 'saved'])
+    expect((await db.table('stamped').get())[0]?.updated_at).not.toBeNull()
+  })
+
   it('keeps guards on logger callbacks of seeders started with call()', async () => {
     const Ledger = defineModelFromTable(ledgers)
     const adapter = createSQLiteAdapter({ filename: ':memory:' })

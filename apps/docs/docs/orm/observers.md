@@ -63,7 +63,7 @@ Events fire in this order:
 - **Force delete:** `deleting`, `forceDeleting`, `forceDeleted`, `deleted`
 - **Restore:** `restoring`, `restored`
 
-Calling `save()` on a model with no changes skips the update and fires no events.
+Calling `save()` on a model with no changes fires `saving` before it checks for changes, then stops without writing. A model without timestamps fires nothing else. A model with timestamps has a change to write (`updated_at`), so it also fires `updating`, `updated`, and `saved`.
 
 ## Writing observers
 

@@ -1604,11 +1604,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return this.runWriteUnit(async () => {
       entity.forceFill(applyGeneratedUniqueIds(this.definition, applyPendingModelAttributes(this.definition, entity.toAttributes())))
       this.applyWriteMutators(entity, Object.keys(entity.toAttributes()))
-      const beforeHandlers = snapshotAttributes(entity.toAttributes())
       await this.dispatchCancelableEvent('saving', entity)
       await this.dispatchCancelableEvent('creating', entity)
+      const beforeTimestamps = snapshotAttributes(entity.toAttributes())
       entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
-      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeHandlers))
+      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false, false)
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
@@ -1732,17 +1732,15 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
-      const beforeSaving = snapshotAttributes(entity.toAttributes())
       await this.dispatchCancelableEvent('saving', entity)
-      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeSaving))
       if (Object.keys(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update')).length === 0) {
         return entity
       }
 
-      const beforeUpdating = snapshotAttributes(entity.toAttributes())
       await this.dispatchCancelableEvent('updating', entity)
+      const beforeTimestamps = snapshotAttributes(entity.toAttributes())
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
-      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeUpdating))
+      this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const dirty = this.sanitizeWritePayload(entity.getDirty(), 'update', false, false)
       if (Object.keys(dirty).length === 0) {
         return entity
@@ -3719,7 +3717,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     eventName: Extract<ModelLifecycleEventName, 'saving' | 'creating' | 'updating' | 'deleting' | 'restoring' | 'forceDeleting'>,
     entity: Entity<TTable>,
   ): Promise<void> {
-    await this.eventDispatcher.dispatchCancelable(eventName, entity)
+    await this.eventDispatcher.dispatchCancelable(eventName, entity, (target, before) => {
+      this.applyWriteMutators(target, this.changedKeysSince(target, before))
+    })
   }
 
   private async dispatchEvent(
