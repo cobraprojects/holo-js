@@ -1,8 +1,9 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthProviderAdapter, type AuthSessionRevocationStore } from '../src'
+import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthenticatedAuthUser, type AuthProviderAdapter, type AuthSessionRevocationStore } from '../src'
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 
 type StoredUser = {
@@ -43,8 +44,9 @@ class Browser {
     const current = authRuntimeInternals.getRuntimeBindings()
     const requestCookies = new Map(this.cookies)
     const requestContext = createAsyncAuthContext()
+    const memoryContext = authRuntimeInternals.createMemoryAuthContext()
     const context = {
-      ...(scoped ? requestContext : authRuntimeInternals.createMemoryAuthContext()),
+      ...(scoped ? requestContext : { ...memoryContext, getRequestScope: () => memoryContext }),
       getRequestCookie: (name: string) => requestCookies.get(name),
       appendResponseCookie: (setCookie: string) => this.receive(setCookie),
     }
@@ -192,7 +194,7 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
-  it.each([true, false])('keeps a remember entry cleared earlier in the same request out of later cookies (request scoped: %s)', async (scoped) => {
+  it.each([true, false])('keeps a remember entry cleared earlier in the same request out of later cookies (async context: %s)', async (scoped) => {
     users.set(2, { id: 2, email: 'mina@app.test', password: 'scrypt$hash-two', remember_token: null })
     const browser = new Browser()
     await browser.request(() => auth.loginUsingId(1, { remember: true }))
@@ -205,6 +207,38 @@ describe('remember me', () => {
     expect(decryptRemember(browser)).toEqual({ admin: [2, expect.any(String), expect.any(String)] })
     browser.expireSession()
     await expect(browser.request(() => auth.check())).resolves.toBe(false)
+  })
+
+  it.each([{ scoped: true, accessor: 'none' }, { scoped: true, accessor: 'getter' }, { scoped: true, accessor: 'setter' }, { scoped: false, accessor: 'none' }])('restores guards across requests in a custom context (scope: $scoped, accessor: $accessor)', async ({ scoped, accessor }) => {
+    const browser = new Browser()
+    const storage = new AsyncLocalStorage<ReturnType<typeof authRuntimeInternals.createMemoryAuthContext>>()
+    const current = () => storage.getStore()!
+    const context = {
+      ...(scoped ? { getRequestScope: () => current() } : {}),
+      ...(accessor === 'getter' ? { getRememberToken: (guard: string) => current().getRememberToken(guard) } : {}),
+      ...(accessor === 'setter' ? { setRememberToken: (guard: string, token?: string) => current().setRememberToken(guard, token) } : {}),
+      getSessionId: (guard: string) => current().getSessionId(guard),
+      setSessionId: (guard: string, id?: string) => current().setSessionId(guard, id),
+      getCachedUser: (guard: string) => current().getCachedUser(guard),
+      setCachedUser: (guard: string, user: AuthenticatedAuthUser | null) => current().setCachedUser(guard, user),
+      getRequestCookie: (name: string) => browser.cookies.get(name),
+      appendResponseCookie: (cookie: string) => browser.receive(cookie),
+    }
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context })
+    const request = <T,>(callback: () => Promise<T>) => storage.run(authRuntimeInternals.createMemoryAuthContext(), callback)
+    await request(async () => {
+      await auth.loginUsingId(1, { remember: true })
+      await auth.guard('admin').loginUsingId(1, { remember: true })
+    })
+    browser.expireSession()
+
+    await expect(request(async () => scoped
+      ? Promise.all([auth.check(), auth.guard('admin').check()])
+      : [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
+    browser.cookies.delete('holo_session_remember')
+    await expect(request(async () => scoped
+      ? Promise.all([auth.check(), auth.guard('admin').check()])
+      : [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
   it('restores once for concurrent checks in the same request', async () => {
@@ -291,7 +325,7 @@ describe('remember me', () => {
     await expect(getSessionRuntime().take(challenge.id, 'challenge')).resolves.toBe(true)
   })
 
-  it.each([true, false])('keeps the browser on a pending multi-factor challenge when the restored guard logs out (request scoped: %s)', async (scoped) => {
+  it.each([true, false])('keeps the browser on a pending multi-factor challenge when the restored guard logs out (async context: %s)', async (scoped) => {
     const browser = new Browser()
     await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
     browser.expireSession()
@@ -391,6 +425,20 @@ describe('remember me with other-device logout', () => {
     await expect(phone.request(() => auth.check())).resolves.toBe(false)
     laptop.expireSession()
     await expect(laptop.request(() => auth.check())).resolves.toBe(true)
+  })
+
+  it('preserves the actor remember entry after stopping impersonation and remembering another guard', async () => {
+    users.set(2, { id: 2, email: 'mina@app.test', password: 'scrypt$hash-two', remember_token: null })
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    await browser.request(async () => {
+      await auth.impersonateById(2)
+      await auth.stopImpersonating()
+      await auth.guard('admin').loginUsingId(2, { remember: true })
+    })
+
+    browser.expireSession()
+    await expect(browser.request(() => auth.user())).resolves.toMatchObject({ id: 1 })
   })
 
   it('leaves the impersonated user remember token and the actor cookie alone', async () => {

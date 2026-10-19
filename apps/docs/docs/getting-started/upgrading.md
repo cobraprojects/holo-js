@@ -331,3 +331,7 @@ Run your test suite as well. Fix any import errors the type checker reports; the
 - [Configuration](/getting-started/configuration)
 - [Packages](/reference/packages): what each `@holo-js/*` package is for
 - [Deploying Holo Apps](/deployment/)
+
+### Give custom auth contexts a request scope
+
+If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Without it, check remembered guards sequentially; remember-cookie reads remain uncached.

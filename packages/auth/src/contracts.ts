@@ -623,6 +623,7 @@ export interface AuthSessionRuntime {
 }
 
 export interface AuthRuntimeContext {
+  getRequestScope?(): object
   getSessionId(guardName: string): string | undefined
   setSessionId(guardName: string, sessionId?: string): void
   getCachedUser(guardName: string): AuthenticatedAuthUser | null | undefined

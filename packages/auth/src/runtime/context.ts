@@ -31,7 +31,7 @@ const requestScopes = new WeakMap<AuthRuntimeContext, () => object>()
 const asyncRequestScopes = new WeakMap<AuthRuntimeContext['getSessionId'], () => object>()
 
 export function authRequestScope(context: AuthRuntimeContext): object | undefined {
-  return requestScopes.get(context)?.() ?? asyncRequestScopes.get(context.getSessionId)?.()
+  return context.getRequestScope?.() ?? requestScopes.get(context)?.() ?? asyncRequestScopes.get(context.getSessionId)?.()
 }
 
 export type MemoryAuthContext = AuthRuntimeContext & {

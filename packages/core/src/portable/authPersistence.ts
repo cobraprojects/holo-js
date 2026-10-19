@@ -777,19 +777,9 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         return typeof value === 'string' ? value : null
       },
       async updateRememberToken(user: unknown, token: string) {
-        const id = getEntityAttributes(user).id
         const values = { remember_token: token }
-        const repository = redemption.repository(providerName)
-        if (repository) {
-          const existing = await repository.findOrFail(id)
-          existing.forceFill(values)
-          await repository.saveEntity(existing, new Set(Object.keys(values)))
-          return
-        }
-
-        const existing = typeof model.find === 'function' ? await model.find(id) : null
-        if (!existing || !await saveAuthEntity(existing, values)) {
-          await model.update(id, values)
+        if (!await saveAuthEntity(user, values)) {
+          await model.update(getEntityAttributes(user).id, values)
         }
       },
       getEmailVerifiedAt(user: unknown) {

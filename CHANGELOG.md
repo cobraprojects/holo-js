@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Custom auth contexts can provide `getRequestScope()` for request-isolated remember-me state and concurrent guard restoration.
+
 - Make `@holo-js/validation` the only public schema-builder package. Remove schema builders from `@holo-js/forms` and remove the `@holo-js/forms/schema` entry.
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.

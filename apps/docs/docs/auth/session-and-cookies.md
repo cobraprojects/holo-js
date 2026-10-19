@@ -175,3 +175,9 @@ const siteUser = await auth.user()
 - [Guards and Providers](/auth/guards-and-providers)
 - [CSRF Protection](/basics/security/csrf)
 - [Sessions](/basics/session)
+
+## Custom auth contexts
+
+If you implement `AuthRuntimeContext`, provide `getRequestScope(): object` to return the same object throughout one request and a fresh object for each new request. This lets Holo restore several remembered guards concurrently into one browser session. `createMemoryAuthContext()` and `createAsyncAuthContext()` already provide it.
+
+Without this accessor, Holo reads remember cookies without caching across calls. Check remembered guards sequentially. The optional `getRememberToken` and `setRememberToken` methods are not required for restoration.
