@@ -29,9 +29,10 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
 
-### Realtime hidden foreign keys
+### Realtime relations honor hidden attributes
 
-Realtime re-runs a query when a belongs-to foreign key changes, if the query's model hides, shows only some, casts, or appends attributes, or if the handler changes those settings on the records it loads with `makeHidden()`, `makeVisible()`, `setHidden()`, `setVisible()`, `append()`, `setAppends()`, or `withoutAppends()`. Before, Holo could patch the raw foreign key into the result, which exposed a hidden value. Models without these rules keep incremental patching. No code changes are required, but subscriptions to those queries run the handler more often.
+Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. The same applies to a root model that sets those rules and loads a belongs-to relation: Holo re-runs the query when the foreign key changes. A handler that calls `makeHidden()`, `makeVisible()`, `setHidden()`, `setVisible()`, `append()`, `setAppends()`, or `withoutAppends()` on the records it loads gets the same re-run. No code changes are required. Subscriptions to those relations and queries run the handler more often. Relations to plain related models keep incremental patching.
+
 
 ### Model scope grouping
 

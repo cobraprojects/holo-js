@@ -27,6 +27,7 @@ import { queryBatches } from '../query/traversal'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { resolveMorphSelector } from './morphRegistry'
+import { modelNeedsSerialization } from './serialize'
 import type { ModelCollection } from './collection'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DriverExecutionResult } from '../core/types'
@@ -1914,12 +1915,8 @@ export class ModelQueryBuilder<
   }
 
   private canBindRowsToSerializedResultBase(): boolean {
-    return Object.keys(this.repository.definition.accessors).length === 0
-      && Object.keys(this.repository.definition.casts).length === 0
+    return !modelNeedsSerialization(this.repository.definition)
       && Object.keys(this.queryCasts).length === 0
-      && this.repository.definition.appended.length === 0
-      && this.repository.definition.hidden.length === 0
-      && this.repository.definition.visible.length === 0
       && this.relationFilters.length === 0
       && this.aggregateLoads.length === 0
   }
@@ -1952,6 +1949,10 @@ export class ModelQueryBuilder<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
+        if (modelNeedsSerialization(relatedDefinition)) {
+          return undefined
+        }
+
         belongsToHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           ownerKey: relation.ownerKey,
@@ -1970,6 +1971,10 @@ export class ModelQueryBuilder<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
+        if (modelNeedsSerialization(relatedDefinition)) {
+          return undefined
+        }
+
         relatedHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           kind: relation.kind,
