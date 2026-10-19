@@ -7,6 +7,7 @@ import {
   configureQueueRuntime,
   dispatch,
   listFailedQueueJobs,
+  QueueWorkerTimeoutError,
   registerQueueJob,
   resetQueueRegistry,
   runQueueWorker,
@@ -349,6 +350,21 @@ describe('@holo-js/queue native worker behavior', () => {
     await expect(dispatch('too-slow', {}).dispatch())
       .rejects.toThrow('[Holo Queue] Queue job "too-slow" timeout of 2 seconds must be less than connection "database" retryAfter of 2 seconds.')
     expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it('treats a handler that throws a QueueWorkerTimeoutError as an ordinary failure, even with failOnTimeout', async () => {
+    await openWorker()
+    registerQueueJob({
+      tries: 2,
+      failOnTimeout: true,
+      handle() {
+        throw new QueueWorkerTimeoutError('thrown-timeout', 1)
+      },
+    }, { name: 'thrown-timeout' })
+    await dispatch('thrown-timeout', {}).dispatch()
+
+    expect(await runQueueWorker({ once: true })).toMatchObject({ released: 1, failed: 0 })
+    expect(await listFailedQueueJobs()).toEqual([])
   })
 
   it('retries with the worker backoff only for a failed job that sets none of its own', async () => {

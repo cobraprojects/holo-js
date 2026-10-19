@@ -20,6 +20,14 @@ describe('queue:work --backoff', () => {
     expect(parseBackoffFlag({})).toBeUndefined()
   })
 
+  it('rejects a --backoff flag with no operand instead of treating it as absent', () => {
+    expect(() => parseBackoffFlag({ backoff: true }))
+      .toThrow('Flag "--backoff" requires a value.')
+    expect(() => parseBackoffFlag({ backoff: [] }))
+      .toThrow('Flag "--backoff" requires a value.')
+    expect(parseBackoffFlag({})).toBeUndefined()
+  })
+
   it('rejects a retry delay that is not a non-negative integer', () => {
     expect(() => parseBackoffFlag({ backoff: '5,x' }))
       .toThrow('Flag "--backoff" must be a non-negative integer or a comma-separated list of them.')

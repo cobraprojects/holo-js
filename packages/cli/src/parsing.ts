@@ -541,9 +541,13 @@ export function resolveBooleanFlag(
 export function parseBackoffFlag(
   flags: Readonly<Record<string, CommandFlagValue>>,
 ): number | readonly number[] | undefined {
-  const raw = resolveStringFlag(flags, 'backoff')
-  if (typeof raw === 'undefined') {
+  if (typeof flags.backoff === 'undefined') {
     return undefined
+  }
+
+  const raw = resolveStringFlag(flags, 'backoff')
+  if (typeof raw !== 'string') {
+    throw new Error('Flag "--backoff" requires a value.')
   }
 
   const entries = raw.split(',').map(entry => entry.trim())

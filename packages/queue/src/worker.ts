@@ -271,7 +271,8 @@ async function processReservedJob(
     handlerError = normalizeHandlerError(error)
   }
 
-  if (handlerError instanceof QueueWorkerTimeoutError) {
+  // Decide from the worker's own timer, not the error class: a handler can throw a QueueWorkerTimeoutError itself.
+  if (executionState.timedOut && handlerError) {
     if (definition.failOnTimeout === true) {
       await failReservedJob(driver, reserved, event, options, { error: handlerError, runJobFailedHook: true })
     }
