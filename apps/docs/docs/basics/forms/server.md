@@ -239,7 +239,7 @@ Read it on the page with `useValidationErrors('password')`. See [Error bags](/ba
 |---|---|
 | `validate(input, schema, options?)` | Get typed data or throw a `ValidationException`. `options.throttle` applies a rate limit, and `options.bag` names the error bag. |
 | `safeParse(input, schema, options?)` | Get a submission object without throwing. `options.throttle` applies a rate limit. |
-| `sanitizeFlashedInput(values, schema?)` | Copy `values` without the password fields and [sensitive](/basics/validation/rules#sensitive) fields of `schema`. Use it before you store submitted values in a session or cookie. |
+| `sanitizeFlashedInput(values, schema?)` | Copy `values` without uploaded files, password fields, and the [sensitive](/basics/validation/rules#sensitive) fields of `schema`, including inside nested objects and arrays. Use it before you store submitted values in a session or cookie. |
 | `FormContractError` | Error class for misuse of these helpers. It is thrown when `fail()` or `success()` gets a status below 100 or a non-integer, when `throttle` is used with input that isn't a request, or when `@holo-js/security` is not installed. |
 
 A submission object has these members:
