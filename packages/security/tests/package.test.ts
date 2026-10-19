@@ -1,4 +1,4 @@
-import { access, chmod, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1619,21 +1619,6 @@ describe('@holo-js/security rate-limit drivers', () => {
         limited: false,
         snapshot: { attempts: 1 },
       })
-    })
-
-    it('keeps hitting healthy keys when a sweep cannot read another directory', async () => {
-      const harness = await createHarness()
-      const unreadable = join(harness.root, 'unreadable')
-      await mkdir(unreadable)
-      await chmod(unreadable, 0)
-      try {
-        await expect(harness.createStore().hit('healthy', {
-          maxAttempts: 1,
-          decaySeconds: 60,
-        })).resolves.toMatchObject({ limited: false, snapshot: { attempts: 1 } })
-      } finally {
-        await chmod(unreadable, 0o700)
-      }
     })
 
     it('starts a file window after waiting for its bucket lock', async () => {

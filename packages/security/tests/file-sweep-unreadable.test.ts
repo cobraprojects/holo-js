@@ -87,6 +87,11 @@ describe('file sweep with an unreadable bucket shard', () => {
       let now = sweepStart
       const store = createFileRateLimitStore(root, { now: () => now })
 
+      await expect(store.hit(kicker, { maxAttempts: 2, decaySeconds: 60 })).resolves.toMatchObject({
+        limited: false,
+        snapshot: { attempts: 1 },
+      })
+
       await waitUntil(async () => {
         await store.hit(kicker, { maxAttempts: 2, decaySeconds: 60 })
         return await access(healthyPath).then(() => false, () => true)
