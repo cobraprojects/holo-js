@@ -34,6 +34,12 @@ type DatabaseQueuedJobRow = {
   created_at: unknown
 }
 
+type ReservationCandidate = {
+  id: unknown
+  available_at: unknown
+  created_at: unknown
+}
+
 function normalizeDatabaseErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message
@@ -68,7 +74,7 @@ function wrapDatabaseError(
   return new DatabaseQueueDriverError(connectionName, action, error)
 }
 
-const RESERVATION_CANDIDATE_LIMIT = 100
+const RESERVATION_CANDIDATE_PAGE_SIZE = 100
 
 function normalizeQueueNames(
   queueNames: readonly string[] | undefined,
@@ -136,39 +142,67 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     now: number,
   ): Promise<DatabaseQueuedJobRow | undefined> {
     const expiredReservationCutoff = this.getExpiredReservationCutoff(now)
-    const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
-    const candidates = await tx.queryCompiled<{ id: unknown }>({
+    const lockClause = tx.getCapabilities().lockForUpdate ? ' FOR UPDATE SKIP LOCKED' : ''
+    let after: ReservationCandidate | undefined
+
+    while (true) {
+      const candidates = await this.selectReservationCandidates(tx, quotedTable, queueName, now, after)
+      for (const candidate of candidates) {
+        const [idPlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
+        const locked = await tx.queryCompiled<DatabaseQueuedJobRow>({
+          sql:
+            `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
+            + `FROM ${quotedTable} `
+            + `WHERE id = ${idPlaceholder} `
+            + `AND available_at <= ${availablePlaceholder} `
+            + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder})${lockClause}`,
+          bindings: [candidate.id, now, expiredReservationCutoff],
+          source: `queue:${this.name}:reserve:lock`,
+        })
+
+        if (locked.rows[0]) {
+          return locked.rows[0]
+        }
+      }
+
+      after = candidates.at(-1)
+      if (!after || candidates.length < RESERVATION_CANDIDATE_PAGE_SIZE) {
+        return undefined
+      }
+    }
+  }
+
+  private async selectReservationCandidates(
+    tx: DatabaseContext,
+    quotedTable: string,
+    queueName: string,
+    now: number,
+    after: ReservationCandidate | undefined,
+  ): Promise<readonly ReservationCandidate[]> {
+    const placeholders = createPlaceholders(tx, after ? 6 : 3)
+    const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = placeholders
+    const cursorCondition = after
+      ? `AND (available_at, created_at, id) > (${placeholders.slice(3).join(', ')}) `
+      : ''
+    const result = await tx.queryCompiled<ReservationCandidate>({
       sql:
-        `SELECT id FROM ${quotedTable} `
+        `SELECT id, available_at, created_at FROM ${quotedTable} `
         + `WHERE queue = ${queuePlaceholder} `
         + `AND available_at <= ${availablePlaceholder} `
         + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
+        + cursorCondition
         + 'ORDER BY available_at ASC, created_at ASC, id ASC '
-        + `LIMIT ${RESERVATION_CANDIDATE_LIMIT}`,
-      bindings: [queueName, now, expiredReservationCutoff],
+        + `LIMIT ${RESERVATION_CANDIDATE_PAGE_SIZE}`,
+      bindings: [
+        queueName,
+        now,
+        this.getExpiredReservationCutoff(now),
+        ...(after ? [after.available_at, after.created_at, after.id] : []),
+      ],
       source: `queue:${this.name}:reserve:candidates`,
     })
 
-    const lockClause = tx.getCapabilities().lockForUpdate ? ' FOR UPDATE SKIP LOCKED' : ''
-    const [idPlaceholder, lockAvailablePlaceholder, lockExpiredPlaceholder] = createPlaceholders(tx, 3)
-    for (const candidate of candidates.rows) {
-      const locked = await tx.queryCompiled<DatabaseQueuedJobRow>({
-        sql:
-          `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
-          + `FROM ${quotedTable} `
-          + `WHERE id = ${idPlaceholder} `
-          + `AND available_at <= ${lockAvailablePlaceholder} `
-          + `AND (reserved_at IS NULL OR reserved_at <= ${lockExpiredPlaceholder})${lockClause}`,
-        bindings: [candidate.id, now, expiredReservationCutoff],
-        source: `queue:${this.name}:reserve:lock`,
-      })
-
-      if (locked.rows[0]) {
-        return locked.rows[0]
-      }
-    }
-
-    return undefined
+    return result.rows
   }
 
   async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(

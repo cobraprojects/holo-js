@@ -203,6 +203,25 @@ for (const server of servers) {
       expect(outcome).toEqual([...ids, null])
     }, 20_000)
 
+    it('finds an available job behind many jobs other workers are holding', async () => {
+      const harness = await createContentionHarness(server.driver)
+      const ids = await dispatchJobs(harness.driver(), 151)
+
+      const outcome = await harness.held.transaction(async () => {
+        for (let index = 0; index < 150; index += 1) {
+          await harness.driver('held').reserve({ queueNames: ['default'], workerId: 'holder' })
+        }
+
+        return withinDeadline(
+          harness.driver().reserve({ queueNames: ['default'], workerId: 'next' }),
+          2_000,
+          'The worker waited on jobs another worker holds.',
+        )
+      })
+
+      expect(outcome?.envelope.id).toBe(ids[150])
+    }, 20_000)
+
     it('reserves every job exactly once across concurrent workers', async () => {
       const harness = await createContentionHarness(server.driver)
       const ids = await dispatchJobs(harness.driver(), 40)
