@@ -8,6 +8,10 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vites
 import { createFileSessionStore, fileSessionDriverInternals, type SessionRecord } from '../src'
 
 let packageBuildRoot: string | undefined
+const windowsFsLoader = new URL('./support/windows-fs-loader/register.mjs', import.meta.url)
+const windowsFsWorkerEnv = process.env.HOLO_SESSION_WINDOWS_FS === '1'
+  ? { ...process.env, NODE_OPTIONS: `--import ${windowsFsLoader.href}`, WINDOWS_FS_FRESH_MS: '1000', WINDOWS_FS_FAIL_RATE: '0.1' }
+  : process.env
 
 async function createSession() {
   const root = await mkdtemp(join(tmpdir(), 'holo-file-lock-'))
@@ -25,7 +29,7 @@ async function createSession() {
 
 async function startWorker(mode: 'hold' | 'flash', root: string, sessionId: string, parameter: string): Promise<ChildProcess> {
   if (!packageBuildRoot) throw new Error('Expected the current session package build')
-  const child = fork(new URL('./support/file-session-worker.mjs', import.meta.url), [mode, root, sessionId, parameter, join(packageBuildRoot, 'index.mjs')], { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+  const child = fork(new URL('./support/file-session-worker.mjs', import.meta.url), [mode, root, sessionId, parameter, join(packageBuildRoot, 'index.mjs')], { execArgv: [], env: windowsFsWorkerEnv, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
   let stderr = ''
   child.stderr?.on('data', (value: Buffer) => { stderr += value.toString() })
   onTestFinished(async () => {
