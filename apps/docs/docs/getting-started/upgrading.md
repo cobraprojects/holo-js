@@ -29,6 +29,10 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
 
+### Realtime hidden foreign keys
+
+A Realtime query whose root model hides, shows only some, casts, or appends attributes, and that also loads a belongs-to relation, is re-run when the foreign key changes instead of patched. Its serialized rows no longer carry the raw foreign key, so the value the model hides stays out of every patch. No code changes are required. Subscriptions to those queries run the handler on each foreign-key change. Models without serialization rules keep incremental patching.
+
 ### Model scope grouping
 
 Review model queries and relation constraints that use `orWhere()`. Caller conditions, each global scope, and the soft-delete filter now form separate groups joined with `AND`. Queries can no longer use `OR` to reach foreign-tenant or deleted rows, and instance writes remain limited to their target row. Existing method signatures are unchanged.

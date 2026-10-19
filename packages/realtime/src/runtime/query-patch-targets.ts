@@ -136,6 +136,7 @@ export function createPatchedQueryObservation(
     selectionColumns: readQuerySelectionColumns(query),
     selectionResultKeys: readQuerySelectionResultKeys(query),
     selections: query.selections,
+    serialized: query.serialized,
     tableName: query.tableName,
   })
 }

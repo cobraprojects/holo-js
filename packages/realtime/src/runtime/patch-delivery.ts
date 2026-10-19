@@ -410,6 +410,10 @@ function canSkipCoveredUnpatchableTarget(
   mutations: readonly DatabaseMutationEvent[],
   relevantTargets: readonly RelevantMutationTarget[],
 ): boolean {
+  if (target.query.serialized) {
+    return false
+  }
+
   return canSkipCoveredMutationValueTarget(target, mutations, relevantTargets, true)
 }
 

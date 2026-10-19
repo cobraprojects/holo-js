@@ -225,6 +225,7 @@ export interface DatabaseQueryObservation {
   readonly scalarListRows?: readonly Readonly<Record<string, unknown>>[]
   readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
   readonly selections: readonly DatabaseQuerySelectionObservation[]
+  readonly serialized?: boolean
 }
 
 export interface DatabaseQueryBelongsToHydrationObservation {
@@ -538,6 +539,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
@@ -559,6 +561,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     }))
     return
   }
@@ -606,6 +609,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
@@ -627,12 +631,13 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     }))
     return
   }
 }
 
-export function disableDatabaseQueryObservationPatching(source: unknown): void {
+export function disableDatabaseQueryObservationPatching(source: unknown, serialized = false): void {
   const state = databaseDependencyCollector.getStore()
   if (!state) {
     return
@@ -664,6 +669,7 @@ export function disableDatabaseQueryObservationPatching(source: unknown): void {
       scalarListColumn: query.scalarListColumn,
       scalarListRows: query.scalarListRows,
       selections: query.selections,
+      serialized: serialized || query.serialized,
     })
     return
   }
@@ -734,6 +740,7 @@ function rebindDatabaseQueryObservation(
       scalarListColumn,
       scalarListRows,
       selections: query.selections,
+      serialized: query.serialized,
     })
     return
   }

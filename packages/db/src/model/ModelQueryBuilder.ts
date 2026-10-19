@@ -2068,7 +2068,7 @@ export class ModelQueryBuilder<
       return
     }
 
-    disableDatabaseQueryObservationPatching(rows)
+    disableDatabaseQueryObservationPatching(rows, true)
   }
 
 }

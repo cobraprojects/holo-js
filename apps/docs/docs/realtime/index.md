@@ -242,7 +242,7 @@ const result = await createPost({
 When a realtime query runs, Holo records which tables and rows it read. When a mutation later writes through Holo's [query builder](/database/query-builder/) or models (inserts, updates, deletes, and relation changes such as attaching tags), Holo finds the affected queries and sends them new results.
 
 - **Only committed writes count.** Writes inside a [transaction](/database/transactions) refresh queries after the commit. If the transaction rolls back or the mutation throws first, nothing is sent.
-- **Most results are patched, not re-run.** For lists, single records, relations loaded with `with(...)`, aggregates like `count()` and `sum(...)`, and paginated results, Holo usually updates the result in place. When it can't do that safely, it re-runs your handler and sends the new result.
+- **Most results are patched, not re-run.** For lists, single records, relations loaded with `with(...)`, aggregates like `count()` and `sum(...)`, and paginated results, Holo usually updates the result in place. When it can't do that safely, it re-runs your handler and sends the new result. A model that hides, shows only some, casts, or appends attributes is re-run when a belongs-to relation changes its foreign key, so hidden values never reach a patch.
 - **Bursts are batched.** Several quick writes produce one refresh with the final data.
 
 ::: warning

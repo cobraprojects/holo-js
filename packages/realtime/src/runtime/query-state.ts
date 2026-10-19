@@ -50,6 +50,7 @@ export type DatabaseQueryObservation = {
   readonly selectionColumns?: readonly string[]
   readonly selectionResultKeys?: readonly string[]
   readonly selections?: readonly DatabaseQuerySelectionObservation[]
+  readonly serialized?: boolean
   readonly tableName: string
 }
 
