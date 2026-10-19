@@ -1,13 +1,18 @@
 import { json, redirect } from '@sveltejs/kit'
 import auth from '@holo-js/auth'
-import { callback } from '@holo-js/auth-social'
+import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
 
 export function GET({ request }: { request: Request }): Promise<Response> {
   return handleCallback(request)
 }
 
 async function handleCallback(request: Request): Promise<Response> {
-  const result = await callback('github', request)
+  const result = await callback('github', request).catch((error: unknown) => {
+    if (error instanceof SocialAuthConflictError) {
+      return { ok: false, status: 409, message: 'Sign in with your password and verify your email to link this account.' } as const
+    }
+    throw error
+  })
   if (!result.ok) {
     return json({
       message: result.message,

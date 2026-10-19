@@ -290,7 +290,7 @@ it('escapes app-provided mail content and rejects executable markdown links in r
     subject: '<script>alert(1)</script>',
     markdown: '[safe](https://example.test) [bad](javascript:alert)\n\n<script>alert(1)</script>',
   })
-  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }) })
+  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('href="https://example.test"')
   expect(preview.html).not.toContain('href="javascript:')
@@ -326,6 +326,7 @@ it('uses app preview overrides and propagates app rendering failures', async () 
   const mail = defineMail({ to: 'ava@example.com', subject: 'App preview', text: 'Original' })
   configureMailRuntime({
     config,
+    environment: 'test',
     preview: async ({ mail }) => ({
       source: { kind: 'text' },
       from: { email: 'sender@example.com' },
@@ -343,7 +344,7 @@ it('uses app preview overrides and propagates app rendering failures', async () 
   })
   await expect(previewMail(mail)).resolves.toMatchObject({ text: 'App rendered preview' })
   await expect((await renderMailPreview(mail)).text()).resolves.toBe('App rendered page')
-  configureMailRuntime({ config, preview: async () => { throw new Error('App preview failed') } })
+  configureMailRuntime({ config, environment: 'test', preview: async () => { throw new Error('App preview failed') } })
   await expect(renderMailPreview(mail)).rejects.toThrow('App preview failed')
 })
 

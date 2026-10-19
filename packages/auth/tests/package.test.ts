@@ -2100,6 +2100,20 @@ describe('@holo-js/auth package runtime', () => {
     await expectAuthValidationError(() => verifyEmail(expired.plainTextToken), 'email_verification_token_expired')
   })
 
+  it('rejects email verification tokens after the user changes their email', async () => {
+    const runtime = await configureRuntime()
+    const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: null })
+    const token = await verification.create(created)
+    await runtime.usersProvider.update!(created, { email: 'attacker@example.com' })
+
+    await expectAuthValidationError(() => verifyEmail(token.plainTextToken), 'email_verification_token_expired')
+    expect((await runtime.usersProvider.findById(created.id))?.email_verified_at ?? null).toBeNull()
+
+    await runtime.usersProvider.update!((await runtime.usersProvider.findById(created.id))!, { email: 'ava@example.com' })
+    const reissued = await verification.create((await runtime.usersProvider.findById(created.id))!)
+    await expect(verifyEmail(reissued.plainTextToken)).resolves.toMatchObject({ email: 'ava@example.com' })
+  })
+
   it('allows exactly one concurrent email verification redemption', async () => {
     await configureRuntime()
     const created = unwrapAuthResult(await register({

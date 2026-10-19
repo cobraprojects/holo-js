@@ -21,7 +21,6 @@ import {
   resetConfigRuntime,
   resolveConfigCachePath,
   resolveEnvPlaceholders,
-  resolveAppEnvironment,
   resolveEnvironmentFileOrder,
   useConfig,
   writeConfigCache,
@@ -126,12 +125,11 @@ describe('@holo-js/config', () => {
     expect(resolveEnvironmentFileOrder('test')).toEqual(['.env', '.env.test'])
   })
 
-  it('resolves app environments and normalizes invalid values', () => {
-    expect(resolveAppEnvironment({ APP_ENV: 'production' })).toBe('production')
-    expect(resolveAppEnvironment({ NODE_ENV: 'test' })).toBe('test')
-    expect(resolveAppEnvironment({ APP_ENV: 'staging' })).toBe('development')
+  it('normalizes app environment values', () => {
     expect(normalizeAppEnv('test', 'development')).toBe('test')
-    expect(normalizeAppEnv('staging', 'production')).toBe('production')
+    expect(normalizeAppEnv(undefined, 'development')).toBe('development')
+    expect(normalizeAppEnv(undefined)).toBe('production')
+    expect(() => normalizeAppEnv('staging')).toThrow('Invalid application environment "staging".')
   })
 
   it('rejects malformed cache, redis, and queue defaults with precise validation errors', () => {

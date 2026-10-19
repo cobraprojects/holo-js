@@ -140,6 +140,25 @@ export interface SocialCallbackFailure {
   readonly message: string
 }
 
+export class SocialAuthConflictError extends Error {
+  readonly code = 'social_identity_conflict'
+  readonly provider: string
+  readonly providerUserId: string
+  readonly email: string
+
+  constructor(options: {
+    readonly provider: string
+    readonly providerUserId: string
+    readonly email: string
+  }) {
+    super(`[@holo-js/auth-social] Social email "${options.email}" from "${options.provider}" matches an existing local user and must be linked explicitly.`)
+    this.name = 'SocialAuthConflictError'
+    this.provider = options.provider
+    this.providerUserId = options.providerUserId
+    this.email = options.email
+  }
+}
+
 const SOCIAL_BINDINGS_KEY = '__holoAuthSocialBindings__'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
@@ -233,13 +252,19 @@ function getStateCookieName(provider: string): string {
   return `holo_oauth_state_${suffix}`
 }
 
-function serializeStateCookie(provider: string, state: string, nonce: string, request: Request): string {
+function serializeStateCookie(
+  provider: string,
+  state: string,
+  nonce: string,
+  request: Request,
+  formPostCallback: boolean,
+): string {
   const secure = new URL(request.url).protocol === 'https:'
   const attributes = [
     `${getStateCookieName(provider)}=${state}.${nonce}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    formPostCallback && secure ? 'SameSite=None' : 'SameSite=Lax',
     'Max-Age=600',
   ]
   if (secure) {
@@ -495,6 +520,17 @@ function serializeLocalUser(
   return Object.freeze(result)
 }
 
+function hasVerifiedLocalEmail(
+  adapter: RuntimeAuthProviderAdapter,
+  user: Record<string, unknown>,
+  serialized: AuthUserLike,
+): boolean {
+  const verifiedAt = adapter.getEmailVerifiedAt
+    ? adapter.getEmailVerifiedAt(user)
+    : serialized.email_verified_at
+  return verifiedAt instanceof Date || typeof verifiedAt === 'string'
+}
+
 async function findUserByEmail(
   adapter: RuntimeAuthProviderAdapter,
   email: string | undefined,
@@ -580,26 +616,31 @@ async function resolveLinkedUserForProviderConfig(
   }
 
   const { guard, authProvider, adapter } = resolveGuardAndProvider(provider, providerConfig)
-  const hasVerifiedEmail = profile.emailVerified === true && typeof profile.email === 'string' && profile.email.trim().length > 0
-  if (!hasVerifiedEmail && verificationRequired) {
+  const providerEmailVerified = profile.emailVerified === true && typeof profile.email === 'string' && profile.email.trim().length > 0
+  if (!providerEmailVerified && verificationRequired) {
     throw new Error(`[@holo-js/auth-social] Social sign-in with "${provider}" requires a verified email address.`)
   }
 
-  const trustedEmail = hasVerifiedEmail ? profile.email?.trim() : undefined
-  let localUser = await findUserByEmail(adapter, trustedEmail)
-  if (!localUser) {
-    localUser = requireUserRecord(await adapter.create({
+  const trustedEmail = providerEmailVerified ? profile.email?.trim() : undefined
+  const matchedUser = await findUserByEmail(adapter, trustedEmail)
+  const localUser = matchedUser ?? requireUserRecord(await adapter.create({
       name: profile.name ?? '',
       email: resolveEmailForCreation(provider, profile, {
-        trustEmail: hasVerifiedEmail,
+        trustEmail: providerEmailVerified,
       }),
       password: null,
       avatar: profile.avatar ?? null,
-      email_verified_at: hasVerifiedEmail ? new Date() : null,
+      email_verified_at: providerEmailVerified ? new Date() : null,
     }), '[@holo-js/auth-social] Auth provider create() must return an object user.')
-  }
 
   const serialized = serializeLocalUser(adapter, localUser, authProvider)
+  if (matchedUser && trustedEmail && !hasVerifiedLocalEmail(adapter, matchedUser, serialized)) {
+    throw new SocialAuthConflictError({
+      provider,
+      providerUserId: profile.id,
+      email: trustedEmail,
+    })
+  }
   await bindings.identityStore.save({
     provider,
     providerUserId: profile.id,
@@ -669,7 +710,7 @@ export async function redirect(provider: string, input: SocialRequestInput): Pro
   const headers = new Headers({
     location: authorizationUrl,
   })
-  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request))
+  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request, new URL(authorizationUrl, request.url).searchParams.get('response_mode') === 'form_post'))
 
   return new Response(null, {
     status: 302,

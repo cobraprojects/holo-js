@@ -233,6 +233,7 @@ afterEach(async () => {
   resetAuthRuntime()
   resetSessionRuntime()
   vi.doUnmock('@clerk/backend')
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   await Promise.all(sessionDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
@@ -784,18 +785,97 @@ describe('@holo-js/auth-clerk', () => {
       },
     })
 
-    await expect(verifyRequest(new Request('https://app.test/me', {
-      headers: {
-        authorization: `Bearer ${secondToken}`,
-      },
-    }))).resolves.toMatchObject({
-      sessionId: 'sess_clerk_rotate_second',
-      user: {
-        id: 'user_clerk_rotate_second',
-      },
-    })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 61_000)
+    try {
+      await expect(verifyRequest(new Request('https://app.test/me', {
+        headers: {
+          authorization: `Bearer ${secondToken}`,
+        },
+      }))).resolves.toMatchObject({
+        sessionId: 'sess_clerk_rotate_second',
+        user: {
+          id: 'user_clerk_rotate_second',
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(jwksRequestCount).toBe(2)
+  })
+
+  it('bounds Clerk JWKS refreshes for forged key ids and expires cached keys after their maximum age', async () => {
+    const runtime = await configureRuntime({
+      configureClerkRuntime: false,
+    })
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      config: defineAuthConfig({
+        ...authRuntimeInternals.getRuntimeBindings().config,
+        clerk: {
+          app: {
+            publishableKey: 'pk_test',
+            secretKey: 'sk_test',
+            frontendApi: 'https://flood.clerk.test',
+            sessionCookie: '__session',
+          },
+        },
+      }),
+    })
+
+    const trustedKeyPair = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const forgedKeyPair = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    let jwksRequestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: FetchMockInput) => {
+      if (resolveFetchMockUrl(input) === 'https://flood.clerk.test/.well-known/jwks.json') {
+        jwksRequestCount += 1
+        return createJwksResponse(trustedKeyPair.publicKey)
+      }
+
+      return new Response(null, { status: 404 })
+    }))
+
+    const forgedBearer = (kid: string) => verifyRequest(new Request('https://app.test/me', {
+      headers: {
+        authorization: `Bearer ${createSignedJwt({
+          sub: 'user_forged',
+          sid: 'sess_forged',
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        }, forgedKeyPair.privateKey, {
+          alg: 'RS256',
+          kid,
+          typ: 'JWT',
+        })}`,
+      },
+    }))
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+      await expect(forgedBearer('clerk-test-key')).rejects.toThrow('signature verification failed')
+      expect(jwksRequestCount).toBe(1)
+
+      vi.setSystemTime(new Date('2030-01-01T00:02:00Z'))
+      await Promise.allSettled(Array.from({ length: 5 }, (_, index) => forgedBearer(`forged-key-${index}`)))
+      expect(jwksRequestCount).toBe(2)
+
+      await Promise.allSettled(Array.from({ length: 5 }, (_, index) => forgedBearer(`other-forged-key-${index}`)))
+      expect(jwksRequestCount).toBe(2)
+
+      vi.setSystemTime(new Date('2030-01-01T00:13:00Z'))
+      await expect(forgedBearer('clerk-test-key')).rejects.toThrow('signature verification failed')
+      expect(jwksRequestCount).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rebuilds the built-in Clerk verifier when frontendApi changes', async () => {

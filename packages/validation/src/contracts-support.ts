@@ -19,6 +19,23 @@ const repeatedFormValues = new WeakSet<unknown[]>()
 
 const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 
+const MAX_INPUT_VARIABLES = 1_000
+const MAX_UPLOADED_FILES = 1_000
+const MAX_INPUT_NESTING_LEVEL = 64
+const TOO_DEEP = 'The request contains a field nested too deeply.'
+
+export class MalformedInputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'MalformedInputError'
+  }
+}
+
+const INVALID_FIELD_NAME = 'The request contains an invalid field name.'
+const INVALID_LIST_INDEX = 'The request contains an invalid list index.'
+
+type ArrayIndexes = Map<unknown[], Set<number>>
+
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
@@ -261,113 +278,283 @@ export function issuesToFlat(issues: ReadonlyArray<StandardSchemaV1Issue>): Reco
   return flat
 }
 
+function pathToken(segment: string): string | number | '' {
+  if (segment === '') {
+    return ''
+  }
+
+  if (/^\d+$/.test(segment)) {
+    return Number(segment)
+  }
+
+  if (UNSAFE_PATH_SEGMENTS.has(segment)) {
+    throw new MalformedInputError(INVALID_FIELD_NAME)
+  }
+
+  return segment
+}
+
 function parsePathTokens(path: string): readonly (string | number | '')[] {
   const tokens: (string | number | '')[] = []
-  const pattern = /([^[.\]]+)|\[(.*?)\]/g
+  let index = 0
 
-  for (const match of path.matchAll(pattern)) {
-    const segment = (match[1] ?? match[2])!
-    if (segment === '') {
-      tokens.push('')
+  while (index < path.length) {
+    const char = path[index]
+    if (char === '.') {
+      index += 1
       continue
     }
 
-    if (/^\d+$/.test(segment)) {
-      tokens.push(Number(segment))
+    if (tokens.length > MAX_INPUT_NESTING_LEVEL) {
+      throw new MalformedInputError(TOO_DEEP)
+    }
+
+    if (char === '[') {
+      const close = path.indexOf(']', index + 1)
+      if (close === -1) {
+        throw new MalformedInputError(INVALID_FIELD_NAME)
+      }
+
+      tokens.push(pathToken(path.slice(index + 1, close)))
+      index = close + 1
       continue
     }
 
-    assertSafePathSegment(segment, path)
-    tokens.push(segment)
+    if (char === ']') {
+      throw new MalformedInputError(INVALID_FIELD_NAME)
+    }
+
+    let end = index + 1
+    while (end < path.length && path[end] !== '.' && path[end] !== '[' && path[end] !== ']') {
+      end += 1
+    }
+
+    tokens.push(pathToken(path.slice(index, end)))
+    index = end
   }
 
   return tokens
 }
 
-function createContainer(next: string | number | '' | undefined): Record<string, unknown> | unknown[] {
-  return typeof next === 'number' || next === '' ? [] : createObjectContainer()
+type SlotKind = 'value' | 'appended' | 'indexed' | 'object'
+
+const slotKinds = new WeakMap<object, SlotKind>()
+
+function slotKindFor(next: string | number | '' | undefined): SlotKind {
+  if (next === undefined) return 'value'
+  if (typeof next === 'number') return 'indexed'
+  return next === '' ? 'appended' : 'object'
 }
 
-export function assignNestedValue(target: Record<string, unknown> | unknown[], path: string, value: unknown): void {
+function joinSlotKinds(established: SlotKind, requested: SlotKind, replaceValues: boolean): SlotKind {
+  if (established === requested) {
+    return established === 'value' && !replaceValues ? 'appended' : established
+  }
+
+  if (!replaceValues && ((established === 'value' && requested === 'appended') || (established === 'appended' && requested === 'value'))) {
+    return 'appended'
+  }
+
+  throw new MalformedInputError(INVALID_FIELD_NAME)
+}
+
+function claimSlot(existing: unknown, requested: SlotKind, replaceValues: boolean): SlotKind {
+  if (existing === undefined) return requested
+  const established = typeof existing === 'object' && existing !== null
+    ? slotKinds.get(existing) ?? 'value'
+    : 'value'
+  return joinSlotKinds(established, requested, replaceValues)
+}
+
+type Container = Record<string, unknown> | unknown[]
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readSlot(container: Container, key: string | number): unknown {
+  return Array.isArray(container) ? container[Number(key)] : container[String(key)]
+}
+
+function writeSlot(container: Container, key: string | number, value: unknown): void {
+  if (Array.isArray(container)) {
+    container[Number(key)] = value
+    return
+  }
+  container[String(key)] = value
+}
+
+function appendedList(container: Container, key: string | number, existing: unknown): unknown[] {
+  if (Array.isArray(existing)) return existing
+  const list = existing === undefined ? [] : [existing]
+  slotKinds.set(list, 'appended')
+  if (existing !== undefined) repeatedFormValues.add(list)
+  writeSlot(container, key, list)
+  return list
+}
+
+function openContainer(container: Container, key: string | number, kind: SlotKind, existing: unknown): Container {
+  if (kind === 'appended') return appendedList(container, key, existing)
+  if (Array.isArray(existing) || isRecord(existing)) return existing
+  const created: Container = kind === 'object' ? createObjectContainer() : []
+  slotKinds.set(created, kind)
+  writeSlot(container, key, created)
+  return created
+}
+
+function recordArrayIndex(indexes: ArrayIndexes, array: unknown[], index: number): void {
+  const recorded = indexes.get(array) ?? new Set<number>()
+  recorded.add(index)
+  indexes.set(array, recorded)
+}
+
+export function assignNestedValue(
+  target: Record<string, unknown> | unknown[],
+  path: string,
+  value: unknown,
+  indexes: ArrayIndexes = new Map(),
+  indexLimit = Number.POSITIVE_INFINITY,
+): void {
   const tokens = parsePathTokens(path)
   if (tokens.length === 0) {
     return
   }
 
-  let cursor: Record<string, unknown> | unknown[] = target
+  let cursor: Container = target
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]
     const next = tokens[index + 1]
     const last = index === tokens.length - 1
+    const requested = slotKindFor(next)
 
-    if (Array.isArray(cursor)) {
-      if (token === '') {
-        if (last) {
-          cursor.push(value)
-          return
-        }
-
-        const container = createContainer(next)
-        cursor.push(container)
-        cursor = container
-        continue
-      }
-
-      if (typeof token !== 'number') {
-        throw new ValidationContractError(`Invalid array path segment "${String(token)}" in "${path}".`)
-      }
-
+    if (Array.isArray(cursor) && token === '') {
+      repeatedFormValues.delete(cursor)
       if (last) {
-        cursor[token] = value
+        cursor.push(value)
         return
       }
 
-      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-      if (!existing || /* v8 ignore next */ typeof existing !== 'object') {
-        cursor[token] = createContainer(next)
-      }
-
-      cursor = cursor[token] as Record<string, unknown> | unknown[]
+      const element: Container = requested === 'object' ? createObjectContainer() : []
+      slotKinds.set(element, requested)
+      cursor.push(element)
+      cursor = element
       continue
     }
 
-    if (typeof token !== 'string') {
-      throw new ValidationContractError(`Invalid object path segment "${String(token)}" in "${path}".`)
+    let key: string | number
+    if (Array.isArray(cursor)) {
+      if (typeof token !== 'number') {
+        throw new MalformedInputError(INVALID_FIELD_NAME)
+      }
+
+      if (token >= indexLimit) {
+        throw new MalformedInputError(INVALID_LIST_INDEX)
+      }
+
+      recordArrayIndex(indexes, cursor, token)
+      key = token
+    } else {
+      if (typeof token !== 'string') {
+        throw new MalformedInputError(INVALID_FIELD_NAME)
+      }
+
+      key = token
     }
 
+    const existing = hasOwnContainerValue(cursor, key) ? readSlot(cursor, key) : undefined
+    const kind = claimSlot(existing, requested, Array.isArray(cursor))
+
     if (last) {
-      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-      if (typeof existing === 'undefined') {
-        cursor[token] = value
-      } else if (Array.isArray(existing)) {
-        existing.push(value)
+      if (kind === 'value') {
+        writeSlot(cursor, key, value)
       } else {
-        const values = [existing, value]
-        repeatedFormValues.add(values)
-        cursor[token] = values
+        appendedList(cursor, key, existing).push(value)
       }
       return
     }
 
-    const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-    if (!existing || typeof existing !== 'object') {
-      cursor[token] = createContainer(next)
-    }
-
-    cursor = cursor[token] as Record<string, unknown> | unknown[]
-  /* v8 ignore next 2 */
+    cursor = openContainer(cursor, key, kind, existing)
   }
 }
 
 export function normalizeFormData(input: FormData | URLSearchParams): Record<string, unknown> {
   const output: Record<string, unknown> = {}
+  const indexes: ArrayIndexes = new Map()
+  let entryCount = 0
+  let variableCount = 0
+  let fileCount = 0
+  for (const [, value] of input.entries()) {
+    entryCount += 1
+    if (isBlobLike(value)) {
+      fileCount += 1
+    } else {
+      variableCount += 1
+    }
+    if (variableCount > MAX_INPUT_VARIABLES || fileCount > MAX_UPLOADED_FILES) {
+      throw new MalformedInputError('The request contains too many input variables.')
+    }
+  }
 
   for (const [key, value] of input.entries()) {
-    assignNestedValue(output, key, value)
+    assignNestedValue(output, key, value, indexes, entryCount)
+  }
+
+  for (const recorded of indexes.values()) {
+    for (const index of recorded) {
+      if (index >= recorded.size) {
+        throw new MalformedInputError(INVALID_LIST_INDEX)
+      }
+    }
   }
 
   return output
+}
+
+function parseJsonInput(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {}
+  }
+}
+
+async function parseFormBody(input: Request): Promise<FormData> {
+  if (input.bodyUsed) return input.formData()
+  const reader = input.body?.getReader()
+  let readFailure: { readonly error: unknown } | undefined
+  let finished = !reader
+  const body = reader ? new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const result = await reader.read().catch((error: unknown) => {
+        readFailure = { error }
+        finished = true
+        throw error
+      })
+      if (result.done) {
+        finished = true
+        controller.close()
+      } else {
+        controller.enqueue(result.value)
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  }) : null
+  const form = new Response(body, { headers: input.headers })
+  try {
+    return await form.formData()
+  } catch {
+    if (readFailure) throw readFailure.error
+    return new FormData()
+  } finally {
+    try {
+      if (!finished) await reader?.cancel()
+    } finally {
+      reader?.releaseLock()
+    }
+  }
 }
 
 export async function normalizeRequestInput(input: Request): Promise<{ readonly source: string, readonly value: unknown }> {
@@ -384,14 +571,14 @@ export async function normalizeRequestInput(input: Request): Promise<{ readonly 
   if (contentType === 'application/json') {
     return {
       source: 'request',
-      value: await input.json(),
+      value: parseJsonInput(await input.text()),
     }
   }
 
   if (contentType === 'multipart/form-data' || contentType === 'application/x-www-form-urlencoded') {
     return {
       source: 'form-data',
-      value: normalizeFormData(await input.formData()),
+      value: normalizeFormData(await parseFormBody(input)),
     }
   }
 
@@ -467,6 +654,18 @@ function coerceDate(value: unknown): unknown {
   return Number.isNaN(parsed.getTime()) ? value : parsed
 }
 
+export function declaredListLimit(definition: FieldDefinition): number | undefined {
+  let limit: number | undefined
+  for (const rule of definition.rules) {
+    if (rule.name === 'transform') break
+    const value = rule.args[0]
+    if ((rule.name === 'max' || rule.name === 'size') && typeof value === 'number' && (limit === undefined || value < limit)) {
+      limit = value
+    }
+  }
+  return limit
+}
+
 export function coerceFieldValue(definition: FieldDefinition, value: unknown): unknown {
   if (definition.kind === 'array') {
     if (value === undefined || (value === null && definition.rules.some(rule => rule.name === 'nullable'))) {
@@ -474,7 +673,8 @@ export function coerceFieldValue(definition: FieldDefinition, value: unknown): u
     }
 
     const rawItems = Array.isArray(value) ? value : [value]
-    if (!definition.item) {
+    const limit = declaredListLimit(definition)
+    if (!definition.item || (limit !== undefined && rawItems.length > limit)) {
       return rawItems
     }
 

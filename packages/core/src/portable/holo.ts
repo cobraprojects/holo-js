@@ -1480,6 +1480,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     mailModule.configureMailRuntime({
       ...existingMailBindings,
       config: loadedConfig.mail,
+      environment: loadedConfig.environment.name,
       projectRoot,
       plugins: loadedConfig.app.plugins,
       ...(options.renderView ?? getHoloRenderingRuntime().renderView
