@@ -600,7 +600,16 @@ describe('@holo-js/queue config', () => {
           retryAfter: -1,
         },
       },
-    })).toThrow('queue connection "database" retryAfter must be greater than or equal to 0.')
+    })).toThrow('queue connection "database" retryAfter must be greater than or equal to 1.')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        database: {
+          driver: 'database',
+          retryAfter: 0,
+        },
+      },
+    })).toThrow('queue connection "database" retryAfter must be greater than or equal to 1.')
 
     expect(() => normalizeQueueConfig({
       connections: {

@@ -284,7 +284,7 @@ function normalizeDatabaseConnection(
     driver: 'database',
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
-      minimum: 0,
+      minimum: 1,
     }),
     sleep: parseInteger(config.sleep, DEFAULT_QUEUE_SLEEP, `queue connection "${name}" sleep`, {
       minimum: 0,

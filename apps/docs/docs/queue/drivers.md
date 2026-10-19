@@ -66,7 +66,7 @@ export default defineQueueConfig({
 | `connection` | `'default'` | Database connection name from `config/database.ts`. |
 | `table` | `'jobs'` | Table that holds waiting jobs. |
 | `queue` | `'default'` | Default queue name for this connection. |
-| `retryAfter` | `90` | Seconds before a job a worker took, but never finished, can be taken by another worker. Keep job timeouts shorter than this. |
+| `retryAfter` | `90` | Seconds before a job a worker took, but never finished, can be taken by another worker. Keep job timeouts shorter than this. Must be at least `1`. |
 | `sleep` | `1` | Seconds a worker waits before checking an empty queue again. |
 
 ### Create the jobs table
