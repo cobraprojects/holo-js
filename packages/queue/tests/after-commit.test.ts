@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB } from '@holo-js/db'
 import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
-import { dispatch, registerQueueJob, resetQueueRegistry } from '../src'
+import { dispatch, dispatchSync, registerQueueJob, resetQueueRegistry } from '../src'
 
 async function openHarness(connectionAfterCommit?: boolean) {
   const harness = await createSQLiteQueueHarness({
@@ -80,5 +80,58 @@ describe('@holo-js/queue after-commit dispatch', () => {
       await dispatch('receipt-sent', {}).dispatch()
       expect(await harness.readJobRows()).toHaveLength(1)
     })
+  })
+
+  it('serializes an afterCommit payload as it was when dispatched, not as it is at commit', async () => {
+    const harness = await openHarness()
+    const payload = { orderId: 0 }
+
+    await DB.transaction(async () => {
+      for (const orderId of [1, 2, 3]) {
+        payload.orderId = orderId
+        await dispatch('receipt-sent', payload).afterCommit().dispatch()
+      }
+    })
+
+    const payloads = (await harness.readJobRows()).map(row => JSON.parse(String(row.payload)) as { orderId: number })
+    expect(payloads.map(entry => entry.orderId).sort()).toEqual([1, 2, 3])
+  })
+
+  it('runs onComplete for an afterCommit dispatch only once it is enqueued at commit', async () => {
+    const harness = await openHarness()
+    const completed: unknown[] = []
+
+    await DB.transaction(async () => {
+      await dispatch('receipt-sent', {}).afterCommit().onComplete(result => {
+        completed.push(result)
+      }).dispatch()
+      expect(completed).toEqual([])
+    })
+
+    expect(completed).toEqual([expect.objectContaining({ synchronous: false })])
+    expect(await harness.readJobRows()).toHaveLength(1)
+  })
+
+  it('does not run onComplete for an afterCommit dispatch whose transaction rolls back', async () => {
+    const harness = await openHarness()
+    const completed: unknown[] = []
+
+    await expect(DB.transaction(async () => {
+      await dispatch('receipt-sent', {}).afterCommit().onComplete(result => {
+        completed.push(result)
+      }).dispatch()
+      throw new Error('rollback requested')
+    })).rejects.toThrow('rollback requested')
+
+    expect(completed).toEqual([])
+    expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it('runs a job inline without checking its timeout against the connection retryAfter', async () => {
+    const harness = await openHarness()
+    registerQueueJob({ timeout: 120, handle() {} }, { name: 'slow-inline' })
+
+    await expect(dispatchSync('slow-inline', {})).resolves.toBeUndefined()
+    expect(await harness.readJobRows()).toEqual([])
   })
 })
