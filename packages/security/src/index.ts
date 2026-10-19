@@ -128,6 +128,7 @@ export type {
   SecurityClearRateLimitOptions,
   SecurityClientConfig,
   SecurityCsrfFacade,
+  SecurityCsrfSessionAccessor,
   SecurityCorsFacade,
   SecurityCsrfInput,
   SecurityCsrfField,

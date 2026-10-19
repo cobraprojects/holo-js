@@ -14,9 +14,9 @@ async function fixture() {
   roots.add(root)
   await mkdir(join(root, 'private'), { recursive: true })
   await mkdir(join(root, 'other'), { recursive: true })
-  await writeFile(join(root, 'private', encodeURIComponent('image #1.png')), 'private-image')
+  await writeFile(join(root, 'private', 'image #1.png'), 'private-image')
   await writeFile(join(root, 'private', 'other.png'), 'other-image')
-  await writeFile(join(root, 'other', encodeURIComponent('image #1.png')), 'other-disk')
+  await writeFile(join(root, 'other', 'image #1.png'), 'other-disk')
   const config: NormalizedHoloStorageConfig = {
     defaultDisk: 'local',
     routePrefix: '/assets',
@@ -117,7 +117,7 @@ describe('private local storage URLs', () => {
     const expired = createTemporaryLocalStorageUrl(disk, 'image #1.png', signingConfig, -1)
     expect((await response(expired)).status).toBe(404)
     await writeFile(join(root, 'secret.txt'), 'secret')
-    await symlink(join(root, 'secret.txt'), join(root, 'private', encodeURIComponent('escape link.txt')))
+    await symlink(join(root, 'secret.txt'), join(root, 'private', 'escape link.txt'))
     const escape = createTemporaryLocalStorageUrl(disk, 'escape link.txt', signingConfig, 60)
     expect((await response(escape)).status).toBe(404)
     for (const path of ['../secret.txt', 'nested/../../secret.txt', '.', 'nested/../image.png', 'nested\\image.png', 'image\u0000.png']) {
@@ -146,5 +146,46 @@ describe('private local storage URLs', () => {
     expect(result.headers.get('content-type')).toBe('application/octet-stream')
     expect(result.headers.get('content-disposition')).toBe('attachment')
     expect(result.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+})
+
+describe('private local storage URLs for metadata names', () => {
+  it('refuses to sign a path ending in the reserved $ suffix', async () => {
+    const { runtime, disk } = await fixture()
+    const config = { ...runtime, appKey, appUrl: 'https://app.test' }
+
+    for (const path of ['prices.json$', 'reports/prices.json$']) {
+      expect(() => createTemporaryLocalStorageUrl(disk, path, config, 60)).toThrow('ending in "$" are reserved')
+    }
+    expect(createTemporaryLocalStorageUrl(disk, 'prices$.json', config, 60)).toContain('/__holo_private/local/prices%24.json')
+  })
+})
+
+describe('private local storage URLs on Windows', () => {
+  it('refuses signed URLs that Windows would resolve to a metadata sidecar, and still serves normal files', async () => {
+    const { root, runtime, disk, response } = await fixture()
+    await writeFile(join(root, 'private', 'report.txt'), 'report')
+    await writeFile(join(root, 'private', 'report.txt$'), '{"owner":"ops"}')
+    for (const alias of ['report.txt$.', 'report.txt$ ']) {
+      await writeFile(join(root, 'private', alias), 'metadata alias')
+    }
+    const urls = Object.fromEntries(['report.txt', 'report.txt$.', 'report.txt$ '].map(path => [
+      path,
+      createTemporaryLocalStorageUrl(disk, path, { ...runtime, appKey, appUrl: 'https://app.test' }, 60),
+    ]))
+
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    if (!descriptor) throw new Error('Missing platform descriptor')
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      expect((await response(urls['report.txt$.'])).status).toBe(404)
+      expect((await response(urls['report.txt$ '])).status).toBe(404)
+      const served = await response(urls['report.txt'])
+      expect(served.status).toBe(200)
+      await expect(served.text()).resolves.toBe('report')
+      expect(() => createTemporaryLocalStorageUrl(disk, 'report.txt$.', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)).toThrow()
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor)
+    }
   })
 })

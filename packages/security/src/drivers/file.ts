@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, opendir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import type { Dir, Dirent } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SecurityRateLimitHitResult, SecurityRateLimitStore } from '../contracts'
 
 type StoredFileRateLimitBucket = {
@@ -31,35 +33,58 @@ export interface FileRateLimitStoreOptions {
   readonly lockTimeoutMs?: number
 }
 
+type FileRateLimitSweepStats = {
+  inFlight: boolean
+  runsStarted: number
+  peakHeldNames: number
+  maxEntriesPerRun: number
+  openHandles: number
+}
+
+type FileRateLimitKeyHashes = {
+  readonly namespaceHash: string
+  readonly prefixHashes: readonly string[]
+}
+
 const LOCK_OWNER_FILE = 'owner'
 const BUCKETS_DIRECTORY = 'buckets'
+const PRUNE_INTERVAL_MS = 60_000
+const sweepStats = new WeakMap<SecurityRateLimitStore, FileRateLimitSweepStats>()
+const SWEEP_BATCH_SIZE = 1_000
 
 function createBucketHash(key: string): string {
   return createHash('sha256').update(key).digest('hex')
 }
 
-function createBucketNamespace(key: string): string {
-  const separatorIndex = key.indexOf('|')
-  return separatorIndex >= 0 ? key.slice(0, separatorIndex + 1) : key
-}
-
-function createBucketNamespaceHash(key: string): string {
-  return createBucketHash(createBucketNamespace(key))
-}
-
-function createBucketPrefixHashes(key: string): string[] {
+function hashBucketKey(key: string, keyHash: string): FileRateLimitKeyHashes {
+  const hash = createHash('sha256')
   const prefixHashes: string[] = []
+  let namespaceHash: string | undefined
+  let prefixLength = 0
 
-  for (let index = 1; index <= key.length; index += 1) {
-    prefixHashes.push(createBucketHash(key.slice(0, index)))
+  for (const character of key) {
+    hash.update(character)
+    prefixLength += character.length
+    const prefixHash = prefixLength === key.length ? keyHash : hash.copy().digest('hex')
+    prefixHashes.push(prefixHash)
+
+    if (namespaceHash === undefined && character === '|') {
+      namespaceHash = prefixHash
+    }
   }
 
-  return prefixHashes
+  return Object.freeze({
+    namespaceHash: namespaceHash ?? keyHash,
+    prefixHashes: Object.freeze(prefixHashes),
+  })
+}
+
+function getBucketPathForKeyHash(root: string, keyHash: string): string {
+  return join(root, BUCKETS_DIRECTORY, keyHash.slice(0, 2), keyHash.slice(2, 4), `${keyHash}.json`)
 }
 
 function getBucketPath(root: string, key: string): string {
-  const hash = createBucketHash(key)
-  return join(root, BUCKETS_DIRECTORY, hash.slice(0, 2), hash.slice(2, 4), `${hash}.json`)
+  return getBucketPathForKeyHash(root, createBucketHash(key))
 }
 
 function serializeBucket(bucket: FileRateLimitBucket): string {
@@ -275,6 +300,47 @@ async function acquireBucketLock(
   }
 }
 
+async function withBucketLockIfFree<TValue>(
+  path: string,
+  options: { readonly timeoutMs: number },
+  operation: () => Promise<TValue>,
+): Promise<TValue | undefined> {
+  const lockPath = getBucketLockPath(path)
+  await mkdir(dirname(lockPath), { recursive: true })
+
+  let lock: FileBucketLock
+  try {
+    lock = await tryCreateBucketLock(lockPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw error
+    }
+
+    if (!await isBucketLockStale(lockPath, options.timeoutMs) || !await reclaimStaleBucketLock(lockPath, options.timeoutMs)) {
+      return undefined
+    }
+
+    try {
+      lock = await tryCreateBucketLock(lockPath)
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code === 'EEXIST') {
+        return undefined
+      }
+
+      throw retryError
+    }
+  }
+
+  const heartbeat = startLockHeartbeat(lockPath, options.timeoutMs)
+
+  try {
+    return await operation()
+  } finally {
+    clearInterval(heartbeat)
+    await removeOwnedBucketLock(lock)
+  }
+}
+
 async function withBucketLock<TValue>(
   path: string,
   options: { readonly retryDelayMs: number, readonly timeoutMs: number },
@@ -295,25 +361,152 @@ async function withBucketLock<TValue>(
   }
 }
 
-async function listBucketPaths(root: string): Promise<string[]> {
-  const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') {
-      return []
+type FileRateLimitWalkStep =
+  | { readonly kind: 'unit' }
+  | { readonly kind: 'bucket', readonly path: string }
+
+type FileRateLimitShardListing = {
+  readonly names: readonly string[]
+}
+
+const UNIT_STEP: FileRateLimitWalkStep = { kind: 'unit' }
+
+function* chargeUnits(count: number): Generator<FileRateLimitWalkStep> {
+  for (let index = 0; index < count; index += 1) {
+    yield UNIT_STEP
+  }
+}
+
+async function readShardEntries(
+  directory: string,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): Promise<Dirent[] | undefined> {
+  try {
+    return await readdir(directory, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
     }
 
-    throw error
-  })
-
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const entryPath = join(root, entry.name)
-    if (entry.isDirectory()) {
-      return await listBucketPaths(entryPath)
+    if (!onUnreadable) {
+      throw error
     }
 
-    return entry.name.endsWith('.json') ? [entryPath] : []
-  }))
+    onUnreadable(directory, error)
+    return undefined
+  }
+}
 
-  return nested.flat()
+async function* readShardListing(
+  directory: string,
+  onHeld: (count: number) => void,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): AsyncGenerator<FileRateLimitWalkStep, FileRateLimitShardListing | undefined> {
+  yield UNIT_STEP
+  const entries = await readShardEntries(directory, onUnreadable)
+  onHeld(entries?.length ?? 0)
+  yield* chargeUnits(entries?.length ?? 0)
+  yield UNIT_STEP
+
+  if (!entries) {
+    return undefined
+  }
+
+  return {
+    names: entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort(),
+  }
+}
+
+async function openShard(
+  directory: string,
+  counter: { openHandles: number },
+  onUnreadable?: (directory: string, error: unknown) => void,
+): Promise<Dir | undefined> {
+  try {
+    const handle = await opendir(directory)
+    counter.openHandles += 1
+    return handle
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+
+    if (!onUnreadable) {
+      throw error
+    }
+
+    onUnreadable(directory, error)
+    return undefined
+  }
+}
+
+async function readShardEntry(
+  handle: Dir,
+  directory: string,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): Promise<Dirent | null> {
+  try {
+    return await handle.read()
+  } catch (error) {
+    if (!onUnreadable) {
+      throw error
+    }
+
+    onUnreadable(directory, error)
+    return null
+  }
+}
+
+async function* walkBucketTree(
+  bucketsRoot: string,
+  counter: { openHandles: number },
+  onHeld: (count: number) => void,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): AsyncGenerator<FileRateLimitWalkStep> {
+  const tops = yield* readShardListing(bucketsRoot, onHeld, onUnreadable)
+
+  for (const top of tops?.names ?? []) {
+    const topPath = join(bucketsRoot, top)
+    const middles = yield* readShardListing(topPath, onHeld, onUnreadable)
+
+    for (const middle of middles?.names ?? []) {
+      const leaf = join(topPath, middle)
+      yield UNIT_STEP
+      const handle = await openShard(leaf, counter, onUnreadable)
+      if (!handle) {
+        continue
+      }
+
+      try {
+        for (let entry = await readShardEntry(handle, leaf, onUnreadable); entry !== null; entry = await readShardEntry(handle, leaf, onUnreadable)) {
+          yield entry.isFile() && entry.name.endsWith('.json')
+            ? { kind: 'bucket', path: join(leaf, entry.name) }
+            : UNIT_STEP
+        }
+      } finally {
+        counter.openHandles -= 1
+        await handle.close().catch(() => undefined)
+      }
+      yield UNIT_STEP
+    }
+  }
+}
+
+async function* bucketFilePaths(bucketsRoot: string): AsyncGenerator<string> {
+  for await (const step of walkBucketTree(bucketsRoot, { openHandles: 0 }, () => undefined)) {
+    if (step.kind === 'bucket') {
+      yield step.path
+    }
+  }
+}
+
+async function listBucketPaths(bucketsRoot: string): Promise<string[]> {
+  const paths: string[] = []
+  for await (const path of bucketFilePaths(bucketsRoot)) {
+    paths.push(path)
+  }
+
+  return paths
 }
 
 function createSnapshot(
@@ -337,18 +530,127 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
   const resolveNow = options.now ?? (() => new Date())
   const lockRetryDelayMs = options.lockRetryDelayMs ?? 5
   const lockTimeoutMs = options.lockTimeoutMs ?? 2000
+  const lockOptions = {
+    retryDelayMs: lockRetryDelayMs,
+    timeoutMs: lockTimeoutMs,
+  }
+  const bucketsRoot = join(root, BUCKETS_DIRECTORY)
+  const stats: FileRateLimitSweepStats = {
+    inFlight: false,
+    runsStarted: 0,
+    peakHeldNames: 0,
+    maxEntriesPerRun: 0,
+    openHandles: 0,
+  }
+  const recordHeldNames = (count: number): void => {
+    stats.peakHeldNames = Math.max(stats.peakHeldNames, count)
+  }
+  let cycleStartedAt: number | undefined
+  let cursor: AsyncGenerator<FileRateLimitWalkStep> | undefined
+  let inFlight: Promise<void> | undefined
+  let closed = false
 
-  return {
+  const reportSweepError = (error: unknown): void => {
+    reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
+  }
+  const reportedUnreadable = new Set<string>()
+  const reportUnreadable = (directory: string, error: unknown): void => {
+    if (reportedUnreadable.has(directory)) {
+      return
+    }
+
+    reportedUnreadable.add(directory)
+    reportSweepError(error)
+  }
+
+  const sweepBucket = async (path: string, now: Date): Promise<void> => {
+    try {
+      const candidate = await readBucket(path)
+      if (!candidate || !isExpired(candidate, now)) {
+        return
+      }
+
+      await withBucketLockIfFree(path, { timeoutMs: lockTimeoutMs }, async () => {
+        const bucket = await readBucket(path)
+        if (bucket && isExpired(bucket, now)) {
+          await deleteBucket(path)
+        }
+      })
+    } catch (error) {
+      reportSweepError(error)
+    }
+  }
+
+  const closeCursor = async (): Promise<void> => {
+    const current = cursor
+    cursor = undefined
+    await current?.return(undefined)
+  }
+
+  const runSweep = async (now: Date): Promise<void> => {
+    let units = 0
+    let finished = false
+
+    try {
+      cursor ??= walkBucketTree(bucketsRoot, stats, recordHeldNames, reportUnreadable)
+
+      while (units < SWEEP_BATCH_SIZE && !closed) {
+        const next = await cursor.next()
+        if (next.done) {
+          finished = true
+          break
+        }
+
+        units += 1
+        if (next.value.kind === 'bucket') {
+          await sweepBucket(next.value.path, now)
+        }
+      }
+    } catch (error) {
+      reportSweepError(error)
+      finished = true
+    } finally {
+      stats.maxEntriesPerRun = Math.max(stats.maxEntriesPerRun, units)
+      if (finished || closed) {
+        await closeCursor()
+      }
+    }
+  }
+
+  const startSweepIfDue = (now: Date): void => {
+    if (closed || inFlight !== undefined) {
+      return
+    }
+
+    if (cursor === undefined) {
+      if (cycleStartedAt !== undefined && now.getTime() - cycleStartedAt < PRUNE_INTERVAL_MS) {
+        return
+      }
+
+      cycleStartedAt = now.getTime()
+    }
+
+    stats.runsStarted += 1
+    stats.inFlight = true
+    inFlight = runSweep(now).finally(() => {
+      inFlight = undefined
+      stats.inFlight = false
+    })
+  }
+
+  const store: SecurityRateLimitStore = {
     async hit(key, hitOptions) {
-      const now = resolveNow()
-      const path = getBucketPath(root, key)
-      return await withBucketLock(path, {
-        retryDelayMs: lockRetryDelayMs,
-        timeoutMs: lockTimeoutMs,
-      }, async () => {
-        const existing = await readBucket(path)
+      const sweepNow = resolveNow()
+      const keyHash = createBucketHash(key)
+      const path = getBucketPathForKeyHash(root, keyHash)
 
-        if (existing && existing.keyHash !== createBucketHash(key)) {
+      startSweepIfDue(sweepNow)
+
+      return await withBucketLock(path, lockOptions, async () => {
+        const existing = await readBucket(path)
+        const now = resolveNow()
+
+        if (existing && existing.keyHash !== keyHash) {
           throw new Error(`[@holo-js/security] File rate-limit bucket hash collision detected for stored bucket ${existing.keyHash}.`)
         }
 
@@ -362,9 +664,8 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
               attempts: existing.attempts + 1,
             }
           : {
-              namespaceHash: createBucketNamespaceHash(key),
-              keyHash: createBucketHash(key),
-              prefixHashes: Object.freeze(createBucketPrefixHashes(key)),
+              ...hashBucketKey(key, keyHash),
+              keyHash,
               attempts: 1,
               expiresAt: new Date(now.getTime() + hitOptions.decaySeconds * 1000),
             }
@@ -379,13 +680,11 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       })
     },
     async clear(key) {
-      const path = getBucketPath(root, key)
-      return await withBucketLock(path, {
-        retryDelayMs: lockRetryDelayMs,
-        timeoutMs: lockTimeoutMs,
-      }, async () => {
+      const keyHash = createBucketHash(key)
+      const path = getBucketPathForKeyHash(root, keyHash)
+      return await withBucketLock(path, lockOptions, async () => {
         const existing = await readBucket(path)
-        if (!existing || existing.keyHash !== createBucketHash(key)) {
+        if (!existing || existing.keyHash !== keyHash) {
           return false
         }
 
@@ -396,13 +695,10 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     async clearByPrefix(prefix) {
       let cleared = 0
       const now = resolveNow()
-      const paths = await listBucketPaths(root)
+      const prefixHash = createBucketHash(prefix)
 
-      for (const path of paths) {
-        const removed = await withBucketLock(path, {
-          retryDelayMs: lockRetryDelayMs,
-          timeoutMs: lockTimeoutMs,
-        }, async () => {
+      for await (const path of bucketFilePaths(bucketsRoot)) {
+        const removed = await withBucketLock(path, lockOptions, async () => {
           const bucket = await readBucket(path)
           if (!bucket) {
             return false
@@ -413,7 +709,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
             return false
           }
 
-          if (!bucket.prefixHashes.includes(createBucketHash(prefix))) {
+          if (!bucket.prefixHashes.includes(prefixHash)) {
             return false
           }
 
@@ -429,14 +725,10 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       return cleared
     },
     async clearAll() {
-      const paths = await listBucketPaths(root)
       let cleared = 0
 
-      for (const path of paths) {
-        const removed = await withBucketLock(path, {
-          retryDelayMs: lockRetryDelayMs,
-          timeoutMs: lockTimeoutMs,
-        }, async () => {
+      for await (const path of bucketFilePaths(bucketsRoot)) {
+        const removed = await withBucketLock(path, lockOptions, async () => {
           const bucket = await readBucket(path)
           if (!bucket) {
             return false
@@ -453,11 +745,44 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
 
       return cleared
     },
+    async close() {
+      closed = true
+      await inFlight
+      await closeCursor()
+    },
   }
+
+  sweepStats.set(store, stats)
+  return store
+}
+
+function sweepInFlight(store: SecurityRateLimitStore): boolean {
+  return sweepStats.get(store)?.inFlight ?? false
+}
+
+function sweepRunsStarted(store: SecurityRateLimitStore): number {
+  return sweepStats.get(store)?.runsStarted ?? 0
+}
+
+function sweepPeakHeldNames(store: SecurityRateLimitStore): number {
+  return sweepStats.get(store)?.peakHeldNames ?? 0
+}
+
+function sweepMaxEntriesPerRun(store: SecurityRateLimitStore): number {
+  return sweepStats.get(store)?.maxEntriesPerRun ?? 0
+}
+
+function sweepOpenHandles(store: SecurityRateLimitStore): number {
+  return sweepStats.get(store)?.openHandles ?? 0
 }
 
 export const fileRateLimitDriverInternals = {
   createBucketHash,
+  sweepInFlight,
+  sweepMaxEntriesPerRun,
+  sweepOpenHandles,
+  sweepPeakHeldNames,
+  sweepRunsStarted,
   createSnapshot,
   deleteBucket,
   deserializeBucket,

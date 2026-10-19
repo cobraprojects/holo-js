@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -30,6 +30,11 @@ async function runApp(framework, driver) {
   let output = ''
   let log
   try {
+    {
+      const generatedBroadcastKey = (await readFile(join(projectRoot, '.env'), 'utf8').catch(() => '')).match(/^BROADCAST_APP_KEY=(.+)$/m)?.[1]?.trim()
+      if (!env.BROADCAST_APP_KEY && generatedBroadcastKey) env.BROADCAST_APP_KEY = generatedBroadcastKey
+      assert.ok(env.BROADCAST_APP_KEY, `${framework} example app .env must define BROADCAST_APP_KEY; run bun install to generate it`)
+    }
     {
       const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
       const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)

@@ -14,6 +14,7 @@ import type * as QueueModule from './queue'
 import type * as QueueMigrationsModule from './queue-migrations'
 import type * as RuntimeModule from './runtime'
 import type * as SecurityModule from './security'
+import type * as StorageModule from './storage'
 
 export type RuntimeExecutor = typeof RuntimeModule.withRuntimeEnvironment
 type ProjectDevCommandExecutors = {
@@ -64,6 +65,7 @@ let mediaMigrationsModulePromise: Promise<typeof MediaMigrationsModule> | undefi
 let generatorsModulePromise: Promise<typeof GeneratorsModule> | undefined
 let broadcastModulePromise: Promise<typeof BroadcastModule> | undefined
 let securityModulePromise: Promise<typeof SecurityModule> | undefined
+let storageModulePromise: Promise<typeof StorageModule> | undefined
 let devModulePromise: Promise<typeof DevModule> | undefined
 let projectConfigModulePromise: Promise<typeof ProjectConfigModule> | undefined
 let projectDiscoveryModulePromise: Promise<typeof ProjectDiscoveryModule> | undefined
@@ -80,6 +82,11 @@ export function loadRuntimeModule(): Promise<typeof RuntimeModule> {
 export function loadSecurityModule(): Promise<typeof SecurityModule> {
   securityModulePromise ??= import('./security')
   return securityModulePromise
+}
+
+export function loadStorageModule(): Promise<typeof StorageModule> {
+  storageModulePromise ??= import('./storage')
+  return storageModulePromise
 }
 
 export function loadProjectConfigModule(): Promise<typeof ProjectConfigModule> {

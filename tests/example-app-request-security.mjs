@@ -60,7 +60,8 @@ function csrfCookie(response) {
 
 async function clientAddress(baseUrl, headers = {}) {
   const response = await fetch(`${baseUrl}/api/framework/client-address`, { headers })
-  return { status: response.status, address: response.ok ? (await response.json()).address : undefined }
+  const body = await response.json().catch(() => undefined)
+  return { status: response.status, address: body?.address }
 }
 
 const spoofedHeaders = { 'x-forwarded-for': '203.0.113.66', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test' }
@@ -106,7 +107,7 @@ async function assertTrustedProxyHeaders(baseUrl, guestPath) {
   assert.match(csrfCookie(secure) ?? '', /;\s*Secure/i)
 }
 
-async function assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, exposesConnectionAddress) {
+async function assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, exposesConnectionAddress, getOutput) {
   const configPath = join(cwd, 'config/security.ts')
   const originalConfig = await readFile(configPath, 'utf8')
   const untrustedConfig = originalConfig.replace(/trustedProxies: [^\n]+,/u, "trustedProxies: ['192.0.2.1'],")
@@ -123,12 +124,15 @@ async function assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, expose
       assert.equal(spoofed.status, 200)
       assert.ok(['127.0.0.1', '::1'].includes(spoofed.address), `Expected X-Forwarded-For from an untrusted peer to be ignored, received ${JSON.stringify(spoofed)}.`)
     } else {
-      assert.equal(spoofed.status, 500, 'Expected the client address to be unavailable instead of read from an untrusted peer.')
+      assert.deepEqual(spoofed, { status: 503, address: null }, 'Expected the client address to be reported as unavailable instead of read from an untrusted peer.')
     }
     const page = await fetch(`${baseUrl}${guestPath}`, { headers: { ...spoofedHeaders, 'x-forwarded-host': 'bad host', 'x-forwarded-port': 'abc' }, redirect: 'manual' })
     assert.equal(page.status, 200, 'Expected X-Forwarded-Host and X-Forwarded-Port from an untrusted peer to be ignored instead of validated.')
     if (exposesConnectionAddress) {
       assert.doesNotMatch(csrfCookie(page) ?? '', /;\s*Secure/i, 'Expected X-Forwarded-Proto from an untrusted peer to be ignored.')
+    }
+    if (getOutput) {
+      assert.doesNotMatch(getOutput(), /SecurityClientAddressUnavailableError/, 'Expected the unavailable client address to be handled by the route instead of logged as an error.')
     }
   } finally {
     await writeFile(configPath, originalConfig)
@@ -140,8 +144,8 @@ async function assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, expose
   }
 }
 
-export async function assertExampleAppRequestSecurity({ baseUrl, cwd, guestPath = '/login', exposesConnectionAddress = true }) {
+export async function assertExampleAppRequestSecurity({ baseUrl, cwd, guestPath = '/login', exposesConnectionAddress = true, getOutput }) {
   await assertPublicStorageServesPassiveFilesOnly(baseUrl, join(cwd, 'storage/app/public'))
   await assertTrustedProxyHeaders(baseUrl, guestPath)
-  await assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, exposesConnectionAddress)
+  await assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, exposesConnectionAddress, getOutput)
 }

@@ -11,17 +11,8 @@ type LoadEnvironmentOptions = {
   processEnv?: NodeJS.ProcessEnv
 }
 
-type EnvRuntimeMode = 'resolve' | 'capture'
-
-type EnvPlaceholder = {
-  readonly __holoEnv: true
-  readonly key: string
-  readonly fallback?: EnvScalar
-}
-
 type EnvRuntimeState = {
   values?: Readonly<Record<string, string>>
-  mode: EnvRuntimeMode
   pendingEvaluation: Promise<void>
   evaluationContext: AsyncLocalStorage<{ active: boolean }>
 }
@@ -152,7 +143,6 @@ function getEnvRuntimeState(): EnvRuntimeState {
   }
 
   runtime.__holoEnvRuntime__ ??= {
-    mode: 'resolve',
     pendingEvaluation: Promise.resolve(),
     evaluationContext: new AsyncLocalStorage(),
   }
@@ -160,17 +150,12 @@ function getEnvRuntimeState(): EnvRuntimeState {
   return runtime.__holoEnvRuntime__
 }
 
-export function configureEnvRuntime(
-  values?: Readonly<Record<string, string>>,
-  options: { mode?: EnvRuntimeMode } = {},
-): void {
-  const state = getEnvRuntimeState()
-  state.values = values
-  state.mode = options.mode ?? 'resolve'
+export function configureEnvRuntime(values?: Readonly<Record<string, string>>): void {
+  getEnvRuntimeState().values = values
 }
 
 async function evaluateConfig<TValue>(
-  options: LoadEnvironmentOptions & { captureEnvPlaceholders?: boolean },
+  options: LoadEnvironmentOptions,
   evaluate: (environment: LoadedEnvironment) => Promise<TValue>,
 ): Promise<TValue> {
   const state = getEnvRuntimeState()
@@ -186,26 +171,18 @@ async function evaluateConfig<TValue>(
           ...options,
           processEnv: { ...(options.processEnv ?? process.env) },
         })
-        const previousRuntime = { values: state.values, mode: state.mode }
+        const previousValues = state.values
         const previousEntries = new Map(
-          [...new Set([...Object.keys(environment.values), 'HOLO_CAPTURE_ENV'])]
-            .map(key => [key, process.env[key]] as const),
+          Object.keys(environment.values).map(key => [key, process.env[key]] as const),
         )
 
         try {
-          configureEnvRuntime(environment.values, {
-            mode: options.captureEnvPlaceholders ? 'capture' : 'resolve',
-          })
+          configureEnvRuntime(environment.values)
           Object.assign(process.env, environment.values)
-          if (options.captureEnvPlaceholders) {
-            process.env.HOLO_CAPTURE_ENV = '1'
-          } else {
-            Reflect.deleteProperty(process.env, 'HOLO_CAPTURE_ENV')
-          }
 
           return await evaluate(environment)
         } finally {
-          configureEnvRuntime(previousRuntime.values, { mode: previousRuntime.mode })
+          configureEnvRuntime(previousValues)
           for (const [key, value] of previousEntries) {
             if (value === undefined) {
               Reflect.deleteProperty(process.env, key)
@@ -226,6 +203,7 @@ async function evaluateConfig<TValue>(
 export const configEvaluationInternals = { evaluate: evaluateConfig }
 
 function coerceEnvScalar<TValue extends EnvScalar>(
+  key: string,
   runtimeValue: string,
   fallback: TValue,
 ): TValue {
@@ -243,12 +221,16 @@ function coerceEnvScalar<TValue extends EnvScalar>(
       return false as TValue
     }
 
-    return fallback
+    throw new Error(`Environment variable "${key}" must be a boolean (true, false, 1, 0, yes, no, on, or off), got "${runtimeValue}".`)
   }
 
   if (typeof fallback === 'number') {
     const parsed = Number(runtimeValue)
-    return (Number.isFinite(parsed) ? parsed : fallback) as TValue
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`Environment variable "${key}" must be a number, got "${runtimeValue}".`)
+    }
+
+    return parsed as TValue
   }
 
   return runtimeValue as TValue
@@ -257,28 +239,18 @@ function coerceEnvScalar<TValue extends EnvScalar>(
 export function env(key: string): string
 export function env<TValue extends EnvScalar>(key: string, fallback: TValue): TValue
 export function env<TValue extends EnvScalar>(key: string, fallback?: TValue): string | TValue {
-  const state = getEnvRuntimeState()
-
-  if (process.env.HOLO_CAPTURE_ENV === '1' || state.mode === 'capture') {
-    return Object.freeze({
-      __holoEnv: true,
-      key,
-      ...(typeof fallback !== 'undefined' ? { fallback } : {}),
-    }) as unknown as string | TValue
-  }
-
-  const runtimeValue = state.values?.[key]
+  const runtimeValue = getEnvRuntimeState().values?.[key]
   if (typeof runtimeValue === 'string') {
     return typeof fallback === 'undefined'
       ? runtimeValue
-      : coerceEnvScalar(runtimeValue, fallback)
+      : coerceEnvScalar(key, runtimeValue, fallback)
   }
 
   const processValue = process.env[key]
   if (typeof processValue === 'string') {
     return typeof fallback === 'undefined'
       ? processValue
-      : coerceEnvScalar(processValue, fallback)
+      : coerceEnvScalar(key, processValue, fallback)
   }
 
   if (typeof fallback !== 'undefined') {
@@ -286,46 +258,4 @@ export function env<TValue extends EnvScalar>(key: string, fallback?: TValue): s
   }
 
   return ''
-}
-
-export function isEnvPlaceholder(value: unknown): value is EnvPlaceholder {
-  return typeof value === 'object'
-    && value !== null
-    && !Array.isArray(value)
-    && (value as Partial<EnvPlaceholder>).__holoEnv === true
-    && typeof (value as Partial<EnvPlaceholder>).key === 'string'
-}
-
-export function resolveEnvPlaceholders<TValue>(
-  value: TValue,
-  envValues: Readonly<Record<string, string>>,
-): TValue {
-  if (isEnvPlaceholder(value)) {
-    const runtimeValue = envValues[value.key]
-    if (typeof runtimeValue === 'string') {
-      if (typeof value.fallback === 'undefined') {
-        return runtimeValue as TValue
-      }
-
-      return coerceEnvScalar(runtimeValue, value.fallback) as TValue
-    }
-
-    if (typeof value.fallback !== 'undefined') {
-      return value.fallback as TValue
-    }
-
-    return '' as TValue
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(entry => resolveEnvPlaceholders(entry, envValues)) as TValue
-  }
-
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, resolveEnvPlaceholders(entry, envValues)]),
-    ) as TValue
-  }
-
-  return value
 }

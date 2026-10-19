@@ -149,7 +149,7 @@ Holo sets up both endpoints for you. You don't write route files for them.
 | `config/redis.ts` | Created if missing. Only used when you scale the worker across servers. |
 | `server/broadcast/` | Your broadcast events. |
 | `server/channels/` | Authorization rules for private and presence channels. |
-| `BROADCAST_CONNECTION=holo` | Added to `.env`. `.env.example` also gets `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, and `BROADCAST_APP_SECRET`. |
+| `BROADCAST_CONNECTION=holo` | Added to `.env`, with generated `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, and `BROADCAST_APP_SECRET` values. `.env.example` gets the same names with blank values. |
 | `@holo-js/broadcast`, `@holo-js/flux` | Server and client packages. |
 | `@holo-js/flux-react`, `@holo-js/flux-vue`, or `@holo-js/flux-svelte` | The client helpers for your framework. |
 

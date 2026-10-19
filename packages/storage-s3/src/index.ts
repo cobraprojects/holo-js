@@ -90,7 +90,7 @@ function toStorageKey(objectKey: string): string {
   return objectKey
     .split('/')
     .filter(Boolean)
-    .map(encodeURIComponent)
+    .map(segment => segment.replace(/[%:$]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`))
     .join(':')
 }
 

@@ -38,6 +38,12 @@ jobs:
           bun-version: 1.3.9
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: node scripts/build-libraries.mjs
+      - name: Test native file session locking
+        working-directory: packages/session
+        run: bun run test:platform
       - name: Test native package loading and server lifecycle
         working-directory: packages/cli
         run: bun run test:platform
+      - name: Test local storage path validation
+        working-directory: packages/storage
+        run: node ../../node_modules/vitest/vitest.mjs --run tests/local-path.test.ts --fileParallelism --maxWorkers 2 --reporter=json
