@@ -354,6 +354,20 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
+  it('creates exactly one restored session when several guards are restored in one request', async () => {
+    const browser = new Browser()
+    await browser.request(async () => {
+      await auth.loginUsingId(1, { remember: true })
+      await auth.guard('admin').loginUsingId(1, { remember: true })
+    })
+    browser.expireSession()
+    const recordsBefore = await sessionFileCount()
+
+    await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
+
+    expect(await sessionFileCount()).toBe(recordsBefore + 1)
+  })
+
   it('keeps a pending multi-factor challenge session when another guard is restored', async () => {
     const browser = new Browser()
     await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
@@ -530,5 +544,42 @@ describe('remember me with other-device logout', () => {
 
     expect(users.get(2)?.remember_token).toBe('mina-existing-remember-token-value')
     expect(admin.cookies.get('holo_session_remember')).toBe(actorCookie)
+  })
+
+  it('rejects a remember cookie whose restoration read revocation state after another device cycled it', async () => {
+    const states = revocationStore()
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: states })
+    const laptop = new Browser()
+    const phone = new Browser()
+    await laptop.request(() => auth.loginUsingId(1, { remember: true }))
+    await phone.request(() => auth.loginUsingId(1, { remember: true }))
+    laptop.expireSession()
+
+    let reads = 0
+    let markArrived!: () => void
+    const arrived = new Promise<void>(resolve => { markArrived = resolve })
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      sessionRevocations: {
+        async readMany(identities) {
+          if (reads++ === 0) {
+            markArrived()
+            await gate
+          }
+          return states.readMany(identities)
+        },
+        revokeOthers: (identity, current) => states.revokeOthers(identity, current),
+      },
+    })
+
+    const restoring = laptop.request(() => auth.check())
+    await arrived
+    await phone.request(() => auth.logoutOtherDevices())
+    release()
+
+    await expect(restoring).resolves.toBe(false)
+    expect(await sessionFileCount()).toBeGreaterThanOrEqual(0)
   })
 })

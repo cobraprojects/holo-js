@@ -44,7 +44,7 @@ it('writes authentication cookies into the consuming Next request scope', async 
   }
 })
 
-it('skips authentication cookie writes while a server component renders', async () => {
+it('reports authentication cookie writes that a server component render cannot make', async () => {
   const projectRoot = process.env.HOLO_NEXT_PEER_PROJECT ?? resolve(import.meta.dirname, '..')
   const requireHost = createRequire(resolve(projectRoot, 'package.json'))
   const nativeGlobals = globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }
@@ -74,7 +74,7 @@ it('skips authentication cookie writes while a server component renders', async 
   process.env.NODE_ENV = 'production'
   try {
     await workAsyncStorage.run({ route: '/admin', isStaticGeneration: false }, () => workUnitAsyncStorage.run(requestStore, async () => {
-      await expect(adapterNextRuntimeInternals.resolveNextAuthRequestAccessors(projectRoot).appendResponseCookie?.('holo_session=synthetic; Path=/; HttpOnly; SameSite=Lax')).resolves.toBeUndefined()
+      await expect(adapterNextRuntimeInternals.resolveNextAuthRequestAccessors(projectRoot).appendResponseCookie?.('holo_session=synthetic; Path=/; HttpOnly; SameSite=Lax')).rejects.toMatchObject({ code: 'cookie_write_unavailable' })
     }))
     expect(cookies.get('holo_session')).toBeUndefined()
   } finally {

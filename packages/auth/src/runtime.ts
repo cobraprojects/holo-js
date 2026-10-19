@@ -1,7 +1,7 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
-import { createHash, createHmac } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
 import { isAuthError } from './contracts'
 import type {
@@ -361,12 +361,32 @@ async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: stri
 const requestRememberEntries = new WeakMap<object, Promise<Map<string, string>>>()
 const requestRememberLoads = new WeakMap<object, Promise<void>>()
 const requestRememberHydrations = new WeakMap<object, Map<string, Promise<void>>>()
-const requestRememberRestorations = new WeakMap<object, Promise<unknown>>()
+const requestSessionQueues = new WeakMap<object, Promise<unknown>>()
+const requestOnlyGuards = new WeakMap<object, Set<string>>()
 
-async function browserKeepsOtherSession(bindings: RuntimeBindings, sessionId: string): Promise<boolean> {
-  const browserSessionId = await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
-  return Boolean(browserSessionId && browserSessionId !== sessionId && await bindings.session.read(browserSessionId))
+function queueRequestSession<TValue>(bindings: RuntimeBindings, operation: () => Promise<TValue>): Promise<TValue> {
+  const scope = authRequestScope(bindings.context)
+  if (!scope) return operation()
+  const previous = requestSessionQueues.get(scope) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(operation)
+  requestSessionQueues.set(scope, next)
+  return next
 }
+
+function setRequestOnlyGuard(bindings: RuntimeBindings, guardName: string, requestOnly: boolean): void {
+  const scope = authRequestScope(bindings.context)
+  if (!scope) return
+  const guards = requestOnlyGuards.get(scope) ?? new Set<string>()
+  if (requestOnly) guards.add(guardName)
+  else guards.delete(guardName)
+  requestOnlyGuards.set(scope, guards)
+}
+
+function isRequestOnlyGuard(bindings: RuntimeBindings, guardName: string): boolean {
+  const scope = authRequestScope(bindings.context)
+  return scope ? requestOnlyGuards.get(scope)?.has(guardName) ?? false : false
+}
+
 
 function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
   const key = authRequestScope(bindings.context)
@@ -490,13 +510,13 @@ function restoreRememberedSession(
   guardName: string,
   provider: string,
   user: SerializedAuthUser,
-): Promise<void> {
-  const scope = authRequestScope(bindings.context)
-  if (!scope) return restoreRememberedSessionNow(bindings, guardName, provider, user)
-  const previous = requestRememberRestorations.get(scope) ?? Promise.resolve()
-  const restoration = previous.catch(() => undefined).then(() => restoreRememberedSessionNow(bindings, guardName, provider, user))
-  requestRememberRestorations.set(scope, restoration)
-  return restoration
+  stillCurrent: () => Promise<boolean>,
+): Promise<boolean> {
+  return queueRequestSession(bindings, () => restoreRememberedSessionNow(bindings, guardName, provider, user, stillCurrent))
+}
+
+function isCookieWriteUnavailable(error: unknown): boolean {
+  return (error as { readonly code?: unknown } | null)?.code === 'cookie_write_unavailable'
 }
 
 async function restoreRememberedSessionNow(
@@ -504,7 +524,8 @@ async function restoreRememberedSessionNow(
   guardName: string,
   provider: string,
   user: SerializedAuthUser,
-): Promise<void> {
+  stillCurrent: () => Promise<boolean>,
+): Promise<boolean> {
   const guardNames = sessionGuardNames(bindings)
   let source: AuthSessionRecord | null = null
   for (const sessionId of new Set([guardName, ...guardNames].map(name => bindings.context.getSessionId(name)))) {
@@ -513,37 +534,41 @@ async function restoreRememberedSessionNow(
   }
   const sourcePayloads = readSessionPayloads(source) ?? {}
   const challengePending = Object.values(sourcePayloads).some(payload => payload.multiFactorChallengeExpiresAt)
-  const payloads = challengePending ? {} : sourcePayloads
   const revocation = bindings.sessionRevocations
-    ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider, userId: user.id }, payloads)
+    ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider, userId: user.id }, challengePending ? {} : sourcePayloads)
     : undefined
-  const session = await bindings.session.create({
-    data: writeSessionPayloads(challengePending ? {} : source?.data ?? {}, {
-      ...payloads,
-      [guardName]: { ...toSessionPayload(guardName, provider, user), ...(revocation ? { revocation } : {}) },
-    }),
-  })
+  if (!await stillCurrent()) return false
+  const payload = { ...toSessionPayload(guardName, provider, user), ...(revocation ? { revocation } : {}) }
   if (challengePending) {
-    bindings.context.setSessionId(guardName, session.id)
+    setRequestOnlyGuard(bindings, guardName, true)
     bindings.context.setCachedUser(guardName, user)
-    return
+    return true
   }
+  if (source) {
+    const merged = writeSessionPayloads(source.data, { ...sourcePayloads, [guardName]: payload })
+    await writeExistingSession(bindings, source, merged)
+    for (const name of guardNames) {
+      if (name === guardName || bindings.context.getSessionId(name) === source.id) bindings.context.setSessionId(name, source.id)
+    }
+    bindings.context.setCachedUser(guardName, user)
+    return true
+  }
+  const sessionId = randomUUID()
   try {
-    await appendResponseCookies(bindings, [bindings.session.sessionCookie(session.id)])
+    await appendResponseCookies(bindings, [bindings.session.sessionCookie(sessionId)])
   } catch (error) {
-    try {
-      await bindings.session.invalidate(session.id, { store: session.store })
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'Failed to clean up a remembered session restoration.')
-    }
-    throw error
+    if (!isCookieWriteUnavailable(error)) throw error
+    setRequestOnlyGuard(bindings, guardName, true)
+    bindings.context.setCachedUser(guardName, user)
+    return true
   }
-  for (const name of guardNames) {
-    if (name === guardName || (source && bindings.context.getSessionId(name) === source.id)) {
-      bindings.context.setSessionId(name, session.id)
-    }
-  }
+  await bindings.session.create({
+    id: sessionId,
+    data: writeSessionPayloads({}, { [guardName]: payload }),
+  })
+  bindings.context.setSessionId(guardName, sessionId)
   bindings.context.setCachedUser(guardName, user)
+  return true
 }
 
 async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName: string, encoded: string): Promise<boolean> {
@@ -551,18 +576,25 @@ async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName:
   if (!recaller || recaller[3] <= Date.now()) return false
   const guard = getGuardConfig(guardName)
   const { adapter } = getProviderAdapter(guard.provider)
-  const user = await adapter.findById(recaller[0])
-  const token = user ? getRememberToken(adapter, user) : null
-  if (
-    !user
-    || !token
-    || !rememberSecretsMatch(token, recaller[1])
-    || !rememberSecretsMatch(hashPasswordForRemember(getPasswordHash(adapter, user)), recaller[2])
-  ) {
-    return false
+  const matchesRecaller = async (): Promise<boolean> => {
+    const user = await adapter.findById(recaller[0])
+    const token = user ? getRememberToken(adapter, user) : null
+    return Boolean(
+      user
+      && token
+      && rememberSecretsMatch(token, recaller[1])
+      && rememberSecretsMatch(hashPasswordForRemember(getPasswordHash(adapter, user)), recaller[2]),
+    )
   }
-  await restoreRememberedSession(bindings, guardName, guard.provider, serializeUser(adapter, user, guard.provider))
-  return true
+  const user = await adapter.findById(recaller[0])
+  if (!user || !await matchesRecaller()) return false
+  return restoreRememberedSession(
+    bindings,
+    guardName,
+    guard.provider,
+    serializeUser(adapter, user, guard.provider),
+    async () => recaller[3] > Date.now() && await matchesRecaller(),
+  )
 }
 
 function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, restore: boolean): Promise<void> {
@@ -1075,11 +1107,10 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const state = await readGuardSessionState(guardName, true)
   const metadata = state?.payload.revocation
   if (!state || !metadata || state.payload.multiFactorChallengeExpiresAt) throwAuthError('auth_user_missing', 'Other-device logout requires valid browser authentication.')
+  const recaller = state.payload.impersonation ? undefined : await cycleRememberToken(state.payload.provider, state.payload.userId)
   const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
   clearSessionRevocationReads(bindings.context)
   if (!retained) throwAuthError('auth_user_missing', 'This browser authentication has already been revoked.')
-  if (state.payload.impersonation) return
-  const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
   if (recaller && await getRememberRecaller(bindings, guardName)) {
     const cookie = await rememberCookieFor(bindings, guardName, recaller)
     if (cookie) await appendResponseCookies(bindings, [cookie])
@@ -1113,13 +1144,18 @@ async function resolveUserFromGuard(
     return authenticated.user
   }
 
+  if (!options.fresh && isRequestOnlyGuard(bindings, guardName)) {
+    const requestOnlyUser = bindings.context.getCachedUser(guardName)
+    if (requestOnlyUser) return requestOnlyUser
+  }
+
   const sessionId = bindings.context.getSessionId(guardName)
   if (!sessionId) {
     bindings.context.setCachedUser(guardName, null)
     return null
   }
 
-  const record = await bindings.session.touch(sessionId)
+  const record = await queueRequestSession(bindings, () => bindings.session.touch(sessionId))
   const payloads = record ? await filterRevokedSessionPayloads(bindings, record) : null
   const payload = payloads?.[guardName]
   if (!record || !payload || payload.guard !== guardName) {
@@ -2043,7 +2079,12 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   await hydrateGuardContextFromRequest(guardName)
 
   let clearSessionCookies = false
-  const sessionId = bindings.context.getSessionId(guardName)
+  const requestOnlyUser = isRequestOnlyGuard(bindings, guardName) ? bindings.context.getCachedUser(guardName) : undefined
+  if (requestOnlyUser?.id !== undefined) {
+    await cycleRememberToken(guard.provider, requestOnlyUser.id)
+  }
+  const sessionId = requestOnlyUser ? undefined : bindings.context.getSessionId(guardName)
+  setRequestOnlyGuard(bindings, guardName, false)
   if (sessionId) {
     const record = await bindings.session.read(sessionId)
     const payloads = {
@@ -2067,7 +2108,6 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     }
   }
 
-  if (clearSessionCookies && sessionId && await browserKeepsOtherSession(bindings, sessionId)) clearSessionCookies = false
   const forgetRemember = Boolean(await getRememberRecaller(bindings, guardName))
     || (await readRememberCookieEntries(bindings)).has(guardName)
   bindings.context.setSessionId(guardName)

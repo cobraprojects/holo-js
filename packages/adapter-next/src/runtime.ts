@@ -157,6 +157,14 @@ function isReadonlyNextCookieStore(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('Cookies can only be modified in a Server Action or Route Handler')
 }
 
+const NEXT_COOKIE_WRITE_UNAVAILABLE = 'cookie_write_unavailable'
+
+function createCookieWriteUnavailableError(cause: unknown): Error {
+  return Object.assign(new Error('Cookies can only be set in a Server Action or Route Handler, not while rendering a Server Component.', { cause }), {
+    code: NEXT_COOKIE_WRITE_UNAVAILABLE,
+  })
+}
+
 export function createNextRequestContext(request: Request): NextRequestLike {
   const nextRequest = request as NextRequestWithCookies
   const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
@@ -222,7 +230,9 @@ function resolveNextAuthRequestAccessors(projectRoot = process.cwd()): NonNullab
         const store = await cookies() as MutableNextCookieStore
         store.set(parsed.name, parsed.value, parsed.options)
       } catch (error) {
-        if (!isMissingNextRequestScope(error) && !isReadonlyNextCookieStore(error)) throw error
+        if (isMissingNextRequestScope(error)) return
+        if (isReadonlyNextCookieStore(error)) throw createCookieWriteUnavailableError(error)
+        throw error
       }
     },
     async redirectResponse(url: string) {
