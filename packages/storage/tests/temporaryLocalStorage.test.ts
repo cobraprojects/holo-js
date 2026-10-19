@@ -14,9 +14,9 @@ async function fixture() {
   roots.add(root)
   await mkdir(join(root, 'private'), { recursive: true })
   await mkdir(join(root, 'other'), { recursive: true })
-  await writeFile(join(root, 'private', encodeURIComponent('image #1.png')), 'private-image')
+  await writeFile(join(root, 'private', 'image #1.png'), 'private-image')
   await writeFile(join(root, 'private', 'other.png'), 'other-image')
-  await writeFile(join(root, 'other', encodeURIComponent('image #1.png')), 'other-disk')
+  await writeFile(join(root, 'other', 'image #1.png'), 'other-disk')
   const config: NormalizedHoloStorageConfig = {
     defaultDisk: 'local',
     routePrefix: '/assets',
@@ -117,7 +117,7 @@ describe('private local storage URLs', () => {
     const expired = createTemporaryLocalStorageUrl(disk, 'image #1.png', signingConfig, -1)
     expect((await response(expired)).status).toBe(404)
     await writeFile(join(root, 'secret.txt'), 'secret')
-    await symlink(join(root, 'secret.txt'), join(root, 'private', encodeURIComponent('escape link.txt')))
+    await symlink(join(root, 'secret.txt'), join(root, 'private', 'escape link.txt'))
     const escape = createTemporaryLocalStorageUrl(disk, 'escape link.txt', signingConfig, 60)
     expect((await response(escape)).status).toBe(404)
     for (const path of ['../secret.txt', 'nested/../../secret.txt', '.', 'nested/../image.png', 'nested\\image.png', 'image\u0000.png']) {

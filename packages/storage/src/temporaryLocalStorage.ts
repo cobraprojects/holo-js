@@ -65,10 +65,10 @@ export function resolveTemporaryLocalStorageRequest(
   } catch {
     return null
   }
-  if (segments.length < 2 || !segments.every(isSafeSegment)) return null
+  if (segments.length < 2 || segments.at(-1)?.endsWith('$') || !segments.every(isSafeSegment)) return null
   const [diskName, ...fileSegments] = segments
   const disk = diskName ? config.disks[diskName] : undefined
   if (!isLocalDisk(disk)) return null
   const root = resolve(projectRoot, disk.root)
-  return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments.map(encodeURIComponent)) }
+  return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments) }
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { openAsBlob } from 'node:fs'
+import { type Dirent, openAsBlob } from 'node:fs'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
@@ -29,9 +29,14 @@ export function resolveStorageKeyPath(root: string, key: string): string {
     .split(':')
     .flatMap(segment => segment.split('/'))
     .filter(Boolean)
+    .map(decodeStorageKeySegment)
 
   if (segments.includes('..')) {
     throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
+  }
+
+  if (segments.some(segment => segment === '.' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
+    throw new Error('[Holo Storage] Storage path segments must be file or folder names.')
   }
 
   const rootPath = resolve(root)
@@ -44,6 +49,24 @@ export function resolveStorageKeyPath(root: string, key: string): string {
   }
 
   return targetPath
+}
+
+function decodeStorageKeySegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
+function encodeStorageKeySegment(name: string): string {
+  return name.replace(/[%:$]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+function storageKeySegmentFromEntry(entry: Dirent): string {
+  return entry.isFile() && entry.name.endsWith('$')
+    ? `${encodeStorageKeySegment(entry.name.slice(0, -1))}$`
+    : encodeStorageKeySegment(entry.name)
 }
 
 async function resolveStorageReadPath(root: string, key: string): Promise<string | null> {
@@ -122,6 +145,104 @@ async function resolveStorageWritePath(root: string, key: string): Promise<strin
   return targetPath
 }
 
+export interface DecodedStorageName {
+  readonly from: string
+  readonly to: string
+}
+
+export interface SkippedStorageName {
+  readonly path: string
+  readonly reason: string
+}
+
+export interface StorageNameDecodingResult {
+  readonly renamed: readonly DecodedStorageName[]
+  readonly skipped: readonly SkippedStorageName[]
+}
+
+function decodeLegacyStorageName(name: string): string | null {
+  if (!name.includes('%')) return null
+  try {
+    const decoded = decodeURIComponent(name)
+    return decoded !== name && encodeURIComponent(decoded) === name ? decoded : null
+  } catch {
+    return null
+  }
+}
+
+function decodeLegacyStorageEntryName(entry: Dirent): string | null {
+  if (entry.isFile() && entry.name.endsWith('$')) {
+    const decoded = decodeLegacyStorageName(entry.name.slice(0, -1))
+    return decoded === null ? null : `${decoded}$`
+  }
+
+  return decodeLegacyStorageName(entry.name)
+}
+
+function storageNameDecodingSkipReason(entry: Dirent, decoded: string): string | null {
+  if (decoded === '.' || decoded === '..' || /[\\/]/u.test(decoded) || decoded.includes('\u0000')) {
+    return 'the decoded name is not a valid file name'
+  }
+  const isMetadata = entry.isFile() && entry.name.endsWith('$')
+  if (!isMetadata && entry.isFile() && decoded.endsWith('$')) {
+    return 'local file names ending in "$" are reserved for metadata'
+  }
+  if (decodeLegacyStorageName(isMetadata ? decoded.slice(0, -1) : decoded) !== null) {
+    return 'the decoded name still looks URL-encoded, so rename it by hand'
+  }
+
+  return null
+}
+
+async function storagePathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function decodeLocalStorageNames(root: string): Promise<StorageNameDecodingResult> {
+  const renamed: DecodedStorageName[] = []
+  const skipped: SkippedStorageName[] = []
+  const resolvedRoot = await resolveExistingRealPath(resolve(root))
+  if (!resolvedRoot) return { renamed, skipped }
+
+  const visit = async (directory: string, segments: readonly string[]): Promise<void> => {
+    const resolvedDirectory = await realpath(directory)
+    if (!storagePathIsInside(resolvedRoot, resolvedDirectory)) {
+      throw new Error('[Holo Storage] Storage paths must stay inside the configured disk root.')
+    }
+
+    const entries = (await readdir(resolvedDirectory, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() || entry.isFile())
+      .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    for (const entry of entries) {
+      let name = entry.name
+      const decoded = decodeLegacyStorageEntryName(entry)
+      if (decoded !== null) {
+        const from = [...segments, entry.name].join('/')
+        const to = [...segments, decoded].join('/')
+        const reason = storageNameDecodingSkipReason(entry, decoded)
+          ?? (await storagePathExists(join(resolvedDirectory, decoded)) ? `"${to}" already exists` : null)
+        if (reason) {
+          skipped.push({ path: from, reason })
+        } else {
+          await rename(join(resolvedDirectory, entry.name), join(resolvedDirectory, decoded))
+          renamed.push({ from, to })
+          name = decoded
+        }
+      }
+      if (entry.isDirectory()) await visit(join(resolvedDirectory, name), [...segments, name])
+    }
+  }
+
+  await visit(resolvedRoot, [])
+  return { renamed, skipped }
+}
+
 type StreamWriteHandle = {
   write(buffer: Uint8Array, offset: number, length: number): Promise<{ readonly bytesWritten: number }>
 }
@@ -150,7 +271,8 @@ function createFileStorageBackend(root: string): StorageBackend {
     const keys: string[] = []
 
     for (const entry of entries) {
-      const nextPrefix = prefix ? `${prefix}:${entry.name}` : entry.name
+      const segment = storageKeySegmentFromEntry(entry)
+      const nextPrefix = prefix ? `${prefix}:${segment}` : segment
       const entryPath = join(currentRoot, entry.name)
 
       if (entry.isDirectory()) {
@@ -181,7 +303,8 @@ function createFileStorageBackend(root: string): StorageBackend {
       const ordered = entries
         .filter(entry => entry.isDirectory() || entry.isFile())
         .map((entry) => {
-          const key = keyPrefix ? `${keyPrefix}:${entry.name}` : entry.name
+          const segment = storageKeySegmentFromEntry(entry)
+          const key = keyPrefix ? `${keyPrefix}:${segment}` : segment
           return { entry, key, order: entry.isDirectory() ? `${key}:` : key }
         })
         .sort((left, right) => left.order < right.order ? -1 : left.order > right.order ? 1 : 0)
@@ -494,6 +617,7 @@ export async function resetOptionalStorageRuntime(): Promise<void> {
 
 export const storageRuntimeInternals = {
   createFileStorageBackend,
+  decodeLocalStorageNames,
   importOptionalModule,
   writeCompleteChunk,
 }

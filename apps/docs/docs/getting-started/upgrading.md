@@ -40,9 +40,24 @@ aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%
     done
 ```
 
-Files on local disks keep their names. For those, `path()` now returns the file Holo actually wrote, such as `<root>/reports/Q1%20caf%C3%A9.pdf`. If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys with URL-encoded names, the same as local disks.
+Local disks also change to exact names; see [Local file names](#local-file-names). If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys in the same format as local disks.
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
+
+### Local file names
+
+Local disks now store files under their exact names, like Laravel. Before 0.4.0, Holo stored `reports/Q1 café.pdf` as `reports/Q1%20caf%C3%A9.pdf` on disk. After upgrading, Holo looks for `reports/Q1 café.pdf`, and `path()` returns that location.
+
+After you deploy 0.4.0, rename the existing files once for each local disk:
+
+```bash
+npx holo storage:decode-names --disk=local
+npx holo storage:decode-names --disk=public
+```
+
+The command prints what it renamed and what it skipped, and running it again changes nothing. Rename skipped files by hand. See [storage:decode-names](/reference/cli#storage-decode-names).
+
+Low-level keys still use `:` between folders, but only `%`, `:`, and `$` are escaped inside a name, so the key for `reports/Q1 café.pdf` is `reports:Q1 café.pdf` instead of `reports:Q1%20caf%C3%A9.pdf`. Old-style keys still read the same file. On local disks, file names ending in `$` are now reserved for metadata, so `put('prices.json$', ...)` throws an error.
 
 ### Local storage on Nuxt and symlinks
 

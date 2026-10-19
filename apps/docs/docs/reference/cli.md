@@ -754,6 +754,28 @@ npx holo media:regenerate [ModelName ...] [--ids=<ids>] [--only=<names>] [--only
 npx holo media:regenerate Post --only=thumb
 ```
 
+## Storage commands
+
+### storage:decode-names
+
+Rename files that Holo 0.3 stored under URL-encoded names on a local disk, such as `May%20report.csv`, to their real names, such as `May report.csv`. Run it once for each local disk after upgrading to 0.4.0.
+
+```bash
+npx holo storage:decode-names --disk=local
+```
+
+| Flag | Description |
+| --- | --- |
+| `--disk=<name>` | The local disk to rename files on. Required. |
+
+It prints every rename and every file it skips, then the total. Running it again renames nothing. It skips:
+
+- a name that still looks URL-encoded after decoding, such as `100%2520off.txt`, because Holo can't tell what the original name was;
+- a name whose decoded form already exists;
+- a file whose decoded name ends in `$`, because local disks use that ending for metadata.
+
+It doesn't follow symlinks, so files outside the disk root are never renamed. Rename skipped files by hand. S3 disks are not supported; see [S3 file names with special characters](/getting-started/upgrading#s3-file-names-with-special-characters).
+
 ## Broadcast commands
 
 ### broadcast:work

@@ -39,7 +39,7 @@ function isPublicLocalDisk(disk: RuntimeDiskConfig | undefined): disk is PublicL
 
 function resolveAbsolutePath(projectRoot: string, disk: PublicLocalDisk, fileSegments: string[]): string | null {
   const root = resolve(projectRoot, disk.root)
-  const absolutePath = resolve(root, ...fileSegments.map(encodeURIComponent))
+  const absolutePath = resolve(root, ...fileSegments)
   if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
     return null
   }
@@ -130,7 +130,7 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
 
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
-  if (!segments?.length || segments.some(segment => segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
+  if (!segments?.length || segments.at(-1)?.endsWith('$') || segments.some(segment => segment === '.' || segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
     return null
   }
 

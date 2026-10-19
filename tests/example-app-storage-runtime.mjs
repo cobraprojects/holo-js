@@ -7,6 +7,8 @@ export async function assertExampleAppStorageRuntime({ baseUrl }) {
     streamed: 'streamed contents',
     stat: { size: 17, mimeType: 'text/plain' },
     exists: true,
-    pages: [['framework-storage-check/second.txt'], ['framework-storage-check/streamed.txt']],
+    storedAs: 'framework-storage-check/Q1 café ☕.txt',
+    storedOnDisk: true,
+    pages: [['framework-storage-check/Q1 café ☕.txt'], ['framework-storage-check/streamed.txt']],
   })
 }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../../core/src/storageRuntime'
 import '../src/config'
+import { createPublicStorageResponse } from '../src'
 import { useStorage } from '../src/runtime/composables'
 
 let server: Server
@@ -81,6 +82,7 @@ beforeEach(async () => {
     defaultDisk: 'local',
     disks: {
       local: { driver: 'local', visibility: 'private', root: join(projectRoot, 'storage/app') },
+      public: { driver: 'public', visibility: 'public', root: join(projectRoot, 'storage/app/public') },
       media: {
         driver: 's3',
         visibility: 'public',
@@ -138,5 +140,54 @@ describe('object keys', () => {
     await disk.put(name, `contents of ${name}`)
 
     await expect(readFile(disk.path(name), 'utf8')).resolves.toBe(`contents of ${name}`)
+  })
+})
+
+const localNames = process.platform === 'win32' ? names.filter(name => !name.includes(':')) : names
+
+describe('local file names', () => {
+  it.each(localNames)('stores %j on a local disk under its literal name', async (name) => {
+    const disk = useStorage('local')
+    const stored = join(projectRoot, 'storage/app', ...name.split('/'))
+    await disk.put(name, `contents of ${name}`)
+
+    expect(disk.path(name)).toBe(stored)
+    await expect(readFile(stored, 'utf8')).resolves.toBe(`contents of ${name}`)
+    await expect(disk.get(name)).resolves.toBe(`contents of ${name}`)
+    await expect(disk.exists(name)).resolves.toBe(true)
+    await expect(disk.listFiles('uploads')).resolves.toEqual({ nextCursor: null, paths: [name] })
+    await disk.delete(name)
+    await expect(readdir(join(projectRoot, 'storage/app/uploads'))).resolves.toEqual([])
+  })
+
+  it.each(localNames)('serves %j from a public local disk url()', async (name) => {
+    const disk = useStorage('public')
+    await disk.put(name, `public ${name}`)
+
+    await expect(readFile(join(projectRoot, 'storage/app/public', ...name.split('/')), 'utf8')).resolves.toBe(`public ${name}`)
+    const storageConfig = (await loadConfigDirectory(projectRoot, { preferCache: false })).storage
+    const response = await createPublicStorageResponse(projectRoot, storageConfig, new Request(new URL(disk.url(name), 'https://app.test')))
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe(`public ${name}`)
+  })
+
+  it('escapes only %, : and $ inside low-level key segments', async () => {
+    const disk = useStorage('local')
+    await disk.put('reports/Q1 café ☕ 100% $5.txt', 'report')
+
+    await expect(disk.getKeys('reports')).resolves.toEqual(['reports:Q1 café ☕ 100%25 %245.txt'])
+    await expect(disk.getItemRaw('reports:Q1 café ☕ 100%25 %245.txt')).resolves.toEqual(Buffer.from('report'))
+    await expect(readFile(join(projectRoot, 'storage/app/reports/Q1 café ☕ 100% $5.txt'), 'utf8')).resolves.toBe('report')
+  })
+
+  it('reserves local file names ending in $ for metadata', async () => {
+    const disk = useStorage('local')
+    await disk.put('prices.json', '{}')
+    await disk.setMeta?.('prices.json', { owner: 'billing' })
+
+    await expect(disk.put('prices.json$', 'conflict')).rejects.toThrow('ending in "$" are reserved')
+    await expect(disk.get('prices.json$')).rejects.toThrow('ending in "$" are reserved')
+    await expect(disk.getMeta?.('prices.json')).resolves.toEqual({ owner: 'billing' })
+    await expect(disk.listFiles()).resolves.toEqual({ nextCursor: null, paths: ['prices.json'] })
   })
 })

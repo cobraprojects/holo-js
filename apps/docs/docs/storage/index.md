@@ -518,7 +518,9 @@ const page = await Storage.listFiles('exports', { limit: 200 })
 
 Returns where the file lives on the backend: a filesystem path under the disk root for local disks, or `s3://bucket/key` for S3 disks.
 
-Local disks URL-encode each part of the name on disk, so `path('exports/May report.csv')` returns `<root>/exports/May%20report.csv`. That's the file Holo wrote, so you can pass it straight to other tools.
+Local disks store files under their exact names, so `path('exports/May report.csv')` returns `<root>/exports/May report.csv`. You can pass it straight to other tools.
+
+On local disks, file names ending in `$` are reserved for [metadata](#low-level-key-methods), so writing or reading `prices.json$` throws an error.
 
 ```ts
 const location = Storage.disk('s3').path('backups/db.sql')
@@ -568,7 +570,7 @@ const isPublic = Storage.disk('public').visibility === 'public'
 
 ### Low-level key methods
 
-These methods work on raw keys, where folders are separated by `:` and not `/`, and each folder or file name is URL-encoded, so `exports/May report.csv` is the key `exports:May%20report.csv`. The file methods above convert `/` paths to keys for you, so prefer them for app code.
+These methods work on raw keys, where folders are separated by `:` and not `/`. Inside each folder or file name, only `%`, `:`, and `$` are escaped, as `%25`, `%3A`, and `%24`, so `exports/Q1: 100% done.csv` is the key `exports:Q1%3A 100%25 done.csv`. The file methods above convert `/` paths to keys for you, so prefer them for app code.
 
 - **getItem(key)** returns a value parsed from JSON, or `null`. Use it with values written by `setItem()`.
 - **getItemRaw(key)** returns the stored bytes or text, or `null`.
