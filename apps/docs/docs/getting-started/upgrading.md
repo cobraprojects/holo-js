@@ -83,7 +83,7 @@ export default defineAppConfig({
 
 If you use the config cache, run `npx holo config:cache` again on every server after upgrading. Holo ignores caches written by 0.3.x and loads `config/*.ts` until you rebuild the cache, because an old cache can hold the wrong environment. Mail previews check the environment from `APP_ENV` (or `--env`) rather than a cached `app.env`.
 
-`holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
+`holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
 ### Encrypted session, remember-me, and CSRF cookies
 
