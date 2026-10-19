@@ -146,7 +146,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     let after: ReservationCandidate | undefined
 
     while (true) {
-      const candidates = await this.selectReservationCandidates(tx, quotedTable, queueName, now, after)
+      const candidates = await this.selectReservationCandidates(tx, quotedTable, queueName, now, expiredReservationCutoff, after)
       for (const candidate of candidates) {
         const [idPlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
         const locked = await tx.queryCompiled<DatabaseQueuedJobRow>({
@@ -177,6 +177,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     quotedTable: string,
     queueName: string,
     now: number,
+    expiredReservationCutoff: number,
     after: ReservationCandidate | undefined,
   ): Promise<readonly ReservationCandidate[]> {
     const placeholders = createPlaceholders(tx, after ? 6 : 3)
@@ -196,7 +197,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
       bindings: [
         queueName,
         now,
-        this.getExpiredReservationCutoff(now),
+        expiredReservationCutoff,
         ...(after ? [after.available_at, after.created_at, after.id] : []),
       ],
       source: `queue:${this.name}:reserve:candidates`,
