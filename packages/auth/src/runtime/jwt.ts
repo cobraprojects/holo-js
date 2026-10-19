@@ -74,7 +74,7 @@ const JWKS_REFRESH_INTERVAL_MS = 60 * 1000
 type AuthRuntimeJwksCacheEntry = {
   readonly keys: Promise<readonly AuthRuntimeJwkKey[]>
   readonly loadedAt: number
-  failed: boolean
+  expiresAt: number
 }
 
 type AuthRuntimeJwksCache = Map<string, AuthRuntimeJwksCacheEntry>
@@ -95,7 +95,7 @@ function loadJwks(
 ): AuthRuntimeJwksCacheEntry {
   const entry: AuthRuntimeJwksCacheEntry = {
     loadedAt: Date.now(),
-    failed: false,
+    expiresAt: Number.POSITIVE_INFINITY,
     keys: (async () => {
       const response = await fetch(options.requestUrl, {
         headers: {
@@ -111,9 +111,10 @@ function loadJwks(
     })(),
   }
 
-  entry.keys.catch(() => {
-    entry.failed = true
-  })
+  entry.keys.then(
+    () => { entry.expiresAt = entry.loadedAt + JWKS_MAX_AGE_MS },
+    () => { entry.expiresAt = Date.now() + JWKS_REFRESH_INTERVAL_MS },
+  )
   cache.set(cacheKey, entry)
   return entry
 }
@@ -127,8 +128,7 @@ function resolveCacheEntry(
   },
 ): AuthRuntimeJwksCacheEntry {
   const existing = cache.get(cacheKey)
-  const age = existing ? Date.now() - existing.loadedAt : Number.POSITIVE_INFINITY
-  if (!existing || age >= JWKS_MAX_AGE_MS || (existing.failed && age >= JWKS_REFRESH_INTERVAL_MS)) {
+  if (!existing || Date.now() >= existing.expiresAt) {
     return loadJwks(cache, cacheKey, options)
   }
 
