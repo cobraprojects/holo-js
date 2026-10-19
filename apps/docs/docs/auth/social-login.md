@@ -215,9 +215,9 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ message: result.message }, { status: result.status })
   }
 
-  await auth.guard(result.guard).loginUsing(result.user)
+  const session = await auth.guard(result.guard).loginUsing(result.user)
 
-  redirect('/dashboard')
+  redirect(session.multiFactorChallenge?.route ?? '/dashboard')
 }
 ```
 
@@ -238,9 +238,9 @@ export default defineEventHandler(async (event) => {
     return { message: result.message }
   }
 
-  await auth.guard(result.guard).loginUsing(result.user)
+  const session = await auth.guard(result.guard).loginUsing(result.user)
 
-  return sendRedirect(event, '/dashboard', 303)
+  return sendRedirect(event, session.multiFactorChallenge?.route ?? '/dashboard', 303)
 })
 ```
 
@@ -262,9 +262,9 @@ export const GET: RequestHandler = async ({ request }) => {
     return json({ message: result.message }, { status: result.status })
   }
 
-  await auth.guard(result.guard).loginUsing(result.user)
+  const session = await auth.guard(result.guard).loginUsing(result.user)
 
-  redirect(303, '/dashboard')
+  redirect(303, session.multiFactorChallenge?.route ?? '/dashboard')
 }
 ```
 
