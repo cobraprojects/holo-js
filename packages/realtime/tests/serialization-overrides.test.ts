@@ -91,4 +91,84 @@ describe('realtime per-instance serialization overrides', () => {
     expect(reads).toBe(1)
     expect(snapshots.at(-1)).toEqual(await handler())
   })
+
+  it('refreshes an empty result after a collection override, then an insert', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    const Author = defineModel(defineGeneratedTable('authors', { id: column.id(), name: column.string() }), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: { author: belongsTo(() => Author, 'author_id') },
+    })
+    let reads = 0
+    const handler = async () => {
+      reads += 1
+      const posts = await db.model(Post).query().where('title', 'Missing').with('author').orderBy('id').get()
+      posts.makeHidden('author_id')
+      return posts.toJSON()
+    }
+    const snapshots: unknown[] = []
+    const patches: unknown[] = []
+    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
+      onData: (snapshot: { data: unknown }) => { snapshots.push(snapshot.data) },
+      onPatch: (patch: unknown) => { patches.push(patch) },
+      onError: error => { throw error },
+    }
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').insert({ id: 2, title: 'Missing', author_id: 2 }),
+    }))
+
+    expect(reads).toBe(2)
+    expect(JSON.stringify(patches)).not.toContain('author_id')
+    expect(JSON.stringify(snapshots.at(-1))).not.toContain('author_id')
+    expect(snapshots.at(-1)).toEqual(await handler())
+  })
+
+  it('keeps paginator data covered when a collection override is applied to a page', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    const Author = defineModel(defineGeneratedTable('authors', { id: column.id(), name: column.string() }), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: { author: belongsTo(() => Author, 'author_id') },
+    })
+    let reads = 0
+    const handler = async () => {
+      reads += 1
+      const page = await db.model(Post).query().with('author').orderBy('id').simplePaginate(10, 1)
+      const data = page.data as unknown as { makeHidden(...keys: string[]): unknown, toJSON(): unknown }
+      data.makeHidden('author_id')
+      return data.toJSON()
+    }
+    const snapshots: unknown[] = []
+    const patches: unknown[] = []
+    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
+      onData: (snapshot: { data: unknown }) => { snapshots.push(snapshot.data) },
+      onPatch: (patch: unknown) => { patches.push(patch) },
+      onError: error => { throw error },
+    }
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').where('id', 1).update({ author_id: 2 }),
+    }))
+
+    expect(JSON.stringify(patches)).not.toContain('author_id')
+    expect(JSON.stringify(snapshots.at(-1))).not.toContain('author_id')
+    expect(snapshots.at(-1)).toEqual(await handler())
+  })
 })
