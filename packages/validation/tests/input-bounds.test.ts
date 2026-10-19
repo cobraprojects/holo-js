@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ValidationException, field, safeParse, schema, validate } from '../src'
+import { ValidationException, field, safeParse, schema, validate, type ValidationSchema } from '../src'
 
 const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
@@ -13,7 +13,7 @@ function variables(count: number): (readonly [string, string])[] {
   return Array.from({ length: count }, (_, index) => [`extra${index}`, 'x'] as const)
 }
 
-async function rootErrors(input: FormData | URLSearchParams | Request, definition = schema({ name: field.string().optional() })) {
+async function rootErrors(input: FormData | URLSearchParams | Request, definition: ValidationSchema = schema({ name: field.string().optional() })) {
   const result = await safeParse(input, definition)
   expect(result.valid).toBe(false)
   return result.valid ? [] : result.errors.get('_root')
