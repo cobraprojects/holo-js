@@ -236,7 +236,7 @@ With `overwrite: false`, it returns `false` instead of replacing a file that alr
 
 ## Unsupported operations
 
-`stat()`, `listFiles()`, `readStream()`, and `writeStream()` need support from the disk's backend. When a backend doesn't support them, they throw one of these errors, all exported from `@holo-js/storage/runtime`:
+`stat()`, `listFiles()`, `readStream()`, and `writeStream()` need support from the disk's backend. Local and S3 disks support all four in Next.js, Nuxt, SvelteKit, and plain Node. When a custom backend doesn't support them, they throw one of these errors, all exported from `@holo-js/storage/runtime`:
 
 | Method | Error |
 | --- | --- |
@@ -249,6 +249,8 @@ With `overwrite: false`, it returns `false` instead of replacing a file that alr
 ## Safe paths
 
 Paths are always relative to the disk root. Holo rejects paths that contain `..` segments, so user input can't reach files outside the disk. Leading slashes are removed, so `/reports/a.txt` and `reports/a.txt` are the same file.
+
+On local disks, symlinks can't lead outside the disk root either. Reading, writing into a folder, `delete()`, and `clear()` throw an error when the path goes through a symlink that points outside the disk, and nothing outside the disk is changed. Deleting a symlink that points to another file on the same disk removes only the link.
 
 ## Override config with environment variables
 
@@ -462,7 +464,7 @@ const info = await Storage.stat('uploads/report.pdf')
 
 ### exists()
 
-Returns `true` when a file exists at the path.
+Returns `true` when a file exists at the path. It returns `false` for a folder. On local disks it checks the file without reading it.
 
 ```ts
 if (await Storage.exists('reports/daily.txt')) {
@@ -575,7 +577,7 @@ These methods work on raw keys, where folders are separated by `:` and not `/`, 
 - **hasItem(key)** returns `true` when a key exists.
 - **removeItem(key)** deletes a key.
 - **getKeys(base?)** returns every key under a base key, or every key when `base` is omitted.
-- **clear(base?)** deletes every key under a base key, or everything when `base` is omitted.
+- **clear(base?)** deletes every key under a base key, or everything when `base` is omitted. On local disks, clearing everything empties the disk root folder and keeps the folder itself.
 - **getMeta(key)**, **setMeta(key, value)**, and **removeMeta(key)** store a sidecar value for a key.
 
 ```ts

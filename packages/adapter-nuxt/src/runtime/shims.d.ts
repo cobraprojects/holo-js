@@ -3,21 +3,6 @@ import type { RuntimeConfigInput, RuntimeConnectionConfig, RuntimeDatabaseConfig
 type HoloConnectionRuntimeConfig = RuntimeConnectionConfig
 type HoloDatabaseRuntimeConfig = RuntimeDatabaseConfig
 
-interface StorageRuntimeDriverShim {
-  name: string
-  driver: 'local' | 'public' | 's3'
-  visibility: 'private' | 'public'
-  root?: string
-  url?: string
-  bucket?: string
-  region?: string
-  endpoint?: string
-  accessKeyId?: string
-  secretAccessKey?: string
-  sessionToken?: string
-  forcePathStyleEndpoint?: boolean
-}
-
 interface HoloRuntimeConfig extends RuntimeConfigInput {
   holo: NonNullable<RuntimeConfigInput['holo']> & {
     appEnv: 'production' | 'development' | 'test'
@@ -26,12 +11,6 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
     projectRoot?: string
   }
   db?: HoloDatabaseRuntimeConfig
-  holoStorage: {
-    defaultDisk: string | undefined
-    diskNames: string[]
-    routePrefix: string
-    disks: Record<string, StorageRuntimeDriverShim>
-  }
 }
 
 declare module '#app' {

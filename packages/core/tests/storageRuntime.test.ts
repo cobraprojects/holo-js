@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
-import { Storage } from '@holo-js/storage/runtime'
+import { Storage, useStorage } from '@holo-js/storage/runtime'
 import { createPublicStorageResponse } from '@holo-js/storage'
 import '@holo-js/storage/config'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 
 const tempDirs: string[] = []
 
@@ -129,4 +129,136 @@ describe('@holo-js/core storage runtime optional imports', () => {
     )
   })
 
+})
+
+const canRestrictPermissions = process.platform !== 'win32' && process.getuid?.() !== 0
+
+async function configureLocalDisk(): Promise<{ readonly root: string, readonly storage: string, readonly outside: string }> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'holo-storage-local-safety-')))
+  tempDirs.push(root)
+  const storage = join(root, 'storage')
+  const outside = join(root, 'outside')
+  await Promise.all([mkdir(join(root, 'config')), mkdir(storage), mkdir(outside)])
+  await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
+    defaultDisk: 'local',
+    disks: { local: { driver: 'local', root: storage } },
+  })}\n`)
+  await configurePlainNodeStorageRuntime(root, await loadConfigDirectory(root, { preferCache: false }))
+  return { root, storage, outside }
+}
+
+describe('@holo-js/core local storage safety', () => {
+  afterEach(async () => {
+    await resetOptionalStorageRuntime()
+  })
+
+  it('refuses to delete files through a symlinked directory outside the disk root', async () => {
+    const { storage, outside } = await configureLocalDisk()
+    await writeFile(join(outside, 'private.txt'), 'private')
+    await symlink(outside, join(storage, 'escape'))
+
+    await expect(Storage.delete('escape/private.txt')).rejects.toThrow('Storage paths must stay inside the configured disk root')
+    await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
+  })
+
+  it('refuses to delete a symlinked file that points outside the disk root', async () => {
+    const { storage, outside } = await configureLocalDisk()
+    await writeFile(join(outside, 'private.txt'), 'private')
+    await symlink(join(outside, 'private.txt'), join(storage, 'link.txt'))
+
+    await expect(Storage.delete('link.txt')).rejects.toThrow('Storage paths must stay inside the configured disk root')
+    await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
+  })
+
+  it('deletes a symlink inside the disk root without deleting its target', async () => {
+    const { storage } = await configureLocalDisk()
+    await Storage.put('target.txt', 'kept')
+    await symlink(join(storage, 'target.txt'), join(storage, 'alias.txt'))
+
+    await expect(Storage.delete('alias.txt')).resolves.toBe(true)
+    await expect(lstat(join(storage, 'alias.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(Storage.get('target.txt')).resolves.toBe('kept')
+  })
+
+  it('refuses to clear a directory that resolves outside the disk root', async () => {
+    const { storage, outside } = await configureLocalDisk()
+    await writeFile(join(outside, 'private.txt'), 'private')
+    await symlink(outside, join(storage, 'escape'))
+
+    await expect(useStorage('local').clear?.('escape')).rejects.toThrow('Storage paths must stay inside the configured disk root')
+    await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
+  })
+
+  it('clears everything inside a symlinked disk root and keeps the root', async () => {
+    const { root, outside } = await configureLocalDisk()
+    const linkedRoot = join(root, 'linked')
+    const real = join(root, 'real')
+    await mkdir(real)
+    await symlink(real, linkedRoot)
+    await writeFile(join(outside, 'private.txt'), 'private')
+    await writeFile(join(root, 'config/storage.mjs'), `export default ${JSON.stringify({
+      defaultDisk: 'local',
+      disks: { local: { driver: 'local', root: linkedRoot } },
+    })}\n`)
+    await configurePlainNodeStorageRuntime(root, await loadConfigDirectory(root, { preferCache: false }))
+    await Storage.put('nested/file.txt', 'remove me')
+    await symlink(outside, join(real, 'escape'))
+
+    await useStorage('local').clear?.()
+
+    expect((await lstat(linkedRoot)).isSymbolicLink()).toBe(true)
+    await expect(readdir(real)).resolves.toEqual([])
+    await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
+  })
+
+  it.skipIf(!canRestrictPermissions)('checks existence without reading file contents', async () => {
+    const { storage } = await configureLocalDisk()
+    await Storage.put('unreadable.txt', 'secret')
+    await Storage.put('folder/file.txt', 'nested')
+    await chmod(join(storage, 'unreadable.txt'), 0o000)
+
+    await expect(Storage.exists('unreadable.txt')).resolves.toBe(true)
+    await expect(Storage.exists('folder')).resolves.toBe(false)
+    await expect(Storage.missing('absent.txt')).resolves.toBe(true)
+  })
+
+  it.skipIf(!canRestrictPermissions)('lists the next page without rescanning directories before the cursor', async () => {
+    const { storage } = await configureLocalDisk()
+    await Storage.put('a/first.txt', 'a')
+    await Storage.put('b.txt', 'b')
+    await Storage.put('c.txt', 'c')
+    await Storage.put('d/next.txt', 'd')
+    await Storage.put('z/last.txt', 'z')
+    const disk = Storage.disk('local')
+
+    const first = await disk.listFiles('', { limit: 2 })
+    expect(first.paths).toEqual(['a/first.txt', 'b.txt'])
+    await chmod(join(storage, 'a'), 0o000)
+    await chmod(join(storage, 'z'), 0o000)
+    try {
+      const second = await disk.listFiles('', { limit: 1, cursor: first.nextCursor })
+      expect(second.paths).toEqual(['c.txt'])
+      expect(second.nextCursor).not.toBeNull()
+    } finally {
+      await chmod(join(storage, 'a'), 0o755)
+      await chmod(join(storage, 'z'), 0o755)
+    }
+  })
+
+  it('lists files in key order across nested directories', async () => {
+    await configureLocalDisk()
+    for (const path of ['a-b.txt', 'a/x.txt', 'a.txt', 'b/c/d.txt', 'b/c.txt', 'ab.txt']) {
+      await Storage.put(path, path)
+    }
+    const disk = Storage.disk('local')
+    const paths: string[] = []
+    let cursor: string | null = null
+    do {
+      const page = await disk.listFiles('', { limit: 2, cursor })
+      paths.push(...page.paths)
+      cursor = page.nextCursor
+    } while (cursor)
+
+    expect(paths).toEqual(['a-b.txt', 'a.txt', 'a/x.txt', 'ab.txt', 'b/c.txt', 'b/c/d.txt'])
+  })
 })

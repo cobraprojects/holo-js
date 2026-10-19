@@ -15,6 +15,7 @@
 
 ### Security
 
+- Local disks refuse `delete()`, `removeItem()`, and `clear()` paths that lead outside the disk root through a symlink, and `clear()` with no base empties the root without replacing a symlinked root folder. Deleting an in-disk symlink removes only the link. See [Safe paths](apps/docs/docs/storage/index.md#safe-paths).
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.
@@ -25,6 +26,7 @@
 
 ### Changed
 
+- Nuxt uses the same hardened local disk backend as Next.js, SvelteKit, and plain Node, so local `stat()`, `listFiles()`, `readStream()`, and `writeStream()` work on Nuxt. The Nuxt adapter no longer registers Nitro `holo:<disk>` storage mounts, the Nitro S3 driver, or `runtimeConfig.holoStorage`, and `@holo-js/storage` drops `applyNitroStorageConfig()`, `buildStorageConfig()`, `buildStorageConfigWithDriver()`, `StorageConfig`, `NitroStorageLike`, and `StorageAdapterOptionsLike`. Local `exists()` checks file metadata without reading contents and returns `false` for folders. Local `listFiles()` pages skip folders before the cursor and stop reading once the page is full. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#local-storage-on-nuxt-and-symlinks).
 - Require CI typechecks, lint and the full library suite on Node 24, plus native package loading and server lifecycle checks on Linux, Windows and macOS with Node 22.14.0, 24 and 26. Example-app, published-package, scaffold and browser-bundle acceptance run locally with `bun run test`. Monitor npm and Actions updates, block high/critical published-runtime dependency advisories, and reject new Fallow dead-code findings against a pinned baseline. Concurrent test typechecks retain their own generated configurations.
 
 - Core capability disposal and startup rollback continue cleanup after individual failures, close only Holo-owned resources, and restore prior live bindings. Multiple failures are reported together. Queue asynchronous shutdown closes all owned drivers and resets state even if closure fails.

@@ -20,6 +20,7 @@ import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailabl
 import { assertExampleAppFormsBrowserFlow } from '../../../tests/example-app-forms-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 import { assertExampleAppRequestSecurity } from '../../../tests/example-app-request-security.mjs'
+import { assertExampleAppStorageRuntime } from '../../../tests/example-app-storage-runtime.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -525,6 +526,7 @@ try {
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await assertExampleAppRequestSecurity({ cwd, baseUrl: `http://localhost:${port}` })
+  await assertExampleAppStorageRuntime({ baseUrl: `http://localhost:${port}` })
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertAdminApiRequiresAuthentication(`http://localhost:${port}`)
   await assertExampleAppAuthFlow({

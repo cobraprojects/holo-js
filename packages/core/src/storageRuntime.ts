@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { openAsBlob } from 'node:fs'
-import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 import type * as StorageFeature from '@holo-js/storage'
 import type { RuntimeDiskConfig } from '@holo-js/storage'
@@ -64,9 +64,28 @@ async function resolveExistingRealPath(path: string): Promise<string | null> {
   try {
     return await realpath(path)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null
     throw error
   }
+}
+
+async function resolveStorageDeletePath(root: string, key: string): Promise<string | null> {
+  const rootPath = resolve(root)
+  const targetPath = resolveStorageKeyPath(rootPath, key)
+  const resolvedRoot = await resolveExistingRealPath(rootPath)
+  if (!resolvedRoot) return null
+  const resolvedParent = await resolveExistingRealPath(dirname(targetPath))
+  if (!resolvedParent) return null
+  const resolvedTarget = await resolveExistingRealPath(targetPath)
+  if (
+    targetPath === rootPath
+    || !storagePathIsInside(resolvedRoot, resolvedParent)
+    || (resolvedTarget && !storagePathIsInside(resolvedRoot, resolvedTarget))
+  ) {
+    throw new Error('[Holo Storage] Storage paths must stay inside the configured disk root.')
+  }
+  return join(resolvedParent, basename(targetPath))
 }
 
 function storagePathIsInside(root: string, target: string): boolean {
@@ -153,35 +172,33 @@ function createFileStorageBackend(root: string): StorageBackend {
     cursor: string | null,
     limit: number,
   ): Promise<{ readonly nextCursor: string | null, readonly paths: readonly string[] }> {
-    const retained: string[] = []
-    const insert = (key: string): void => {
-      let low = 0
-      let high = retained.length
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2)
-        if ((retained[middle] ?? '') < key) low = middle + 1
-        else high = middle
-      }
-      retained.splice(low, 0, key)
-      if (retained.length > limit + 1) retained.pop()
-    }
+    const collected: string[] = []
     const visit = async (directory: string, keyPrefix: string): Promise<void> => {
       const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
         throw error
       })
-      for (const entry of entries) {
-        const key = keyPrefix ? `${keyPrefix}:${entry.name}` : entry.name
-        const entryPath = join(directory, entry.name)
-        if (entry.isDirectory()) await visit(entryPath, key)
-        else if (entry.isFile() && (!cursor || key > cursor)) insert(key)
+      const ordered = entries
+        .filter(entry => entry.isDirectory() || entry.isFile())
+        .map((entry) => {
+          const key = keyPrefix ? `${keyPrefix}:${entry.name}` : entry.name
+          return { entry, key, order: entry.isDirectory() ? `${key}:` : key }
+        })
+        .sort((left, right) => left.order < right.order ? -1 : left.order > right.order ? 1 : 0)
+      for (const { entry, key, order } of ordered) {
+        if (collected.length > limit) return
+        if (entry.isDirectory()) {
+          if (!cursor || cursor < order || cursor.startsWith(order)) await visit(join(directory, entry.name), key)
+        } else if (!cursor || key > cursor) {
+          collected.push(key)
+        }
       }
     }
 
     await visit(currentRoot, prefix)
-    const page = retained.slice(0, limit)
+    const page = collected.slice(0, limit)
     return Object.freeze({
-      nextCursor: retained.length > limit ? page.at(-1) ?? null : null,
+      nextCursor: collected.length > limit ? page.at(-1) ?? null : null,
       paths: Object.freeze(page),
     })
   }
@@ -328,13 +345,22 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async hasItem(key: string): Promise<boolean> {
-      return (await this.getItemRaw(key)) !== null
+      const targetPath = await resolveStorageReadPath(root, key)
+      if (!targetPath) return false
+      try {
+        return (await stat(targetPath)).isFile()
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ENOTDIR') return false
+        throw error
+      }
     },
 
     async removeItem(key: string): Promise<void> {
-      const targetPath = resolveStorageKeyPath(root, key)
-      await rm(targetPath, { force: true })
-      await rm(`${targetPath}$`, { force: true })
+      for (const itemKey of [key, `${key}$`]) {
+        const targetPath = await resolveStorageDeletePath(root, itemKey)
+        if (targetPath) await rm(targetPath, { force: true })
+      }
     },
 
     async getKeys(base = ''): Promise<string[]> {
@@ -370,11 +396,16 @@ function createFileStorageBackend(root: string): StorageBackend {
 
     async clear(base = ''): Promise<void> {
       const prefix = base.replace(/:+$/, '')
-      const targetPath = prefix ? resolveStorageKeyPath(root, prefix) : root
-      await rm(targetPath, { recursive: true, force: true })
-      if (!prefix) {
-        await mkdir(root, { recursive: true })
+      if (prefix) {
+        const targetPath = await resolveStorageDeletePath(root, prefix)
+        if (targetPath) await rm(targetPath, { recursive: true, force: true })
+        return
       }
+
+      const resolvedRoot = await resolveExistingRealPath(resolve(root))
+      if (!resolvedRoot) return
+      const entries = await readdir(resolvedRoot)
+      await Promise.all(entries.map(entry => rm(join(resolvedRoot, entry), { recursive: true, force: true })))
     },
   }
 }

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   applyEnvOverrides,
-  buildStorageConfig,
   defineStorageConfig,
   normalizeDiskConfig,
   normalizeModuleOptions,
@@ -236,54 +235,6 @@ describe('normalizeDiskConfig', () => {
   })
 })
 
-describe('buildStorageConfig', () => {
-  it('maps local/public disks to fs drivers', () => {
-    expect(buildStorageConfig({
-      name: 'local',
-      driver: 'local',
-      visibility: 'private',
-      root: './storage/app',
-    })).toEqual({
-      driver: 'fs',
-      base: './storage/app',
-    })
-  })
-
-  it('falls back to the default root when an fs-style disk root is absent', () => {
-    expect(buildStorageConfig({
-      name: 'public',
-      driver: 'public',
-      visibility: 'public',
-    })).toEqual({
-      driver: 'fs',
-      base: './storage/app/public',
-    })
-  })
-
-  it('maps s3 disks to s3 drivers', () => {
-    expect(buildStorageConfig({
-      name: 'media',
-      driver: 's3',
-      visibility: 'private',
-      bucket: 'media',
-      region: 'us-east-1',
-      endpoint: 'https://s3.us-east-1.amazonaws.com',
-      accessKeyId: 'key',
-      secretAccessKey: 'secret',
-      forcePathStyleEndpoint: true,
-    })).toEqual({
-      driver: 's3',
-      bucket: 'media',
-      region: 'us-east-1',
-      endpoint: 'https://s3.us-east-1.amazonaws.com',
-      accessKeyId: 'key',
-      secretAccessKey: 'secret',
-      sessionToken: undefined,
-      forcePathStyleEndpoint: true,
-    })
-  })
-})
-
 describe('normalizeModuleOptions', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
@@ -497,71 +448,5 @@ describe('normalizeModuleOptions', () => {
         },
       },
     })).toBe(true)
-
-    const opts = {
-      nitro: {},
-      runtimeConfig: {},
-      build: { transpile: [] as string[] },
-    } as never
-    storageInternals.applyNitroStorageConfig(opts, {
-      defaultDisk: 'media',
-      diskNames: ['media'],
-      routePrefix: '/storage',
-      disks: {
-        media: {
-          name: 'media',
-          driver: 's3',
-          visibility: 'private',
-          bucket: 'media',
-          region: 'us-east-1',
-          endpoint: 'https://s3.us-east-1.amazonaws.com',
-        },
-      },
-    }, './runtime/drivers/s3')
-
-    expect((opts as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
-      'holo:media': {
-        driver: './runtime/drivers/s3',
-        bucket: 'media',
-        region: 'us-east-1',
-        endpoint: 'https://s3.us-east-1.amazonaws.com',
-        accessKeyId: undefined,
-        secretAccessKey: undefined,
-        sessionToken: undefined,
-        forcePathStyleEndpoint: undefined,
-      },
-    })
-
-    const optsWithExistingNitro = {
-      nitro: {
-        storage: {
-          custom: { driver: 'memory' },
-          'holo:old': { driver: 'fs' },
-        },
-      },
-      runtimeConfig: {},
-      build: { transpile: [] as string[] },
-    } as never
-    storageInternals.applyNitroStorageConfig(optsWithExistingNitro, {
-      defaultDisk: 'local',
-      diskNames: ['local'],
-      routePrefix: '/storage',
-      disks: {
-        local: {
-          name: 'local',
-          driver: 'local',
-          visibility: 'private',
-          root: './storage/app',
-        },
-      },
-    }, './runtime/drivers/s3')
-
-    expect((optsWithExistingNitro as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
-      custom: { driver: 'memory' },
-      'holo:local': {
-        driver: 'fs',
-        base: './storage/app',
-      },
-    })
   })
 })

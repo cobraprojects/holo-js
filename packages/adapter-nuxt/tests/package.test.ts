@@ -10,9 +10,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
     const storageEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/storage.ts')
     const clientEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/forms.ts')
     const realtimeEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/realtime.ts')
-    const storagePluginPath = resolve(import.meta.dirname, '../src/runtime/plugins/storage.ts')
     const storageRoutePath = resolve(import.meta.dirname, '../src/runtime/server/routes/storage.ts')
-    const s3DriverPath = resolve(import.meta.dirname, '../src/runtime/drivers/s3.ts')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
       dependencies?: Record<string, string>
       peerDependencies?: Record<string, string>
@@ -24,9 +22,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
     const storageEntry = await readFile(storageEntryPath, 'utf8')
     const clientEntry = await readFile(clientEntryPath, 'utf8')
     const realtimeEntry = await readFile(realtimeEntryPath, 'utf8')
-    const storagePlugin = await readFile(storagePluginPath, 'utf8')
     const storageRoute = await readFile(storageRoutePath, 'utf8')
-    const s3Driver = await readFile(s3DriverPath, 'utf8')
 
     expect(moduleEntry).not.toMatch(/@holo-js\/forms/)
     expect(moduleEntry).toMatch(/import\(\s*['"]@holo-js\/storage['"]\s*\)/)
@@ -37,9 +33,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
     expect(clientEntry).toMatch(/@holo-js\/forms\/internal\/client/)
     expect(clientEntry).not.toMatch(/@holo-js\/realtime/)
     expect(realtimeEntry).toMatch(/@holo-js\/realtime\/client/)
-    expect(storagePlugin).toMatch(/@holo-js\/storage\/runtime/)
     expect(storageRoute).toMatch(/@holo-js\/storage/)
-    expect(s3Driver).toMatch(/@holo-js\/storage-s3/)
     expect(packageJson.exports?.['./storage']).toBeDefined()
     expect(packageJson.exports?.['./realtime']).toBeDefined()
     expect(packageJson.exports?.['./auth']).toBeUndefined()

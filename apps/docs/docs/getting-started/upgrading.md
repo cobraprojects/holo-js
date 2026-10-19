@@ -38,6 +38,24 @@ Files on local disks keep their names. For those, `path()` now returns the file 
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
 
+### Local storage on Nuxt and symlinks
+
+Nuxt apps now use the same local disk code as Next.js, SvelteKit, and plain Node. On Nuxt, `stat()`, `listFiles()`, `readStream()`, and `writeStream()` now work on local disks instead of throwing an unsupported-operation error. Files keep their names and locations, so no data moves.
+
+The Nuxt adapter no longer adds `holo:<disk>` entries to Nitro's `storage` option or a `holoStorage` key to `runtimeConfig`. If your server code calls Nitro's `useStorage('holo:local')`, switch to Holo's disk:
+
+```ts [server/api/report.get.ts]
+import { useStorage } from '@holo-js/storage/runtime'
+
+export default defineEventHandler(async () => {
+  return await useStorage('local').get('reports/daily.txt')
+})
+```
+
+`@holo-js/storage` no longer exports the Nitro helpers `applyNitroStorageConfig()`, `buildStorageConfig()`, `buildStorageConfigWithDriver()`, or the `StorageConfig`, `NitroStorageLike`, and `StorageAdapterOptionsLike` types.
+
+On every framework, local disks now refuse to delete through symlinks that lead outside the disk root. `delete()` and `clear(base)` throw instead of deleting the outside file, and `clear()` with no base empties the disk root without replacing a symlinked root folder. `exists()` returns `false` for a folder instead of throwing. If your app keeps files outside the disk root and links them in, delete them through a disk whose root contains them.
+
 ### Node.js 22.14 or newer
 
 Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.

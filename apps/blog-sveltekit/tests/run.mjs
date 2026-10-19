@@ -20,6 +20,7 @@ import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailabl
 import { assertExampleAppFormsBrowserFlow } from '../../../tests/example-app-forms-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 import { assertExampleAppRequestSecurity } from '../../../tests/example-app-request-security.mjs'
+import { assertExampleAppStorageRuntime } from '../../../tests/example-app-storage-runtime.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -668,6 +669,7 @@ try {
   await startBroadcastWorker(devUrl)
   await assertCacheBackedHttpBehavior(devUrl)
   await assertExampleAppRequestSecurity({ cwd, baseUrl: devUrl })
+  await assertExampleAppStorageRuntime({ baseUrl: devUrl })
   await waitForRedirect(`${devUrl}/admin/posts`, '/login')
   await assertExampleAppFormsBrowserFlow({ baseUrl: devUrl, framework: 'sveltekit' })
   await assertResetPasswordApiValidation(devUrl)
