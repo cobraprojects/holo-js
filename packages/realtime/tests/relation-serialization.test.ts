@@ -381,6 +381,35 @@ describe('realtime relation serialization', () => {
     expect(snapshots.at(-1)).toEqual(await handler())
   })
 
+  it('refreshes a serialized root model when a discarded raw read covers its columns', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    const Author = defineModel(authorsTable(), {
+      timestamps: false,
+      hidden: ['password'],
+      appended: ['label'],
+      accessors: { label: (_value, entity) => `Author:${entity.toAttributes().name}` },
+    })
+    const handler = async () => {
+      await db.table('authors').where('id', 1).first()
+      return db.model(Author).query().where('id', 1).firstJson()
+    }
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('authors').where('id', 1).update({ name: 'Grace', password: 'rotated-secret' }),
+    }))
+
+    expect(snapshots.at(-1)).toEqual(await handler())
+    expect(JSON.stringify(snapshots)).not.toContain('rotated-secret')
+  })
+
   it('keeps plain belongs-to patching when a belongs-to-many relation is loaded alongside it', async () => {
     const context = await openRealtimeDatabase()
     const { db, adapter } = context

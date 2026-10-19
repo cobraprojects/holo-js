@@ -448,7 +448,7 @@ function hasPatchableColumnTarget(
       continue
     }
 
-    if (includeSelectedColumns && !coversResultPath(target.query.resultPath, candidate.query.resultPath)) {
+    if (includeSelectedColumns && (candidate.query.resultBound === false || !coversResultPath(target.query.resultPath, candidate.query.resultPath))) {
       continue
     }
 
