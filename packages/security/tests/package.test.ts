@@ -1875,6 +1875,69 @@ describe('@holo-js/security rate-limit drivers', () => {
         await store.close?.()
       }, 120_000)
 
+      it('streams a single shard holding several thousand files without holding it in memory', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const seedKey = 'limiter:login|user:shard-seed'
+        await writeExpiredBucket(root, seedKey)
+        const shard = dirname(fileRateLimitDriverInternals.getBucketPath(root, seedKey))
+        for (let index = 0; index < 3_000; index += 1) {
+          await writeFile(join(shard, `stale-${index}.json`), JSON.stringify({
+            namespaceHash: 'namespace',
+            keyHash: 'stale',
+            prefixHashes: ['prefix'],
+            attempts: 1,
+            expiresAt: '2026-04-16T11:59:00.000Z',
+          }), 'utf8')
+        }
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
+        await store.close?.()
+      }, 120_000)
+
+      it('keeps one shard handle open between runs and releases it on close', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const seedKey = 'limiter:login|user:handle-seed'
+        await writeExpiredBucket(root, seedKey)
+        const shard = dirname(fileRateLimitDriverInternals.getBucketPath(root, seedKey))
+        for (let index = 0; index < 2_500; index += 1) {
+          await writeFile(join(shard, `handle-${index}.json`), JSON.stringify({
+            namespaceHash: 'namespace',
+            keyHash: 'handle',
+            prefixHashes: ['prefix'],
+            attempts: 1,
+            expiresAt: '2026-04-16T11:59:00.000Z',
+          }), 'utf8')
+        }
+
+        await store.hit('limiter:login|user:first-run', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        await waitUntil(async () => !fileRateLimitDriverInternals.sweepInFlight(store))
+        expect(fileRateLimitDriverInternals.sweepOpenHandles(store)).toBe(1)
+
+        await store.close?.()
+        expect(fileRateLimitDriverInternals.sweepOpenHandles(store)).toBe(0)
+      }, 120_000)
+
       it('finishes an in-flight sweep on close and starts no more after it', async () => {
         const root = await createSweepRoot()
         let now = sweepStart

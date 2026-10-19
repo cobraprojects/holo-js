@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
-import type { Dirent } from 'node:fs'
+import { mkdir, opendir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import type { Dir, Dirent } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SecurityRateLimitHitResult, SecurityRateLimitStore } from '../contracts'
@@ -33,11 +33,20 @@ export interface FileRateLimitStoreOptions {
   readonly lockTimeoutMs?: number
 }
 
+type FileRateLimitSweepCursor = {
+  readonly shards: AsyncGenerator<string>
+  dir?: {
+    readonly path: string
+    readonly handle: Dir
+  }
+}
+
 type FileRateLimitSweepStats = {
   inFlight: boolean
   runsStarted: number
   peakHeldNames: number
   maxEntriesPerRun: number
+  openHandles: number
 }
 
 type FileRateLimitKeyHashes = {
@@ -360,11 +369,7 @@ async function withBucketLock<TValue>(
   }
 }
 
-async function readSortedEntries(
-  directory: string,
-  keep: (entry: Dirent) => boolean,
-  onHeld: (count: number) => void,
-): Promise<string[]> {
+async function readDirectoryNames(directory: string, keep: (entry: Dirent) => boolean): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') {
       return []
@@ -372,23 +377,20 @@ async function readSortedEntries(
 
     throw error
   })
-  const names = entries.filter(keep).map(entry => entry.name).sort()
-  onHeld(names.length)
-  return names
+
+  return entries.filter(keep).map(entry => entry.name).sort()
 }
 
-async function* bucketPathsAfter(
+async function* shardDirectories(
   bucketsRoot: string,
-  after: string | undefined,
   onHeld: (count: number) => void,
   onUnreadable?: (directory: string, error: unknown) => void,
 ): AsyncGenerator<string> {
-  const [afterTop, afterMiddle] = after?.split('/') ?? []
-  const isDirectory = (entry: Dirent) => entry.isDirectory()
-  const isBucketFile = (entry: Dirent) => entry.isFile() && entry.name.endsWith('.json')
-  const readDirectory = async (directory: string, keep: (entry: Dirent) => boolean): Promise<string[]> => {
+  const readShards = async (directory: string): Promise<string[]> => {
     try {
-      return await readSortedEntries(directory, keep, onHeld)
+      const names = await readDirectoryNames(directory, entry => entry.isDirectory())
+      onHeld(names.length)
+      return names
     } catch (error) {
       if (!onUnreadable) {
         throw error
@@ -399,25 +401,44 @@ async function* bucketPathsAfter(
     }
   }
 
-  for (const top of await readDirectory(bucketsRoot, isDirectory)) {
-    if (afterTop !== undefined && top < afterTop) {
+  for (const top of await readShards(bucketsRoot)) {
+    const topPath = join(bucketsRoot, top)
+    for (const middle of await readShards(topPath)) {
+      yield join(topPath, middle)
+    }
+  }
+}
+
+async function openShard(
+  directory: string,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): Promise<Dir | undefined> {
+  try {
+    return await opendir(directory)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+
+    if (!onUnreadable) {
+      throw error
+    }
+
+    onUnreadable(directory, error)
+    return undefined
+  }
+}
+
+async function* bucketFilePaths(bucketsRoot: string): AsyncGenerator<string> {
+  for await (const shard of shardDirectories(bucketsRoot, () => undefined)) {
+    const handle = await openShard(shard)
+    if (!handle) {
       continue
     }
 
-    const topPath = join(bucketsRoot, top)
-    for (const middle of await readDirectory(topPath, isDirectory)) {
-      if (afterTop !== undefined && top === afterTop && afterMiddle !== undefined && middle < afterMiddle) {
-        continue
-      }
-
-      const middlePath = join(topPath, middle)
-      for (const name of await readDirectory(middlePath, isBucketFile)) {
-        const relativePath = `${top}/${middle}/${name}`
-        if (after !== undefined && relativePath <= after) {
-          continue
-        }
-
-        yield relativePath
+    for await (const entry of handle) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        yield join(shard, entry.name)
       }
     }
   }
@@ -425,8 +446,8 @@ async function* bucketPathsAfter(
 
 async function listBucketPaths(bucketsRoot: string): Promise<string[]> {
   const paths: string[] = []
-  for await (const relativePath of bucketPathsAfter(bucketsRoot, undefined, () => undefined)) {
-    paths.push(join(bucketsRoot, relativePath))
+  for await (const path of bucketFilePaths(bucketsRoot)) {
+    paths.push(path)
   }
 
   return paths
@@ -463,13 +484,13 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     runsStarted: 0,
     peakHeldNames: 0,
     maxEntriesPerRun: 0,
+    openHandles: 0,
   }
   const recordHeldNames = (count: number): void => {
     stats.peakHeldNames = Math.max(stats.peakHeldNames, count)
   }
-  let cycleActive = false
   let cycleStartedAt: number | undefined
-  let cursor: string | undefined
+  let cursor: FileRateLimitSweepCursor | undefined
   let inFlight: Promise<void> | undefined
   let closed = false
 
@@ -504,31 +525,66 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     }
   }
 
+  const closeCursor = async (): Promise<void> => {
+    const current = cursor
+    cursor = undefined
+    if (!current) {
+      return
+    }
+
+    if (current.dir) {
+      await current.dir.handle.close().catch(() => undefined)
+      stats.openHandles -= 1
+    }
+    await current.shards.return(undefined)
+  }
+
   const runSweep = async (now: Date): Promise<void> => {
     let handled = 0
     let finished = false
-    const entries = bucketPathsAfter(bucketsRoot, cursor, recordHeldNames, reportUnreadable)
 
     try {
-      for await (const relativePath of entries) {
-        if (closed || handled === SWEEP_BATCH_SIZE) {
-          break
+      cursor ??= { shards: shardDirectories(bucketsRoot, recordHeldNames, reportUnreadable) }
+
+      while (handled < SWEEP_BATCH_SIZE && !closed) {
+        const current = cursor
+        const dir = current.dir
+        if (!dir) {
+          const next = await current.shards.next()
+          if (next.done) {
+            finished = true
+            break
+          }
+
+          const handle = await openShard(next.value, reportUnreadable)
+          if (handle) {
+            current.dir = { path: next.value, handle }
+            stats.openHandles += 1
+          }
+          continue
         }
 
-        await sweepBucket(join(bucketsRoot, relativePath), now)
-        cursor = relativePath
-        handled += 1
-      }
+        const entry = await dir.handle.read()
+        recordHeldNames(1)
+        if (entry === null) {
+          await dir.handle.close()
+          stats.openHandles -= 1
+          current.dir = undefined
+          continue
+        }
 
-      finished = closed || handled < SWEEP_BATCH_SIZE
+        if (entry.isFile() && entry.name.endsWith('.json')) {
+          await sweepBucket(join(dir.path, entry.name), now)
+          handled += 1
+        }
+      }
     } catch (error) {
       reportSweepError(error)
       finished = true
     } finally {
       stats.maxEntriesPerRun = Math.max(stats.maxEntriesPerRun, handled)
-      if (finished) {
-        cycleActive = false
-        cursor = undefined
+      if (finished || closed) {
+        await closeCursor()
       }
     }
   }
@@ -538,14 +594,12 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       return
     }
 
-    if (!cycleActive) {
+    if (cursor === undefined) {
       if (cycleStartedAt !== undefined && now.getTime() - cycleStartedAt < PRUNE_INTERVAL_MS) {
         return
       }
 
       cycleStartedAt = now.getTime()
-      cycleActive = true
-      cursor = undefined
     }
 
     stats.runsStarted += 1
@@ -615,8 +669,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       const now = resolveNow()
       const prefixHash = createBucketHash(prefix)
 
-      for await (const relativePath of bucketPathsAfter(bucketsRoot, undefined, () => undefined)) {
-        const path = join(bucketsRoot, relativePath)
+      for await (const path of bucketFilePaths(bucketsRoot)) {
         const removed = await withBucketLock(path, lockOptions, async () => {
           const bucket = await readBucket(path)
           if (!bucket) {
@@ -646,8 +699,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     async clearAll() {
       let cleared = 0
 
-      for await (const relativePath of bucketPathsAfter(bucketsRoot, undefined, () => undefined)) {
-        const path = join(bucketsRoot, relativePath)
+      for await (const path of bucketFilePaths(bucketsRoot)) {
         const removed = await withBucketLock(path, lockOptions, async () => {
           const bucket = await readBucket(path)
           if (!bucket) {
@@ -667,9 +719,8 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     },
     async close() {
       closed = true
-      cycleActive = false
-      cursor = undefined
       await inFlight
+      await closeCursor()
     },
   }
 
@@ -693,10 +744,15 @@ function sweepMaxEntriesPerRun(store: SecurityRateLimitStore): number {
   return sweepStats.get(store)?.maxEntriesPerRun ?? 0
 }
 
+function sweepOpenHandles(store: SecurityRateLimitStore): number {
+  return sweepStats.get(store)?.openHandles ?? 0
+}
+
 export const fileRateLimitDriverInternals = {
   createBucketHash,
   sweepInFlight,
   sweepMaxEntriesPerRun,
+  sweepOpenHandles,
   sweepPeakHeldNames,
   sweepRunsStarted,
   createSnapshot,
