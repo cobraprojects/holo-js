@@ -35,6 +35,16 @@ describe('Validation input bounds', () => {
       .toEqual(['The request contains too many input variables.'])
   })
 
+  it('does not count uploaded files as input variables', async () => {
+    const formData = formWith([['name', 'Ava'], ...variables(999)])
+    formData.append('attachments[]', new File(['report'], 'report.txt'))
+    formData.append('attachments[]', new File(['summary'], 'summary.txt'))
+
+    const result = await safeParse(formData, schema({ name: field.string().required(), attachments: field.array(field.file()) }))
+
+    expect(result.valid).toBe(true)
+  })
+
   it('requires every array index to be lower than the entries submitted for that array', async () => {
     const definition = schema({
       tags: field.array(field.string()).optional(),
@@ -50,6 +60,10 @@ describe('Validation input bounds', () => {
     expect(await rootErrors(formWith([['tags[0]', 'a'], ['tags[2]', 'c']]), definition))
       .toEqual(['The request contains an invalid list index.'])
     expect(await rootErrors(new URLSearchParams('rows[0][name]=a&rows[5][name]=b'), definition))
+      .toEqual(['The request contains an invalid list index.'])
+    expect(await rootErrors(new URLSearchParams('tags[3]=a&tags[3]=b&tags[3]=c&tags[3]=d'), definition))
+      .toEqual(['The request contains an invalid list index.'])
+    expect(await rootErrors(new URLSearchParams('rows[1][name]=a&rows[1][name]=b'), definition))
       .toEqual(['The request contains an invalid list index.'])
   })
 
@@ -85,6 +99,19 @@ describe('Validation input bounds', () => {
     })
 
     const result = await safeParse(request, definition)
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })
+  })
+
+  it('validates an unparseable form body as empty input', async () => {
+    const request = new Request('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=missing' },
+      body: 'not a multipart body',
+    })
+
+    const result = await safeParse(request, schema({ name: field.string().required() }))
 
     expect(result.valid).toBe(false)
     if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })

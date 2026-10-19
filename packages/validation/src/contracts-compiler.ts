@@ -38,18 +38,18 @@ function makeCompiledArrayItemSchema(plan: SchemaPlan, parent: ExecutionNode): C
 }
 
 function makeListLimitSchema(definition: FieldDefinition): CompiledSchema | undefined {
-  let limit: FieldRule | undefined
+  let limit: { rule: FieldRule, value: number } | undefined
   for (const rule of definition.rules) {
-    if ((rule.name === 'max' || rule.name === 'size') && typeof rule.args[0] === 'number'
-      && (!limit || rule.args[0] < (limit.args[0] as number))) {
-      limit = rule
+    const value = rule.args[0]
+    if ((rule.name === 'max' || rule.name === 'size') && typeof value === 'number' && (!limit || value < limit.value)) {
+      limit = { rule, value }
     }
   }
   if (!limit) return undefined
-  const value = limit.args[0] as number
+  const { rule, value } = limit
   return v.pipeAsync(
     v.unknown(),
-    asPipeItem(limit.name === 'max' ? maxAction(definition, value, limit.message) : exactSizeAction(definition, value, limit.message)),
+    asPipeItem(rule.name === 'max' ? maxAction(definition, value, rule.message) : exactSizeAction(definition, value, rule.message)),
   )
 }
 

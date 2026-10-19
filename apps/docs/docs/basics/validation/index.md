@@ -116,7 +116,7 @@ When you pass a `Request`, Holo reads it based on the method and content type:
 | `multipart/form-data` or `application/x-www-form-urlencoded` | Form body |
 | Empty body | Treated as `{}` |
 
-A JSON body that can't be parsed is treated as `{}`, so required fields fail with their usual messages. Any other content type throws an error.
+A JSON or form body that can't be parsed is treated as `{}`, so required fields fail with their usual messages. Any other content type throws an error.
 
 Form fields can use dot or bracket names for nested data: `address.city`, `address[city]`, `tags[]`, and `tags[0]` all work. A repeated name such as `tags=a&tags=b` becomes an array.
 
@@ -124,8 +124,8 @@ Form fields can use dot or bracket names for nested data: `address.city`, `addre
 
 Holo limits form bodies and query strings, so a small request can't make validation do a lot of work:
 
-- A request can send at most 1,000 fields, the same default as PHP's `max_input_vars`.
-- A list index must be lower than the number of values sent for that list. `tags[1]` with `tags[0]` works, but `tags[5]` on its own fails.
+- A request can send at most 1,000 fields, the same default as PHP's `max_input_vars`. Uploaded files don't count toward this limit.
+- A list index must be lower than the number of different indexes sent for that list. `tags[1]` with `tags[0]` works, but `tags[5]` on its own fails.
 - Names that use `__proto__`, `constructor`, or `prototype` fail. So does a name that treats a list as an object, such as sending both `tags[0]` and `tags[name]`.
 
 These requests don't throw. They fail validation with one of these errors on `_root`, so `validate()` responds with a [422](/basics/validation/errors#the-422-response):

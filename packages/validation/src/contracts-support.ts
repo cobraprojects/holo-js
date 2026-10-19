@@ -28,7 +28,9 @@ export class MalformedInputError extends Error {
   }
 }
 
-type ArrayEntryCounts = Map<unknown[], { entries: number, highestIndex: number }>
+const INVALID_FIELD_NAME = 'The request contains an invalid field name.'
+
+type ArrayIndexes = Map<unknown[], Set<number>>
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -289,7 +291,7 @@ function parsePathTokens(path: string): readonly (string | number | '')[] {
     }
 
     if (UNSAFE_PATH_SEGMENTS.has(segment)) {
-      throw new MalformedInputError('The request contains an invalid field name.')
+      throw new MalformedInputError(INVALID_FIELD_NAME)
     }
     tokens.push(segment)
   }
@@ -301,14 +303,13 @@ function createContainer(next: string | number | '' | undefined): Record<string,
   return typeof next === 'number' || next === '' ? [] : createObjectContainer()
 }
 
-function countArrayEntry(counts: ArrayEntryCounts, array: unknown[], index: number): void {
-  const count = counts.get(array) ?? { entries: 0, highestIndex: -1 }
-  count.entries += 1
-  count.highestIndex = Math.max(count.highestIndex, index)
-  counts.set(array, count)
+function recordArrayIndex(indexes: ArrayIndexes, array: unknown[], index: number): void {
+  const recorded = indexes.get(array) ?? new Set<number>()
+  recorded.add(index)
+  indexes.set(array, recorded)
 }
 
-export function assignNestedValue(target: Record<string, unknown> | unknown[], path: string, value: unknown, counts: ArrayEntryCounts = new Map()): void {
+export function assignNestedValue(target: Record<string, unknown> | unknown[], path: string, value: unknown, indexes: ArrayIndexes = new Map()): void {
   const tokens = parsePathTokens(path)
   if (tokens.length === 0) {
     return
@@ -322,7 +323,7 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
     const last = index === tokens.length - 1
 
     if (Array.isArray(cursor)) {
-      countArrayEntry(counts, cursor, typeof token === 'number' ? token : cursor.length)
+      recordArrayIndex(indexes, cursor, typeof token === 'number' ? token : cursor.length)
       if (token === '') {
         if (last) {
           cursor.push(value)
@@ -336,7 +337,7 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
       }
 
       if (typeof token !== 'number') {
-        throw new MalformedInputError('The request contains an invalid field name.')
+        throw new MalformedInputError(INVALID_FIELD_NAME)
       }
 
       if (last) {
@@ -354,7 +355,7 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
     }
 
     if (typeof token !== 'string') {
-      throw new MalformedInputError('The request contains an invalid field name.')
+      throw new MalformedInputError(INVALID_FIELD_NAME)
     }
 
     if (last) {
@@ -383,20 +384,22 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
 
 export function normalizeFormData(input: FormData | URLSearchParams): Record<string, unknown> {
   const output: Record<string, unknown> = {}
-  const counts: ArrayEntryCounts = new Map()
+  const indexes: ArrayIndexes = new Map()
   let variables = 0
 
   for (const [key, value] of input.entries()) {
-    variables += 1
+    if (!isBlobLike(value)) variables += 1
     if (variables > MAX_INPUT_VARIABLES) {
       throw new MalformedInputError('The request contains too many input variables.')
     }
-    assignNestedValue(output, key, value, counts)
+    assignNestedValue(output, key, value, indexes)
   }
 
-  for (const { entries, highestIndex } of counts.values()) {
-    if (highestIndex >= entries) {
-      throw new MalformedInputError('The request contains an invalid list index.')
+  for (const recorded of indexes.values()) {
+    for (const index of recorded) {
+      if (index >= recorded.size) {
+        throw new MalformedInputError('The request contains an invalid list index.')
+      }
     }
   }
 
@@ -408,6 +411,14 @@ function parseJsonInput(text: string): unknown {
     return JSON.parse(text)
   } catch {
     return {}
+  }
+}
+
+async function parseFormBody(input: Request): Promise<FormData> {
+  try {
+    return await input.formData()
+  } catch {
+    return new FormData()
   }
 }
 
@@ -432,7 +443,7 @@ export async function normalizeRequestInput(input: Request): Promise<{ readonly 
   if (contentType === 'multipart/form-data' || contentType === 'application/x-www-form-urlencoded') {
     return {
       source: 'form-data',
-      value: normalizeFormData(await input.formData()),
+      value: normalizeFormData(await parseFormBody(input)),
     }
   }
 
