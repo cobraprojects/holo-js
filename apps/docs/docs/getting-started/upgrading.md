@@ -79,6 +79,14 @@ Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) 
 
 In Nuxt, the cookie that flashes errors after a native form post no longer contains the submitted values, and it is marked `Secure` on HTTPS requests. `useValidationErrors()` works as before.
 
+### Validation input limits
+
+Form bodies and query strings are now limited to 1,000 non-file fields, with a separate limit of 1,000 uploaded-file entries per form, and a list index must be lower than the number of different indexes sent for that list. Requests that break these limits, or that use `__proto__`, `constructor`, `prototype`, or the same name used with two shapes (an object and a list, or numbered indexes and `[]`) in any order, fail validation with a 422 instead of throwing. Split forms that exceed either limit into smaller submissions; JSON can be used for larger non-file payloads. See [Input limits](/basics/validation/#input-limits).
+
+A JSON or form body that can't be parsed is now validated as `{}` instead of throwing.
+
+Errors thrown inside `custom()` and `customAsync()` are no longer turned into a validation message on `_root`. They reach your framework's error handling and respond with a 500. If a custom rule calls code that can throw for invalid input, catch the error in the rule and return a message string instead.
+
 ### S3 file names with special characters
 
 S3 disks now store files under their exact names. Before 0.4.0, a name with characters other than letters, digits, and `-_.!~*'()` was stored under its URL-encoded form: `reports/Q1 café.pdf` became the object `reports/Q1%20caf%C3%A9.pdf`, and its `url()` returned access denied or not found. After upgrading, Holo looks for `reports/Q1 café.pdf`, so rename those objects before you deploy. With the AWS CLI:

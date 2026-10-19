@@ -1,7 +1,7 @@
 import * as v from 'valibot'
 import { exactSizeAction, minAction, maxAction, asPipeItem, stringSchema, numberSchema, booleanSchema, dateSchema, emailAction, urlAction, uuidAction, integerAction } from './compiler-actions'
 import type { FieldRule, FieldDefinition, SchemaInputShape, SupportedRuleFamily, WebFileLike } from './contracts-types'
-import { isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
+import { declaredListLimit, isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
 
 import { createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
 
@@ -37,6 +37,32 @@ function makeCompiledArrayItemSchema(plan: SchemaPlan, parent: ExecutionNode): C
   }
 }
 
+function makeConstraintAction(definition: FieldDefinition, rule: FieldRule) {
+  const value = rule.args[0]
+  if (typeof value !== 'number') return undefined
+  switch (rule.name) {
+    case 'min':
+      return asPipeItem(minAction(definition, value, rule.message))
+    case 'max':
+      if (definition.kind !== 'file') return asPipeItem(maxAction(definition, value, rule.message))
+      break
+    case 'size':
+      if (definition.kind !== 'file') return asPipeItem(exactSizeAction(definition, value, rule.message))
+      break
+  }
+  return undefined
+}
+
+function makeListLimitSchema(definition: FieldDefinition): CompiledSchema {
+  const actions = []
+  for (const rule of definition.rules) {
+    if (rule.name === 'transform') break
+    const action = makeConstraintAction(definition, rule)
+    if (action) actions.push(action)
+  }
+  return v.pipeAsync(v.unknown(), ...actions)
+}
+
 function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
   switch (definition.kind) {
     case 'string':
@@ -52,10 +78,16 @@ function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: ob
     case 'array': {
       if (!executionFor) throw new Error('Validation array execution is missing.')
       if (!itemPlan) throw new Error('Validation array item plan is missing.')
+      const listLimit = declaredListLimit(definition)
+      const listLimitSchema = listLimit === undefined ? undefined : makeListLimitSchema(definition)
       return {
         ...v.unknown(),
         async: true,
         async '~run'(dataset, config) {
+          if (listLimit !== undefined && listLimitSchema && Array.isArray(dataset.value) && dataset.value.length > listLimit) {
+            const limited = await listLimitSchema['~run'](dataset, config)
+            return Object.assign(limited, { typed: false as const })
+          }
           const node = executionFor(dataset).node
           const item = makeCompiledArrayItemSchema(itemPlan, node)
           const compiledItem = itemPlan.hasCustomRules ? createOrderedSchemaFactory()(item) : item
@@ -76,22 +108,19 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
   }))
 
   for (const rule of definition.rules) {
+    if (executionFor && definition.kind === 'file' && (rule.name === 'max' || rule.name === 'size')) {
+      actions.push(v.rawCheck(({ dataset }) => {
+        executionFor(dataset).sizedValues.set(rule, dataset.value)
+      }))
+    }
     switch (rule.name) {
       case 'min':
-        if (typeof rule.args[0] === 'number') {
-          actions.push(asPipeItem(minAction(definition, rule.args[0], rule.message)))
-        }
-        break
       case 'max':
-        if (definition.kind !== 'file' && typeof rule.args[0] === 'number') {
-          actions.push(asPipeItem(maxAction(definition, rule.args[0], rule.message)))
-        }
+      case 'size': {
+        const action = makeConstraintAction(definition, rule)
+        if (action) actions.push(action)
         break
-      case 'size':
-        if (typeof rule.args[0] === 'number' && definition.kind !== 'file') {
-          actions.push(asPipeItem(exactSizeAction(definition, rule.args[0], rule.message)))
-        }
-        break
+      }
       case 'email':
         actions.push(asPipeItem(emailAction(rule.message)))
         break

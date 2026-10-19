@@ -10,7 +10,6 @@ import {
   type ValidationResult,
   type ValidationSchema,
   ValidationContractError,
-  type WebFileLike,
   type FieldRule,
 } from './contracts-types'
 import {
@@ -19,7 +18,9 @@ import {
   coerceShapeInput,
   createErrorBag,
   isPlainObject,
+  isWebFileLike,
   issuesToFlat,
+  MalformedInputError,
   normalizeFormData,
   normalizeRequestInput,
   parseByteSize,
@@ -189,7 +190,8 @@ function applyFieldChecks(
         break
       }
       case 'max': {
-        const fileSize = (shapeRuleValue as WebFileLike).size
+        const sized = execution.sizedValues.has(rule) ? execution.sizedValues.get(rule) : shapeRuleValue
+        const fileSize = isWebFileLike(sized) ? sized.size : undefined
         if (definition.kind === 'file' && typeof fileSize === 'number') {
           const rawLimit = rule.args[0] as number | string
           const limit = parseByteSize(rawLimit)
@@ -200,8 +202,10 @@ function applyFieldChecks(
         break
       }
       case 'size': {
-        if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number' && typeof rule.args[0] === 'number') {
-          if ((shapeRuleValue as WebFileLike).size !== rule.args[0]) {
+        const sized = execution.sizedValues.has(rule) ? execution.sizedValues.get(rule) : shapeRuleValue
+        const fileSize = isWebFileLike(sized) ? sized.size : undefined
+        if (definition.kind === 'file' && typeof fileSize === 'number' && typeof rule.args[0] === 'number') {
+          if (fileSize !== rule.args[0]) {
             pushIssue(issues, path, resolveRuleMessage(rule, `The selected file must be exactly ${formatByteSizeLimit(rule.args[0], rule.args[0])}.`))
           }
         }
@@ -345,39 +349,36 @@ export async function validateInternal<TSchema extends ValidationSchema>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
 ): Promise<ValidationResult<InferValidationSchemaData<TSchema>>> {
-  const normalized = await normalizeInput(input)
-
+  let normalized: Awaited<ReturnType<typeof normalizeInput>>
   try {
-    const coerced = coerceShapeInput(schemaDefinition.fields, normalized.value)
-    const result = await schemaDefinition['~standard'].validate(normalized.value)
-
-    if (result.issues) {
-      const flat = issuesToFlat(result.issues)
-      return {
-        valid: false,
-        submitted: true,
-        values: coerced as Partial<InferValidationSchemaData<TSchema>>,
-        errors: createErrorBag<InferValidationSchemaData<TSchema>>(flat),
-      }
-    }
-
-    return {
-      valid: true,
-      submitted: true,
-      data: result.value as InferValidationSchemaData<TSchema>,
-      values: result.value as InferValidationSchemaData<TSchema>,
-      errors: createErrorBag<InferValidationSchemaData<TSchema>>(),
-    }
+    normalized = await normalizeInput(input)
   } catch (error) {
-    const issues: Record<string, string[]> = {
-      _root: [error instanceof Error ? error.message : 'Validation failed.'],
-    }
-
+    if (!(error instanceof MalformedInputError)) throw error
     return {
       valid: false,
       submitted: true,
-      values: normalized.value as Partial<InferValidationSchemaData<TSchema>>,
-      errors: createErrorBag<InferValidationSchemaData<TSchema>>(issues),
+      values: {},
+      errors: createErrorBag<InferValidationSchemaData<TSchema>>({ _root: [error.message] }),
     }
+  }
+
+  const coerced = coerceShapeInput(schemaDefinition.fields, normalized.value)
+  const result = await schemaDefinition['~standard'].validate(normalized.value)
+
+  if (result.issues) {
+    return {
+      valid: false,
+      submitted: true,
+      values: coerced as Partial<InferValidationSchemaData<TSchema>>,
+      errors: createErrorBag<InferValidationSchemaData<TSchema>>(issuesToFlat(result.issues)),
+    }
+  }
+
+  return {
+    valid: true,
+    submitted: true,
+    data: result.value as InferValidationSchemaData<TSchema>,
+    values: result.value as InferValidationSchemaData<TSchema>,
+    errors: createErrorBag<InferValidationSchemaData<TSchema>>(),
   }
 }
