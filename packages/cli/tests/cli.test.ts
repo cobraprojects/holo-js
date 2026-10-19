@@ -9871,6 +9871,64 @@ export default defineCacheConfig({
     })).rejects.toThrow('Unsupported cache driver: bad.')
   }, 30_000)
 
+  it('refuses a redis cache install when the existing redis config has no cache connection', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', '')
+    await writeProjectFile(projectRoot, '.env.example', '')
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('does not define a "cache" connection')
+    await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).not.toContain('cache: {')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('')
+  }, 30_000)
+
+  it('installs the redis cache store when the existing redis config defines the cache connection', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', '')
+    await writeProjectFile(projectRoot, '.env.example', '')
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 1,
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({
+      createdCacheConfig: true,
+      createdRedisConfig: false,
+    })
+    expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('connection: \'cache\'')
+  }, 30_000)
+
   it('generates queue table migrations and flushes persisted failed jobs', async () => {
     const defaultProjectRoot = await createTempProject()
     tempDirs.push(defaultProjectRoot)

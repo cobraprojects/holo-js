@@ -15,6 +15,7 @@ import {
   MEDIA_CONFIG_FILE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
+  REDIS_CONFIG_FILE_NAMES,
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   type AuthInstallResult,
@@ -61,6 +62,7 @@ import {
   renderNotificationsConfig,
   renderProjectSecurityConfig,
   renderQueueConfig,
+  renderRedisCacheConnectionLines,
   renderRedisConfig,
   renderSecurityConfig,
   renderSessionConfig,
@@ -819,6 +821,22 @@ export async function installCacheIntoProject(
     throw new Error(
       `config/cache.ts already exists and does not configure the "${driver}" cache driver. `
       + `Update your cache config first, then rerun "holo install cache".`,
+    )
+  }
+
+  const existingRedisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)
+  if (
+    driver === 'redis'
+    && !cacheConfigPath
+    && existingRedisConfigPath
+    && !('cache' in loadedConfig.redis.connections)
+  ) {
+    throw new Error(
+      `config/redis.ts does not define a "cache" connection, and the Redis cache store needs one so that cache flushes `
+      + `stay on their own Redis database. Add this connection to the connections object in config/redis.ts, `
+      + `then rerun "holo install cache --driver redis":\n\n`
+      + `${renderRedisCacheConnectionLines().join('\n')}\n\n`
+      + `REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.`,
     )
   }
 

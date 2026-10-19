@@ -116,7 +116,7 @@ redis: {
 }
 ```
 
-The scaffold gives the cache its own `cache` connection on Redis database `1`, so queues and sessions on `default` are never touched by a flush. If `config/redis.ts` already exists, the installer leaves it alone, so add the `cache` connection yourself.
+The scaffold gives the cache its own `cache` connection on Redis database `1`, so queues and sessions on `default` are never touched by a flush. If `config/redis.ts` already exists without a `cache` connection, `npx holo install cache --driver redis` stops before it writes anything and prints the connection to add.
 
 | Option | Default | Description |
 | --- | --- | --- |
