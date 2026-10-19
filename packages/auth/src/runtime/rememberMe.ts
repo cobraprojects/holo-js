@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
-export type RememberRecaller = readonly [userId: string | number, token: string, passwordHash: string]
+export type RememberRecaller = readonly [userId: string | number, token: string, passwordHashDigest: string]
 
 export function createRememberToken(): string {
   return randomBytes(45).toString('base64url')

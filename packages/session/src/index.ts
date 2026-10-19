@@ -96,7 +96,7 @@ const session = Object.assign(
     rotate: rotateSession,
     invalidate: invalidateSession,
     touch: touchSession,
-        flash: flashSession,
+    flash: flashSession,
     take: takeSession,
     cookie,
     sessionCookie,

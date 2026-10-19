@@ -94,6 +94,8 @@ export default defineMigration({
 Add `remember_token` to the model's `hidden` list so it never reaches the browser:
 
 ```ts [server/models/User.ts]
+import { defineModel } from '@holo-js/db'
+
 export default defineModel('users', {
   fillable: ['name', 'email', 'password', 'avatar'],
   hidden: ['password', 'remember_token'],

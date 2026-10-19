@@ -56,6 +56,7 @@ import type {
   PasswordResetTokenStore,
 } from './contracts'
 import {
+  authRequestScope,
   captureAuthRequestContext,
   getCapturedAuthContext,
   createAsyncAuthContext,
@@ -357,8 +358,16 @@ async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: stri
   return value ? bindings.session.decryptCookie(name, value) : undefined
 }
 
-async function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
-  return parseRememberCookie(await resolveHoloCookie(bindings, bindings.session.rememberMeCookie('')))
+const requestRememberEntries = new WeakMap<object, Promise<Map<string, string>>>()
+const requestRememberHydrations = new WeakMap<object, Map<string, Promise<void>>>()
+
+function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
+  const scope = authRequestScope(bindings.context)
+  const existing = scope ? requestRememberEntries.get(scope) : undefined
+  if (existing) return existing
+  const entries = resolveHoloCookie(bindings, bindings.session.rememberMeCookie('')).then(parseRememberCookie)
+  if (scope) requestRememberEntries.set(scope, entries)
+  return entries
 }
 
 function sessionGuardNames(bindings: RuntimeBindings): readonly string[] {
@@ -426,7 +435,47 @@ async function guardHasSessionPayload(bindings: RuntimeBindings, guardName: stri
   return Boolean(sessionId && readSessionPayloads(await bindings.session.read(sessionId))?.[guardName])
 }
 
-async function restoreFromRememberRecaller(guardName: string, encoded: string): Promise<boolean> {
+async function restoreRememberedSession(
+  bindings: RuntimeBindings,
+  guardName: string,
+  provider: string,
+  user: SerializedAuthUser,
+): Promise<void> {
+  const guardNames = sessionGuardNames(bindings)
+  let source: AuthSessionRecord | null = null
+  for (const sessionId of new Set([guardName, ...guardNames].map(name => bindings.context.getSessionId(name)))) {
+    source = sessionId ? await bindings.session.read(sessionId) : null
+    if (source) break
+  }
+  const payloads = readSessionPayloads(source) ?? {}
+  const revocation = bindings.sessionRevocations
+    ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider, userId: user.id }, payloads)
+    : undefined
+  const session = await bindings.session.create({
+    data: writeSessionPayloads(source?.data ?? {}, {
+      ...payloads,
+      [guardName]: { ...toSessionPayload(guardName, provider, user), ...(revocation ? { revocation } : {}) },
+    }),
+  })
+  try {
+    await appendResponseCookies(bindings, [bindings.session.sessionCookie(session.id)])
+  } catch (error) {
+    try {
+      await bindings.session.invalidate(session.id, { store: session.store })
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Failed to clean up a remembered session restoration.')
+    }
+    throw error
+  }
+  for (const name of guardNames) {
+    if (name === guardName || (source && bindings.context.getSessionId(name) === source.id)) {
+      bindings.context.setSessionId(name, session.id)
+    }
+  }
+  bindings.context.setCachedUser(guardName, user)
+}
+
+async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName: string, encoded: string): Promise<boolean> {
   const recaller = decodeRememberRecaller(encoded)
   if (!recaller) return false
   const guard = getGuardConfig(guardName)
@@ -441,12 +490,34 @@ async function restoreFromRememberRecaller(guardName: string, encoded: string): 
   ) {
     return false
   }
-  await establishSessionForUser(serializeUser(adapter, user, guard.provider), {
-    guard: guardName,
-    provider: guard.provider,
-    preserveRemember: true,
-  })
+  await restoreRememberedSession(bindings, guardName, guard.provider, serializeUser(adapter, user, guard.provider))
   return true
+}
+
+function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, restore: boolean): Promise<void> {
+  const scope = authRequestScope(bindings.context)
+  let hydrations = scope ? requestRememberHydrations.get(scope) : undefined
+  const pending = hydrations?.get(guardName)
+  if (pending) return pending
+  if (bindings.context.getRememberToken?.(guardName)) return Promise.resolve()
+  const hydration = (async () => {
+    const recaller = (await readRememberCookieEntries(bindings)).get(guardName)
+    if (!recaller) return
+    bindings.context.setRememberToken?.(guardName, recaller)
+    if (
+      restore
+      && !await guardHasSessionPayload(bindings, guardName)
+      && !await restoreFromRememberRecaller(bindings, guardName, recaller)
+    ) {
+      bindings.context.setRememberToken?.(guardName)
+    }
+  })()
+  if (scope) {
+    hydrations ??= new Map()
+    hydrations.set(guardName, hydration)
+    requestRememberHydrations.set(scope, hydrations)
+  }
+  return hydration
 }
 
 async function hydrateGuardContextFromRequest(
@@ -474,19 +545,7 @@ async function hydrateGuardContextFromRequest(
     }
   }
 
-  if (!bindings.context.getRememberToken?.(guardName)) {
-    const recaller = (await readRememberCookieEntries(bindings)).get(guardName)
-    if (recaller) {
-      bindings.context.setRememberToken?.(guardName, recaller)
-      if (
-        options.restoreRemembered !== false
-        && !await guardHasSessionPayload(bindings, guardName)
-        && !await restoreFromRememberRecaller(guardName, recaller)
-      ) {
-        bindings.context.setRememberToken?.(guardName)
-      }
-    }
-  }
+  await hydrateRememberedGuard(bindings, guardName, options.restoreRemembered !== false)
 }
 
 function createLifecycleTokenResult<TRecord extends {
@@ -950,6 +1009,7 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
   clearSessionRevocationReads(bindings.context)
   if (!retained) throwAuthError('auth_user_missing', 'This browser authentication has already been revoked.')
+  if (state.payload.impersonation) return
   const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
   if (recaller && bindings.context.getRememberToken?.(guardName)) {
     bindings.context.setRememberToken?.(guardName, recaller)

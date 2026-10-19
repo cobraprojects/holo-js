@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import auth, { authRuntimeInternals, configureAuthRuntime, resetAuthRuntime, type AuthProviderAdapter, type AuthSessionRevocationStore } from '../src'
+import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthProviderAdapter, type AuthSessionRevocationStore } from '../src'
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 
 type StoredUser = {
@@ -41,14 +41,16 @@ class Browser {
 
   async request<TValue>(callback: () => Promise<TValue>, bindings: Partial<Parameters<typeof configureAuthRuntime>[0]> = {}): Promise<TValue> {
     const current = authRuntimeInternals.getRuntimeBindings()
+    const requestCookies = new Map(this.cookies)
+    const requestContext = createAsyncAuthContext()
     const context = {
-      ...authRuntimeInternals.createMemoryAuthContext(),
-      getRequestCookie: (name: string) => this.cookies.get(name),
+      ...requestContext,
+      getRequestCookie: (name: string) => requestCookies.get(name),
       appendResponseCookie: (setCookie: string) => this.receive(setCookie),
     }
     authRuntimeInternals.configureRuntime({ ...current, ...bindings, context })
     try {
-      return await callback()
+      return await requestContext.run(callback)
     } finally {
       authRuntimeInternals.configureRuntime(current)
     }
@@ -64,6 +66,10 @@ class Browser {
   expireSession(): void {
     this.cookies.delete('holo_session')
   }
+}
+
+async function sessionFileCount(): Promise<number> {
+  return (await readdir(directory)).filter(name => name.endsWith('.json')).length
 }
 
 function decryptRemember(browser: Browser): unknown {
@@ -186,6 +192,66 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
+  it('keeps a remember entry cleared earlier in the same request out of later cookies', async () => {
+    users.set(2, { id: 2, email: 'mina@app.test', password: 'scrypt$hash-two', remember_token: null })
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+
+    await browser.request(async () => {
+      await auth.loginUsingId(2)
+      await auth.guard('admin').loginUsingId(2, { remember: true })
+    })
+
+    expect(decryptRemember(browser)).toEqual({ admin: [2, expect.any(String), expect.any(String)] })
+    browser.expireSession()
+    await expect(browser.request(() => auth.check())).resolves.toBe(false)
+  })
+
+  it('restores once for concurrent checks in the same request', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    const sessionsBefore = await sessionFileCount()
+
+    await expect(browser.request(async () => {
+      const first = auth.check()
+      await new Promise(resolve => setImmediate(resolve))
+      return Promise.all([first, auth.check(), auth.user()])
+    })).resolves.toEqual([true, true, expect.objectContaining({ id: 1 })])
+    expect(await sessionFileCount()).toBe(sessionsBefore + 1)
+  })
+
+  it('keeps the browser session intact when the restored session cookie cannot be sent', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    await browser.request(() => auth.loginUsingId(1))
+    const liveSession = browser.cookies.get('holo_session')
+
+    const readOnly = new Browser()
+    for (const [name, value] of browser.cookies) readOnly.cookies.set(name, value)
+    readOnly.receive = () => {}
+    await expect(readOnly.request(() => auth.guard('admin').check())).resolves.toBe(true)
+
+    const sessionOnly = new Browser()
+    sessionOnly.cookies.set('holo_session', liveSession!)
+    await expect(sessionOnly.request(() => auth.check())).resolves.toBe(true)
+  })
+
+  it('restores several guards into one session within a request', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const browser = new Browser()
+    await browser.request(async () => {
+      await auth.loginUsingId(1, { remember: true })
+      await auth.guard('admin').loginUsingId(1, { remember: true })
+    })
+    vi.setSystemTime(Date.now() + 3 * 60 * 60 * 1000)
+
+    await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
+    browser.cookies.delete('holo_session_remember')
+    await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
+  })
+
   it('cycles the token on logout so every device loses remember-me while other active sessions remain', async () => {
     const laptop = new Browser()
     const phone = new Browser()
@@ -261,5 +327,21 @@ describe('remember me with other-device logout', () => {
     await expect(phone.request(() => auth.check())).resolves.toBe(false)
     laptop.expireSession()
     await expect(laptop.request(() => auth.check())).resolves.toBe(true)
+  })
+
+  it('leaves the impersonated user remember token and the actor cookie alone', async () => {
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: revocationStore() })
+    users.set(2, { id: 2, email: 'mina@app.test', password: 'scrypt$hash-two', remember_token: 'mina-existing-remember-token-value' })
+    const admin = new Browser()
+    await admin.request(() => auth.loginUsingId(1, { remember: true }))
+    const actorCookie = admin.cookies.get('holo_session_remember')
+
+    await admin.request(async () => {
+      await auth.impersonateById(2)
+      await auth.logoutOtherDevices()
+    })
+
+    expect(users.get(2)?.remember_token).toBe('mina-existing-remember-token-value')
+    expect(admin.cookies.get('holo_session_remember')).toBe(actorCookie)
   })
 })
