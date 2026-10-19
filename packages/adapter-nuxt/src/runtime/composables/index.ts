@@ -210,7 +210,6 @@ export const holo = createHoloProjectAccessors(async () => {
   const authRequest = createNuxtAuthRequestAccessors()
   const { createNuxtAuthorizationError } = await import('../authorization-error')
   const project = await initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
-    envName: resolveRuntimeEnvName(config.holo.appEnv),
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
     authRequest,

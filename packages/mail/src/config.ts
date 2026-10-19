@@ -1,10 +1,15 @@
 export type HoloAppEnv = 'development' | 'production' | 'test'
 
-export function normalizeMailEnvironment(
-  value: string | undefined,
-  fallback: HoloAppEnv = 'production',
-): HoloAppEnv {
-  return value === 'development' || value === 'production' || value === 'test' ? value : fallback
+export function normalizeMailEnvironment(value: string | undefined): HoloAppEnv {
+  if (!value) {
+    return 'production'
+  }
+
+  if (value === 'development' || value === 'production' || value === 'test') {
+    return value
+  }
+
+  throw new Error(`Invalid APP_ENV "${value}". Use development, production, or test.`)
 }
 
 export interface HoloMailAddressConfig {

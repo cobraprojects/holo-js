@@ -178,7 +178,7 @@ The seeder run accepts these options. The CLI sets them from the flags in [Runni
 | `only` | Names of the seeders to run. Unknown names throw. |
 | `quietly` | Turn off model events and observers while seeding |
 | `force` | Allow seeding when `environment` is `production` |
-| `environment` | Environment name used for the production check. The CLI passes the [app environment](/reference/environment#env-files-and-loading-order). |
+| `environment` | Environment name used for the production check. The CLI passes the [application environment](/reference/environment#env-files-and-loading-order). |
 
 ## Next steps
 

@@ -320,6 +320,9 @@ describe('@holo-js/mail runtime', () => {
 
     process.env.APP_ENV = 'development'
     expect((await renderMailPreview(mail)).status).toBe(200)
+
+    process.env.APP_ENV = 'staging'
+    await expect(renderMailPreview(mail)).rejects.toThrow('Invalid APP_ENV "staging". Use development, production, or test.')
   })
 
   it('re-normalizes overrides and preserves preview validation', async () => {

@@ -2,7 +2,7 @@ import type { ModuleOptions } from '../src/module'
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import type { loadNuxt } from '@nuxt/kit'
 import { createApp, defineEventHandler } from 'h3'
 import { serve } from './support/http'
@@ -984,6 +984,26 @@ describe('useHoloDb', () => {
     expectTypeOf(asynchronousResult).toEqualTypeOf<Promise<{ mode: 'async' }>>()
     await expect(synchronousResult).resolves.toEqual({ mode: 'sync' })
     await expect(asynchronousResult).resolves.toEqual({ mode: 'async' })
+  })
+
+  it('selects env files from the runtime APP_ENV instead of the build-time environment', async () => {
+    vi.resetModules()
+    vi.stubEnv('APP_ENV', 'production')
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const root = await createProject()
+    await writeFile(join(root, '.env.development'), 'APP_NAME=Development\n')
+    await writeFile(join(root, '.env.production'), 'APP_NAME=Production\n')
+    await writeFile(join(root, 'config/app.mjs'), "export default { name: process.env.APP_NAME }")
+    await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
+    const runtime = await import('../src/runtime/composables')
+    runtime.configureHoloRuntimeConfig({ holo: { appEnv: 'development', appDebug: false, projectRoot: root } })
+
+    const project = await runtime.holo.getApp()
+
+    expect(project.config.environment.name).toBe('production')
+    expect(project.config.app.name).toBe('Production')
   })
 
   it('boots the working directory when no runtime projectRoot is configured', async () => {

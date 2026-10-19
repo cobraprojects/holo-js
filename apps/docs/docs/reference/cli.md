@@ -166,7 +166,7 @@ npx holo start [...frameworkArgs]
 | --- | --- |
 | `...frameworkArgs` | Extra arguments passed to the production server. |
 
-Like `dev`, `start` uses `PORT` when you don't pass `--port`. It loads your `.env` files and runs the server with `NODE_ENV=production`. The app environment still comes from `APP_ENV`, which is `production` when it isn't set. See [Deployment](/deployment/).
+Like `dev`, `start` uses `PORT` when you don't pass `--port`. It loads your `.env` files and runs the server with `NODE_ENV=production`. The application environment still comes from `APP_ENV`, which is `production` when it isn't set. See [Deployment](/deployment/).
 
 ```bash
 PORT=8080 npx holo start

@@ -57,7 +57,7 @@ export default defineAppConfig({
 })
 ```
 
-`holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
+`holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
 ## Earlier 0.3.x releases
 
