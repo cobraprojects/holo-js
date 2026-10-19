@@ -14,8 +14,17 @@ import {
 } from '../src'
 import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
 
-async function openWorker() {
-  const harness = await createSQLiteQueueHarness({ createFailedTable: true })
+async function openWorker(options: { retryAfter?: number } = {}) {
+  const harness = await createSQLiteQueueHarness({
+    createFailedTable: true,
+    ...(typeof options.retryAfter === 'number'
+      ? { queueConfig: {
+          default: 'database',
+          failed: { driver: 'database', connection: 'default', table: 'failed_jobs' },
+          connections: { database: { driver: 'database', connection: 'default', table: 'jobs', queue: 'default', retryAfter: options.retryAfter } },
+        } }
+      : {}),
+  })
   onTestFinished(() => harness.cleanup())
   const enqueue = async (name: string, options: Partial<QueueJobEnvelope<{ ok: boolean }>> = {}) => {
     const envelope: QueueJobEnvelope<{ ok: boolean }> = {
@@ -211,12 +220,55 @@ describe('@holo-js/queue native worker behavior', () => {
     expect(complete).toBe(0)
   })
 
-  it('rejects an unregistered job while keeping its native reservation recoverable', async () => {
+  it('fails an unregistered job terminally and keeps working', async () => {
     const harness = await openWorker()
-    await harness.enqueue('missing')
-    await expect(runQueueWorker({ once: true })).rejects.toThrow('is not registered')
-    expect(await harness.readJobRows()).toHaveLength(1)
-    expect(await listFailedQueueJobs()).toEqual([])
+    const failures: QueueWorkerJobEvent[] = []
+    let handled = 0
+    registerQueueJob({ handle: () => { handled += 1 } }, { name: 'registered' })
+    const missing = await harness.enqueue('missing', { createdAt: Date.now() - 1_000 })
+    await harness.enqueue('registered')
+    expect(await runQueueWorker({ stopWhenEmpty: true, onJobFailed: (event) => { failures.push(event) } }))
+      .toEqual({ processed: 1, released: 0, failed: 1, stoppedBecause: 'empty' })
+    expect(handled).toBe(1)
+    expect(failures).toEqual([expect.objectContaining({ jobId: missing.id, jobName: 'missing', error: expect.objectContaining({ message: expect.stringContaining('is not registered') }) })])
+    expect(await harness.readJobRows()).toEqual([])
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: missing.id, exception: expect.stringContaining('is not registered') })])
+  })
+
+  it('redelivers an abandoned reservation after it expires and counts the abandoned attempt', async () => {
+    const harness = await openWorker({ retryAfter: 1 })
+    const attempts: number[] = []
+    registerQueueJob({ handle: (_payload, context) => { attempts.push(context.attempt) } }, { name: 'abandoned' })
+    await harness.enqueue('abandoned')
+    expect(await harness.driver.reserve({ queueNames: ['default'], workerId: 'crashed-worker' })).not.toBeNull()
+    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 0, stoppedBecause: 'once' })
+    await setTimeout(1_050)
+    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1 })
+    expect(attempts).toEqual([2])
+    expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it.each([
+    ['job tries', {}],
+    ['worker tries', { tries: 1 }],
+  ] as const)('fails an abandoned reservation terminally once it reaches its %s', async (_label, workerOptions) => {
+    const harness = await openWorker({ retryAfter: 1 })
+    const events: string[] = []
+    registerQueueJob({
+      handle: () => { events.push('handle') },
+      onFailed: (_payload, error) => { events.push(`failed:${error.message}`) },
+    }, { name: 'exhausted' })
+    const job = await harness.enqueue('exhausted', { maxAttempts: 'tries' in workerOptions ? 3 : 1 })
+    expect(await harness.driver.reserve({ queueNames: ['default'], workerId: 'crashed-worker' })).not.toBeNull()
+    await setTimeout(1_050)
+    expect(await runQueueWorker({ ...workerOptions, once: true, onJobFailed: event => { events.push(`worker-failed:${event.attempt}/${event.maxAttempts}`) } }))
+      .toMatchObject({ processed: 0, released: 0, failed: 1 })
+    expect(events).toEqual([
+      'failed:[Holo Queue] Queue job "exhausted" has been attempted too many times.',
+      'worker-failed:2/1',
+    ])
+    expect(await harness.readJobRows()).toEqual([])
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: job.id, exception: expect.stringContaining('attempted too many times') })])
   })
 
   it.each([{ queueNames: [' '] }, { sleep: -1 }, { maxJobs: 0 }, { maxTime: 0 }])('rejects invalid worker options %j before reserving a real job', async options => {

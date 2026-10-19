@@ -427,6 +427,7 @@ export interface QueueAsyncDriver extends QueueDriverBase {
   acknowledge(job: QueueReservedJob): Promise<void>
   release(job: QueueReservedJob, options?: QueueReleaseOptions): Promise<void>
   delete(job: QueueReservedJob): Promise<void>
+  abandon?(job: QueueReservedJob): void
 }
 
 export interface QueueSyncDriver extends QueueDriverBase {
