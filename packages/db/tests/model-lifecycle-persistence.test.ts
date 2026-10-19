@@ -328,6 +328,66 @@ describe('model lifecycle persistence', () => {
     expect(Array.from(stored.get('payload') as Uint8Array)).toEqual([9, 2, 3, 4])
   })
 
+  it('runs cancellable handlers on mutated values so an alias cannot pass a guard on create or update', async () => {
+    const db = await openDatabase()
+    const members = defineTable('members', { id: column.id(), name: column.string(), role: column.string() })
+    await createTestTable(db, members)
+    const rejectAdmin = (entity: unknown) => {
+      if (asTestEntity(entity).get('role') === 'admin') throw new Error('admin is reserved')
+    }
+    const Member = defineModelFromTable(members, {
+      fillable: ['name', 'role'],
+      mutators: { role: value => String(value).trim().toLowerCase() },
+      events: { creating: [rejectAdmin], updating: [rejectAdmin] },
+    })
+
+    await expect(Member.create({ name: 'Ada', role: ' ADMIN ' })).rejects.toThrow('admin is reserved')
+
+    const member = await Member.create({ name: 'Grace', role: 'member' })
+    member.set('role', ' ADMIN ')
+    await expect(member.save()).rejects.toThrow('admin is reserved')
+
+    expect(await db.table('members').get()).toMatchObject([{ name: 'Grace', role: 'member' }])
+  })
+
+  it('keeps guards on logger callbacks of seeders started with call()', async () => {
+    const Ledger = defineModelFromTable(ledgers)
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({
+      adapter,
+      dialect: createDialect('sqlite'),
+      logger: {
+        onSeederStart: log => {
+          if (log.seederName !== 'NestedChildSeeder') return undefined
+          return Ledger.create({ code: 'logged', name: 'Logged' }).then(() => undefined)
+        },
+      },
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createTestTable(db, ledgers)
+
+    const seeders = createSeederService(db, [
+      defineSeeder({
+        name: 'NestedChildSeeder',
+        async run() {
+          await Ledger.create({ code: 'child', name: 'Child' })
+        },
+      }),
+      defineSeeder({
+        name: 'NestedParentSeeder',
+        async run({ call }) {
+          await call('NestedChildSeeder')
+        },
+      }),
+    ])
+
+    await expect(seeders.seed({ only: ['NestedParentSeeder'] })).rejects.toThrow(
+      'Column "code" is not writable on model "Ledger".',
+    )
+    expect(await db.table('ledgers').get()).toEqual([])
+  })
+
   it('runs seeders without mass-assignment guards', async () => {
     const db = await openDatabase()
     await createTestTable(db, ledgers)

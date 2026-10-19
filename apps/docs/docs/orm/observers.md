@@ -166,7 +166,7 @@ try {
 ```
 
 ::: warning
-Attributes you change inside `saving`, `creating`, or `updating` are written. For example, a `creating` handler can set a slug before the insert. Mutators still run once per write, on the value that reaches the database.
+Attributes you change inside `saving`, `creating`, or `updating` are written. For example, a `creating` handler can set a slug before the insert. Mutators run before these handlers, so a handler sees the normalized value: a `role` mutator that lowercases the input means a `creating` check for `admin` also rejects `' ADMIN '`. A value your handler changes is run through its mutator after the handler, so each write runs a mutator once.
 :::
 
 ## Events and transactions
