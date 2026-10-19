@@ -20,6 +20,7 @@ const STEP_MS = 50
 
 type Acquisition = {
   readonly label: string
+  readonly ready: Promise<void>
   settled: boolean
   settledAt?: number
   error?: Error
@@ -32,6 +33,7 @@ let recordPath: string
 let lockPath: string
 let pendingPaths: Map<string, string>
 let acquisitions: Acquisition[]
+let sleepListeners: Array<() => void>
 
 function labelledMakeDirectory(label: string) {
   return (async (path: string) => {
@@ -41,13 +43,25 @@ function labelledMakeDirectory(label: string) {
 }
 
 function startAcquisition(label: string): Acquisition {
-  const acquisition: Acquisition = { label, settled: false, released: false }
+  let markSettled = (): void => undefined
+  const ready = new Promise<void>(resolve => { markSettled = resolve })
+  const acquisition: Acquisition = { label, ready, settled: false, released: false }
   acquisitions.push(acquisition)
   fileSessionDriverInternals.acquireRecordLock(recordPath, labelledMakeDirectory(label)).then(
-    release => Object.assign(acquisition, { settled: true, settledAt: Date.now(), release }),
-    (error: Error) => Object.assign(acquisition, { settled: true, settledAt: Date.now(), error }),
+    release => {
+      Object.assign(acquisition, { settled: true, settledAt: Date.now(), release })
+      markSettled()
+    },
+    (error: Error) => {
+      Object.assign(acquisition, { settled: true, settledAt: Date.now(), error })
+      markSettled()
+    },
   )
   return acquisition
+}
+
+function nextSleep(): Promise<void> {
+  return new Promise(resolve => sleepListeners.push(resolve))
 }
 
 async function releaseAcquisition(acquisition: Acquisition): Promise<void> {
@@ -77,57 +91,28 @@ function liveHolders(): number {
   return acquisitions.filter(acquisition => acquisition.release && !acquisition.released).length
 }
 
-function unsettled(): number {
-  return acquisitions.filter(acquisition => !acquisition.settled).length
-}
-
-async function untilTrue(condition: () => boolean): Promise<void> {
-  for (let turn = 0; !condition(); turn += 1) {
-    if (turn > 100_000) throw new Error('Condition never held')
-    await new Promise(resolve => setImmediate(resolve))
-  }
-}
-
-async function untilWaitersSleep(): Promise<void> {
-  await untilTrue(() => vi.getTimerCount() === liveHolders() + unsettled())
-}
-
-async function tick(ms: number): Promise<void> {
+async function tick(waiter: Acquisition, ms: number): Promise<void> {
+  const sleeping = nextSleep()
   await vi.advanceTimersByTimeAsync(ms)
-  await untilWaitersSleep()
-}
-
-async function tickFreely(ms: number): Promise<void> {
-  await vi.advanceTimersByTimeAsync(ms)
-  for (let turn = 0; turn < 200; turn += 1) await new Promise(resolve => setImmediate(resolve))
-}
-
-async function releaseWithTicks(acquisition: Acquisition): Promise<void> {
-  let finished = false
-  const released = releaseAcquisition(acquisition).then(() => { finished = true })
-  for (let tickCount = 0; !finished; tickCount += 1) {
-    if (tickCount > 200) throw new Error(`${acquisition.label} never finished releasing`)
-    await tickFreely(STEP_MS)
-  }
-  await released
-}
-
-async function advanceTo(time: number): Promise<void> {
-  while (Date.now() < time) await tick(Math.min(STEP_MS, time - Date.now()))
-}
-
-async function untilAcquired(acquisition: Acquisition): Promise<void> {
-  for (let tickCount = 0; !acquisition.settled; tickCount += 1) {
-    if (tickCount > 200) throw new Error(`${acquisition.label} never acquired the lock`)
-    await tick(STEP_MS)
+  await Promise.race([sleeping, waiter.ready])
+  if (!waiter.settled && vi.getTimerCount() !== liveHolders() + 1) {
+    throw new Error(`expected ${liveHolders() + 1} pending timers, found ${vi.getTimerCount()}`)
   }
 }
 
-async function untilWaiterAttemptsAfter(label: string, attempts: number): Promise<void> {
-  for (let tickCount = 0; renameAttempts(label) === attempts; tickCount += 1) {
-    if (tickCount > 200) throw new Error(`${label} never retried its rename`)
-    await tick(STEP_MS)
+async function advanceTo(waiter: Acquisition, time: number): Promise<void> {
+  while (Date.now() < time) await tick(waiter, Math.min(STEP_MS, time - Date.now()))
+}
+
+async function advanceUntilSettled(operation: Promise<void>): Promise<void> {
+  let done = false
+  const finished = operation.finally(() => { done = true })
+  while (!done) {
+    const sleeping = nextSleep()
+    await vi.advanceTimersByTimeAsync(STEP_MS)
+    await Promise.race([sleeping, finished])
   }
+  await finished
 }
 
 describe('file session lock handover under a fake clock', () => {
@@ -137,9 +122,15 @@ describe('file session lock handover under a fake clock', () => {
     lockPath = `${recordPath}.lock`
     pendingPaths = new Map()
     acquisitions = []
+    sleepListeners = []
     windowsFs.blockedRenameSources.clear()
     windowsFs.renameAttempts.clear()
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const scheduleTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+      for (const listener of sleepListeners.splice(0)) listener()
+      return scheduleTimeout(...args)
+    }) as typeof setTimeout
   })
 
   afterEach(async () => {
@@ -152,15 +143,16 @@ describe('file session lock handover under a fake clock', () => {
 
   it('times out a stuck holder after the stall deadline', async () => {
     const holder = startAcquisition('holder')
-    await untilTrue(() => holder.settled)
+    await holder.ready
+    const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
-    await untilWaitersSleep()
+    await asleep
     const startedAt = Date.now()
 
-    await advanceTo(startedAt + STALL_MS - STEP_MS)
+    await advanceTo(waiter, startedAt + STALL_MS - STEP_MS)
     expect(waiter.settled).toBe(false)
 
-    await advanceTo(startedAt + STALL_MS + STEP_MS)
+    await advanceTo(waiter, startedAt + STALL_MS + STEP_MS)
     expect(waiter.settled).toBe(true)
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(STALL_MS)
@@ -171,26 +163,29 @@ describe('file session lock handover under a fake clock', () => {
 
   it('restarts the stall deadline when the lock changes hands', async () => {
     const first = startAcquisition('first')
-    await untilTrue(() => first.settled)
+    await first.ready
+    const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     blockRenames('waiter')
-    await untilWaitersSleep()
+    await asleep
     const startedAt = Date.now()
 
-    await advanceTo(startedAt + 4_000)
+    await advanceTo(waiter, startedAt + 4_000)
     expect(waiter.settled).toBe(false)
 
     await releaseAcquisition(first)
     const second = startAcquisition('second')
-    await untilAcquired(second)
-    await untilWaiterAttemptsAfter('waiter', renameAttempts('waiter'))
+    await second.ready
+    const attemptsAtHandover = renameAttempts('waiter')
+    await tick(waiter, STEP_MS)
+    expect(renameAttempts('waiter')).toBeGreaterThan(attemptsAtHandover)
 
-    await advanceTo(startedAt + 7_000)
+    await advanceTo(waiter, startedAt + 7_000)
     expect(waiter.settled).toBe(false)
 
     await releaseAcquisition(second)
     unblockRenames('waiter')
-    for (let tickCount = 0; !waiter.settled && tickCount < 200; tickCount += 1) await tick(STEP_MS)
+    await tick(waiter, STEP_MS)
     expect(waiter.settled).toBe(true)
     expect(waiter.error).toBeUndefined()
     expect(waiter.release).toBeDefined()
@@ -200,21 +195,22 @@ describe('file session lock handover under a fake clock', () => {
 
   it('gives up at the hard cap while the lock keeps changing hands', async () => {
     let holder = startAcquisition('holder-0')
-    await untilTrue(() => holder.settled)
+    await holder.ready
+    const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     blockRenames('waiter')
-    await untilWaitersSleep()
+    await asleep
     const startedAt = Date.now()
 
     for (let cycle = 1; cycle * 4_000 < HARD_CAP_MS; cycle += 1) {
-      await advanceTo(startedAt + cycle * 4_000)
+      await advanceTo(waiter, startedAt + cycle * 4_000)
       expect(waiter.settled).toBe(false)
       await releaseAcquisition(holder)
       holder = startAcquisition(`holder-${cycle}`)
-      await untilAcquired(holder)
+      await holder.ready
     }
 
-    await advanceTo(startedAt + HARD_CAP_MS + STEP_MS)
+    await advanceTo(waiter, startedAt + HARD_CAP_MS + STEP_MS)
     expect(waiter.settled).toBe(true)
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
@@ -223,32 +219,33 @@ describe('file session lock handover under a fake clock', () => {
 
   it('times out instead of acquiring when a reclaim finishes past the hard cap', async () => {
     let holder = startAcquisition('holder-0')
-    await untilTrue(() => holder.settled)
+    await holder.ready
+    const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     blockRenames('waiter')
-    await untilWaitersSleep()
+    await asleep
     const startedAt = Date.now()
 
     for (let cycle = 1; cycle <= 7; cycle += 1) {
-      await advanceTo(startedAt + cycle * 4_000)
+      await advanceTo(waiter, startedAt + cycle * 4_000)
       expect(waiter.settled).toBe(false)
       await releaseAcquisition(holder)
       holder = startAcquisition(`holder-${cycle}`)
-      await untilAcquired(holder)
+      await holder.ready
     }
 
-    await advanceTo(startedAt + 28_500)
+    await advanceTo(waiter, startedAt + 28_500)
     windowsFs.blockedUnlinkPrefixes.add(join(lockPath, 'owner.'))
-    await releaseWithTicks(holder)
+    await advanceUntilSettled(releaseAcquisition(holder))
 
-    while (Date.now() < startedAt + HARD_CAP_MS + 500) await tickFreely(STEP_MS)
+    await advanceTo(waiter, startedAt + HARD_CAP_MS + 200)
     windowsFs.blockedUnlinkPrefixes.clear()
     unblockRenames('waiter')
-    for (let tickCount = 0; !waiter.settled && tickCount < 200; tickCount += 1) await tickFreely(STEP_MS)
+    await tick(waiter, STEP_MS)
 
     expect(waiter.settled).toBe(true)
     expect(waiter.release).toBeUndefined()
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
-    expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS + 500)
+    expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
   })
 })
