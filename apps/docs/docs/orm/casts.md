@@ -276,7 +276,7 @@ export default defineModel('users', {
 })
 ```
 
-Mutators run on `create()`, `save()`, `update()`, and query builder `update()` calls made through the model.
+Mutators run on `create()`, `save()`, `update()`, and query builder `update()` calls made through the model. Each write runs a mutator once, including a `make()` followed by `save()`, and factory-made records.
 
 ## Accessors
 

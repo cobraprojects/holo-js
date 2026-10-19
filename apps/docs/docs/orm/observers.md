@@ -166,7 +166,7 @@ try {
 ```
 
 ::: warning
-Changing attributes inside `saving`, `creating`, or `updating` does not change what is written. Holo builds the insert or update before these events fire. To change values on the way in, use a [mutator](/orm/casts#mutators) instead.
+Attributes you change inside `saving`, `creating`, or `updating` are written. For example, a `creating` handler can set a slug before the insert. Mutators still run once per write, on the value that reaches the database.
 :::
 
 ## Events and transactions

@@ -70,6 +70,35 @@ export function valuesAreEqual(left: unknown, right: unknown): boolean {
   return false
 }
 
+export function snapshotAttributes<TAttributes extends object>(attributes: TAttributes): TAttributes {
+  return Object.fromEntries(Object.entries(attributes).map(([key, value]) => [key, snapshotAttributeValue(value)])) as TAttributes
+}
+
+function snapshotAttributeValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return new Date(value.getTime())
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(snapshotAttributeValue)
+  }
+
+  if (value && typeof value === 'object' && isPlainObject(value)) {
+    const copy = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>
+    for (const [key, nested] of Object.entries(value)) {
+      Object.defineProperty(copy, key, { value: snapshotAttributeValue(nested), enumerable: true, writable: true, configurable: true })
+    }
+    return copy
+  }
+
+  return value
+}
+
+function isPlainObject(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
 type EntityPropertyHost<TRelations extends RelationMap> = {
   hasRelation(name: string): boolean
   getRelation<TRelation = unknown>(name: string): TRelation

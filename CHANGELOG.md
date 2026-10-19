@@ -48,6 +48,8 @@
 - S3 disks store files under their exact names and encode them once in request URLs, `url()` and `temporaryUrl()`, so files with spaces, non-ASCII characters or `%` are reachable. Low-level S3 `getKeys()` returns `:`-separated keys with URL-encoded names, like local disks. Local `path()` returns the stored file's URL-encoded name. See [S3 file names](apps/docs/docs/storage/s3.md#file-names).
 - S3 requests time out after 30 seconds without a response, with 1 extra second per 128 KiB uploaded, and downloads fail after 30 seconds without data. `writeStream()` buffers one multipart part of at most 64 MiB, which limits one stream to about 620 GiB. `clear()` deletes one 1,000-key listing page at a time with at most 8 concurrent deletes. See [S3 timeouts](apps/docs/docs/storage/s3.md#timeouts).
 
+- Persist attribute changes made in `creating`, `updating`, and `saving` handlers, and apply mutators once per write, including `make().save()` and factories. Models loaded with `withCount()` or `withExists()` save without writing the computed values, and in-place changes to JSON and date attributes are detected and saved. Factories and `holo seed` run seeders without mass-assignment guards, as Laravel does. See [lifecycle, factories, and seeders](apps/docs/docs/getting-started/upgrading.md#lifecycle-factories-and-seeders).
+
 ### Compatibility and upgrade requirements
 
 - **Run `npx holo config:cache` again after upgrading** if you use the config cache. 0.3.x caches are ignored, and the app loads `config/*.ts` until the cache is rebuilt.

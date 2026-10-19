@@ -320,7 +320,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
     return new Entity(
       this,
-      this.sanitizeWritePayload(applyPendingModelAttributes(this.definition, values), 'create'),
+      this.assertMassAssignable(applyPendingModelAttributes(this.definition, values)),
       false,
     )
   }
@@ -1596,21 +1596,16 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   private async createRecord(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+    return this.insertEntity(new Entity(this, values, false))
+  }
+
+  private async insertEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
     return this.runWriteUnit(async () => {
-      const payload = this.sanitizeWritePayload(
-        this.applyTimestampDefaults(
-          applyGeneratedUniqueIds(
-            this.definition,
-            applyPendingModelAttributes(this.definition, values),
-          ),
-          'create',
-        ),
-        'create',
-        false,
-      )
-      const entity = new Entity(this, payload, false)
+      entity.forceFill(applyGeneratedUniqueIds(this.definition, applyPendingModelAttributes(this.definition, entity.toAttributes())))
       await this.dispatchCancelableEvent('saving', entity)
       await this.dispatchCancelableEvent('creating', entity)
+      entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
+      const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false)
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
@@ -1721,7 +1716,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
     if (!entity.exists()) {
-      return this.createRecord(entity.toAttributes())
+      return this.insertEntity(entity)
     }
 
     return this.runWriteUnit(async () => {
@@ -1731,17 +1726,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         throw new HydrationError(`Cannot persist ${this.definition.name} without a primary key value.`)
       }
 
-      const dirty = this.sanitizeWritePayload(
-        this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'),
-        'update',
-        false,
-      )
+      await this.dispatchCancelableEvent('saving', entity)
+      if (Object.keys(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update')).length === 0) {
+        return entity
+      }
+
+      await this.dispatchCancelableEvent('updating', entity)
+      entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
+      const dirty = this.sanitizeWritePayload(entity.getDirty(), 'update', false)
       if (Object.keys(dirty).length === 0) {
         return entity
       }
 
-      await this.dispatchCancelableEvent('saving', entity)
-      await this.dispatchCancelableEvent('updating', entity)
       await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
       const updated = new Entity<TTable>(this, { ...entity.toAttributes(), ...this.normalizeFromStorage(dirty) }, true)
       updated.syncOriginal()

@@ -1,6 +1,6 @@
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DatabaseError, SecurityError } from '../core/errors'
-import { withoutModelEvents } from '../model/eventState'
+import { withoutModelEvents, withoutModelGuards } from '../model/eventState'
 import { createSchemaService } from '../schema/SchemaService'
 import { defineSeeder } from './defineSeeder'
 import type { SeederStartLog } from '../core/types'
@@ -43,11 +43,11 @@ export class SeederService {
   }
 
   async seed(options: SeedOptions = {}): Promise<SeederDefinition[]> {
-    return this.runSeeders(this.selectSeeders(options.only), {
+    return withoutModelGuards(() => this.runSeeders(this.selectSeeders(options.only), {
       quietly: options.quietly === true,
       force: options.force === true,
       environment: options.environment,
-    })
+    }))
   }
 
   private selectSeeders(only?: readonly string[]): readonly SeederDefinition[] {
