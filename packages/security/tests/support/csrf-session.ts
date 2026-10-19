@@ -31,7 +31,10 @@ export function memoryCsrfSessions(initial: Readonly<Record<string, string>> = {
       const id = existing && tokens.has(existing) ? existing : `guest-${++created}`
       tokens.set(id, token)
       writes.push(id)
-      return id === existing ? [] : [`${TEST_SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax`]
+      return {
+        token,
+        cookies: id === existing ? [] : [`${TEST_SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax`],
+      }
     },
   }
 }

@@ -1,4 +1,5 @@
 import { connectionAsyncContext, DB, TableQueryBuilder, type DatabaseContext } from '@holo-js/db'
+import { serializeAuthTimestamp } from './authPersistence'
 import { normalizeSessionRecordFromRow, serializeSessionRecordForRow } from './recordPersistence'
 
 const SESSION_FLASH_ENVELOPE_MARKER = 'holo-session-flash-v1'
@@ -18,6 +19,11 @@ export interface CoreSessionStoreTakeResult {
   readonly value?: unknown
 }
 
+export interface CoreSessionStoreSetDataResult {
+  readonly found: boolean
+  readonly value?: unknown
+}
+
 export interface CoreDatabaseSessionAdapter {
   read(sessionId: string): Promise<CoreSessionRecord | null>
   write(record: CoreSessionRecord): Promise<void>
@@ -25,6 +31,8 @@ export interface CoreDatabaseSessionAdapter {
   rotate(previousSessionId: string, record: CoreSessionRecord): Promise<void>
   flash(sessionId: string, key: string, value: unknown): Promise<void>
   take(sessionId: string, key: string): Promise<CoreSessionStoreTakeResult>
+  setDataIfAbsent(sessionId: string, key: string, value: unknown): Promise<CoreSessionStoreSetDataResult>
+  sweepExpired(now: Date): Promise<number>
 }
 
 type StoredSessionData = {
@@ -184,6 +192,33 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         await new TableQueryBuilder(tableName, transaction)
           .where('id', sessionId)
           .update({ data: serializeStoredSessionData(stored) })
+      })
+    },
+    async sweepExpired(now: Date): Promise<number> {
+      return inSessionWriteTransaction(connectionName, async (transaction) => {
+        const result = await new TableQueryBuilder(tableName, transaction)
+          .where('expires_at', '<=', serializeAuthTimestamp(now, transaction.getDialect().name))
+          .delete()
+        return result.affectedRows ?? 0
+      })
+    },
+    async setDataIfAbsent(sessionId: string, key: string, value: unknown): Promise<CoreSessionStoreSetDataResult> {
+      return inSessionWriteTransaction(connectionName, async (transaction) => {
+        const row = await createSessionQuery(transaction, tableName, sessionId, true)
+          .first<Record<string, unknown>>()
+        if (!row || isExpiredSessionRow(row)) {
+          if (row) await new TableQueryBuilder(tableName, transaction).where('id', sessionId).delete()
+          return { found: false }
+        }
+
+        const stored = splitStoredSessionData(row.data)
+        if (Object.hasOwn(stored.publicData, key)) return { found: true, value: stored.publicData[key] }
+
+        const publicData = Object.freeze({ ...stored.publicData, [key]: value })
+        await new TableQueryBuilder(tableName, transaction)
+          .where('id', sessionId)
+          .update({ data: serializeStoredSessionData({ publicData, flashEntries: stored.flashEntries }) })
+        return { found: true, value }
       })
     },
     async take(sessionId: string, key: string): Promise<CoreSessionStoreTakeResult> {

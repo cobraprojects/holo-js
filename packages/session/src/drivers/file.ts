@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir as defaultMkdir, open, readFile, readdir, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { constants as fsConstants, type Dir } from 'node:fs'
+import { mkdir as defaultMkdir, lstat, open, opendir, readFile, readdir, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import type { SessionRecord, SessionStore } from '../contracts'
 
 const RECORD_LOCK_STALE_MS = 10_000
+const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
 type MakeDirectory = typeof defaultMkdir
@@ -172,8 +174,17 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
 }
 
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
+  const release = await acquireRecordLockBefore(recordPath, makeDirectory, Date.now() + 5_000)
+  if (!release) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+  return release
+}
+
+async function acquireRecordLockBefore(
+  recordPath: string,
+  makeDirectory: MakeDirectory,
+  deadline: number | undefined,
+): Promise<(() => Promise<void>) | undefined> {
   const lockPath = `${recordPath}.lock`
-  const deadline = Date.now() + 5_000
   const owner = Object.freeze({ host: hostname(), pid: process.pid, processToken: PROCESS_INSTANCE_TOKEN, token: randomUUID() })
   const pendingPath = `${lockPath}.${owner.token}.pending`
   await makeDirectory(pendingPath)
@@ -192,6 +203,11 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
         if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error
         const reclaimable = await reclaimableRecordLock(lockPath)
         if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
+        if (deadline === undefined) {
+          await ownerHandle.close()
+          await rm(pendingPath, { recursive: true, force: true })
+          return undefined
+        }
         if (Date.now() >= deadline) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
         await sleep(5)
       }
@@ -290,7 +306,80 @@ async function acquireRecordLocks(
   }
 }
 
+async function readRecordWithoutFollowingLinks(recordPath: string): Promise<SessionRecord | null> {
+  const handle = await open(recordPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    return deserializeRecord(await handle.readFile({ encoding: 'utf8' }))
+  } catch {
+    return null
+  } finally {
+    await handle.close()
+  }
+}
+
+function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory): (now: Date) => Promise<number> {
+  let directory: Dir | undefined
+  let sweeping = false
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function closeDirectory(): Promise<void> {
+    const current = directory
+    directory = undefined
+    await current?.close()
+  }
+
+  return async (now) => {
+    if (sweeping) return 0
+    sweeping = true
+    clearTimeout(idleTimer)
+    try {
+      directory ??= await opendir(root)
+      let removed = 0
+      for (let inspected = 0; inspected < SWEEP_ENTRY_LIMIT; inspected += 1) {
+        const entry = await directory.read()
+        if (!entry) {
+          await closeDirectory()
+          break
+        }
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+        const recordPath = join(root, entry.name)
+        try {
+          if (!(await lstat(recordPath)).isFile()) continue
+          const candidate = await readRecordWithoutFollowingLinks(recordPath)
+          if (!candidate || candidate.expiresAt.getTime() > now.getTime()) continue
+
+          const release = await acquireRecordLockBefore(recordPath, makeDirectory, undefined)
+          if (!release) continue
+          try {
+            const current = await readRecordWithoutFollowingLinks(recordPath)
+            if (current && current.expiresAt.getTime() <= now.getTime()) {
+              await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
+              removed += 1
+            }
+          } finally {
+            await release()
+          }
+        } catch (error) {
+          if (!isMissingFileError(error) && (error as NodeJS.ErrnoException).code !== 'ELOOP') throw error
+        }
+      }
+      return removed
+    } catch (error) {
+      await closeDirectory()
+      if (isMissingFileError(error)) return 0
+      throw error
+    } finally {
+      sweeping = false
+      if (directory) {
+        idleTimer = setTimeout(() => { void closeDirectory().catch(() => undefined) }, 60_000)
+        idleTimer.unref()
+      }
+    }
+  }
+}
+
 function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: MakeDirectory): SessionStore {
+  const sweepExpired = createExpiredSessionSweeper(root, makeDirectory)
   return {
     async read(sessionId) {
       try {
@@ -364,6 +453,24 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
         await release()
       }
     },
+    async setDataIfAbsent(sessionId, key, value) {
+      await makeDirectory(root, { recursive: true, mode: 0o700 })
+      const recordPath = getRecordPath(root, sessionId)
+      const release = await acquireRecordLock(recordPath, makeDirectory)
+      try {
+        const record = await readActiveRecord(recordPath)
+        if (!record) {
+          await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
+          return { found: false }
+        }
+        if (Object.hasOwn(record.data, key)) return { found: true, value: record.data[key] }
+        await writePathAtomically(recordPath, serializeRecord({ ...record, data: { ...record.data, [key]: value } }))
+        return { found: true, value }
+      } finally {
+        await release()
+      }
+    },
+    sweepExpired,
     async take(sessionId, key) {
       await makeDirectory(root, { recursive: true, mode: 0o700 })
       const recordPath = getRecordPath(root, sessionId)

@@ -69,7 +69,7 @@ describe('@holo-js/forms client', () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({ csrf: { enabled: true } }),
       csrfSigningKey: 'native-form-bootstrap-key',
-      csrfSession: { read: async () => 'session-token', write: async () => [] },
+      csrfSession: { read: async () => 'session-token', write: async (_request: Request, token: string) => ({ token, cookies: [] }) },
     })
     onTestFinished(resetSecurityRuntime)
     const token = await csrf.token(new Request('http://localhost/enquiries'))
@@ -89,7 +89,7 @@ describe('@holo-js/forms client', () => {
   })
 
   it('sends the bootstrapped CSRF token in the configured header', async () => {
-    const browserGlobal = globalThis as typeof globalThis & { document?: { cookie?: string } }
+    const browserGlobal: { document?: { cookie?: string } } = globalThis
     const originalDocument = browserGlobal.document
     browserGlobal.document = {
       cookie: `HOLO-CSRF-CONFIG=${encodeURIComponent(JSON.stringify({ csrf: { field: '_csrf', header: 'X-App-CSRF', cookie: 'app-xsrf' } }))}`,
@@ -113,7 +113,7 @@ describe('@holo-js/forms client', () => {
   })
 
   it('sends only the bootstrapped token when the browser also holds a CSRF cookie', async () => {
-    const browserGlobal = globalThis as typeof globalThis & { document?: { cookie?: string } }
+    const browserGlobal: { document?: { cookie?: string } } = globalThis
     const originalDocument = browserGlobal.document
     browserGlobal.document = { cookie: 'XSRF-TOKEN=stale-cookie-token' }
     onTestFinished(() => {

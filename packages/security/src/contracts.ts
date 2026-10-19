@@ -35,7 +35,10 @@ export type {
 
 export interface SecurityCsrfSessionAccessor {
   read(request: Request): Promise<string | undefined>
-  write(request: Request, token: string): Promise<readonly string[]>
+  write(request: Request, token: string): Promise<{
+    readonly token: string
+    readonly cookies: readonly string[]
+  }>
 }
 
 export interface SecurityRuntimeBindings {

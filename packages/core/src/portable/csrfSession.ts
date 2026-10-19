@@ -38,12 +38,14 @@ export function createCsrfSessionAccessor(
       const session = sessionModule.getSessionRuntime()
       const record = await resolveRecord(request)
       if (record) {
-        await session.write({ ...record, data: { ...record.data, [CSRF_SESSION_KEY]: token } })
-        return []
+        const stored = await session.setDataIfAbsent(record.id, CSRF_SESSION_KEY, token, { store: record.store })
+        if (stored.found) {
+          return { token: typeof stored.value === 'string' && stored.value ? stored.value : token, cookies: [] }
+        }
       }
 
       const created = await session.create({ data: { [CSRF_SESSION_KEY]: token } })
-      return [session.sessionCookie(created.id)]
+      return { token, cookies: [session.sessionCookie(created.id)] }
     },
   })
 }

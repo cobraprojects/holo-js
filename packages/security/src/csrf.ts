@@ -175,10 +175,10 @@ async function ensureSessionToken(request: Request): Promise<{
   }
 
   const token = requestTokenCache.get(request) ?? createCsrfToken()
-  const sessionCookies = await csrfSession().write(request, token)
-  requestTokenCache.set(request, token)
-  persistedTokens.set(request, token)
-  return { token, sessionCookies }
+  const written = await csrfSession().write(request, token)
+  requestTokenCache.set(request, written.token)
+  persistedTokens.set(request, written.token)
+  return { token: written.token, sessionCookies: written.cookies }
 }
 
 function resolveShouldProtect(request: Request, options: SecurityProtectOptions = {}): boolean {
