@@ -146,6 +146,19 @@ describe('@holo-js/storage-s3', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('rejects keys whose encoded segments decode to path separators or period-only segments', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const driver = createDriver()
+
+    await expect(driver.setItemRaw('tenant:..%2Fadmin.txt', 'x'))
+      .rejects.toThrow('S3 object key segments cannot contain path separators')
+    await expect(driver.removeItem('tenant:%2E%2E:admin.txt'))
+      .rejects.toThrow('S3 object keys cannot contain period-only path segments')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('does not clear listed keys with period-only object key segments', async () => {
     const listResponse = [
       '<?xml version="1.0" encoding="UTF-8"?>',
