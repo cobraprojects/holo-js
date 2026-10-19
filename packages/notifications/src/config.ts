@@ -1,9 +1,13 @@
+import { normalizeNotificationBackoff, normalizeNotificationTries } from './queueOptions'
+
 export interface HoloNotificationsConfig {
   readonly table?: string
   readonly queue?: {
     readonly connection?: string
     readonly queue?: string
     readonly afterCommit?: boolean
+    readonly tries?: number
+    readonly backoff?: number | readonly number[]
   }
 }
 
@@ -19,6 +23,8 @@ export interface NormalizedHoloNotificationsConfig {
     readonly connection?: string
     readonly queue?: string
     readonly afterCommit: boolean
+    readonly tries?: number
+    readonly backoff?: number | readonly number[]
   }
 }
 
@@ -30,6 +36,8 @@ export const holoNotificationsDefaults: Readonly<NormalizedHoloNotificationsConf
     connection: undefined,
     queue: undefined,
     afterCommit: false,
+    tries: undefined,
+    backoff: undefined,
   }),
 })
 
@@ -61,6 +69,8 @@ export function normalizeNotificationsConfig(
       connection: normalizeOptionalString(config.queue?.connection, 'Notifications queue connection'),
       queue: normalizeOptionalString(config.queue?.queue, 'Notifications queue name'),
       afterCommit: config.queue?.afterCommit === true,
+      tries: normalizeNotificationTries(config.queue?.tries, 'Notifications queue tries'),
+      backoff: normalizeNotificationBackoff(config.queue?.backoff, 'Notifications queue backoff'),
     }),
   })
 }

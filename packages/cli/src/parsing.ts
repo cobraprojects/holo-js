@@ -538,6 +538,32 @@ export function resolveBooleanFlag(
   return value === true
 }
 
+export function parseBackoffFlag(
+  flags: Readonly<Record<string, CommandFlagValue>>,
+): number | readonly number[] | undefined {
+  if (typeof flags.backoff === 'undefined') {
+    return undefined
+  }
+
+  const raw = resolveStringFlag(flags, 'backoff')
+  if (typeof raw !== 'string') {
+    throw new Error('Flag "--backoff" requires a value.')
+  }
+
+  const entries = raw.split(',').map(entry => entry.trim())
+  if (!entries.every(entry => /^\d+$/.test(entry))) {
+    throw new Error('Flag "--backoff" must be a non-negative integer or a comma-separated list of them.')
+  }
+
+  const values = entries.map(entry => Number.parseInt(entry, 10))
+  const [first] = values
+  return values.length === 1 && typeof first === 'number' ? first : values
+}
+
+export function formatBackoffFlag(backoff: number | readonly number[]): string {
+  return Array.isArray(backoff) ? backoff.join(',') : String(backoff)
+}
+
 export function parseNumberFlag(
   flags: Readonly<Record<string, CommandFlagValue>>,
   name: string,

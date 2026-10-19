@@ -107,6 +107,21 @@ await sendMail(mail).onQueue('mail').afterCommit()
 
 You can also set `afterCommit: true` in any `queue` option above.
 
+## Retry a failed queued mail
+
+Set `tries` to the total number of attempts, and `backoff` to the seconds to wait before each retry:
+
+```ts
+const mail = defineMail({
+  to: 'ava@example.com',
+  subject: 'Your invoice',
+  markdown: '# Invoice',
+  queue: { queue: 'mail', tries: 3, backoff: [10, 60] },
+})
+```
+
+The first retry waits 10 seconds and the second waits 60. A single number such as `backoff: 30` waits that long before every retry. If `backoff` is not set, the worker's `--backoff` option applies. Mail that still fails after its last attempt goes to [failed jobs](/queue/failed-jobs).
+
 ## What the worker receives
 
 Holo renders the mail before it goes on the queue. The worker sends the stored subject, HTML, text, recipients, and attachments; it doesn't call your mail function again. Changes you deploy to a mail file only affect mail queued after the deploy.
@@ -123,6 +138,8 @@ These keys work in `defineMail({ queue })`, on a mailer's `queue`, and on the to
 | `connection` | `string` | Connection name from `config/queue.ts`. |
 | `queue` | `string` | Queue name on that connection. |
 | `afterCommit` | `boolean` | Wait for the current transaction to commit. |
+| `tries` | `number` | Total attempts before the mail fails. Must be 1 or more. Defaults to 1. |
+| `backoff` | `number` or `number[]` | Seconds to wait before each retry. Must be 0 or more. |
 
 ## Next steps
 

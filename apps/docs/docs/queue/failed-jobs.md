@@ -50,7 +50,7 @@ A job is saved to the table when, on a worker:
 
 - it throws on its last attempt (see `tries` in [Writing jobs](/queue/jobs#retries-and-backoff))
 - it calls `context.fail(error)`
-- it runs longer than its `timeout`
+- it runs longer than its `timeout` and has `failOnTimeout` set; otherwise a timed-out run is retried like an interrupted one
 - a worker stopped while running it and it has no tries left (see [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly))
 - its job name isn't registered in the app that runs the worker
 
