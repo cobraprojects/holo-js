@@ -360,6 +360,7 @@ async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: stri
 
 const requestRememberEntries = new WeakMap<object, Promise<Map<string, string>>>()
 const requestRememberHydrations = new WeakMap<object, Map<string, Promise<void>>>()
+const requestRememberRestorations = new WeakMap<object, Promise<unknown>>()
 
 function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
   const scope = authRequestScope(bindings.context)
@@ -435,7 +436,21 @@ async function guardHasSessionPayload(bindings: RuntimeBindings, guardName: stri
   return Boolean(sessionId && readSessionPayloads(await bindings.session.read(sessionId))?.[guardName])
 }
 
-async function restoreRememberedSession(
+function restoreRememberedSession(
+  bindings: RuntimeBindings,
+  guardName: string,
+  provider: string,
+  user: SerializedAuthUser,
+): Promise<void> {
+  const scope = authRequestScope(bindings.context)
+  if (!scope) return restoreRememberedSessionNow(bindings, guardName, provider, user)
+  const previous = requestRememberRestorations.get(scope) ?? Promise.resolve()
+  const restoration = previous.catch(() => undefined).then(() => restoreRememberedSessionNow(bindings, guardName, provider, user))
+  requestRememberRestorations.set(scope, restoration)
+  return restoration
+}
+
+async function restoreRememberedSessionNow(
   bindings: RuntimeBindings,
   guardName: string,
   provider: string,

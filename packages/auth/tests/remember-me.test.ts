@@ -252,6 +252,19 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
+  it('restores several guards checked concurrently into one session', async () => {
+    const browser = new Browser()
+    await browser.request(async () => {
+      await auth.loginUsingId(1, { remember: true })
+      await auth.guard('admin').loginUsingId(1, { remember: true })
+    })
+    browser.expireSession()
+
+    await expect(browser.request(() => Promise.all([auth.check(), auth.guard('admin').check()]))).resolves.toEqual([true, true])
+    browser.cookies.delete('holo_session_remember')
+    await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
+  })
+
   it('cycles the token on logout so every device loses remember-me while other active sessions remain', async () => {
     const laptop = new Browser()
     const phone = new Browser()

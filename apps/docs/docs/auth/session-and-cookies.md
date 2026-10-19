@@ -117,7 +117,7 @@ export default defineModel('users', {
 })
 ```
 
-The encrypted cookie holds the user's ID, the token, and a hash of the password hash. Holo restores the user only when the token and password still match, so changing the password ends remember me.
+The encrypted cookie holds the user's ID, the token, and a hash of the password hash. Holo restores the user only when the token and password still match, so changing the password ends remember me. Restoring starts a new session, so a flash message waiting in the expired browser session isn't shown.
 
 `logout()` clears the cookies and gives the user a new remember token. Remember-me cookies on every other device stop working, but browsers that still have an active session stay signed in until that session ends. With [multi-factor auth](/auth/multi-factor), the remember-me cookie is set only after the user passes the challenge.
 
