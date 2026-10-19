@@ -108,6 +108,11 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
   }))
 
   for (const rule of definition.rules) {
+    if (executionFor && definition.kind === 'file' && (rule.name === 'max' || rule.name === 'size')) {
+      actions.push(v.rawCheck(({ dataset }) => {
+        executionFor(dataset).sizedValues.set(rule, dataset.value)
+      }))
+    }
     switch (rule.name) {
       case 'min':
       case 'max':

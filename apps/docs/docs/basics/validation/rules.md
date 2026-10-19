@@ -393,7 +393,7 @@ npm install sharp
 
 Without it, server-side validation fails with an error asking you to install it. In the browser, `image()` checks the file's contents quickly and leaves the full decode to the server.
 
-Add `maxSize()` to image fields. Holo checks the size first: an uploaded file larger than its `max()`, `maxSize()`, or `size()` limit is never decoded and fails with the size error. If a `transform()` before `image()` returns a different file that is over the limit, that file isn't decoded either, and it fails with the image error.
+Add `maxSize()` to image fields. Holo checks the size first: an uploaded file larger than its `max()`, `maxSize()`, or `size()` limit is never decoded and fails with the size error. Size rules check the value at their own place in the chain. If a `transform()` before them returns a larger file, that file is checked against the size rule, not decoded, and fails with the size message you configured.
 
 ### `imageAspectRatio(ratios, message?)`
 

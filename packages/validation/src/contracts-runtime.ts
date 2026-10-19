@@ -10,7 +10,6 @@ import {
   type ValidationResult,
   type ValidationSchema,
   ValidationContractError,
-  type WebFileLike,
   type FieldRule,
 } from './contracts-types'
 import {
@@ -19,6 +18,7 @@ import {
   coerceShapeInput,
   createErrorBag,
   isPlainObject,
+  isWebFileLike,
   issuesToFlat,
   MalformedInputError,
   normalizeFormData,
@@ -190,7 +190,8 @@ function applyFieldChecks(
         break
       }
       case 'max': {
-        const fileSize = (shapeRuleValue as WebFileLike).size
+        const sized = execution.sizedValues.has(rule) ? execution.sizedValues.get(rule) : shapeRuleValue
+        const fileSize = isWebFileLike(sized) ? sized.size : undefined
         if (definition.kind === 'file' && typeof fileSize === 'number') {
           const rawLimit = rule.args[0] as number | string
           const limit = parseByteSize(rawLimit)
@@ -201,8 +202,10 @@ function applyFieldChecks(
         break
       }
       case 'size': {
-        if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number' && typeof rule.args[0] === 'number') {
-          if ((shapeRuleValue as WebFileLike).size !== rule.args[0]) {
+        const sized = execution.sizedValues.has(rule) ? execution.sizedValues.get(rule) : shapeRuleValue
+        const fileSize = isWebFileLike(sized) ? sized.size : undefined
+        if (definition.kind === 'file' && typeof fileSize === 'number' && typeof rule.args[0] === 'number') {
+          if (fileSize !== rule.args[0]) {
             pushIssue(issues, path, resolveRuleMessage(rule, `The selected file must be exactly ${formatByteSizeLimit(rule.args[0], rule.args[0])}.`))
           }
         }

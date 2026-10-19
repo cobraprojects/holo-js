@@ -22,6 +22,7 @@ const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 const MAX_INPUT_VARIABLES = 1_000
 const MAX_UPLOADED_FILES = 1_000
 const MAX_INPUT_NESTING_LEVEL = 64
+const TOO_DEEP = 'The request contains a field nested too deeply.'
 
 export class MalformedInputError extends Error {
   constructor(message: string) {
@@ -277,34 +278,59 @@ export function issuesToFlat(issues: ReadonlyArray<StandardSchemaV1Issue>): Reco
   return flat
 }
 
-function parsePathTokens(path: string): readonly (string | number | '')[] {
-  const pattern = /([^[.\]]+)|\[(.*?)\]/g
-  let depth = -1
-  while (pattern.exec(path) !== null) {
-    depth += 1
-    if (depth > MAX_INPUT_NESTING_LEVEL) {
-      throw new MalformedInputError('The request contains a field nested too deeply.')
-    }
+function pathToken(segment: string): string | number | '' {
+  if (segment === '') {
+    return ''
   }
 
+  if (/^\d+$/.test(segment)) {
+    return Number(segment)
+  }
+
+  if (UNSAFE_PATH_SEGMENTS.has(segment)) {
+    throw new MalformedInputError(INVALID_FIELD_NAME)
+  }
+
+  return segment
+}
+
+function parsePathTokens(path: string): readonly (string | number | '')[] {
   const tokens: (string | number | '')[] = []
+  let index = 0
 
-  for (const match of path.matchAll(pattern)) {
-    const segment = (match[1] ?? match[2])!
-    if (segment === '') {
-      tokens.push('')
+  while (index < path.length) {
+    const char = path[index]
+    if (char === '.') {
+      index += 1
       continue
     }
 
-    if (/^\d+$/.test(segment)) {
-      tokens.push(Number(segment))
+    if (tokens.length > MAX_INPUT_NESTING_LEVEL) {
+      throw new MalformedInputError(TOO_DEEP)
+    }
+
+    if (char === '[') {
+      const close = path.indexOf(']', index + 1)
+      if (close === -1) {
+        throw new MalformedInputError(INVALID_FIELD_NAME)
+      }
+
+      tokens.push(pathToken(path.slice(index + 1, close)))
+      index = close + 1
       continue
     }
 
-    if (UNSAFE_PATH_SEGMENTS.has(segment)) {
+    if (char === ']') {
       throw new MalformedInputError(INVALID_FIELD_NAME)
     }
-    tokens.push(segment)
+
+    let end = index + 1
+    while (end < path.length && path[end] !== '.' && path[end] !== '[' && path[end] !== ']') {
+      end += 1
+    }
+
+    tokens.push(pathToken(path.slice(index, end)))
+    index = end
   }
 
   return tokens

@@ -127,7 +127,7 @@ Holo limits form bodies and query strings, so a small request can't make validat
 - A request can send at most 1,000 fields, the same default as PHP's `max_input_vars`. Uploaded files don't count toward this limit; a form can separately send at most 1,000 uploaded-file entries. Repeated files count as separate entries.
 - A name can have at most 64 nesting levels after its root, matching PHP's default `max_input_nesting_level`. Both dots and brackets add levels: `address.city` and `address[city]` each have one. Holo rejects deeper names instead of silently dropping them.
 - A list index must be lower than the number of different indexes sent for that list. `tags[1]` with `tags[0]` works, but `tags[5]` on its own fails.
-- Names that use `__proto__`, `constructor`, or `prototype` fail.
+- Names that use `__proto__`, `constructor`, or `prototype` fail. So do brackets that aren't closed or are closed without an opening bracket, such as `tags[0` or `tags]`.
 - A name must keep one shape. `tags[name]` can't be combined with `tags[]`, `tags[0]`, or `tags=x`, and numbered indexes (`tags[0]`) can't be combined with `tags[]` or repeated names, because the order of the fields would change the result. Repeated names and `tags[]` can be mixed, such as `tags=a&tags[]=b`, which gives `['a', 'b']`.
 
 These requests don't throw. They fail validation with one of these errors on `_root`, so `validate()` responds with a [422](/basics/validation/errors#the-422-response):

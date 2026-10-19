@@ -517,6 +517,26 @@ describe('Validation input bounds', () => {
     }))
 
     expect(result.valid).toBe(false)
-    if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be an image.'])
+    if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be 1 KB or smaller.'])
+  })
+
+  it.each([
+    ['image before size', (large: File) => field.file().required().transform(() => large).image().maxSize('1kb', 'Too large.')],
+    ['size before image', (large: File) => field.file().required().transform(() => large).maxSize('1kb', 'Too large.').image()],
+  ])('reports the configured size message for a transformed image that is too large (%s)', async (_order, build) => {
+    const large = new File([pngPixel, new Uint8Array(4096)], 'large.png', { type: 'image/png' })
+
+    const result = await safeParse({ avatar: new File([pngPixel], 'avatar.png', { type: 'image/png' }) }, schema({ avatar: build(large) }))
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.get('avatar')).toEqual(['Too large.'])
+  })
+
+  it.each([
+    ['an unterminated bracket', `${'['.repeat(65_536)}=x`],
+    ['an unterminated bracket after a name', 'tags[name=x'],
+    ['an unbalanced closing bracket', 'tags]=x'],
+  ])('rejects a name with %s as an invalid field name', async (_label, query) => {
+    expect(await rootErrors(new URLSearchParams(query))).toEqual(['The request contains an invalid field name.'])
   })
 })

@@ -22,6 +22,7 @@ export type FieldExecution = {
   readonly customIssues: Map<FieldRule, string>
   readonly confirmationResults: Map<FieldRule, boolean>
   readonly imageVerifications: Map<Blob, Map<FieldRule, Promise<DecodedImageVerification | undefined>>>
+  readonly sizedValues: Map<FieldRule, unknown>
 }
 
 export type ExecutionNode = {
@@ -92,8 +93,7 @@ export async function executeCustomRule(field: FieldExecution, rule: FieldRule, 
       }
       verification = await pending
     }
-    if (!verification && value === field.shapeValue) return
-    verification ??= { valid: false, aspectRatios: [] }
+    if (!verification) return
     const valid = verification.valid && (validator === 'image' || verification.aspectRatios[ratioRules.indexOf(rule)] === true)
     if (!valid) {
       field.customIssues.set(rule, resolveRuleMessage(rule, validator === 'image'
@@ -170,6 +170,7 @@ export function createFieldExecutionSchema(
         customIssues: new Map(),
         confirmationResults: new Map(),
         imageVerifications: new Map(),
+        sizedValues: new Map(),
       }
       node.field = field
       return compile(field, dataset)['~run'](dataset, config)
