@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { PooledTransactionClients } from './drivers/PooledTransactionClients'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
@@ -390,4 +391,4 @@ export type {
   UpdateQueryPlan,
 } from './query'
 
-export const holoRuntimeInternals = Object.freeze({ PooledTransactionClients })
+export const holoRuntimeInternals = Object.freeze({ PooledTransactionClients, reportError })
