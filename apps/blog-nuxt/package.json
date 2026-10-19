@@ -5,7 +5,7 @@
   "packageManager": "bun@1.3.9",
   "scripts": {
     "postinstall": "nuxt prepare",
-    "prepare": "holo key:generate && holo prepare",
+    "prepare": "holo key:generate && holo install broadcast && holo prepare",
     "dev": "holo dev",
     "build": "holo build",
     "start": "holo start",

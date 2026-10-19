@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createJiti } from 'jiti'
@@ -12,7 +13,6 @@ import {
 } from './defaults'
 import {
   configEvaluationInternals,
-  resolveEnvPlaceholders,
 } from './env'
 import { composeRegisteredConfig, configRegistryInternals } from './registry'
 import type {
@@ -27,7 +27,8 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 4
+const HOLO_CONFIG_CACHE_VERSION = 6
+const CONFIG_CACHE_UNDEFINED_MARKER = '__holoUndefined'
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
@@ -94,14 +95,57 @@ async function importConfigModule(filePath: string): Promise<unknown> {
   return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${configImportNonce}`)
 }
 
-async function writeFileIfChanged(filePath: string, contents: string): Promise<void> {
+const CONFIG_CACHE_FILE_MODE = 0o600
+
+async function writeConfigCacheFile(filePath: string, contents: string): Promise<void> {
   const existing = await readFile(filePath, 'utf8').catch(() => undefined)
   if (existing === contents) {
+    await chmod(filePath, CONFIG_CACHE_FILE_MODE)
     return
   }
 
   await mkdir(dirname(filePath), { recursive: true })
-  await writeFile(filePath, contents, 'utf8')
+  const temporaryPath = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporaryPath, contents, { encoding: 'utf8', mode: CONFIG_CACHE_FILE_MODE, flag: 'wx' })
+    await rename(temporaryPath, filePath)
+  } catch (error) {
+    await rm(temporaryPath, { force: true })
+    throw error
+  }
+}
+
+function encodeConfigCacheValue(value: unknown): unknown {
+  if (value === undefined) {
+    return { [CONFIG_CACHE_UNDEFINED_MARKER]: true }
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(entry => encodeConfigCacheValue(entry))
+  }
+
+  if (isObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, encodeConfigCacheValue(entry)]))
+  }
+
+  return value
+}
+
+function decodeConfigCacheValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(entry => decodeConfigCacheValue(entry))
+  }
+
+  if (isObject(value)) {
+    const keys = Object.keys(value)
+    if (keys.length === 1 && value[CONFIG_CACHE_UNDEFINED_MARKER] === true) {
+      return undefined
+    }
+
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, decodeConfigCacheValue(entry)]))
+  }
+
+  return value
 }
 
 function getConfigExtensionPriority(fileName: string): number {
@@ -198,16 +242,15 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     loadedFiles: readonly string[]
   },
 ): LoadedHoloConfig<TCustom> {
-  const resolvedRawConfig = resolveEnvPlaceholders(rawConfig, options.environment.values)
-  const rawApp = resolvedRawConfig.app as HoloAppConfig | undefined
+  const rawApp = rawConfig.app as HoloAppConfig | undefined
   const app = normalizeAppConfig({ ...rawApp, env: rawApp?.env ?? options.environment.name })
-  const redis = normalizeRedisConfig(resolvedRawConfig.redis as HoloRedisConfig | undefined)
-  const firstPartyConfig = composeRegisteredConfig(resolvedRawConfig, {
+  const redis = normalizeRedisConfig(rawConfig.redis as HoloRedisConfig | undefined)
+  const firstPartyConfig = composeRegisteredConfig(rawConfig, {
     app,
     redis,
   }) as HoloConfigValues<TCustom>
   const firstPartyConfigKeys = new Set(Object.keys(firstPartyConfig))
-  const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
+  const customEntries = Object.entries(rawConfig).filter(([key]) => {
     return !firstPartyConfigKeys.has(key)
   })
   const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
@@ -241,7 +284,8 @@ function isSerializableConfigValue(value: unknown): boolean {
   }
 
   if (isObject(value)) {
-    return Object.values(value).every(entry => isSerializableConfigValue(entry))
+    return !Object.hasOwn(value, CONFIG_CACHE_UNDEFINED_MARKER)
+      && Object.values(value).every(entry => entry === undefined || isSerializableConfigValue(entry))
   }
 
   return false
@@ -310,7 +354,11 @@ async function readConfigCache(projectRoot: string): Promise<ConfigCachePayload 
 
   try {
     const parsed = JSON.parse(contents) as unknown
-    return isCachePayload(parsed) ? parsed : undefined
+    if (!isCachePayload(parsed)) {
+      return undefined
+    }
+
+    return { ...parsed, config: decodeConfigCacheValue(parsed.config) as RawConfigMap }
   } catch {
     return undefined
   }
@@ -325,7 +373,6 @@ export async function writeConfigCache(
   const { environment, rawConfig, loadedFiles } = await configEvaluationInternals.evaluate({
     cwd: root,
     ...options,
-    captureEnvPlaceholders: true,
   }, async (environment) => {
     return { environment, ...await collectRawConfig(configDir) }
   })
@@ -343,13 +390,13 @@ export async function writeConfigCache(
       warnings: environment.warnings,
     },
     configFiles: loadedFiles,
-    config: cacheableConfig,
+    config: encodeConfigCacheValue(cacheableConfig) as RawConfigMap,
     deferredConfigNames,
     normalizerConfigNames: configRegistryInternals
       .getRegisteredNames()
       .filter(name => Object.hasOwn(rawConfig, name)),
   } satisfies ConfigCachePayload, null, 2)}\n`
-  await writeFileIfChanged(cachePath, contents)
+  await writeConfigCacheFile(cachePath, contents)
 
   return cachePath
 }

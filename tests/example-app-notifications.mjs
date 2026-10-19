@@ -140,7 +140,7 @@ async function assertQueuedMail(projectRoot, require, DB, runMaintenance) {
 }
 
 async function assertNotificationBroadcast(notify, defineNotification, runMaintenance) {
-  const socket = new WebSocket(`ws://${process.env.BROADCAST_HOST}:${process.env.BROADCAST_PORT}/app/${process.env.BROADCAST_APP_KEY ?? 'app-key'}`)
+  const socket = new WebSocket(`ws://${process.env.BROADCAST_HOST}:${process.env.BROADCAST_PORT}/app/${process.env.BROADCAST_APP_KEY}`)
   const packets = []
   socket.addEventListener('message', event => packets.push(JSON.parse(String(event.data))))
   const receive = async name => {

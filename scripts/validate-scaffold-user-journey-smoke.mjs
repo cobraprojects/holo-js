@@ -247,7 +247,12 @@ async function createInstallWrapper(tempRoot) {
 
 async function assertScaffoldStructure(projectRoot, journey) {
   const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
-  assert.equal(manifest.scripts.prepare, 'holo key:generate && holo prepare')
+  assert.equal(
+    manifest.scripts.prepare,
+    optionalPackageNames.includes('broadcast')
+      ? 'holo key:generate && holo install broadcast && holo prepare'
+      : 'holo key:generate && holo prepare',
+  )
   assert.equal(manifest.scripts.dev, 'holo dev')
   assert.equal(manifest.scripts.build, 'holo build')
   assert.equal(manifest.scripts.start, 'holo start')

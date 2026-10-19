@@ -28,6 +28,7 @@ import {
   readTextFile,
   resolveFirstExistingPath,
 } from '../runtime'
+import { generateBroadcastCredentials } from '../../app-key'
 import { writeTextFile } from '../atomic-file'
 import {
   renderBroadcastAuthSupportFrameworkFiles,
@@ -406,9 +407,9 @@ export function renderBroadcastConfig(
       '  connections: {',
       '    holo: {',
       '      driver: \'holo\',',
-      '      appId: env(\'BROADCAST_APP_ID\', \'app-id\'),',
-      '      key: env(\'BROADCAST_APP_KEY\', \'app-key\'),',
-      '      secret: env(\'BROADCAST_APP_SECRET\', \'app-secret\'),',
+      '      appId: env(\'BROADCAST_APP_ID\'),',
+      '      key: env(\'BROADCAST_APP_KEY\'),',
+      '      secret: env(\'BROADCAST_APP_SECRET\'),',
       '      options: {',
       '        host: env(\'BROADCAST_HOST\', \'127.0.0.1\'),',
       '        port: env(\'BROADCAST_PORT\', 8080),',
@@ -449,9 +450,9 @@ export function renderBroadcastConfig(
     '  connections: {',
     '    holo: {',
     '      driver: \'holo\',',
-    '      appId: env(\'BROADCAST_APP_ID\', \'app-id\'),',
-    '      key: env(\'BROADCAST_APP_KEY\', \'app-key\'),',
-    '      secret: env(\'BROADCAST_APP_SECRET\', \'app-secret\'),',
+    '      appId: env(\'BROADCAST_APP_ID\'),',
+    '      key: env(\'BROADCAST_APP_KEY\'),',
+    '      secret: env(\'BROADCAST_APP_SECRET\'),',
     '      options: {',
     '        host: env(\'BROADCAST_HOST\', \'127.0.0.1\'),',
     '        port: env(\'BROADCAST_PORT\', 8080),',
@@ -559,8 +560,12 @@ export function resolveBroadcastConfigTargetPath(
 }
 
 export function renderBroadcastEnvFiles(): { env: readonly string[], example: readonly string[] } {
+  const credentials = generateBroadcastCredentials()
   const env = [
     'BROADCAST_CONNECTION=holo',
+    `BROADCAST_APP_ID=${credentials.appId}`,
+    `BROADCAST_APP_KEY=${credentials.key}`,
+    `BROADCAST_APP_SECRET=${credentials.secret}`,
   ]
   const example = [
     'BROADCAST_CONNECTION=holo',
