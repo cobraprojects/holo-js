@@ -24,7 +24,7 @@ Errors Holo catches in background work, such as failing queue hooks, background 
 
 Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) are now left out of every validation failure, including inside nested objects and arrays. This covers the 422 response in Next.js, Nuxt, and SvelteKit, `ValidationException` `values` and `toJSON()`, and `submission.fail()` and `submission.serialize()`. If your code reads a password back from a caught `ValidationException`, read it from the request instead.
 
-In Nuxt, the cookie that flashes errors after a native form post no longer contains the submitted values, and it is marked `Secure` on HTTPS requests. `useValidationErrors()` works as before. No code changes are required.
+In Nuxt, the cookie that flashes errors after a native form post no longer contains the submitted values, and it is marked `Secure` on HTTPS requests. `useValidationErrors()` works as before.
 
 ### Node.js 22.14 or newer
 
