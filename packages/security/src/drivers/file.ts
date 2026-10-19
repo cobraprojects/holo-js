@@ -32,6 +32,11 @@ export interface FileRateLimitStoreOptions {
   readonly lockTimeoutMs?: number
 }
 
+type FileRateLimitSweepStats = {
+  inFlight: boolean
+  runsStarted: number
+}
+
 type FileRateLimitKeyHashes = {
   readonly namespaceHash: string
   readonly prefixHashes: readonly string[]
@@ -40,6 +45,8 @@ type FileRateLimitKeyHashes = {
 const LOCK_OWNER_FILE = 'owner'
 const BUCKETS_DIRECTORY = 'buckets'
 const PRUNE_INTERVAL_MS = 60_000
+const sweepStats = new WeakMap<SecurityRateLimitStore, FileRateLimitSweepStats>()
+const SWEEP_BATCH_SIZE = 1_000
 
 function createBucketHash(key: string): string {
   return createHash('sha256').update(key).digest('hex')
@@ -289,6 +296,47 @@ async function acquireBucketLock(
   }
 }
 
+async function withBucketLockIfFree<TValue>(
+  path: string,
+  options: { readonly timeoutMs: number },
+  operation: () => Promise<TValue>,
+): Promise<TValue | undefined> {
+  const lockPath = getBucketLockPath(path)
+  await mkdir(dirname(lockPath), { recursive: true })
+
+  let lock: FileBucketLock
+  try {
+    lock = await tryCreateBucketLock(lockPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw error
+    }
+
+    if (!await isBucketLockStale(lockPath, options.timeoutMs) || !await reclaimStaleBucketLock(lockPath, options.timeoutMs)) {
+      return undefined
+    }
+
+    try {
+      lock = await tryCreateBucketLock(lockPath)
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code === 'EEXIST') {
+        return undefined
+      }
+
+      throw retryError
+    }
+  }
+
+  const heartbeat = startLockHeartbeat(lockPath, options.timeoutMs)
+
+  try {
+    return await operation()
+  } finally {
+    clearInterval(heartbeat)
+    await removeOwnedBucketLock(lock)
+  }
+}
+
 async function withBucketLock<TValue>(
   path: string,
   options: { readonly retryDelayMs: number, readonly timeoutMs: number },
@@ -355,33 +403,75 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     retryDelayMs: lockRetryDelayMs,
     timeoutMs: lockTimeoutMs,
   }
-  let lastPrunedAt: number | undefined
+  const bucketsRoot = join(root, BUCKETS_DIRECTORY)
+  const stats: FileRateLimitSweepStats = {
+    inFlight: false,
+    runsStarted: 0,
+  }
+  let cycleStartedAt: number | undefined
+  let backlog: string[] = []
+  let inFlight: Promise<void> | undefined
+  let closed = false
 
-  const pruneExpiredBuckets = async (now: Date): Promise<void> => {
-    for (const path of await listBucketPaths(join(root, BUCKETS_DIRECTORY))) {
-      await withBucketLock(path, lockOptions, async () => {
-        const bucket = await readBucket(path)
-        if (bucket && isExpired(bucket, now)) {
-          await deleteBucket(path)
+  const sweepBucket = async (path: string, now: Date): Promise<void> => {
+    await withBucketLockIfFree(path, { timeoutMs: lockTimeoutMs }, async () => {
+      const bucket = await readBucket(path)
+      if (bucket && isExpired(bucket, now)) {
+        await deleteBucket(path)
+      }
+    }).catch((error: unknown) => {
+      reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
+    })
+  }
+
+  const runSweep = async (now: Date, relist: boolean): Promise<void> => {
+    try {
+      if (relist) {
+        backlog = await listBucketPaths(bucketsRoot)
+      }
+
+      for (const path of backlog.splice(0, SWEEP_BATCH_SIZE)) {
+        if (closed) {
+          break
         }
-      }).catch((error: unknown) => {
-        reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
-      })
+
+        await sweepBucket(path, now)
+      }
+    } catch (error) {
+      reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
     }
   }
 
-  return {
+  const startSweepIfDue = (now: Date): void => {
+    if (closed || inFlight !== undefined) {
+      return
+    }
+
+    const continuing = backlog.length > 0
+    const startsCycle = cycleStartedAt === undefined || now.getTime() - cycleStartedAt >= PRUNE_INTERVAL_MS
+    if (!continuing && !startsCycle) {
+      return
+    }
+
+    if (!continuing) {
+      cycleStartedAt = now.getTime()
+    }
+
+    stats.runsStarted += 1
+    stats.inFlight = true
+    inFlight = runSweep(now, !continuing).finally(() => {
+      inFlight = undefined
+      stats.inFlight = false
+    })
+  }
+
+  const store: SecurityRateLimitStore = {
     async hit(key, hitOptions) {
       const sweepNow = resolveNow()
       const keyHash = createBucketHash(key)
       const path = getBucketPathForKeyHash(root, keyHash)
 
-      if (lastPrunedAt === undefined || sweepNow.getTime() - lastPrunedAt >= PRUNE_INTERVAL_MS) {
-        lastPrunedAt = sweepNow.getTime()
-        await pruneExpiredBuckets(sweepNow).catch((error: unknown) => {
-          reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
-        })
-      }
+      startSweepIfDue(sweepNow)
 
       return await withBucketLock(path, lockOptions, async () => {
         const existing = await readBucket(path)
@@ -484,11 +574,29 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
 
       return cleared
     },
+    async close() {
+      closed = true
+      backlog = []
+      await inFlight
+    },
   }
+
+  sweepStats.set(store, stats)
+  return store
+}
+
+function sweepInFlight(store: SecurityRateLimitStore): boolean {
+  return sweepStats.get(store)?.inFlight ?? false
+}
+
+function sweepRunsStarted(store: SecurityRateLimitStore): number {
+  return sweepStats.get(store)?.runsStarted ?? 0
 }
 
 export const fileRateLimitDriverInternals = {
   createBucketHash,
+  sweepInFlight,
+  sweepRunsStarted,
   createSnapshot,
   deleteBucket,
   deserializeBucket,

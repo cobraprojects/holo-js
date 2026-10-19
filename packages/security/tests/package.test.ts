@@ -1503,8 +1503,153 @@ describe('@holo-js/security rate-limit drivers', () => {
         decaySeconds: 60,
       })
 
-      await expect(readFile(abandonedPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      await vi.waitFor(async () => {
+        await expect(readFile(abandonedPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      }, { timeout: 15_000, interval: 10 })
       await expect(store.clear('limiter:login|user:fresh')).resolves.toBe(true)
+    })
+
+    describe('background expiry sweep', () => {
+      const sweepStart = new Date('2026-04-16T12:00:00.000Z')
+
+      async function createSweepRoot() {
+        const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+        tempDirs.push(root)
+        return root
+      }
+
+      async function writeExpiredBucket(root: string, key: string) {
+        const path = fileRateLimitDriverInternals.getBucketPath(root, key)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, JSON.stringify({
+          namespaceHash: 'namespace',
+          keyHash: fileRateLimitDriverInternals.createBucketHash(key),
+          prefixHashes: ['prefix'],
+          attempts: 1,
+          expiresAt: '2026-04-16T11:59:00.000Z',
+        }), 'utf8')
+      }
+
+      async function writeExpiredBuckets(root: string, count: number, prefix: string) {
+        for (let index = 0; index < count; index += 1) {
+          await writeExpiredBucket(root, `limiter:login|${prefix}:${index}`)
+        }
+      }
+
+      async function bucketFileCount(root: string) {
+        return (await fileRateLimitDriverInternals.listBucketPaths(join(root, 'buckets'))).length
+      }
+
+      async function waitUntil(predicate: () => Promise<boolean>) {
+        const deadline = Date.now() + 15_000
+        while (!(await predicate())) {
+          if (Date.now() > deadline) {
+            throw new Error('Timed out waiting for the background sweep.')
+          }
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      }
+
+      it('returns from hit promptly while the sweep meets a locked expired bucket', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+          lockTimeoutMs: 5_000,
+        })
+        const heldKey = 'limiter:login|user:held'
+        await writeExpiredBucket(root, heldKey)
+        const heldKeyPath = fileRateLimitDriverInternals.getBucketPath(root, heldKey)
+        const heldLockPath = fileRateLimitDriverInternals.getBucketLockPath(heldKeyPath)
+        await mkdir(heldLockPath)
+
+        const startedAt = performance.now()
+        await store.hit('limiter:login|user:other', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        expect(performance.now() - startedAt).toBeLessThan(1_000)
+
+        await store.close?.()
+        await rm(heldLockPath, { recursive: true, force: true })
+        await rm(heldKeyPath, { force: true })
+      }, 30_000)
+
+      it('starts at most one sweep while one is in flight', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 1_500, 'flight')
+
+        await store.hit('limiter:login|user:first', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        now = new Date(now.getTime() + 61_000)
+        await store.hit('limiter:login|user:second', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+
+        expect(fileRateLimitDriverInternals.sweepInFlight(store)).toBe(true)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBe(1)
+        await store.close?.()
+      }, 30_000)
+
+      it('removes abandoned buckets across batches and later sweep cycles', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 1_500, 'first')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        await writeExpiredBuckets(root, 1_200, 'second')
+        now = new Date(now.getTime() + 61_000)
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        await expect(store.clear('limiter:login|user:kicker')).resolves.toBe(true)
+        await store.close?.()
+      }, 60_000)
+
+      it('finishes an in-flight sweep on close and starts no more after it', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 1_500, 'closing')
+
+        await store.hit('limiter:login|user:before-close', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        await store.close?.()
+        expect(fileRateLimitDriverInternals.sweepInFlight(store)).toBe(false)
+
+        now = new Date(now.getTime() + 61_000)
+        await store.hit('limiter:login|user:after-close', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBe(1)
+      }, 30_000)
     })
 
     it('leaves unrelated JSON files under the root alone during the sweep and clearAll', async () => {

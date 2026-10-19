@@ -340,7 +340,7 @@ export default defineSecurityConfig({
 })
 ```
 
-`path` defaults to `./storage/framework/rate-limits`. Keys are hashed before they're written to disk. Each key is one file. Holo deletes expired files while it handles requests, at most once a minute. A file for an expired key stays on disk until the next request after that minute.
+`path` defaults to `./storage/framework/rate-limits`. Keys are hashed before they're written to disk. Each key is one file. While it handles requests, Holo deletes expired files in the background, at most once a minute and a thousand files per step, so rate-limit checks never wait for cleanup. A file for an expired key stays on disk until a later request starts that cleanup.
 
 ### Redis driver
 
