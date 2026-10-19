@@ -142,7 +142,7 @@ The model must be saved first. Adding media to a record without a primary key th
 | An object with contents | `post.addMedia({ contents: bytes, fileName: 'a.png' })` |
 | A local file path | `post.addMedia('/tmp/upload-123.jpg')` or `post.addMedia({ path: '/tmp/upload-123.jpg' })` |
 
-A string is always a file path. To download a file from a URL, use [addMediaFromUrl()](#add-media-from-a-url). To attach a file already stored on a disk, use [addMediaFromDisk()](#add-media-from-a-disk).
+To download a file from a URL, use [addMediaFromUrl()](#add-media-from-a-url). To attach a file already stored on a disk, use [addMediaFromDisk()](#add-media-from-a-disk).
 
 Local paths must be inside your system's temp folder or your project's `storage/` folder. Any other path throws, so a user-supplied path can't read arbitrary files from your server.
 

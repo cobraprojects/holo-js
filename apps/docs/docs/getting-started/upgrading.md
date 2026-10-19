@@ -164,7 +164,18 @@ await post.addMediaFromUrl('https://example.com/photo.jpg').toMediaCollection('i
 
 Remote downloads now have a 30-second limit for the whole download, including reading the file. Slow downloads throw an error instead of waiting indefinitely.
 
-Collections without `disk()` now use the media disk, which is `public` unless you set `MEDIA_DISK` or `disk` in `config/media.ts`. Before 0.4.0 they used the default storage disk when it was public. If your default disk is private, set `MEDIA_DISK` to the disk you want.
+Collections without `disk()` now use the media disk, which is `public` unless `config/media.ts` sets `disk`. Before 0.4.0 they used the default storage disk when it was public, and otherwise the `public` disk if one existed. Projects created before 0.4.0 have an empty `config/media.ts`, and that file doesn't read `MEDIA_DISK`, so setting the variable does nothing until you change the file to:
+
+```ts [config/media.ts]
+import { env } from '@holo-js/config'
+import { defineMediaConfig } from '@holo-js/media/config'
+
+export default defineMediaConfig({
+  disk: env('MEDIA_DISK', 'public'),
+})
+```
+
+Check this before deploying if your default storage disk is private or S3, since uploads otherwise go to `public`.
 
 Image conversions reject images over 40 million pixels or 1,000 frames, the same limits upload validation uses. Conversions also run before the database transaction starts. Use `addMediaFromDisk(path, disk)` to attach a file that's already on a storage disk.
 
