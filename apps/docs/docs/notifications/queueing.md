@@ -91,7 +91,7 @@ queue(recipient, channel) {
 
 ## Defaults in config
 
-`queue` in `config/notifications.ts` fills in the connection, queue, and `afterCommit` for notifications that are already queued. It doesn't queue anything by itself:
+`queue` in `config/notifications.ts` fills in the connection, queue, `afterCommit`, `tries`, and `backoff` for notifications that are already queued. It doesn't queue anything by itself:
 
 ```ts [config/notifications.ts]
 import { defineNotificationsConfig } from '@holo-js/notifications'
@@ -101,9 +101,13 @@ export default defineNotificationsConfig({
     connection: 'redis',
     queue: 'notifications',
     afterCommit: true,
+    tries: 3,
+    backoff: [10, 60],
   },
 })
 ```
+
+`tries` is the total number of attempts for each queued channel, and `backoff` is the wait before each retry, in seconds or an array of waits per retry. A worker's `--tries` still overrides both, as it does for every job.
 
 ## Which setting wins
 
@@ -112,6 +116,7 @@ For each channel:
 - **Delay:** `.delayFor()`, then `.delay()`, then the definition's `delay`, then `delay` inside the definition's `queue`.
 - **Connection and queue:** `.onConnection()` / `.onQueue()`, then the definition's `queue`, then `config/notifications.ts`.
 - **After commit:** `.afterCommit()`, then the definition's `queue`, then `config/notifications.ts` (for queued channels only).
+- **Tries and backoff:** the definition's `queue`, then `config/notifications.ts` (for queued channels only). A definition's `queue.tries` or `queue.backoff` overrides the config value. When neither sets `backoff`, the worker's `--backoff` applies.
 
 ## Wait for a transaction
 

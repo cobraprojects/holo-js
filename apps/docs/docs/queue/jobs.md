@@ -492,6 +492,20 @@ Waits before the job can run. Pass seconds as a non-negative number, or a valid 
 await SendDigest.dispatch({ userId: 42 }).delay(new Date('2026-12-01T09:00:00Z'))
 ```
 
+### `.afterCommit()` {#aftercommit}
+
+Holds the job until the surrounding database transaction commits. If there is no open transaction, it dispatches right away. If the transaction rolls back, the job is never queued, `onComplete` doesn't run, and `onFailed` doesn't run either.
+
+```ts
+await DB.transaction(async () => {
+  const order = await Order.create({ total: 4999 })
+
+  await SendOrderReceipt.dispatch({ orderId: order.id }).afterCommit()
+})
+```
+
+The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. If queuing fails at commit, `onFailed` runs with the error, and Holo reports the error. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
+
 ### `.onComplete(callback)` {#oncomplete-callback}
 
 Calls `callback` with `{ jobId, connection, queue, synchronous }` after the job is queued. This means queued, not finished. Errors in the callback are logged as warnings. You can add more than one callback.
