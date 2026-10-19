@@ -1,6 +1,7 @@
 import { DatabaseError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
+import { snapshotAttributes } from './entityRuntime'
 import { areModelEventsMuted } from './eventState'
 import { listModelObservers } from './modelObservers'
 import type { ModelDefinition, ModelLifecycleEventName } from './types'
@@ -14,8 +15,16 @@ export class ModelEventDispatcher<TTable extends TableDefinition> {
   async dispatchCancelable(
     eventName: Extract<ModelLifecycleEventName, 'saving' | 'creating' | 'updating' | 'deleting' | 'restoring' | 'forceDeleting'>,
     entity: Entity<TTable>,
+    afterHandler: (entity: Entity<TTable>, before: Record<string, unknown>) => void,
   ): Promise<void> {
-    const results = await this.dispatch(eventName, entity, true)
+    const results: unknown[] = []
+    if (!areModelEventsMuted()) {
+      for (const handler of this.resolveHandlers(eventName)) {
+        const before = snapshotAttributes(entity.toAttributes())
+        results.push(await handler(entity, this.repository))
+        afterHandler(entity, before)
+      }
+    }
     if (results.includes(false)) {
       throw new DatabaseError(
         `${this.definition.name} ${eventName} event cancelled the operation.`,

@@ -14,21 +14,21 @@ export default defineSeeder({
     const userPassword = await hashPassword('secret-secret')
     const adminPassword = await hashPassword('admin-secret')
 
-    const author = await User.unguarded(() => User.create({
+    const author = await User.create({
       name: 'Holo Editor',
       email: 'editor@example.com',
       password: userPassword,
       avatar: null,
       email_verified_at: timestamp,
-    }))
+    })
 
-    await Admin.unguarded(() => Admin.create({
+    await Admin.create({
       name: 'Super Admin',
       email: 'super-admin@example.com',
       password: adminPassword,
       avatar: null,
       email_verified_at: timestamp,
-    }))
+    })
 
     const engineering = await Category.create({
       name: 'Engineering',

@@ -23,13 +23,15 @@ export function valuesAreEqual(left: unknown, right: unknown): boolean {
     return left.getTime() === right.getTime()
   }
 
-  if (left instanceof Uint8Array && right instanceof Uint8Array) {
-    if (left.length !== right.length) {
+  if (isComparableBinaryView(left) && isComparableBinaryView(right)) {
+    if (left.byteLength !== right.byteLength) {
       return false
     }
 
-    for (let index = 0; index < left.length; index += 1) {
-      if (left[index] !== right[index]) {
+    const leftBytes = new Uint8Array(left.buffer, left.byteOffset, left.byteLength)
+    const rightBytes = new Uint8Array(right.buffer, right.byteOffset, right.byteLength)
+    for (let index = 0; index < leftBytes.length; index += 1) {
+      if (leftBytes[index] !== rightBytes[index]) {
         return false
       }
     }
@@ -68,6 +70,43 @@ export function valuesAreEqual(left: unknown, right: unknown): boolean {
   }
 
   return false
+}
+
+export function snapshotAttributes<TAttributes extends object>(attributes: TAttributes): TAttributes {
+  return Object.fromEntries(Object.entries(attributes).map(([key, value]) => [key, snapshotAttributeValue(value)])) as TAttributes
+}
+
+function snapshotAttributeValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return new Date(value.getTime())
+  }
+
+  if (isComparableBinaryView(value)) {
+    return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength))
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(snapshotAttributeValue)
+  }
+
+  if (value && typeof value === 'object' && isPlainObject(value)) {
+    const copy = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>
+    for (const [key, nested] of Object.entries(value)) {
+      Object.defineProperty(copy, key, { value: snapshotAttributeValue(nested), enumerable: true, writable: true, configurable: true })
+    }
+    return copy
+  }
+
+  return value
+}
+
+function isComparableBinaryView(value: unknown): value is ArrayBufferView {
+  return ArrayBuffer.isView(value) && !(value instanceof DataView)
+}
+
+function isPlainObject(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 type EntityPropertyHost<TRelations extends RelationMap> = {

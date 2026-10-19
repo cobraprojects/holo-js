@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { initializeEntityModelProperties, type EntityConstructor, valuesAreEqual } from './entityRuntime'
+import { initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
@@ -89,7 +89,7 @@ class EntityBase<
   ) {
     this.#repository = repository
     this.#attributes = { ...attributes }
-    this.#original = exists ? { ...attributes } : {}
+    this.#original = exists ? snapshotAttributes(this.#attributes) : {}
     this.#changes = exists ? {} : { ...attributes }
     this.#persisted = exists
     this.#relations = {}
@@ -213,7 +213,7 @@ class EntityBase<
   }
 
   syncOriginal(): this {
-    this.#original = { ...this.#attributes }
+    this.#original = snapshotAttributes(this.#attributes)
     return this
   }
 
@@ -222,12 +222,22 @@ class EntityBase<
     return this
   }
 
+  recordChanges(changes: Record<string, unknown>): this {
+    this.#changes = { ...changes }
+    return this
+  }
+
+  finishSave(): this {
+    this.#persisted = true
+    return this.syncOriginal()
+  }
+
   syncPersisted(
     entity: EntityBase<TTable>,
     changes: Record<string, unknown> = {},
   ): this {
     this.#attributes = { ...entity.toAttributes() }
-    this.#original = { ...entity.toAttributes() }
+    this.#original = snapshotAttributes(entity.toAttributes())
     this.#changes = { ...changes }
     this.#persisted = true
     return this
@@ -274,6 +284,7 @@ class EntityBase<
 
   setComputed(name: string, value: unknown): this {
     this.#attributes[name] = value
+    this.#original[name] = value
     return this
   }
 
@@ -466,9 +477,7 @@ class EntityBase<
       throw new HydrationError(errorMessage)
     }
 
-    const pendingChanges = this.#persisted ? this.getDirty() : this.toAttributes()
-    const persisted = await method.call(repo, this)
-    this.applyPersistedEntity(persisted, pendingChanges)
+    await method.call(repo, this)
     return this
   }
 
@@ -634,7 +643,7 @@ class EntityBase<
 
     const refreshed = await repo.refreshEntity(this)
     this.#attributes = { ...refreshed.toAttributes() }
-    this.#original = { ...refreshed.toAttributes() }
+    this.#original = snapshotAttributes(refreshed.toAttributes())
     this.#changes = {}
     this.#relations = {}
     this.#persisted = true

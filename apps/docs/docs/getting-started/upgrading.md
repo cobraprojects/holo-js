@@ -51,6 +51,16 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+### Lifecycle, factories, and seeders
+
+Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.
+
+`save()` on a model with no changes now fires `saving` and `saved`, as in Laravel, and writes nothing. Clean saves no longer write `updated_at` or fire `updating` and `updated`; before, a timestamped model's clean save did both. An `updating` handler that reverts every change fires `saved` without an `UPDATE`. After a save, `wasChanged()` and `getChanges()` report what the save wrote, so edits a `saved` handler makes don't appear there. A save that creates a record reports no changes, as in Laravel. Lifecycle handlers now receive the model you called `save()` on rather than a copy, and after `save()` returns the model is clean even when a `saved` handler changed an attribute: that change is not written. If your `saving` or `saved` handler assumed a clean save runs no code, guard it on `isDirty()`.
+
+Models loaded with `withCount()` or `withExists()` save without error, and their computed values are never written. Changes made in place to JSON and date attributes, such as pushing onto a JSON array, are detected and saved.
+
+Factories and `holo seed` now run without mass-assignment guards, as in Laravel. Remove `unguarded()` wrappers around factories and seeders; code outside them still follows the guards.
+
 ### Error reporting
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).

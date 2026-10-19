@@ -116,6 +116,10 @@ npx holo migrate:fresh --seed --only database
 | `--quietly` | Turn off [model events and observers](/orm/observers) while seeding |
 | `--force` | Skip the production confirmation |
 
+### Mass assignment
+
+Seeders run without mass-assignment guards, as Laravel's `db:seed` does, so a seeder can set any column, including ones that aren't in `fillable`. Don't pass request input to a seeder. Wrapping seeder writes in `unguarded()` isn't needed.
+
 ### Transactions
 
 Each seeder runs in a transaction. If it throws, everything it wrote rolls back. Seeders started with `call()`, and any model writes inside them, join the same transaction, so a failing root seeder undoes the whole run.

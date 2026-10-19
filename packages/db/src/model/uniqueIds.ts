@@ -2,6 +2,7 @@ import { monotonicFactory } from 'ulid'
 import { v7 as uuidv7 } from 'uuid'
 import { DatabaseError, SchemaError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
+import { snapshotAttributes } from './entityRuntime'
 import type {
   ModelAttributeKey,
   ModelDefinition,
@@ -38,7 +39,7 @@ export function applyPendingModelAttributes<TTable extends TableDefinition>(
 ): Partial<ModelRecord<TTable>> {
   return Object.keys(definition.pendingAttributes).length === 0
     ? values
-    : { ...definition.pendingAttributes, ...values }
+    : { ...snapshotAttributes(definition.pendingAttributes), ...values }
 }
 
 export interface UniqueIdTraitOptions<TTable extends TableDefinition = TableDefinition> {

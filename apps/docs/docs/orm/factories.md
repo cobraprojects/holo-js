@@ -50,7 +50,7 @@ export default defineFactory(User, ({ sequence }) => ({
 The callback can be `async`.
 
 ::: warning
-Factories save records with the model's `create()`, so every attribute they set must be in the model's `fillable` list. To fill guarded columns, wrap the call in `User.unguarded(() => UserFactory.createOne())`.
+Factories run without mass-assignment guards, as in Laravel, so they can set any column, including guarded ones such as `is_admin`, the primary key, and timestamps. Don't build factory attributes from request input.
 :::
 
 ## Building and saving models

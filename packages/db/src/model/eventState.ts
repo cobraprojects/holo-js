@@ -20,3 +20,7 @@ export async function withoutModelGuards<T>(callback: () => T | Promise<T>): Pro
   const depth = guardBypassStorage.getStore() ?? 0
   return guardBypassStorage.run(depth + 1, callback)
 }
+
+export async function withModelGuards<T>(callback: () => T | Promise<T>): Promise<T> {
+  return guardBypassStorage.run(0, callback)
+}

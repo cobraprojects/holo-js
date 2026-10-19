@@ -1893,9 +1893,9 @@ describe('model core slice', () => {
     expect(user.exists()).toBe(true)
     expect(user.get('id')).toBe(1)
     expect(user.isClean()).toBe(true)
-    expect(user.wasChanged()).toBe(true)
-    expect(user.wasChanged('name')).toBe(true)
-    expect(user.getChanges()).toEqual({ name: 'Zein', email: 'z@example.com', status: 'active' })
+    expect(user.wasChanged()).toBe(false)
+    expect(user.wasChanged('name')).toBe(false)
+    expect(user.getChanges()).toEqual({})
     expect((await user.fresh())?.get('status')).toBe('active')
 
     user.set('status', 'inactive')

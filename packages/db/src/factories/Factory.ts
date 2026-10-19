@@ -1,4 +1,5 @@
 import { HydrationError, SecurityError } from '../core/errors'
+import { withoutModelGuards } from '../model/eventState'
 import type { Entity } from '../model/Entity'
 import type { RelationDefinition } from '../model/types'
 import type { TableDefinition } from '../schema/types'
@@ -192,30 +193,29 @@ export class Factory<TModel extends FactoryModelReference = FactoryModelReferenc
     sequence = 1,
     overrides: FactoryAttributes<TModel> = {},
   ): Promise<Entity<TModel['definition']['table']>> {
-    const attributes = await this.resolveAttributes(sequence, overrides)
-    const entity = this.model.make(attributes) as Entity<TModel['definition']['table']>
-    await this.applyParentRelations(entity, false)
-    await this.applyChildRelations(entity, false)
-    await this.applyAttachedRelations(entity, false)
-    await this.runHooks(this.afterMakingHooks, entity, sequence)
-    return entity
+    return withoutModelGuards(async () => {
+      const attributes = await this.resolveAttributes(sequence, overrides)
+      const entity = await this.makeWithParentRelations(attributes, false)
+      await this.applyChildRelations(entity, false)
+      await this.applyAttachedRelations(entity, false)
+      await this.runHooks(this.afterMakingHooks, entity, sequence)
+      return entity
+    })
   }
 
   async createOne(
     sequence = 1,
     overrides: FactoryAttributes<TModel> = {},
   ): Promise<Entity<TModel['definition']['table']>> {
-    const attributes = await this.resolveAttributes(sequence, overrides)
-    const prepared = this.model.make(attributes) as Entity<TModel['definition']['table']>
-    await this.applyParentRelations(prepared, true)
-    const entity = await this.model.create(prepared.toAttributes()) as Entity<TModel['definition']['table']>
-    for (const relationName of this.getPreparedRelationNames(prepared)) {
-      entity.setRelation(relationName, prepared.getRelation(relationName))
-    }
-    await this.applyChildRelations(entity, true)
-    await this.applyAttachedRelations(entity, true)
-    await this.runHooks(this.afterCreatingHooks, entity, sequence)
-    return entity
+    return withoutModelGuards(async () => {
+      const attributes = await this.resolveAttributes(sequence, overrides)
+      const prepared = await this.makeWithParentRelations(attributes, true)
+      const entity = await prepared.save()
+      await this.applyChildRelations(entity, true)
+      await this.applyAttachedRelations(entity, true)
+      await this.runHooks(this.afterCreatingHooks, entity, sequence)
+      return entity
+    })
   }
 
   async makeMany(
@@ -308,14 +308,6 @@ export class Factory<TModel extends FactoryModelReference = FactoryModelReferenc
     return this.getRepository().getRelationDefinition(name)
   }
 
-  private getPreparedRelationNames(entity: RelatedEntity): readonly string[] {
-    return [
-      ...this.parentRelations.map(item => item.relation),
-      ...this.childRelations.map(item => item.relation),
-      ...this.attachedRelations.map(item => item.relation),
-    ].filter((value, index, items) => items.indexOf(value) === index && entity.hasRelation(value))
-  }
-
   private async resolveSingleSource(source: ParentRelationSource, persist: boolean): Promise<RelatedEntity> {
     if ('createOne' in source) {
       const recycled = this.takeRecycledEntities(source, 1)[0]
@@ -374,6 +366,15 @@ export class Factory<TModel extends FactoryModelReference = FactoryModelReferenc
     })
 
     return matches.slice(0, amount)
+  }
+
+  private async makeWithParentRelations(
+    attributes: FactoryAttributes<TModel>,
+    persist: boolean,
+  ): Promise<Entity<TModel['definition']['table']>> {
+    const entity = this.model.make(attributes) as Entity<TModel['definition']['table']>
+    await this.applyParentRelations(entity, persist)
+    return entity
   }
 
   private async applyParentRelations(entity: Entity<TModel['definition']['table']>, persist: boolean): Promise<void> {
