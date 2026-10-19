@@ -5,8 +5,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
-import { expect, it } from 'vitest'
-import { runQueueListen } from '../src/queue'
+import { expect, it, vi } from 'vitest'
+import { runQueueListen, writeQueueRestartSignal } from '../src/queue'
 
 it('starts replacement queue workers after preparation finishes without watching generated output', async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-listen-'))
@@ -215,6 +215,104 @@ it('starts the replacement worker only after the previous worker closes', async 
     await expect(listening).resolves.toBeUndefined()
     expect(replacementStartedAfterClose).toEqual([true])
   } finally {
+    await rm(projectRoot, { recursive: true, force: true })
+  }
+})
+
+it('launches the replacement worker with the environment a preparation wrote while the launch was waiting', async () => {
+  const projectRoot = await createQueueListenProject()
+  let firstWorker: ReturnType<typeof spawn> | undefined
+  try {
+    await writeFile(join(projectRoot, '.env'), 'HOLO_QUEUE_LISTEN_LIFETIME=old\n')
+    let notifyChange = (_path = 'server/jobs/updated.ts') => {}
+    const createWatcher: NonNullable<Parameters<typeof runQueueListen>[4]> = (_path, _options, listener) => {
+      notifyChange = (path = 'server/jobs/updated.ts') => listener('change', path)
+      return createFakeWatcher()
+    }
+    let preparations = 0
+    const prepare = async () => {
+      preparations += 1
+      if (preparations === 3) await writeFile(join(projectRoot, '.env'), 'HOLO_QUEUE_LISTEN_LIFETIME=new\n')
+    }
+    const spawnedEnvironments: (string | undefined)[] = []
+    let resolveFirstWorkerReady = () => {}
+    const firstWorkerReady = new Promise<void>(resolve => { resolveFirstWorkerReady = resolve })
+    const spawnWorker: NonNullable<Parameters<typeof runQueueListen>[3]> = (command, _args, options) => {
+      spawnedEnvironments.push(options.env?.HOLO_QUEUE_LISTEN_LIFETIME)
+      if (spawnedEnvironments.length > 1) return spawn(command, ['-e', 'process.exit(0)'], { stdio: ['pipe', 'pipe', 'pipe'] })
+
+      const worker = spawn(command, ['-e', "process.stdout.write('ready'); setInterval(() => {}, 1000)"], { stdio: ['pipe', 'pipe', 'pipe'] })
+      firstWorker = worker
+      worker.stdout?.once('data', () => resolveFirstWorkerReady())
+      worker.once('close', () => globalThis.setImmediate(() => notifyChange('server/jobs/overlap.ts')))
+      return worker
+    }
+
+    const listening = runQueueListen({
+      cwd: projectRoot,
+      stdin: process.stdin,
+      stdout: process.stdout,
+      stderr: process.stderr,
+    }, projectRoot, {}, spawnWorker, createWatcher, prepare)
+
+    await firstWorkerReady
+    notifyChange()
+
+    await expect(listening).resolves.toBeUndefined()
+    expect(spawnedEnvironments).toEqual(['old', 'new'])
+  } finally {
+    if (firstWorker && firstWorker.exitCode === null && firstWorker.signalCode === null) firstWorker.kill('SIGKILL')
+    await rm(projectRoot, { recursive: true, force: true })
+  }
+})
+
+it('does not relaunch a worker that exits cleanly after a restart signal written while its launch was waiting', async () => {
+  const projectRoot = await createQueueListenProject()
+  const launchStart = 1_000_000
+  let firstWorker: ReturnType<typeof spawn> | undefined
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(launchStart)
+  try {
+    let notifyChange = (_path = 'server/jobs/updated.ts') => {}
+    const createWatcher: NonNullable<Parameters<typeof runQueueListen>[4]> = (_path, _options, listener) => {
+      notifyChange = (path = 'server/jobs/updated.ts') => listener('change', path)
+      return createFakeWatcher()
+    }
+    let resolveFirstWorkerReady = () => {}
+    const firstWorkerReady = new Promise<void>(resolve => { resolveFirstWorkerReady = resolve })
+    const spawnedCount: number[] = []
+    const spawnWorker: NonNullable<Parameters<typeof runQueueListen>[3]> = (command) => {
+      spawnedCount.push(spawnedCount.length)
+      if (spawnedCount.length > 1) return spawn(command, ['-e', 'setTimeout(() => process.exit(0), 300)'], { stdio: ['pipe', 'pipe', 'pipe'] })
+
+      const worker = spawn(command, ['-e', "process.stdout.write('ready'); setInterval(() => {}, 1000)"], { stdio: ['pipe', 'pipe', 'pipe'] })
+      firstWorker = worker
+      worker.stdout?.once('data', () => resolveFirstWorkerReady())
+      worker.once('close', () => {
+        vi.setSystemTime(launchStart + 10)
+        globalThis.setImmediate(() => {
+          vi.setSystemTime(launchStart + 20)
+          void writeQueueRestartSignal(projectRoot)
+        })
+      })
+      return worker
+    }
+
+    const listening = runQueueListen({
+      cwd: projectRoot,
+      stdin: process.stdin,
+      stdout: process.stdout,
+      stderr: process.stderr,
+    }, projectRoot, {}, spawnWorker, createWatcher, async () => {})
+
+    await firstWorkerReady
+    notifyChange()
+
+    await expect(listening).resolves.toBeUndefined()
+    expect(spawnedCount).toHaveLength(2)
+  } finally {
+    vi.useRealTimers()
+    if (firstWorker && firstWorker.exitCode === null && firstWorker.signalCode === null) firstWorker.kill('SIGKILL')
     await rm(projectRoot, { recursive: true, force: true })
   }
 })

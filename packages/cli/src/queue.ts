@@ -648,7 +648,6 @@ export async function runQueueListen(
     }
 
     while (!session.signal.aborted) {
-      const childStartedAt = Date.now()
       const run = await session.launch({ command: process.execPath, args: [cliEntrypoint.path] }, childArgs, {}, {
         generation: () => preparationGeneration,
         settle: settlePreparation,
@@ -670,7 +669,7 @@ export async function runQueueListen(
       }
       if (session.signal.aborted) break
       if (result.restartRequested) continue
-      if (result.code === 0 && await hasQueueRestartSignalSince(projectRoot, childStartedAt)) continue
+      if (result.code === 0 && await hasQueueRestartSignalSince(projectRoot, run.startedAt)) continue
       if (result.code === 0) return
 
       throw new Error(`Queue worker failed with exit code ${result.code ?? 'unknown'}.`)

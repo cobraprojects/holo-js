@@ -38,12 +38,13 @@ function launchFrameworkRun(
   serverArgs: readonly string[],
   spawnProcess: FrameworkSpawn,
   environment: NodeJS.ProcessEnv,
-): { readonly completion: Promise<FrameworkRunResult>, restart(): void, shutdown(signal: NodeJS.Signals): void } {
+): { readonly completion: Promise<FrameworkRunResult>, readonly startedAt: number, restart(): void, shutdown(signal: NodeJS.Signals): void } {
   const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
     cwd: projectRoot,
     env: environment,
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as SpawnProcessLike
+  const startedAt = Date.now()
   let restartRequested = false
   let shutdownSignal: NodeJS.Signals | undefined
   let processError: Error | undefined
@@ -94,6 +95,7 @@ function launchFrameworkRun(
 
   return {
     completion,
+    startedAt,
     shutdown,
     restart() {
       if (settled || processError || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
