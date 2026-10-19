@@ -479,12 +479,40 @@ function parseJsonInput(text: string): unknown {
 }
 
 async function parseFormBody(input: Request): Promise<FormData> {
-  const body = await input.blob()
+  if (input.bodyUsed) return input.formData()
+  const reader = input.body?.getReader()
+  let readFailure: { readonly error: unknown } | undefined
+  let finished = !reader
+  const body = reader ? new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const result = await reader.read().catch((error: unknown) => {
+        readFailure = { error }
+        finished = true
+        throw error
+      })
+      if (result.done) {
+        finished = true
+        controller.close()
+      } else {
+        controller.enqueue(result.value)
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  }) : null
   const form = new Response(body, { headers: input.headers })
   try {
     return await form.formData()
   } catch {
+    if (readFailure) throw readFailure.error
     return new FormData()
+  } finally {
+    try {
+      if (!finished) await reader?.cancel()
+    } finally {
+      reader?.releaseLock()
+    }
   }
 }
 

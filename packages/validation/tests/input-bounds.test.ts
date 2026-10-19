@@ -216,12 +216,21 @@ describe('Validation input bounds', () => {
     ['application/x-www-form-urlencoded', TypeError],
   ] as const)('propagates body stream failures for %s (%s)', async (contentType, Failure) => {
     const failure = new Failure('body stream failed')
+    let sentFileChunk = false
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode('name=Ava'))
+        const prefix = contentType.startsWith('multipart/')
+          ? '--form\r\nContent-Disposition: form-data; name="upload"; filename="report.txt"\r\nContent-Type: text/plain\r\n\r\n'
+          : 'name=Ava&upload='
+        controller.enqueue(new TextEncoder().encode(prefix))
       },
       pull(controller) {
-        controller.error(failure)
+        if (!sentFileChunk) {
+          sentFileChunk = true
+          controller.enqueue(new Uint8Array(4096).fill(97))
+        } else {
+          controller.error(failure)
+        }
       },
     })
     const request = new Request('https://example.com/', {
@@ -232,6 +241,21 @@ describe('Validation input bounds', () => {
     })
 
     await expect(safeParse(request, schema({ name: field.string().required() }))).rejects.toBe(failure)
+  })
+
+  it.each(['multipart/form-data; boundary=form', 'application/x-www-form-urlencoded'])('propagates locked-body errors for %s', async (contentType) => {
+    const request = new Request('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': contentType },
+      body: 'name=Ava',
+    })
+    const reader = request.body!.getReader()
+    try {
+      await expect(safeParse(request, schema({ name: field.string().required() }))).rejects.toBeInstanceOf(TypeError)
+    } finally {
+      await reader.cancel()
+      reader.releaseLock()
+    }
   })
 
   it.each(['multipart/form-data', 'application/x-www-form-urlencoded'])('propagates consumed-body errors for %s', async (contentType) => {
