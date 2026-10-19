@@ -1,5 +1,5 @@
 import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
-import { existsSync, lstatSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path'
@@ -83,6 +83,7 @@ type StorageS3Module = {
 const MODEL_FILE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'])
 const HOLO_PACKAGE_SCOPE = '@holo-js/'
 const realtimeClientDefinitionPrefix = '\0holo-realtime-client:'
+const realtimeDefinitionsModuleId = '#holo/realtime-definitions'
 const VALIDATION_CLIENT_DEPENDENCIES = ['valibot', 'file-type'] as const
 const CLIENT_OPTIMIZE_DEPS = [
   {
@@ -467,6 +468,31 @@ function resolveRealtimeDefinitionImport(source: string, importer: string | unde
   return basePath ? resolveExistingRealtimeDefinitionFile(basePath) : undefined
 }
 
+function collectRealtimeDefinitionFiles(rootDir: string): readonly string[] {
+  const realtimeRoot = resolve(rootDir, 'server/realtime')
+  if (!existsSync(realtimeRoot)) {
+    return []
+  }
+
+  return readdirSync(realtimeRoot, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile() && MODEL_FILE_EXTENSIONS.has(extname(entry.name)))
+    .map(entry => resolve(entry.parentPath, entry.name))
+    .sort((left, right) => left.localeCompare(right))
+}
+
+function renderRealtimeDefinitionsModule(rootDir: string): string {
+  const files = collectRealtimeDefinitionFiles(rootDir)
+  const imports = files.map((filePath, index) => `import * as realtimeModule${index} from ${JSON.stringify(filePath)}`)
+  const values = files.map((_filePath, index) => `...Object.values(realtimeModule${index})`)
+
+  return [
+    ...imports,
+    '',
+    `export const realtimeDefinitions = [${values.join(', ')}]`,
+    '',
+  ].join('\n')
+}
+
 function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
   return {
     name: 'holo-realtime-client-definitions',
@@ -693,7 +719,6 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
     const storageModule = await importOptionalStorageModule()
     const loaded = await loadConfigDirectory(rootDir, {
-      preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
     })
     if ((loaded.app.plugins ?? []).includes('@holo-js/panels')) {
@@ -807,6 +832,10 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
         route: '/holo/realtime/mutation',
         handler: resolver.resolve('./runtime/server/routes/realtime-mutation.post'),
       })
+      opts.nitro.virtual = {
+        ...opts.nitro.virtual,
+        [realtimeDefinitionsModuleId]: () => renderRealtimeDefinitionsModule(rootDir),
+      }
       opts._holoRealtimeRouteRegistered = true
     }
 
@@ -861,6 +890,7 @@ export const moduleInternals = {
   isProjectPackageLinked,
   isRealtimeDefinitionModule,
   resolveClientOptimizeDeps,
+  renderRealtimeDefinitionsModule,
   resolveExistingRealtimeDefinitionFile,
   resolveRealtimeDefinitionImport,
 }

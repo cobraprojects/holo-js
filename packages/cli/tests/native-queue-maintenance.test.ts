@@ -17,7 +17,7 @@ it.each(['builtin', 'plugin'] as const)('clears only the selected real Redis que
   if (port === undefined) throw new Error('Expected an owned Redis port')
   const root = await mkdtemp(join(tmpdir(), 'holo-native-queue-maintenance-'))
   const drivers = ['emails', 'reports'].map(queue => redisQueueDriverFactory.create({
-    name: 'redis', driver: 'redis', connection: 'default', queue, retryAfter: 30, blockFor: 0,
+    name: 'redis', driver: 'redis', connection: 'default', queue, afterCommit: false, retryAfter: 30, blockFor: 0,
     redis: { host: '127.0.0.1', port, db: 0 },
   }, { async execute() { throw new Error('Maintenance does not execute jobs') } }))
   try {

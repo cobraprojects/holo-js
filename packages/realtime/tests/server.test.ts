@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -95,6 +96,34 @@ describe('@holo-js/realtime server definition resolution', () => {
     })
 
     expect(resolvedDefinition).toBe(directDefinition)
+  })
+
+  it.each([
+    ['query', handleRealtimeQueryRequest, 'posts.extra'],
+    ['mutation', handleRealtimeMutationRequest, 'posts.extra'],
+  ] as const)('answers a %s for a name missing from supplied definitions with 404 without scanning realtime files', async (_kind, handle, name) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-realtime-supplied-'))
+    try {
+      await mkdir(join(projectRoot, 'server/realtime'), { recursive: true })
+      await writeFile(join(projectRoot, 'server/realtime/extra.ts'), 'export const extra = {}\n')
+      const imported: string[] = []
+      const response = await handle(new Request('http://localhost/holo/realtime', {
+        method: 'POST',
+        body: JSON.stringify({ name, args: {} }),
+      }), {
+        projectRoot,
+        definitions: [defineRealtimeQuery({ name: 'posts.list', access: 'public', handler: () => [] })],
+        importModule: async (absolutePath) => {
+          imported.push(absolutePath)
+          return {}
+        },
+      })
+
+      expect(response.status).toBe(404)
+      expect(imported).toEqual([])
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('finds definitions inside plain modules and ignores unsupported module values', () => {

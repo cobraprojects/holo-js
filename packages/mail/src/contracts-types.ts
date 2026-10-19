@@ -50,6 +50,8 @@ export interface MailQueueOptions {
   readonly connection?: string
   readonly queue?: string
   readonly afterCommit?: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 export type MailAttachmentContent = string | Uint8Array
@@ -249,6 +251,8 @@ export interface MailSendOptions {
   readonly queue?: string
   readonly delay?: MailDelayValue
   readonly afterCommit?: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 export interface MailSendInput {

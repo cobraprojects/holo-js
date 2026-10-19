@@ -159,9 +159,21 @@ type QueueDispatchChain = {
   dispatch(): Promise<unknown>
 }
 
+type QueueJobRetryContext = {
+  readonly attempt: number
+  readonly maxAttempts: number
+  release(delaySeconds?: number): Promise<void>
+}
+
 type QueueModule = {
-  defineJob(definition: { handle(payload: QueuedNotificationDeliveryPayload): Promise<unknown> | unknown }): unknown
-  dispatch(jobName: string, payload: QueuedNotificationDeliveryPayload): QueueDispatchChain
+  defineJob(definition: {
+    handle(payload: QueuedNotificationDeliveryPayload, context: QueueJobRetryContext): Promise<unknown> | unknown
+  }): unknown
+  dispatch(
+    jobName: string,
+    payload: QueuedNotificationDeliveryPayload,
+    options?: { readonly tries?: number },
+  ): QueueDispatchChain
   getRegisteredQueueJob(name: string): unknown
   registerQueueJob(definition: unknown, options: { name: string }): void
 }
@@ -175,6 +187,7 @@ type QueuedNotificationDeliveryPayload = Readonly<{
   readonly payload: unknown
   readonly targetIndex: number
   readonly deduplicationKey?: string
+  readonly backoff?: number | readonly number[]
 }>
 
 const builtInChannels = createBuiltInChannels(getRuntimeBindings)
@@ -402,6 +415,7 @@ async function deliverResolvedNotificationChannel(
 function createQueuedDeliveryPayload(
   context: NotificationSendContext,
   deduplicationKey?: string,
+  backoff?: number | readonly number[],
 ): QueuedNotificationDeliveryPayload {
   return Object.freeze({
     channel: context.channel,
@@ -412,6 +426,7 @@ function createQueuedDeliveryPayload(
     payload: context.payload,
     targetIndex: context.targetIndex,
     ...(deduplicationKey === undefined ? {} : { deduplicationKey }),
+    ...(typeof backoff === 'undefined' ? {} : { backoff }),
   })
 }
 
@@ -434,6 +449,14 @@ async function runQueuedNotificationDelivery(
   }), payload.deduplicationKey)
 }
 
+function resolveNotificationRetryDelaySeconds(backoff: number | readonly number[], attempt: number): number {
+  if (typeof backoff === 'number') {
+    return backoff
+  }
+
+  return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)] ?? 0
+}
+
 async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule): Promise<QueueModule> {
   const resolvedQueueModule = queueModule ?? await loadQueueModule()
   if (resolvedQueueModule.getRegisteredQueueJob(HOLO_NOTIFICATIONS_DELIVER_JOB)) {
@@ -442,8 +465,22 @@ async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule):
 
   resolvedQueueModule.registerQueueJob(
     resolvedQueueModule.defineJob({
-      async handle(payload: QueuedNotificationDeliveryPayload) {
-        return await runQueuedNotificationDelivery(payload)
+      async handle(payload: QueuedNotificationDeliveryPayload, context: QueueJobRetryContext) {
+        try {
+          return await runQueuedNotificationDelivery(payload)
+        } catch (error) {
+          if (typeof payload.backoff === 'undefined' || context.attempt >= context.maxAttempts) {
+            throw error
+          }
+
+          try {
+            await context.release(resolveNotificationRetryDelaySeconds(payload.backoff, context.attempt))
+          } catch {
+            throw error
+          }
+
+          return undefined
+        }
       },
     }),
     { name: HOLO_NOTIFICATIONS_DELIVER_JOB },
@@ -460,7 +497,8 @@ async function dispatchQueuedNotificationChannel(
   const queueModule = await ensureNotificationsQueueJobRegistered()
   let pending = queueModule.dispatch(
     HOLO_NOTIFICATIONS_DELIVER_JOB,
-    createQueuedDeliveryPayload(context, deduplicationKey),
+    createQueuedDeliveryPayload(context, deduplicationKey, plan.backoff),
+    typeof plan.tries === 'undefined' ? {} : { tries: plan.tries },
   )
 
   if (typeof plan.connection !== 'undefined') {
