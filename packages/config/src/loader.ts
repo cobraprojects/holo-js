@@ -27,7 +27,7 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 3
+const HOLO_CONFIG_CACHE_VERSION = 4
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
@@ -199,7 +199,8 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   },
 ): LoadedHoloConfig<TCustom> {
   const resolvedRawConfig = resolveEnvPlaceholders(rawConfig, options.environment.values)
-  const app = normalizeAppConfig(resolvedRawConfig.app as HoloAppConfig | undefined)
+  const rawApp = resolvedRawConfig.app as HoloAppConfig | undefined
+  const app = normalizeAppConfig({ ...rawApp, env: rawApp?.env ?? options.environment.name })
   const redis = normalizeRedisConfig(resolvedRawConfig.redis as HoloRedisConfig | undefined)
   const firstPartyConfig = composeRegisteredConfig(resolvedRawConfig, {
     app,
@@ -285,7 +286,7 @@ function getNormalizerConfigNames(payload: Pick<ConfigCachePayload, 'normalizerC
 
 function isCachePayload(value: unknown): value is ConfigCachePayload {
   return isObject(value)
-    && (value.version === 1 || value.version === HOLO_CONFIG_CACHE_VERSION)
+    && value.version === HOLO_CONFIG_CACHE_VERSION
     && isObject(value.environment)
     && typeof value.environment.name === 'string'
     && Array.isArray(value.environment.loadedFiles)

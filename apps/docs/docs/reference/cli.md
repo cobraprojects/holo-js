@@ -69,6 +69,14 @@ These rules apply to every command, including your own app commands.
 
 Number flags such as `--step` and `--tries` must be non-negative whole numbers.
 
+### Pick the environment
+
+Every command accepts `--env` to pick the environment for that run. It wins over `APP_ENV` from your shell or `.env`, and decides which `.env` files load. See [Env files and loading order](/reference/environment#env-files-and-loading-order).
+
+```bash
+npx holo migrate:fresh --env=test
+```
+
 ### Interactive prompts
 
 When you run a command in a terminal and leave out a required argument, `holo` asks for it. Some commands, like `new`, `install`, and `make:model`, also ask follow-up questions.
@@ -158,7 +166,7 @@ npx holo start [...frameworkArgs]
 | --- | --- |
 | `...frameworkArgs` | Extra arguments passed to the production server. |
 
-Like `dev`, `start` uses `PORT` when you don't pass `--port`. It loads your `.env` files before starting the server. See [Deployment](/deployment/).
+Like `dev`, `start` uses `PORT` when you don't pass `--port`. It loads your `.env` files and runs the server with `NODE_ENV=production`. The application environment still comes from `APP_ENV`, which is `production` when it isn't set. See [Deployment](/deployment/).
 
 ```bash
 PORT=8080 npx holo start
@@ -515,7 +523,7 @@ npx holo seed [--only <names>] [--quietly] [--force]
 | --- | --- |
 | `--only <names>` | Run only these seeders. Comma-separate or repeat the flag. |
 | `--quietly` | Run seeders without firing model events (observers don't run). |
-| `--force` | Allow seeding when `APP_ENV` (or `NODE_ENV`) is `production`. |
+| `--force` | Allow seeding when the environment is `production`. |
 
 ```bash
 npx holo seed --only roles,admin

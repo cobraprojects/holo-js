@@ -1,16 +1,10 @@
-import type { RuntimeConfigInput, RuntimeConnectionConfig, RuntimeDatabaseConfig } from '@holo-js/db'
-
-type HoloConnectionRuntimeConfig = RuntimeConnectionConfig
-type HoloDatabaseRuntimeConfig = RuntimeDatabaseConfig
+import type { RuntimeConfigInput } from '@holo-js/db'
 
 interface HoloRuntimeConfig extends RuntimeConfigInput {
   holo: NonNullable<RuntimeConfigInput['holo']> & {
-    appEnv: 'production' | 'development' | 'test'
-    appDebug: boolean
     appUrl?: string
     projectRoot?: string
   }
-  db?: HoloDatabaseRuntimeConfig
 }
 
 declare module '#app' {

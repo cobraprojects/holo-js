@@ -2,7 +2,7 @@ import type { ModuleOptions } from '../src/module'
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import type { loadNuxt } from '@nuxt/kit'
 import { createApp, defineEventHandler } from 'h3'
 import { serve } from './support/http'
@@ -49,9 +49,13 @@ async function loadAdapterModule() {
   }
 }
 
-async function loadComposables(runtimeConfig: RuntimeConfigShape) {
+async function loadProjectComposables(database: Record<string, unknown>) {
+  vi.resetModules()
+  const root = await createProject()
+  await writeFile(join(root, 'config/database.mjs'), `export default ${JSON.stringify(database)}`)
   const runtime = await import('../src/runtime/composables')
-  runtime.configureHoloRuntimeConfig(runtimeConfig as Parameters<typeof runtime.configureHoloRuntimeConfig>[0])
+  runtime.configureHoloRuntimeConfig({ holo: { projectRoot: root } })
+  await runtime.holo.getApp()
   return runtime
 }
 
@@ -155,10 +159,8 @@ export default defineDatabaseConfig({
 
     await module.setup({}, nuxt)
 
-    expect((nuxt.options.runtimeConfig.holo as Record<string, unknown>)).toMatchObject({
+    expect(nuxt.options.runtimeConfig.holo).toEqual({
       appUrl: 'https://env.test',
-      appDebug: false,
-      appEnv: 'production',
       projectRoot: root,
     })
     expect((nuxt.options.runtimeConfig.public as Record<string, unknown>)).toMatchObject({
@@ -166,18 +168,7 @@ export default defineDatabaseConfig({
         appName: 'Example App',
       },
     })
-    expect(nuxt.options.runtimeConfig.db).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'postgres',
-          url: 'postgresql://db.internal/main',
-          password: 'top-secret',
-          schema: 'public',
-          logging: true,
-        },
-      },
-    })
+    expect(nuxt.options.runtimeConfig).not.toHaveProperty('db')
   })
 
   it('falls back to default config values when config files are absent', async () => {
@@ -187,22 +178,11 @@ export default defineDatabaseConfig({
 
     await module.setup({}, nuxt)
 
-    expect((nuxt.options.runtimeConfig.holo as Record<string, unknown>)).toMatchObject({
+    expect(nuxt.options.runtimeConfig.holo).toEqual({
       appUrl: 'http://localhost:3000',
-      appEnv: 'development',
-      appDebug: true,
+      projectRoot: root,
     })
-    expect(nuxt.options.runtimeConfig.db).toEqual({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: 'sqlite',
-          url: './data/database.sqlite',
-          schema: 'public',
-          logging: false,
-        },
-      },
-    })
+    expect(nuxt.options.runtimeConfig).not.toHaveProperty('db')
     expect(registeredServerPlugins(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/init'))
     expect(registeredServerPlugins(nuxt)).toContain(resolve(import.meta.dirname, '../src/runtime/plugins/forms'))
     const imports: Parameters<typeof nuxt.callHook<'imports:extend'>>[1] = []
@@ -542,7 +522,7 @@ export default defineAppConfig({
       const { module } = await loadAdapterModule()
       await module.setup({}, nuxt)
       expect(nuxt.options.runtimeConfig.public.holo).toMatchObject({ appName: 'Cached App' })
-      expect(nuxt.options.runtimeConfig.holo).toMatchObject({ appEnv: 'production', appDebug: false })
+      expect(nuxt.options.runtimeConfig.holo).toEqual({ appUrl: 'http://localhost:3000', projectRoot: root })
     } finally {
       vi.unstubAllEnvs()
     }
@@ -566,205 +546,31 @@ export default defineAppConfig({
 })
 
 describe('useHoloDb', () => {
-  it('preserves passwords for named runtimeConfig.db connections', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        defaultConnection: 'primary',
-        connections: {
-          primary: {
-            driver: 'postgres',
-            host: 'db.internal',
-            username: 'app',
-            password: 'secret',
-            database: 'main',
-          },
-        },
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'postgres',
-          url: undefined,
-          host: 'db.internal',
-          port: undefined,
-          username: 'app',
-          password: 'secret',
-          database: 'main',
-          schema: undefined,
-          ssl: undefined,
-          logging: false,
-        },
-      },
-    })
-  })
-
-  it('prefers the named default connection when present without explicit default config', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        connections: {
-          analytics: {
-            driver: 'postgres',
-            url: 'postgresql://analytics.internal/app',
-          },
-          default: {
-            driver: 'mysql',
-            url: 'mysql://default.internal/app',
-          },
-        },
-      },
-    })
-
-    expect(useHoloDb().defaultConnection).toBe('default')
-  })
-
-  it('uses runtimeConfig.db values as-is without inheriting app metadata', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        connections: {
-          default: {
-            driver: 'postgres',
-            host: 'db.internal',
-            username: 'app',
-            database: 'main',
-          },
-        },
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: 'postgres',
-          url: undefined,
-          host: 'db.internal',
-          port: undefined,
-          username: 'app',
-          password: undefined,
-          database: 'main',
-          schema: undefined,
-          ssl: undefined,
-          logging: false,
-        },
-      },
-    })
-  })
-
-  it('uses the only named connection as the default in the composable output', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        connections: {
-          analytics: {
-            driver: 'postgres',
-            url: 'postgresql://analytics.internal/app',
-          },
-        },
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
+  it('normalizes named, string, and filename-based connections from the runtime database config', async () => {
+    const runtime = await loadProjectComposables({
       defaultConnection: 'analytics',
       connections: {
-        analytics: {
-          driver: 'postgres',
-          url: 'postgresql://analytics.internal/app',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: false,
-        },
-      },
-    })
-  })
-
-  it('supports env helpers, string URLs, and filename-based sqlite inference', async () => {
-    const { useHoloDb, useHoloEnv, useHoloDebug } = await loadComposables({
-      holo: {
-        appEnv: 'test',
-        appDebug: true,
-      },
-      db: {
-        defaultConnection: 'analytics',
-        connections: {
-          analytics: {
-            filename: './data/direct.sqlite',
-            logging: true,
-          },
-          replica: 'postgresql://replica.internal/app',
-        },
+        analytics: { filename: ':memory:', logging: true },
+        warehouse: { driver: 'mysql', username: 'reporter', password: 'secret', database: 'warehouse' },
+        replica: 'postgresql://replica.internal/app',
       },
     })
 
-    expect(useHoloDb()).toEqual({
+    expect(runtime.useHoloDb()).toEqual({
       defaultConnection: 'analytics',
       connections: {
         analytics: {
           driver: 'sqlite',
-          url: './data/direct.sqlite',
+          url: ':memory:',
           host: undefined,
           port: undefined,
           username: undefined,
           password: undefined,
-          database: './data/direct.sqlite',
+          database: ':memory:',
           schema: undefined,
           ssl: undefined,
           logging: true,
         },
-        replica: {
-          url: 'postgresql://replica.internal/app',
-        },
-      },
-    })
-    expect(useHoloEnv()).toBe('test')
-    expect(useHoloDebug()).toBe(true)
-  })
-
-  it('supports db.defaultConnection with canonical connection properties', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        defaultConnection: 'warehouse',
-        connections: {
-          warehouse: {
-            driver: 'mysql',
-            username: 'reporter',
-            password: 'secret',
-            database: 'warehouse',
-            logging: true,
-          },
-        },
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'warehouse',
-      connections: {
         warehouse: {
           driver: 'mysql',
           url: undefined,
@@ -775,92 +581,22 @@ describe('useHoloDb', () => {
           database: 'warehouse',
           schema: undefined,
           ssl: undefined,
-          logging: true,
-        },
-      },
-    })
-  })
-
-  it('supports empty direct holo connection groups and driverless object connections', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        connections: {
-          analytics: {
-            url: 'https://example.test/not-a-db-url',
-          },
-        },
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'analytics',
-      connections: {
-        analytics: {
-          driver: undefined,
-          url: 'https://example.test/not-a-db-url',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
           logging: false,
         },
+        replica: {
+          url: 'postgresql://replica.internal/app',
+        },
       },
     })
   })
 
-  it('returns an empty direct holo connection group with the default fallback name', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        connections: {},
-      },
-    })
+  it('throws until the Holo runtime is initialized', async () => {
+    vi.resetModules()
+    const runtime = await import('../src/runtime/composables')
 
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'default',
-      connections: {},
-    })
-  })
-
-  it('falls back to an empty group when runtimeConfig.db is absent', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'default',
-      connections: {},
-    })
-  })
-
-  it('falls back to empty connections when runtimeConfig.db omits them', async () => {
-    const { useHoloDb } = await loadComposables({
-      holo: {
-        appEnv: 'development',
-        appDebug: false,
-      },
-      db: {
-        defaultConnection: 'primary',
-      },
-    })
-
-    expect(useHoloDb()).toEqual({
-      defaultConnection: 'primary',
-      connections: {},
-    })
+    expect(() => runtime.useHoloDb()).toThrow('Holo runtime is not initialized.')
+    expect(() => runtime.useHoloEnv()).toThrow('Holo runtime is not initialized.')
+    expect(() => runtime.useHoloDebug()).toThrow('Holo runtime is not initialized.')
   })
 
   it('throws a type error when runtime config bindings are unavailable', async () => {
@@ -870,65 +606,34 @@ describe('useHoloDb', () => {
 
     const runtime = await import('../src/runtime/composables')
 
-    expect(() => runtime.useHoloEnv()).toThrow(TypeError)
-    expect(() => runtime.useHoloDb()).toThrow('Holo runtime config is not configured.')
+    await expect(runtime.holo.getApp()).rejects.toThrow('Holo runtime config is not configured.')
   })
 
   it('uses configured runtime config from shared globals and can reset it', async () => {
     vi.resetModules()
     vi.unstubAllGlobals()
     vi.doUnmock('#app')
-
+    const root = await createProject()
+    await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
     const runtime = await import('../src/runtime/composables')
 
-    runtime.configureHoloRuntimeConfig({
-      holo: {
-        appEnv: 'test',
-        appDebug: true,
-      },
-      db: {
-        connections: {
-          default: {
-            url: './configured.sqlite',
-          },
-        },
-      },
-    })
-
-    expect(runtime.useHoloDb()).toEqual({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: undefined,
-          url: './configured.sqlite',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: false,
-        },
-      },
-    })
-    expect(runtime.useHoloEnv()).toBe('test')
-    expect(runtime.useHoloDebug()).toBe(true)
-    expect(typeof runtime.holo.getApp).toBe('function')
+    runtime.configureHoloRuntimeConfig({ holo: { projectRoot: root } })
+    await expect(runtime.holo.getApp()).resolves.toMatchObject({ projectRoot: root })
 
     runtime.resetHoloRuntimeConfig()
 
-    expect(() => runtime.useHoloDb()).toThrow('Holo runtime config is not configured.')
+    await expect(runtime.holo.getApp()).rejects.toThrow('Holo runtime config is not configured.')
   })
 
   it.each(['production', 'development', 'test'] as const)('boots a real SQLite project through holo.getApp in %s', async appEnv => {
     vi.resetModules()
     vi.stubEnv('NODE_ENV', appEnv)
+    vi.stubEnv('APP_ENV', appEnv)
     const root = await createProject()
     await writeFile(join(root, 'config/app.mjs'), `export default { name: 'Native Nuxt App', env: '${appEnv}', key: 'base64:key', url: 'http://localhost' }`)
     await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
     const runtime = await import('../src/runtime/composables')
-    runtime.configureHoloRuntimeConfig({ holo: { appEnv, appDebug: false, projectRoot: root } })
+    runtime.configureHoloRuntimeConfig({ holo: { projectRoot: root } })
 
     const project = await runtime.holo.getApp()
     expect(project.projectRoot).toBe(root)
@@ -948,6 +653,54 @@ describe('useHoloDb', () => {
     await expect(asynchronousResult).resolves.toEqual({ mode: 'async' })
   })
 
+  it('reports the runtime environment, debug flag, and database when started with a different APP_ENV than the build', async () => {
+    vi.stubEnv('APP_ENV', undefined)
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const root = await createProject()
+    await writeFile(join(root, '.env'), 'APP_ENV=development\nAPP_DEBUG=true\nDB_URL=./build.sqlite\n')
+    await writeFile(join(root, '.env.production'), 'APP_DEBUG=false\nDB_URL=:memory:\n')
+    await writeFile(join(root, 'config/app.mjs'), "export default { name: 'Runtime Env App', debug: process.env.APP_DEBUG !== 'false' }")
+    await writeFile(join(root, 'config/database.mjs'), "export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: process.env.DB_URL } } }")
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
+    await module.setup({}, nuxt)
+    const builtHoloConfig = nuxt.options.runtimeConfig.holo as { appUrl?: string, projectRoot?: string }
+
+    vi.stubEnv('APP_ENV', 'production')
+    vi.stubEnv('APP_DEBUG', undefined)
+    vi.stubEnv('DB_URL', undefined)
+    const runtime = await import('../src/runtime/composables')
+    runtime.configureHoloRuntimeConfig({ holo: builtHoloConfig })
+    const project = await runtime.holo.getApp()
+
+    expect(project.config.environment.name).toBe('production')
+    expect(runtime.useHoloEnv()).toBe('production')
+    expect(runtime.useHoloDebug()).toBe(false)
+    expect(runtime.useHoloDb()).toMatchObject({ defaultConnection: 'main', connections: { main: { url: ':memory:' } } })
+  })
+
+  it('selects env files from the runtime APP_ENV instead of the build-time environment', async () => {
+    vi.resetModules()
+    vi.stubEnv('APP_ENV', 'production')
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const root = await createProject()
+    await writeFile(join(root, '.env.development'), 'APP_NAME=Development\n')
+    await writeFile(join(root, '.env.production'), 'APP_NAME=Production\n')
+    await writeFile(join(root, 'config/app.mjs'), "export default { name: process.env.APP_NAME }")
+    await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
+    const runtime = await import('../src/runtime/composables')
+    runtime.configureHoloRuntimeConfig({ holo: { projectRoot: root } })
+
+    const project = await runtime.holo.getApp()
+
+    expect(project.config.environment.name).toBe('production')
+    expect(project.config.app.name).toBe('Production')
+  })
+
   it('boots the working directory when no runtime projectRoot is configured', async () => {
     vi.resetModules()
     const root = await createProject()
@@ -955,7 +708,7 @@ describe('useHoloDb', () => {
     await writeFile(join(root, 'config/database.mjs'), `export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:' } } }`)
     const previousCwd = process.cwd()
     const runtime = await import('../src/runtime/composables')
-    runtime.configureHoloRuntimeConfig({ holo: { appEnv: 'development', appDebug: false } })
+    runtime.configureHoloRuntimeConfig({ holo: {} })
     try {
       process.chdir(root)
       const project = await runtime.holo.getApp()

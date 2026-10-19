@@ -63,8 +63,8 @@ function jwksResponse(keys: readonly Record<string, unknown>[] = [appleJwk]): Re
 }
 
 function mockAppleFetch(
-  payload: Record<string, unknown>,
-  keys: readonly Record<string, unknown>[] = [appleJwk],
+  payload: Record<string, unknown> | (() => Record<string, unknown>),
+  keys: readonly Record<string, unknown>[] | (() => readonly Record<string, unknown>[]) = [appleJwk],
 ): void {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string'
@@ -74,11 +74,11 @@ function mockAppleFetch(
         : input.url
 
     if (url === APPLE_TOKEN_URL) {
-      return tokenResponse(payload)
+      return tokenResponse(typeof payload === 'function' ? payload() : payload)
     }
 
     if (url === APPLE_JWKS_URL) {
-      return jwksResponse(keys)
+      return jwksResponse(typeof keys === 'function' ? keys() : keys)
     }
 
     throw new Error(`Unexpected Apple fetch: ${url}`)
@@ -456,6 +456,151 @@ describe('@holo-js/auth-social-apple', () => {
     }) as typeof fetch
 
     await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow('Failed to load Apple JWKS')
+  })
+
+  it('refreshes Apple JWKS once when an id token names a key the cache does not hold', async () => {
+    const rotatedKeyPair = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const rotatedJwk = {
+      ...rotatedKeyPair.publicKey.export({ format: 'jwk' }),
+      kid: 'apple-rotated-key',
+      alg: 'RS256',
+      use: 'sig',
+    }
+    let keys: readonly Record<string, unknown>[] = [appleJwk]
+    let idToken = ''
+    let jwksRequests = 0
+    mockAppleFetch(() => ({ access_token: 'apple-access-token', id_token: idToken }), () => {
+      jwksRequests += 1
+      return keys
+    })
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+      idToken = createToken({ sub: 'apple-user-first' })
+      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user-first' } })
+
+      keys = [appleJwk, rotatedJwk]
+      vi.setSystemTime(new Date('2030-01-01T00:02:00Z'))
+      idToken = createToken({ sub: 'apple-user-rotated' }, {
+        kid: 'apple-rotated-key',
+        privateKey: rotatedKeyPair.privateKey,
+      })
+      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user-rotated' } })
+      expect(jwksRequests).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('limits Apple JWKS refreshes for forged key ids to one per refresh interval', async () => {
+    let idToken = ''
+    let jwksRequests = 0
+    mockAppleFetch(() => ({ access_token: 'apple-access-token', id_token: idToken }), () => {
+      jwksRequests += 1
+      return [appleJwk]
+    })
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+      idToken = createToken({ sub: 'apple-user' })
+      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
+
+      vi.setSystemTime(new Date('2030-01-01T00:02:00Z'))
+      idToken = createToken({ sub: 'forged-user' }, { kid: 'forged-key', privateKey: invalidKeyPair.privateKey })
+      await Promise.allSettled(Array.from({ length: 5 }, () => exchangeCode({ clientId: 'client' })))
+      expect(jwksRequests).toBe(2)
+
+      await Promise.allSettled(Array.from({ length: 5 }, () => exchangeCode({ clientId: 'client' })))
+      expect(jwksRequests).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['fetch', 61_000],
+    ['json', 61_000],
+    ['fetch', 660_000],
+    ['json', 660_000],
+  ] as const)('coalesces a pending %s for %i ms and waits a minute after rejection before retrying', async (phase, delay) => {
+    let markStarted!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    const failure = new Error('Delayed JWKS failure')
+    let rejectLoad!: (error: Error) => void
+    const pending = phase === 'json'
+      ? new Response(new ReadableStream({
+          start(controller) {
+            rejectLoad = error => controller.error(error)
+          },
+        }))
+      : new Promise<Response>((_resolve, reject) => { rejectLoad = reject })
+    let jwksRequests = 0
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === APPLE_TOKEN_URL) {
+        return tokenResponse({ access_token: 'access', id_token: createToken({ sub: 'apple-user' }) })
+      }
+      if (String(input) === APPLE_JWKS_URL) {
+        jwksRequests += 1
+        markStarted()
+        return jwksRequests === 1 ? pending : jwksResponse()
+      }
+      throw new Error(`Unexpected Apple fetch: ${String(input)}`)
+    }) as typeof fetch
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+      const first = Promise.allSettled([exchangeCode({ clientId: 'client' })])
+      await started
+      vi.setSystemTime(Date.now() + delay)
+      const concurrent = Promise.allSettled(Array.from({ length: 3 }, () => exchangeCode({ clientId: 'client' })))
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(jwksRequests).toBe(1)
+
+      rejectLoad(failure)
+      for (const result of [...await first, ...await concurrent]) {
+        expect(result).toMatchObject({ status: 'rejected', reason: failure })
+      }
+      await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow('Delayed JWKS failure')
+      expect(jwksRequests).toBe(1)
+
+      vi.setSystemTime(Date.now() + 59_999)
+      await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow('Delayed JWKS failure')
+      expect(jwksRequests).toBe(1)
+
+      vi.setSystemTime(Date.now() + 1)
+      const retried = await Promise.all(Array.from({ length: 3 }, () => exchangeCode({ clientId: 'client' })))
+      expect(retried).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({ profile: expect.objectContaining({ id: 'apple-user' }) })))
+      expect(jwksRequests).toBe(2)
+    } finally {
+      rejectLoad(failure)
+      vi.useRealTimers()
+    }
+  })
+
+  it('expires cached Apple JWKS after their maximum age', async () => {
+    let idToken = ''
+    let jwksRequests = 0
+    mockAppleFetch(() => ({ access_token: 'apple-access-token', id_token: idToken }), () => {
+      jwksRequests += 1
+      return [appleJwk]
+    })
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+      idToken = createToken({ sub: 'apple-user' })
+      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
+
+      vi.setSystemTime(new Date('2030-01-01T00:11:00Z'))
+      idToken = createToken({ sub: 'apple-user' })
+      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
+      expect(jwksRequests).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects Apple id tokens with invalid claims', async () => {

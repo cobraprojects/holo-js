@@ -583,13 +583,15 @@ describe('model relation slice', () => {
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     const Profile = defineModelFromTable(profiles)
-    const Role = defineModelFromTable(roles)
+    const Role = defineModelFromTable(roles, { guarded: [] })
     const Post = defineModelFromTable(posts, {
+      guarded: [],
       relations: {
         author: belongsTo(() => User, 'userId'),
       },
     })
     User = defineModelFromTable(users, {
+      guarded: [],
       relations: {
         posts: hasMany(() => Post, 'userId'),
         profile: hasOne(() => Profile, 'userId'),
@@ -1368,18 +1370,22 @@ describe('model relation slice', () => {
     let Image: ReturnType<typeof defineModelFromTable<typeof images>>
 
     User = defineModelFromTable(users, {
+      guarded: [],
       relations: {
         posts: hasMany(() => Post, 'userId'),
         profile: hasOne(() => Profile, 'userId'),
         avatar: morphOne(() => Image, 'imageable', 'imageableType', 'imageableId'),
         images: morphMany(() => Image, 'imageable', 'imageableType', 'imageableId') } })
     Post = defineModelFromTable(posts, {
+      guarded: [],
       relations: {
         author: belongsTo(() => User, 'userId') } })
     Profile = defineModelFromTable(profiles, {
+      guarded: [],
       relations: {
         user: belongsTo(() => User, 'userId') } })
     Image = defineModelFromTable(images, {
+      guarded: [],
       relations: {
         imageable: morphTo('imageable', 'imageableType', 'imageableId') } })
 
@@ -1517,13 +1523,16 @@ describe('model relation slice', () => {
     let Profile: ReturnType<typeof defineModelFromTable<typeof profiles>>
 
     User = defineModelFromTable(users, {
+      guarded: [],
       relations: {
         posts: hasMany(() => Post, 'userId'),
         profile: hasOne(() => Profile, 'userId') } })
     Post = defineModelFromTable(posts, {
+      guarded: [],
       relations: {
         author: belongsTo(() => User, 'userId') } })
     Profile = defineModelFromTable(profiles, {
+      guarded: [],
       relations: {
         user: belongsTo(() => User, 'userId') } })
 
@@ -1619,15 +1628,17 @@ describe('model relation slice', () => {
     let Article: ReturnType<typeof defineModelFromTable<typeof articles>>
     let Tag: ReturnType<typeof defineModelFromTable<typeof tags>>
 
-    Role = defineModelFromTable(roles)
+    Role = defineModelFromTable(roles, { guarded: [] })
     User = defineModelFromTable(users, {
       relations: {
         roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId') } })
     Tag = defineModelFromTable(tags, {
+      guarded: [],
       relations: {
         articles: morphedByMany(() => Article, 'taggable', taggables, 'tagId', 'id', 'id', 'taggableType', 'taggableId')
           .withPivot('note') } })
     Article = defineModelFromTable(articles, {
+      guarded: [],
       relations: {
         tags: morphToMany(() => Tag, 'taggable', taggables, 'tagId', 'id', 'id', 'taggableType', 'taggableId')
           .withPivot('note') } })
@@ -1778,7 +1789,7 @@ describe('model relation slice', () => {
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
 
-    Post = defineModelFromTable(posts)
+    Post = defineModelFromTable(posts, { guarded: [] })
     User = defineModelFromTable(users)
     Country = defineModelFromTable(countries, {
       name: 'Country',
@@ -2847,6 +2858,7 @@ describe('model relation slice', () => {
     let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
 
     User = defineModelFromTable(users, {
+      guarded: [],
       relations: {
         posts: hasMany(() => Post, 'userId'),
         roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId') } })
@@ -2921,6 +2933,7 @@ describe('model relation slice', () => {
         imageable: morphTo('imageable', 'imageableType', 'imageableId') } })
 
     User = defineModelFromTable(users, {
+      guarded: [],
       morphClass: 'members',
       relations: {
         images: morphMany(() => Image, 'imageable', 'imageableType', 'imageableId'),
@@ -3057,7 +3070,7 @@ describe('model relation slice', () => {
     expect(unmappedImage.getRelation<Entity<TableDefinition>>('imageable')?.getRelation<Entity<TableDefinition>[]>('posts') ?? []).toEqual([])
 
     const fallbackTypedImage = await Image.findOrFail(100)
-    fallbackTypedImage.set('imageableType' as never, null as never)
+    fallbackTypedImage.forceFill({ imageableType: null } as never)
     fallbackTypedImage.setRelation('imageable', loadedUsers[0])
     await expect(fallbackTypedImage.loadMorph('imageable', { User: '' })).resolves.toBe(fallbackTypedImage)
     expect(fallbackTypedImage.getRelation<Entity<TableDefinition>>('imageable')?.get('name')).toBe('Mohamed')
@@ -3138,7 +3151,7 @@ describe('model relation slice', () => {
       'whereMorphedTo targets must be persisted entities.',
     )
     const brokenTarget = User.getRepository().hydrate({ id: 9, name: 'Broken' })
-    brokenTarget.set('id', undefined as never)
+    brokenTarget.forceFill({ id: undefined } as never)
     expect(() => Image.query().whereMorphedTo('imageable', brokenTarget)).toThrow(
       'whereMorphedTo targets must have a defined primary key value.',
     )
@@ -3196,6 +3209,7 @@ describe('model relation slice', () => {
     let Tag: ReturnType<typeof defineModelFromTable<typeof tags>>
 
     Post = defineModelFromTable(posts, {
+      guarded: [],
       morphClass: 'articles',
       relations: {
         tags: morphToMany(() => Tag, 'taggable', taggables, 'tagId', 'id', 'id', 'taggableType', 'taggableId')
@@ -3204,6 +3218,7 @@ describe('model relation slice', () => {
           .as('tagging') } })
 
     Tag = defineModelFromTable(tags, {
+      guarded: [],
       relations: {
         posts: morphedByMany(() => Post, 'taggable', taggables, 'tagId', 'id', 'id', 'taggableType', 'taggableId') } })
 
@@ -3485,6 +3500,7 @@ describe('model relation slice', () => {
       relations: {
         author: belongsTo(() => User, 'userId') } })
     User = defineModelFromTable(users, {
+      guarded: [],
       relations: {
         posts: hasMany(() => Post, 'userId') } })
 

@@ -16,7 +16,7 @@ export const holoAppDefaults: Readonly<NormalizedHoloAppConfig> = Object.freeze(
   url: 'http://localhost:3000',
   timezone: 'UTC',
   debug: true,
-  env: 'development',
+  env: 'production',
   plugins: Object.freeze([]),
   exceptions: Object.freeze({}),
   paths: Object.freeze({ ...DEFAULT_HOLO_PROJECT_PATHS }),
@@ -25,7 +25,7 @@ export const holoAppDefaults: Readonly<NormalizedHoloAppConfig> = Object.freeze(
   seeders: Object.freeze([]),
 })
 
-export function normalizeAppEnv(value: string | undefined, fallback: HoloAppEnv = 'development'): HoloAppEnv {
+export function normalizeAppEnv(value: string | undefined, fallback: HoloAppEnv = 'production'): HoloAppEnv {
   if (!value) {
     return fallback
   }
@@ -34,7 +34,7 @@ export function normalizeAppEnv(value: string | undefined, fallback: HoloAppEnv 
     return value
   }
 
-  return fallback
+  throw new Error(`Invalid application environment "${value}". Use development, production, or test.`)
 }
 
 export function normalizeAppConfig(

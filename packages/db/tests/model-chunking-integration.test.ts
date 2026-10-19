@@ -6,7 +6,7 @@ import type { QuerySuccessLog } from '../src/core/types'
 
 describe('model chunking', () => {
   const table = defineGeneratedTable('chunk_items', { id: column.id(), name: column.string(), active: column.boolean() })
-  const Item = defineModel(table, { timestamps: false })
+  const Item = defineModel(table, { guarded: [], timestamps: false })
   let adapter: ReturnType<typeof createSQLiteAdapter>
   let logs: QuerySuccessLog[]
 
@@ -107,7 +107,7 @@ describe('model chunking', () => {
     await adapter.execute("INSERT INTO chunk_notes VALUES (1, 1, 'First note'), (2, 2, 'Second note'), (3, 4, 'Fourth note')")
     const Note = defineModel(defineGeneratedTable('chunk_notes', {
       id: column.id(), item_id: column.integer(), text: column.string(),
-    }), { timestamps: false })
+    }), { guarded: [], timestamps: false })
     const RelatedItem = defineModel(table, {
       timestamps: false,
       relations: { notes: hasMany(() => Note, 'item_id') },

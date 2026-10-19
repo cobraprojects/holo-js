@@ -92,6 +92,7 @@ let capturedOutput = ''
 
 function createChildEnv(overrides = {}) {
   const env = {
+    APP_ENV: 'development',
     ...process.env,
     BROADCAST_HOST: '127.0.0.1',
     BROADCAST_PORT: broadcastPort,

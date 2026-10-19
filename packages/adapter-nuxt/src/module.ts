@@ -725,11 +725,8 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
     }
     opts.runtimeConfig.holo = {
       appUrl: loaded.app.url,
-      appEnv: loaded.app.env,
-      appDebug: loaded.app.debug,
       projectRoot: rootDir,
     }
-    opts.runtimeConfig.db = loaded.database
     const mergedStorageOptions = storageSetup.options
     const normalizedStorage = storageSetup.normalized
     opts._holoStorageModuleOptions = mergedStorageOptions

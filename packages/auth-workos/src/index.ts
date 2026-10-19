@@ -122,7 +122,7 @@ const WORKOS_AUTHENTICATE_URL = `${WORKOS_API_BASE_URL}/user_management/authenti
 const WORKOS_LOGOUT_URL = `${WORKOS_API_BASE_URL}/user_management/sessions/logout`
 const WORKOS_STATE_COOKIE_MAX_AGE_SECONDS = 300
 const workosDefaultProviderRuntimeCache = new Map<string, WorkosProviderRuntime>()
-const workosJwksCache = new Map<string, Promise<readonly JwkKey[]>>()
+const workosJwksCache: Parameters<typeof authRuntimeInternals.jwt.resolveCachedJwk>[0] = new Map()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
 function getRuntimeState(): WorkosRuntimeState {
@@ -189,14 +189,11 @@ function verifyJwtSignatureWithJwk(
   })
 }
 
-async function fetchWorkosJwks(clientId: string, options: {
-  readonly refresh?: boolean
-} = {}): Promise<readonly JwkKey[]> {
+async function resolveWorkosJwk(clientId: string, kid: string | undefined): Promise<JwkKey | undefined> {
   const normalizedClientId = clientId.trim()
-  return authRuntimeInternals.jwt.fetchCachedJwks(normalizedClientId, {
-    cache: workosJwksCache,
+  return authRuntimeInternals.jwt.resolveCachedJwk(workosJwksCache, normalizedClientId, {
     requestUrl: `${WORKOS_API_BASE_URL}/sso/jwks/${encodeURIComponent(normalizedClientId)}`,
-    refresh: options.refresh,
+    kid,
     errorMessage: `[@holo-js/auth-workos] Failed to load WorkOS JWKS for "${normalizedClientId}".`,
   })
 }
@@ -212,17 +209,7 @@ async function verifyWorkosSessionToken(
 
   const parsed = parseJwt(token)
   const headerKid = typeof parsed.header.kid === 'string' ? parsed.header.kid : undefined
-  const resolveKey = async (refresh = false): Promise<JwkKey | undefined> => {
-    const keys = await fetchWorkosJwks(clientId, { refresh })
-    return headerKid
-      ? keys.find(candidate => candidate.kid === headerKid)
-      : keys[0]
-  }
-
-  let key = await resolveKey()
-  if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
-    key = await resolveKey(true)
-  }
+  const key = await resolveWorkosJwk(clientId, headerKid)
   if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
     throw new Error('[@holo-js/auth-workos] WorkOS token signature verification failed.')
   }

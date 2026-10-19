@@ -25,7 +25,7 @@ export default defineAppConfig({
   name: 'Command Runtime',
   key: 'base64:command-runtime',
   url: 'https://command.test',
-  env: 'testing',
+  env: 'test',
 })
 `)
   await writeFile(join(root, 'config/database.ts'), `
