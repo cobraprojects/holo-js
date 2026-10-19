@@ -85,7 +85,7 @@ conversion('large')
   .queued()
 ```
 
-When the media is added, Holo stores the original, generates any non-queued conversions, and then dispatches a `media.generate-conversions` job on the `media` queue. If the upload happens inside a [database transaction](/database/transactions), the job is dispatched only after the transaction commits.
+When the media is added, Holo stores the original, then generates each non-queued conversion and writes it to disk before it starts the next one. Each conversion's image data is released once it's written, so a media item with many conversions doesn't hold all of them in memory at once. The database row is recorded last, in a transaction. Then Holo dispatches a `media.generate-conversions` job on the `media` queue. This happens before Holo's own database transaction starts. If you call `addMedia()` inside your own transaction, the image work still runs inside that transaction, so upload after it commits to keep it short. See [Media upload tutorial](/tutorial/media-uploads). The default image executor limits images to 40 million pixels and 1,000 frames, the same limits upload validation uses. If the upload happens inside a [database transaction](/database/transactions), the job is dispatched only after the transaction commits.
 
 What happens next depends on your [queue driver](/queue/drivers):
 
@@ -137,12 +137,16 @@ await image?.regenerate('thumb')
 
 When you name conversions, only those are rebuilt and the rest are left alone. Naming a conversion that doesn't exist, or that doesn't apply to the item's collection, throws an error. Regenerating also throws if the original file is missing from its disk.
 
+Each regeneration writes its conversions to new files and points the record at them in one transaction. The files they replace are deleted after that transaction commits, so a regenerated conversion's URL changes. Read URLs from the item after you regenerate, rather than keeping the old ones.
+
 ## When something fails
 
 Adding, replacing, regenerating, and deleting media each run in a database transaction, so a failure doesn't leave half-finished state behind.
 
-- **A conversion fails during upload.** The call throws an error naming the conversion and file. Holo deletes the files it just wrote and doesn't create the `media` row. For a `singleFile()` collection, the previous file stays in place.
-- **The upload is inside your own transaction and that transaction rolls back.** Holo removes the new files, restores any files it overwrote, and the previous media is kept.
+- **A conversion fails during upload.** The call throws an error naming the conversion and file. Holo deletes every file it already wrote for that upload and doesn't create the `media` row. For a `singleFile()` collection, the previous file stays in place. If a cleanup delete also fails, the error includes both failures, and the conversion failure stays first.
+- **The database transaction fails after the files are written.** Holo deletes the files it wrote and doesn't keep the `media` row.
+- **The upload is inside your own transaction and that transaction rolls back.** Holo removes the files this upload created, and the previous media is kept.
+- **A regeneration fails or rolls back.** Holo deletes the new conversion files it wrote. The previous files and the `media` row stay as they were.
 - **Files are replaced or deleted.** Old files are removed only after the transaction commits, so a rollback never loses the previous file.
 
 ::: warning
