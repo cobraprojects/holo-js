@@ -1,18 +1,16 @@
 import type { RuntimeConnectionConfig, RuntimeDatabaseConfig } from '@holo-js/db'
 import {
   createHoloProjectAccessors,
+  getHolo,
   initializeHoloAdapterProject,
   type CreateHoloOptions,
 } from '@holo-js/core'
 
 type RuntimeConfigShape = {
   holo: {
-    appEnv: 'production' | 'development' | 'test'
-    appDebug: boolean
     appUrl?: string
     projectRoot?: string
   }
-  db?: RuntimeDatabaseConfig
 }
 
 type RuntimeGlobals = typeof globalThis & {
@@ -66,10 +64,6 @@ function getRuntimeConfig(): RuntimeConfigShape {
   }
 
   return runtimeGlobals.useRuntimeConfig()
-}
-
-function resolveRuntimeEnvName(env: RuntimeConfigShape['holo']['appEnv']): 'development' | 'production' | 'test' {
-  return env
 }
 
 function resolveRuntimeProjectRoot(config: RuntimeConfigShape): string {
@@ -210,7 +204,6 @@ export const holo = createHoloProjectAccessors(async () => {
   const authRequest = createNuxtAuthRequestAccessors()
   const { createNuxtAuthorizationError } = await import('../authorization-error')
   const project = await initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
-    envName: resolveRuntimeEnvName(config.holo.appEnv),
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
     authRequest,
@@ -222,22 +215,6 @@ export const holo = createHoloProjectAccessors(async () => {
   runtimeGlobals.__holoNuxtAuthRequestRunner = (accessors, callback) => project.runtime.runWithAuthRequestAccessors(accessors, callback)
   return project
 }, { cache: process.env.NODE_ENV === 'production' })
-
-function resolveDefaultConnectionName(group: {
-  defaultConnection?: string
-  connections: Record<string, unknown>
-}): string {
-  if (group.defaultConnection) {
-    return group.defaultConnection
-  }
-
-  const connectionNames = Object.keys(group.connections)
-  if (connectionNames.includes('default')) {
-    return 'default'
-  }
-
-  return connectionNames[0] ?? 'default'
-}
 
 function normalizeConnection(
   connection: RuntimeConnectionConfig,
@@ -264,15 +241,11 @@ function normalizeConnection(
 }
 
 export function useHoloDb() {
-  const config = getRuntimeConfig()
-  const group = config.db ?? { connections: {} }
+  const group: RuntimeDatabaseConfig = getHolo().loadedConfig.database
   const connections = group.connections ?? {}
 
   return {
-    defaultConnection: resolveDefaultConnectionName({
-      defaultConnection: group.defaultConnection,
-      connections,
-    }),
+    defaultConnection: group.defaultConnection ?? 'default',
     connections: Object.fromEntries(
       Object.entries(connections).map(([name, connection]) => {
         if (typeof connection === 'string') {
@@ -286,11 +259,9 @@ export function useHoloDb() {
 }
 
 export function useHoloEnv(): 'production' | 'development' | 'test' {
-  const config = getRuntimeConfig()
-  return resolveRuntimeEnvName(config.holo.appEnv)
+  return getHolo().loadedConfig.environment.name
 }
 
 export function useHoloDebug(): boolean {
-  const config = getRuntimeConfig()
-  return config.holo.appDebug
+  return getHolo().loadedConfig.app.debug
 }

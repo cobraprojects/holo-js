@@ -86,7 +86,7 @@ export async function runProjectStartServer(
     const serverArgs = await resolveServerArguments(projectRoot, passthroughArgs)
     if (session.signal.aborted) return
 
-    const result = await (await session.launch(invocation, serverArgs)).completion
+    const result = await (await session.launch(invocation, serverArgs, { NODE_ENV: 'production' })).completion
     if (result.kind === 'error') throw result.error
     if (session.signal.aborted) return
     if (result.code !== 0) {

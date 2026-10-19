@@ -71,12 +71,16 @@ async function readEnvFile(filePath: string): Promise<Record<string, string> | u
 export function resolveAppEnvironment(
   processEnv: NodeJS.ProcessEnv = process.env,
 ): HoloAppEnv {
-  const value = processEnv.HOLO_ENV ?? processEnv.APP_ENV ?? processEnv.NODE_ENV
+  const value = processEnv.APP_ENV
+  if (!value) {
+    return 'production'
+  }
+
   if (value === 'production' || value === 'development' || value === 'test') {
     return value
   }
 
-  return 'development'
+  throw new Error(`Invalid APP_ENV "${value}". Use development, production, or test.`)
 }
 
 export function resolveEnvironmentFileOrder(envName: HoloAppEnv): string[] {
@@ -95,9 +99,11 @@ export async function loadEnvironment(
   options: LoadEnvironmentOptions,
 ): Promise<LoadedEnvironment> {
   const cwd = resolve(options.cwd)
-  const envName = options.envName
-    ? resolveAppEnvironment({ ...options.processEnv, HOLO_ENV: options.envName })
-    : resolveAppEnvironment(options.processEnv)
+  const processEnv = options.processEnv ?? process.env
+  const baseValues = await readEnvFile(join(cwd, '.env'))
+  const envName = resolveAppEnvironment({
+    APP_ENV: options.envName ?? processEnv.APP_ENV ?? baseValues?.APP_ENV,
+  })
   const loadedFiles: string[] = []
   const warnings: string[] = []
   const values: Record<string, string> = {}
@@ -105,7 +111,7 @@ export async function loadEnvironment(
 
   for (const relativeName of resolveEnvironmentFileOrder(envName)) {
     const filePath = join(cwd, relativeName)
-    const fileValues = await readEnvFile(filePath)
+    const fileValues = relativeName === '.env' ? baseValues : await readEnvFile(filePath)
     if (!fileValues) {
       continue
     }
@@ -124,12 +130,13 @@ export async function loadEnvironment(
     Object.assign(values, fileValues)
   }
 
-  const processEnv = options.processEnv ?? process.env
   for (const [key, value] of Object.entries(processEnv)) {
     if (typeof value === 'string') {
       values[key] = value
     }
   }
+
+  values.APP_ENV = envName
 
   return {
     name: envName,

@@ -6,6 +6,12 @@
 
 [Realtime](/realtime/) and [Broadcast](/broadcasting/) are **Experimental** in 0.4.0. Review their [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates. This label does not change runtime behavior.
 
+### Apple callbacks and signing-key rotation
+
+Serve your [Apple callback](/auth/social-login#apple) over HTTPS. Holo now sends its state cookie with `SameSite=None; Secure`, allowing Apple's cross-site form POST while keeping state validation. Keep the callback as a POST handler and exclude it from CSRF protection. No social-provider configuration changes are required.
+
+Apple, Clerk, and WorkOS signing keys now expire after ten minutes. An unknown key ID can refresh them at most once per minute, and concurrent requests share the fetch. A newly rotated key may therefore take up to a minute to be accepted. Tokens with invalid signatures under a known key ID no longer trigger a fetch.
+
 ### Forwarded headers follow Laravel's TrustProxies
 
 Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware does:
@@ -28,6 +34,22 @@ Server subscriptions now authorize and execute independently, including subscrip
 Review model queries and relation constraints that use `orWhere()`. Caller conditions, each global scope, and the soft-delete filter now form separate groups joined with `AND`. Queries can no longer use `OR` to reach foreign-tenant or deleted rows, and instance writes remain limited to their target row. Existing method signatures are unchanged.
 
 Use the existing `withoutGlobalScope()` / `withoutGlobalScopes()` and `withTrashed()` / `onlyTrashed()` controls when deliberately querying outside those filters; apply scope-removal methods before caller conditions as described in [Scopes](/orm/scopes).
+
+### Mass assignment is closed by default
+
+A model without `fillable` or `guarded` now rejects every column in `create()`, `update()`, `make()`, `fill()`, `set()`, property assignment, and query `update()`, `upsert()`, `increment()`, and `decrement()` extra values. Before, it allowed every column. Add a `fillable` list to each such model, or `guarded: []` to allow every column except the primary key and timestamps:
+
+```ts [server/models/Post.ts]
+export default defineModel('posts', {
+  fillable: ['title', 'body', 'status'],
+})
+```
+
+The primary key and the `created_at` and `updated_at` columns are now guarded unless you name them in `fillable`. `fillable: ['*']` and `guarded` lists no longer let request data write them. Holo still generates IDs and timestamps itself. Query `upsert()` rows that include `created_at` or `updated_at` now need those columns in `fillable`.
+
+Mass assignment rules are now checked when you assign attributes, not when you save. `fill()`, `set()`, and property assignment throw the `SecurityError` immediately, and `save()` writes every changed column. A JSON path such as `settings->role` follows its column's rules. `forceFill()` assigns without checking, so the next `save()` writes the columns you pass it, even when they're guarded. Code that relied on `forceFill()` failing for guarded columns should use `fill()` instead.
+
+Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
 ### Error reporting
 
@@ -97,6 +119,29 @@ Holo adapters now use your app's framework packages as peer dependencies instead
 
 Holo's own dependencies now require patched releases too: `ws` 8.21.0, `sharp` 0.35.5, and `mysql2` 3.22.0 or newer. Your package manager installs these for you. If your lockfile pins older versions, refresh it after upgrading.
 
+### Application environment from `APP_ENV`
+
+The environment now comes only from `APP_ENV`. The `--env` option wins over `APP_ENV` from your shell, which wins over `APP_ENV` in `.env`. When none of them sets it, the environment is `production` instead of `development`. Holo uses that environment to pick which `.env` files load. `HOLO_ENV` is no longer read, and `NODE_ENV` no longer picks the environment. A value other than `development`, `production`, or `test` now stops Holo with an error instead of counting as `development`.
+
+Before installing 0.4.0:
+
+1. Add `APP_ENV=development` to your local `.env`. Without it, local commands and `holo dev` run as `production`.
+2. Replace `HOLO_ENV` with `APP_ENV`, or with `--env`, in scripts, CI, and hosting settings.
+3. Set `APP_ENV` anywhere you relied on `NODE_ENV` to pick the environment. For example, Vitest sets `NODE_ENV=test`, so set `APP_ENV: 'test'` in your test config as shown in [Testing](/testing/).
+4. In `config/app.ts`, set the environment the way new projects do:
+
+```ts [config/app.ts]
+import { defineAppConfig, env } from '@holo-js/config'
+
+export default defineAppConfig({
+  env: env('APP_ENV', 'production'),
+})
+```
+
+If you use the config cache, run `npx holo config:cache` again on every server after upgrading. Holo ignores caches written by 0.3.x and loads `config/*.ts` until you rebuild the cache, because an old cache can hold the wrong environment. Mail previews check the environment from `APP_ENV` (or `--env`) rather than a cached `app.env`.
+
+`holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
+
 ### Encrypted session, remember-me, and CSRF cookies
 
 Holo now encrypts the cookies it sets: the session cookie, the remember-me cookie, and `XSRF-TOKEN`. It uses AES-256-GCM with a key derived from `APP_KEY`, and rejects any cookie that was changed. Your own cookies, including ones written with `cookie()` or `cookies.make()`, are not encrypted.
@@ -106,6 +151,12 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 `APP_KEY` must be set wherever Holo sets these cookies. Without it, signing in and issuing the CSRF cookie throw an error. Run `npx holo key:generate` if your `.env` has no key. Changing `APP_KEY` later signs everyone out again.
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
+
+### Social sign-in links only verified accounts
+
+Social sign-in no longer signs in as an existing user whose email isn't verified. When a provider's verified email matches such a user, `callback()` from `@holo-js/auth-social` throws `SocialAuthConflictError`. Catch it in your callback routes and ask the user to sign in with their password and verify their email; their next social sign-in links the accounts. See [Link an existing account](/auth/social-login#link-an-existing-account).
+
+Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
 ## Earlier 0.3.x releases
 
