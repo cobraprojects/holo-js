@@ -12,6 +12,7 @@ class SyncQueueDriver implements QueueSyncDriver {
   readonly name: string
   readonly driver = 'sync' as const
   readonly mode = 'sync' as const
+  readonly acceptsJobId = true
   private readonly context: QueueDriverFactoryContext
 
   constructor(

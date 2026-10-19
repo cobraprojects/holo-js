@@ -241,6 +241,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   readonly name: string
   readonly driver = 'redis' as const
   readonly mode = 'async' as const
+  readonly acceptsJobId = true
 
   private readonly connection: NormalizedQueueRedisConnectionConfig
   private readonly bullConnection: QueueBullConnection

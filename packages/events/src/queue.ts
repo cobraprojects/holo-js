@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import type { QueueJobDefinition, QueueJsonValue, QueueRegisteredJob } from '@holo-js/queue'
+import type { QueueJobContext, QueueJobDefinition, QueueJsonValue, QueueRegisteredJob } from '@holo-js/queue'
 import type { EventQueuedListenerDispatch, EventEnvelope, RegisteredListener } from './contracts'
 import { getRegisteredListener } from './registry'
 
@@ -23,6 +23,7 @@ type QueueModule = {
   dispatch(
     jobName: string,
     payload: EventsInvokeListenerPayload,
+    options?: { readonly tries?: number },
   ): QueuePendingDispatchChain
   getRegisteredQueueJob(name: string): QueueRegisteredJob | undefined
   registerQueueJob(
@@ -100,12 +101,34 @@ function assertQueuedListenerMatchesEvent(
   }
 }
 
+function resolveListenerRetryDelaySeconds(backoff: number | readonly number[], attempt: number): number {
+  if (typeof backoff === 'number') {
+    return backoff
+  }
+
+  return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)] ?? 0
+}
+
 export async function runQueuedListenerInvocation(
   payload: EventsInvokeListenerPayload,
+  context?: QueueJobContext,
 ): Promise<void> {
   const listener = requireQueuedListener(payload.listenerId)
   assertQueuedListenerMatchesEvent(listener, payload.eventName)
-  await listener.definition.handle(createQueuedListenerEventEnvelope(payload))
+  try {
+    await listener.definition.handle(createQueuedListenerEventEnvelope(payload))
+  } catch (error) {
+    const { backoff } = listener.definition
+    if (!context || typeof backoff === 'undefined' || context.attempt >= context.maxAttempts) {
+      throw error
+    }
+
+    try {
+      await context.release(resolveListenerRetryDelaySeconds(backoff, context.attempt))
+    } catch {
+      throw error
+    }
+  }
 }
 
 function registerEventsQueueJob(queue: QueueModule): void {
@@ -137,7 +160,7 @@ export async function dispatchQueuedListenerViaQueue(
     eventName: dispatch.event.name,
     occurredAt: dispatch.event.occurredAt,
     payload: dispatch.event.payload as QueueJsonValue,
-  })
+  }, typeof dispatch.tries === 'undefined' ? {} : { tries: dispatch.tries })
 
   if (typeof dispatch.connection !== 'undefined') {
     pending = pending.onConnection(dispatch.connection)

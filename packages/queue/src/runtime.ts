@@ -26,7 +26,7 @@ import type {
   HoloQueueConfig,
 } from './contracts'
 import { queueJobInternals } from './contracts'
-import { DEFAULT_QUEUE_NAME } from './config'
+import { DEFAULT_QUEUE_NAME, assertQueueTimeoutBelowRetryAfter } from './config'
 import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { syncQueueDriverFactory } from './drivers/sync'
 import { getRegisteredQueueJob } from './registry'
@@ -466,6 +466,7 @@ function createJobEnvelope<TPayload extends QueueJsonValue>(
   jobName: string,
   payload: TPayload,
   options: QueueDispatchOptions,
+  { validateTimeout = true }: { validateTimeout?: boolean } = {},
 ): QueueJobEnvelope<TPayload> {
   const runtime = getQueueRuntimeState()
   const registered = requireRegisteredQueueJob(jobName)
@@ -474,6 +475,12 @@ function createJobEnvelope<TPayload extends QueueJsonValue>(
     options.connection ?? registered.definition.connection,
   )
   const queue = normalizeQueueName(options.queue ?? registered.definition.queue ?? connection.queue ?? DEFAULT_QUEUE_NAME)
+  const tries = queueJobInternals.normalizeOptionalInteger(options.tries, 'Queue dispatch tries', { minimum: 1 })
+    ?? registered.definition.tries
+    ?? 1
+  if (validateTimeout) {
+    assertQueueTimeoutBelowRetryAfter(`Queue job "${registered.name}"`, registered.definition.timeout, connection)
+  }
 
   return Object.freeze({
     id: randomUUID(),
@@ -482,7 +489,7 @@ function createJobEnvelope<TPayload extends QueueJsonValue>(
     queue,
     payload,
     attempts: 0,
-    maxAttempts: registered.definition.tries ?? 1,
+    maxAttempts: tries,
     ...(typeof options.delay === 'undefined' ? {} : { availableAt: normalizeDelay(options.delay) }),
     createdAt: Date.now(),
   })
@@ -492,22 +499,124 @@ function createDispatchEnvelope<TPayload extends QueueJsonValue>(
   jobName: string,
   payload: TPayload,
   options: QueueDispatchOptions = {},
+  { runsInline = false }: { runsInline?: boolean } = {},
 ): QueueJobEnvelope<TPayload> {
   validateQueuePayload(payload)
-  return createJobEnvelope(jobName, payload, options)
+  // Snapshot the payload so a deferred (afterCommit) dispatch serializes what was passed in, not later mutations.
+  const snapshot = JSON.parse(JSON.stringify(payload)) as TPayload
+  return createJobEnvelope(jobName, snapshot, options, { validateTimeout: !runsInline })
 }
 
-async function dispatchRecord(
-  envelope: QueueJobEnvelope,
-): Promise<QueueDispatchResult> {
-  const driver = resolveConnectionDriver(envelope.connection)
-  const result = await dispatchThroughDriver(driver, envelope)
+type DatabaseTransactionConnection = {
+  getScope(): { kind: string }
+  afterCommit(callback: () => Promise<void>): void
+}
 
+type DatabaseModule = {
+  connectionAsyncContext: {
+    getActive(): { connection: DatabaseTransactionConnection } | undefined
+  }
+}
+
+const databaseSpecifier = '@holo-js/db'
+
+async function loadDatabaseModule(): Promise<DatabaseModule | null> {
+  try {
+    return await import(databaseSpecifier) as DatabaseModule
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error.code === 'ERR_MODULE_NOT_FOUND' || error.code === 'MODULE_NOT_FOUND')
+    ) {
+      return null
+    }
+
+    throw error
+  }
+}
+
+async function resolveOpenDatabaseTransaction(): Promise<DatabaseTransactionConnection | undefined> {
+  const database = await loadDatabaseModule()
+  const active = database?.connectionAsyncContext.getActive()?.connection
+  if (!active || active.getScope().kind === 'root') {
+    return undefined
+  }
+
+  return active
+}
+
+type DispatchOutcomeHandlers = {
+  completed(result: QueueDispatchResult): Promise<void>
+  failed(error: unknown): Promise<void>
+}
+
+function toDispatchResult(
+  envelope: QueueJobEnvelope,
+  result: { readonly jobId: string, readonly synchronous: boolean },
+): QueueDispatchResult {
   return {
     jobId: result.jobId,
     connection: envelope.connection,
     queue: envelope.queue,
     synchronous: result.synchronous,
+  }
+}
+
+async function dispatchRecord(
+  envelope: QueueJobEnvelope,
+  options: Pick<QueueDispatchOptions, 'afterCommit'>,
+  handlers: DispatchOutcomeHandlers,
+): Promise<QueueDispatchResult> {
+  try {
+    const driver = resolveConnectionDriver(envelope.connection)
+    const connection = resolveConnectionConfig(getQueueRuntimeState().config, envelope.connection)
+    const afterCommit = options.afterCommit ?? connection.afterCommit
+    // The awaited result is returned before commit, so it can only carry the caller's job ID if the driver stores that ID.
+    if (afterCommit && driver.acceptsJobId !== true) {
+      throw new Error(
+        `[Holo Queue] Queue connection "${envelope.connection}" uses driver "${driver.driver}", `
+        + 'which does not accept a caller-supplied job ID, so afterCommit needs a driver that accepts the job ID.',
+      )
+    }
+
+    const transaction = afterCommit ? await resolveOpenDatabaseTransaction() : undefined
+
+    if (transaction) {
+      // Completion and failure hooks run at commit time, so they reflect what was actually enqueued.
+      transaction.afterCommit(async () => {
+        try {
+          const result = await dispatchThroughDriver(driver, envelope)
+          if (result.jobId !== envelope.id) {
+            throw new Error(
+              `[Holo Queue] Queue connection "${envelope.connection}" driver "${driver.driver}" returned job ID "${result.jobId}" `
+              + `for job "${envelope.id}", but it declares that it accepts the job ID.`,
+            )
+          }
+
+          await handlers.completed(toDispatchResult(envelope, result))
+        } catch (error) {
+          reportError(error, { capability: 'queue', operation: 'dispatch.afterCommit' })
+          await handlers.failed(error)
+        }
+      })
+
+      // The driver runs at commit, so report how it will run now, not after commit.
+      return {
+        jobId: envelope.id,
+        connection: envelope.connection,
+        queue: envelope.queue,
+        synchronous: driver.mode === 'sync',
+      }
+    }
+
+    const dispatched = toDispatchResult(envelope, await dispatchThroughDriver(driver, envelope))
+    await handlers.completed(dispatched)
+    return dispatched
+  } catch (error) {
+    await handlers.failed(error)
+    throw error
   }
 }
 
@@ -555,6 +664,13 @@ class PendingQueueDispatch<TPayload extends QueueJsonValue> implements QueuePend
     }, this.completedHooks, this.failedHooks)
   }
 
+  afterCommit(): QueuePendingDispatch<TPayload> {
+    return new PendingQueueDispatch(this.jobName, this.payload, {
+      ...this.options,
+      afterCommit: true,
+    }, this.completedHooks, this.failedHooks)
+  }
+
   onComplete(callback: QueueDispatchCompletedHook): QueuePendingDispatch<TPayload> {
     return new PendingQueueDispatch(
       this.jobName,
@@ -598,33 +714,41 @@ class PendingQueueDispatch<TPayload extends QueueJsonValue> implements QueuePend
 
   private execute(): Promise<QueueDispatchResult> {
     this.executionPromise ??= (async () => {
+      let envelope: QueueJobEnvelope
       try {
-        const envelope = createDispatchEnvelope(this.jobName, this.payload, this.options)
-        const result = await dispatchRecord(envelope)
-
-        for (const hook of this.completedHooks) {
-          try {
-            await hook(result)
-          } catch (error) {
-            reportError(error, { capability: 'queue', operation: 'dispatch.onComplete' })
-          }
-        }
-
-        return result
+        envelope = createDispatchEnvelope(this.jobName, this.payload, this.options)
       } catch (error) {
-        for (const hook of this.failedHooks) {
-          try {
-            await hook(error)
-          } catch (hookError) {
-            reportError(hookError, { capability: 'queue', operation: 'dispatch.onFailed' })
-          }
-        }
-
+        await this.runFailedHooks(error)
         throw error
       }
+
+      return dispatchRecord(envelope, { afterCommit: this.options.afterCommit }, {
+        completed: result => this.runCompletedHooks(result),
+        failed: error => this.runFailedHooks(error),
+      })
     })()
 
     return this.executionPromise
+  }
+
+  private async runCompletedHooks(result: QueueDispatchResult): Promise<void> {
+    for (const hook of this.completedHooks) {
+      try {
+        await hook(result)
+      } catch (error) {
+        reportError(error, { capability: 'queue', operation: 'dispatch.onComplete' })
+      }
+    }
+  }
+
+  private async runFailedHooks(error: unknown): Promise<void> {
+    for (const hook of this.failedHooks) {
+      try {
+        await hook(error)
+      } catch (hookError) {
+        reportError(hookError, { capability: 'queue', operation: 'dispatch.onFailed' })
+      }
+    }
   }
 }
 
@@ -724,7 +848,7 @@ function dispatchSyncInternal(
   options: QueueDispatchOptions = {},
 ): Promise<unknown> {
   return (async () => {
-    const envelope = createDispatchEnvelope(jobName, payload, options)
+    const envelope = createDispatchEnvelope(jobName, payload, options, { runsInline: true })
     const result = await dispatchThroughDriver(
       resolveSyncExecutionDriver(),
       envelope,

@@ -69,6 +69,40 @@ function normalizeOptionalBoolean(
   return value
 }
 
+function normalizeOptionalTries(value: number | undefined): number | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('[Holo Events] Listener tries must be an integer greater than or equal to 1.')
+  }
+
+  return value
+}
+
+function normalizeOptionalBackoff(
+  value: number | readonly number[] | undefined,
+): number | readonly number[] | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error('[Holo Events] Listener backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+    }
+
+    return value
+  }
+
+  if (!Array.isArray(value) || value.length === 0 || value.some(entry => !Number.isInteger(entry) || entry < 0)) {
+    throw new Error('[Holo Events] Listener backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+  }
+
+  return Object.freeze([...value])
+}
+
 function normalizeOptionalDelay(
   value: EventDelayValue | undefined,
 ): EventDelayValue | undefined {
@@ -228,6 +262,8 @@ export interface ListenerDefinition<
   readonly queueName?: string
   readonly delay?: EventDelayValue
   readonly afterCommit?: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
   handle(event: ListenerHandledEvent<TInput>): TResult | Promise<TResult>
 }
 
@@ -290,6 +326,7 @@ export interface EventQueuedListenerDispatch {
   readonly connection?: string
   readonly queueName?: string
   readonly delay?: EventDelayValue
+  readonly tries?: number
 }
 
 export interface EventDeferredDispatchContext {
@@ -405,8 +442,10 @@ export function normalizeListenerDefinition<
   const queueName = normalizeOptionalString(listener.queueName, 'Listener queue name')
   const delay = normalizeOptionalDelay(listener.delay)
   const afterCommit = normalizeOptionalBoolean(listener.afterCommit, 'Listener afterCommit')
+  const tries = normalizeOptionalTries(listener.tries)
+  const backoff = normalizeOptionalBackoff(listener.backoff)
 
-  if (queue !== true && (connection || queueName || typeof delay !== 'undefined')) {
+  if (queue !== true && (connection || queueName || typeof delay !== 'undefined' || typeof tries !== 'undefined' || typeof backoff !== 'undefined')) {
     throw new Error('[Holo Events] Listener queue metadata requires queue: true.')
   }
 
@@ -419,6 +458,8 @@ export function normalizeListenerDefinition<
     ...(typeof queueName === 'undefined' ? {} : { queueName }),
     ...(typeof delay === 'undefined' ? {} : { delay }),
     ...(typeof afterCommit === 'undefined' ? {} : { afterCommit }),
+    ...(typeof tries === 'undefined' ? {} : { tries }),
+    ...(typeof backoff === 'undefined' ? {} : { backoff }),
   } as ListenerDefinition<TInput, TResult>
 }
 

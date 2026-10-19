@@ -1,4 +1,5 @@
 import type { NormalizedHoloNotificationsConfig } from './config'
+import { normalizeNotificationQueueOptions } from './queueOptions'
 
 const HOLO_NOTIFICATION_DEFINITION_MARKER = Symbol.for('holo-js.notifications.definition')
 const BUILT_IN_NOTIFICATION_CHANNELS = ['email', 'database', 'broadcast'] as const
@@ -168,6 +169,8 @@ export interface NotificationQueueOptions {
   readonly queue?: string
   readonly delay?: NotificationDelayValue
   readonly afterCommit?: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 export type NotificationQueueResolver<TNotifiable, TChannel extends string>
@@ -398,20 +401,7 @@ export function isNotificationDefinition(value: unknown): value is NotificationD
 function normalizeQueueOptions(
   value: NotificationQueueOptions | undefined,
 ): NotificationQueueOptions | undefined {
-  if (typeof value === 'undefined') {
-    return undefined
-  }
-
-  return Object.freeze({
-    connection: normalizeOptionalString(value.connection, 'Notification queue connection'),
-    queue: normalizeOptionalString(value.queue, 'Notification queue name'),
-    ...(typeof value.delay === 'undefined'
-      ? {}
-      : { delay: normalizeDelayValue(value.delay, 'Notification queue delay') }),
-    ...(typeof normalizeOptionalBoolean(value.afterCommit, 'Notification queue afterCommit') === 'undefined'
-      ? {}
-      : { afterCommit: value.afterCommit }),
-  })
+  return normalizeNotificationQueueOptions(value)
 }
 
 function normalizeDelayConfig<TNotifiable, TChannels extends string>(
