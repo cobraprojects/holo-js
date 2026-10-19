@@ -358,7 +358,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
   let lastPrunedAt: number | undefined
 
   const pruneExpiredBuckets = async (now: Date): Promise<void> => {
-    for (const path of await listBucketPaths(root)) {
+    for (const path of await listBucketPaths(join(root, BUCKETS_DIRECTORY))) {
       await withBucketLock(path, lockOptions, async () => {
         const bucket = await readBucket(path)
         if (bucket && isExpired(bucket, now)) {
@@ -433,7 +433,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       let cleared = 0
       const now = resolveNow()
       const prefixHash = createBucketHash(prefix)
-      const paths = await listBucketPaths(root)
+      const paths = await listBucketPaths(join(root, BUCKETS_DIRECTORY))
 
       for (const path of paths) {
         const removed = await withBucketLock(path, lockOptions, async () => {
@@ -463,7 +463,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       return cleared
     },
     async clearAll() {
-      const paths = await listBucketPaths(root)
+      const paths = await listBucketPaths(join(root, BUCKETS_DIRECTORY))
       let cleared = 0
 
       for (const path of paths) {

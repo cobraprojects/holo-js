@@ -1507,6 +1507,33 @@ describe('@holo-js/security rate-limit drivers', () => {
       await expect(store.clear('limiter:login|user:fresh')).resolves.toBe(true)
     })
 
+    it('leaves unrelated JSON files under the root alone during the sweep and clearAll', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+      tempDirs.push(root)
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createFileRateLimitStore(root, {
+        now: () => now,
+      })
+      const unrelatedPath = join(root, 'app-state.json')
+      await writeFile(unrelatedPath, JSON.stringify({
+        namespaceHash: 'app-namespace',
+        keyHash: 'app-key',
+        prefixHashes: ['app-prefix'],
+        attempts: 1,
+        expiresAt: '2026-04-16T12:00:30.000Z',
+      }), 'utf8')
+
+      now = new Date('2026-04-16T12:02:00.000Z')
+      await store.hit('limiter:login|user:fresh', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      await expect(access(unrelatedPath)).resolves.toBeUndefined()
+
+      await expect(store.clearAll()).resolves.toBe(1)
+      await expect(access(unrelatedPath)).resolves.toBeUndefined()
+    })
+
     it('serializes concurrent hits on the same bucket so attempts are not lost', async () => {
       const harness = await createHarness()
       const store = harness.createStore()
