@@ -52,6 +52,7 @@ type MediaEnabledEntityMethods<
 > = {
   addMedia(source: MediaSourceInput): MediaAdder<Entity<TableDefinition>, TCollectionName, TConversionName>
   addMediaFromUrl(url: string): MediaAdder<Entity<TableDefinition>, TCollectionName, TConversionName>
+  addMediaFromDisk(path: string, disk: string): MediaAdder<Entity<TableDefinition>, TCollectionName, TConversionName>
   getMedia(collectionName?: TCollectionName): Promise<MediaItem<TCollectionName, TConversionName, Entity<TableDefinition>>[]>
   getMediaUrls(collectionName?: TCollectionName, conversionName?: TConversionName): Promise<string[]>
   getMediaPaths(collectionName?: TCollectionName, conversionName?: TConversionName): Promise<string[]>

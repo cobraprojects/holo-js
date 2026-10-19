@@ -85,7 +85,7 @@ conversion('large')
   .queued()
 ```
 
-When the media is added, Holo stores the original, generates any non-queued conversions, and then dispatches a `media.generate-conversions` job on the `media` queue. If the upload happens inside a [database transaction](/database/transactions), the job is dispatched only after the transaction commits.
+When the media is added, Holo generates any non-queued conversions, stores the original and the conversions, and then dispatches a `media.generate-conversions` job on the `media` queue. Images are generated before the database transaction starts, so a slow resize doesn't hold the transaction open. Images are limited to 40 million pixels and 1,000 frames, the same limits upload validation uses. If the upload happens inside a [database transaction](/database/transactions), the job is dispatched only after the transaction commits.
 
 What happens next depends on your [queue driver](/queue/drivers):
 

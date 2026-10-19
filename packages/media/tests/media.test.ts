@@ -6,6 +6,7 @@ import sharp from 'sharp'
 import { beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { createNativeRedisQueue } from '../../queue-redis/tests/support/native-queue'
 import { createNativeMediaStorage, storageFiles } from './support/native-storage'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { Storage } from '@holo-js/storage/runtime'
 import {
   belongsTo,
@@ -212,6 +213,16 @@ async function createImageBuffer(
     : base.jpeg().toBuffer()
 }
 
+function createAnimatedGif(frameCount: number): Buffer {
+  const frame = Buffer.from([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0x00])
+  return Buffer.concat([
+    Buffer.from('GIF89a', 'ascii'),
+    Buffer.from([1, 0, 1, 0, 0, 0, 0]),
+    ...Array.from({ length: frameCount }, () => frame),
+    Buffer.from([0x3b]),
+  ])
+}
+
 async function createRemoteMediaServer(handler: RequestListener) {
   const server = createServer(handler)
   await new Promise<void>(resolveListening => server.listen(0, '127.0.0.1', resolveListening))
@@ -221,9 +232,10 @@ async function createRemoteMediaServer(handler: RequestListener) {
     server.close(error => error ? reject(error) : resolveClosed())
     server.closeAllConnections()
   }))
-  mediaAdderInternals.setRemoteMediaDownloader(async url => await mediaAdderInternals.requestRemoteMedia(
+  mediaAdderInternals.setRemoteMediaDownloader(async (url, signal) => await mediaAdderInternals.requestRemoteMedia(
     new URL(`${url.pathname}${url.search}`, `http://media.test:${address.port}`),
     { address: '127.0.0.1', family: 4 },
+    signal,
   ))
 }
 
@@ -1866,6 +1878,221 @@ describe('@holo-js/media', () => {
     expect(new MediaItem(relativeUrlMedia).getPath()).toBe('/assets/relative/original.txt')
   })
 
+  it('treats string sources as local paths and never downloads them', async () => {
+    let requests = 0
+    await createRemoteMediaServer((_request, response) => {
+      requests += 1
+      response.end(pngPixel)
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    const post = await Post.create({ title: 'String source' })
+    await expect(post.addMedia('https://example.test/photo.png').toMediaCollection('images'))
+      .rejects.toThrow('ENOENT')
+    await post.addMedia({ url: 'https://example.test/photo.png' } as never).toMediaCollection('images').catch(() => undefined)
+    expect(requests).toBe(0)
+    expect(await post.getMedia('images')).toEqual([])
+  })
+
+  it('attaches files already on a storage disk and leaves the source in place', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const post = await Post.create({ title: 'From disk' })
+
+    const media = await expectMediaAdded(
+      post.addMediaFromDisk('uploads/photo.png', 'local')
+        .usingName('Disk Photo')
+        .toMediaCollection('images'),
+    )
+
+    expect(media.record.disk).toBe('public')
+    expect(media.fileName).toBe('photo.png')
+    expect(media.record.name).toBe('Disk Photo')
+    expect(media.mimeType).toBe('image/png')
+    expect(await Storage.disk('local').exists('uploads/photo.png')).toBe(true)
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+
+    await expect(post.addMediaFromDisk('uploads/missing.png', 'local').toMediaCollection('images'))
+      .rejects.toThrow('"uploads/missing.png" was not found on disk "local"')
+  })
+
+  it('stores collections without a disk on the configured media disk', async () => {
+    configureConfigRuntime({ app: { timezone: 'UTC' }, media: { disk: 'local' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images')],
+    })
+
+    const post = await Post.create({ title: 'Configured disk' })
+    const media = await expectMediaAdded(post.addMedia(pngPixel).toMediaCollection('images'))
+
+    expect(media.record.disk).toBe('local')
+    expect(await Storage.disk('local').exists(media.record.path)).toBe(true)
+  })
+
+  it('abandons remote downloads that run longer than thirty seconds', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    const post = await Post.create({ title: 'Slow remote' })
+    let downloadSignal: AbortSignal | undefined
+    let downloadStarted: () => void = () => {}
+    const started = new Promise<void>((resolveStarted) => {
+      downloadStarted = resolveStarted
+    })
+    mediaAdderInternals.setRemoteMediaDownloader((_url, signal) => {
+      downloadSignal = signal
+      downloadStarted()
+      return new Promise<Response>(() => {})
+    })
+
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+
+    const upload = post.addMediaFromUrl('https://example.test/slow.png').toMediaCollection('images')
+    const assertion = expect(upload).rejects.toThrow('must finish within 30 seconds')
+    await started
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(downloadSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(downloadSignal?.aborted).toBe(true)
+  })
+
+  it('closes a stalled remote response when the download deadline passes', async () => {
+    let closeServerResponse: () => void = () => {}
+    const serverResponseClosed = new Promise<void>((resolveClosed) => {
+      closeServerResponse = resolveClosed
+    })
+    let respond: () => void = () => {}
+    const serverResponded = new Promise<void>((resolveResponded) => {
+      respond = resolveResponded
+    })
+    await createRemoteMediaServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'image/png', 'content-length': '4096' })
+      response.write(pngPixel)
+      response.on('close', () => closeServerResponse())
+      respond()
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    const post = await Post.create({ title: 'Stalled remote' })
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+
+    const upload = post.addMediaFromUrl('https://example.test/stalled.png').toMediaCollection('images')
+    const assertion = expect(upload).rejects.toThrow('must finish within 30 seconds')
+    await serverResponded
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    await assertion
+    await serverResponseClosed
+  })
+
+  it('generates image conversions before opening the database write transaction', async () => {
+    const scopes: string[] = []
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        scopes.push(DB.connection().getScope().kind)
+        return {
+          contents: Buffer.from(conversion.name),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Transaction scope' })
+    const media = await expectMediaAdded(post.addMedia(await createImageBuffer()).toMediaCollection('images'))
+
+    expect(scopes).toEqual(['root'])
+    expect(media.getAvailableConversions()).toEqual(['thumb'])
+  })
+
+  it('rejects image conversions whose decoded size exceeds the upload pixel limit', async () => {
+    const oversized = await sharp({
+      create: {
+        width: 7001,
+        height: 5715,
+        channels: 3,
+        background: { r: 20, g: 40, b: 60 },
+      },
+    }).jpeg().toBuffer()
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Oversized' })
+    await expect(post.addMedia(oversized).toMediaCollection('images'))
+      .rejects.toThrow('Failed to generate conversion "thumb"')
+    expect(await post.getMedia('images')).toEqual([])
+    expect(await storageFiles('public')).toEqual([])
+  })
+
+  it('rejects animated image conversions with more frames than the upload limit', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Too many frames' })
+    await expect(post.addMedia(createAnimatedGif(1_000)).toMediaCollection('images')).resolves.toMatchObject({ error: null })
+    await expect(post.addMedia(createAnimatedGif(1_001)).toMediaCollection('images'))
+      .rejects.toThrow('Failed to generate conversion "thumb"')
+    expect(await post.getMedia('images')).toHaveLength(1)
+  })
+
   it('supports remote uploads and selective regeneration', async () => {
     const imageBytes = await createImageBuffer()
     await createRemoteMediaServer((request, response) => {
@@ -1934,7 +2161,7 @@ describe('@holo-js/media', () => {
       await expect(post.regenerateMedia('images', 'missing' as never)).rejects.toThrow('Unknown media conversion')
 
       const download = await post
-        .addMedia('https://example.test')
+        .addMediaFromUrl('https://example.test')
         .toMediaCollection('downloads')
 
       expect(download.fileName).toBe('media.bin')
@@ -1943,7 +2170,7 @@ describe('@holo-js/media', () => {
       await expect(post.addMediaFromUrl('%%%%').toMediaCollection('downloads')).rejects.toThrow('valid absolute URLs')
 
       const renamedRemoteImage = await post
-        .addMedia({ url: 'https://example.test/override' })
+        .addMediaFromUrl('https://example.test/override')
         .usingFileName('override.png')
         .toMediaCollection('downloads')
 

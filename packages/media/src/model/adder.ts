@@ -8,6 +8,7 @@ import { BlockList, isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
+import { config } from '@holo-js/config'
 import { inspectFileContent } from '@holo-js/kernel/file-content'
 import { Storage } from '@holo-js/storage/runtime'
 import type { Entity, ModelRecord, TableDefinition } from '@holo-js/db'
@@ -28,7 +29,11 @@ import {
 import type { NormalizedMediaCollectionDefinition } from '../definitions/collections'
 import type { NormalizedMediaDefinition } from '../definitions/config'
 import { dispatchQueuedMediaConversionsForModel } from '../queue'
-import { generateStoredConversions, resolveQueuedConversionNames } from './conversions'
+import {
+  prepareStoredConversions,
+  resolveQueuedConversionNames,
+  storePreparedConversions,
+} from './conversions'
 import { Media } from './Media'
 import { removeObsoleteFiles, runMediaMutation } from './mutation'
 import { MediaItem } from './item'
@@ -42,15 +47,23 @@ export type MediaSourceInput
     | BinaryContent
     | { readonly path: string }
     | {
-      readonly url: string
-      readonly fileName?: string
-      readonly name?: string
-    }
-    | {
       readonly contents: BinaryContent
       readonly fileName?: string
       readonly name?: string
     }
+
+export class RemoteMediaSource {
+  constructor(readonly url: string) {}
+}
+
+export class StoredMediaSource {
+  constructor(
+    readonly disk: string,
+    readonly path: string,
+  ) {}
+}
+
+type MediaAdderSource = MediaSourceInput | RemoteMediaSource | StoredMediaSource
 
 type ReadMediaSource = {
   readonly contents: Uint8Array
@@ -69,6 +82,8 @@ type NamedBinaryContent = BinaryContent & {
 }
 
 const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
+const REMOTE_MEDIA_TIMEOUT_MS = 30_000
+const DEFAULT_MEDIA_DISK = 'public'
 const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
 const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
   tmpdir(),
@@ -76,7 +91,7 @@ const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
 ])
 
 type RemoteMediaAddressResolver = (hostname: string) => Promise<readonly LookupAddress[]>
-type RemoteMediaDownloader = (url: URL) => Promise<Response>
+type RemoteMediaDownloader = (url: URL, signal: AbortSignal) => Promise<Response>
 
 const defaultRemoteMediaAddressResolver: RemoteMediaAddressResolver = async hostname => await lookup(hostname, {
   all: true,
@@ -86,9 +101,9 @@ function createRemoteMediaDownloader(
   resolver: RemoteMediaAddressResolver,
   requester: typeof requestRemoteMedia,
 ): RemoteMediaDownloader {
-  return async (url) => {
+  return async (url, signal) => {
     const address = await resolveRemoteMediaAddress(url, resolver)
-    return await requester(url, address)
+    return await requester(url, address, signal)
   }
 }
 const defaultRemoteMediaDownloader = createRemoteMediaDownloader(defaultRemoteMediaAddressResolver, requestRemoteMedia)
@@ -156,22 +171,17 @@ class MediaAddValidationException extends Error {
   }
 }
 
-function resolveImplicitDiskName(): string {
-  const defaultDisk = Storage.disk()
-  if (defaultDisk.visibility === 'public') {
-    return defaultDisk.name
-  }
-
+function resolveMediaDefaultDisk(): string {
+  let configuredDisk: unknown
   try {
-    const publicDisk = Storage.disk('public')
-    if (publicDisk.visibility === 'public') {
-      return publicDisk.name
-    }
+    configuredDisk = config('media.disk')
   } catch {
-    // Fall back to the configured default disk when no public disk is available.
+    return DEFAULT_MEDIA_DISK
   }
 
-  return defaultDisk.name
+  return typeof configuredDisk === 'string' && configuredDisk.trim()
+    ? configuredDisk.trim()
+    : DEFAULT_MEDIA_DISK
 }
 
 function parseRemoteFileName(url: string): string {
@@ -286,7 +296,7 @@ async function readRemoteMediaContents(
 }
 
 async function resolveMediaSource(
-  input: MediaSourceInput,
+  input: MediaAdderSource,
   overrideFileName: string | undefined,
   overrideName: string | undefined,
   options: {
@@ -300,7 +310,7 @@ async function resolveMediaSource(
 }
 
 async function readMediaSource(
-  input: MediaSourceInput,
+  input: MediaAdderSource,
   overrideFileName: string | undefined,
   overrideName: string | undefined,
   options: {
@@ -308,17 +318,7 @@ async function readMediaSource(
     readonly collectionName: string
   },
 ): Promise<ReadMediaSource> {
-  if (typeof input === 'string' && /^https?:\/\//i.test(input)) {
-    return resolveRemoteMediaSource(
-      { url: input },
-      overrideFileName,
-      overrideName,
-      options.maxSize,
-      options.collectionName,
-    )
-  }
-
-  if (typeof input !== 'string' && isUrlInput(input)) {
+  if (input instanceof RemoteMediaSource) {
     return resolveRemoteMediaSource(
       input,
       overrideFileName,
@@ -326,6 +326,10 @@ async function readMediaSource(
       options.maxSize,
       options.collectionName,
     )
+  }
+
+  if (input instanceof StoredMediaSource) {
+    return resolveStorageMediaSource(input, overrideFileName, overrideName)
   }
 
   if (typeof input === 'string' || isPathInput(input)) {
@@ -376,66 +380,96 @@ function isPathInput(
   return typeof input === 'object' && input !== null && 'path' in input
 }
 
-function isUrlInput(
-  input: Exclude<MediaSourceInput, string>,
-): input is {
-  readonly url: string
-  readonly fileName?: string
-  readonly name?: string
-} {
-  return typeof input === 'object' && input !== null && 'url' in input
+async function resolveStorageMediaSource(
+  input: StoredMediaSource,
+  overrideFileName: string | undefined,
+  overrideName: string | undefined,
+): Promise<ReadMediaSource> {
+  const contents = await Storage.disk(input.disk).getBytes(input.path)
+  if (!contents) {
+    throw new Error(`[@holo-js/media] File "${input.path}" was not found on disk "${input.disk}".`)
+  }
+
+  const fileName = sanitizeFileName(overrideFileName ?? basename(input.path))
+  return {
+    contents,
+    fileName,
+    extension: getExtension(fileName),
+    size: contents.byteLength,
+    name: getDisplayName(fileName, overrideName),
+  }
+}
+
+async function withRemoteMediaDeadline<TResult>(
+  download: (signal: AbortSignal) => Promise<TResult>,
+): Promise<TResult> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(
+        `[@holo-js/media] Remote media downloads must finish within ${REMOTE_MEDIA_TIMEOUT_MS / 1000} seconds.`,
+      )
+      controller.abort(error)
+      reject(error)
+    }, REMOTE_MEDIA_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([download(controller.signal), deadline])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function resolveRemoteMediaSource(
-  input: {
-    readonly url: string
-    readonly fileName?: string
-    readonly name?: string
-  },
+  input: RemoteMediaSource,
   overrideFileName: string | undefined,
   overrideName: string | undefined,
   maxSize: number | undefined,
   collectionName: string,
 ): Promise<ReadMediaSource> {
   const remoteUrl = resolveRemoteMediaUrl(input.url)
-  const response = await remoteMediaDownloader(remoteUrl)
-  if (response.status >= 300 && response.status < 400) {
-    throw new Error('[@holo-js/media] Remote media downloads do not follow redirects.')
-  }
+  return await withRemoteMediaDeadline(async (signal) => {
+    const response = await remoteMediaDownloader(remoteUrl, signal)
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error('[@holo-js/media] Remote media downloads do not follow redirects.')
+    }
 
-  if (!response.ok) {
-    throw new Error(
-      `[Holo Media] Failed to download media from "${remoteUrl.toString()}" (${response.status} ${response.statusText}).`,
+    if (!response.ok) {
+      throw new Error(
+        `[Holo Media] Failed to download media from "${remoteUrl.toString()}" (${response.status} ${response.statusText}).`,
+      )
+    }
+
+    const fileName = sanitizeFileName(
+      overrideFileName ?? parseRemoteFileName(remoteUrl.toString()),
     )
-  }
+    const contentLengthHeader = response.headers.get('content-length')
+    const contentLength = contentLengthHeader?.trim()
+      ? Number(contentLengthHeader)
+      : Number.NaN
 
-  const fileName = sanitizeFileName(
-    overrideFileName ?? input.fileName ?? parseRemoteFileName(remoteUrl.toString()),
-  )
-  const contentLengthHeader = response.headers.get('content-length')
-  const contentLength = contentLengthHeader?.trim()
-    ? Number(contentLengthHeader)
-    : Number.NaN
+    const resolvedMaxSize = typeof maxSize === 'number' ? maxSize : DEFAULT_REMOTE_MEDIA_MAX_SIZE
+    if (Number.isFinite(contentLength) && contentLength > resolvedMaxSize) {
+      throw createMaxSizeError(fileName, collectionName, resolvedMaxSize, contentLength)
+    }
 
-  const resolvedMaxSize = typeof maxSize === 'number' ? maxSize : DEFAULT_REMOTE_MEDIA_MAX_SIZE
-  if (Number.isFinite(contentLength) && contentLength > resolvedMaxSize) {
-    throw createMaxSizeError(fileName, collectionName, resolvedMaxSize, contentLength)
-  }
+    const contents = await readRemoteMediaContents(
+      response,
+      fileName,
+      maxSize,
+      collectionName,
+    )
 
-  const contents = await readRemoteMediaContents(
-    response,
-    fileName,
-    maxSize,
-    collectionName,
-  )
-
-  return {
-    contents,
-    fileName,
-    extension: getExtension(fileName),
-    size: contents.byteLength,
-    name: getDisplayName(fileName, overrideName ?? input.name),
-  }
+    return {
+      contents,
+      fileName,
+      extension: getExtension(fileName),
+      size: contents.byteLength,
+      name: getDisplayName(fileName, overrideName),
+    }
+  })
 }
 
 async function resolveLocalMediaSourcePath(path: string): Promise<string> {
@@ -522,13 +556,14 @@ async function resolveRemoteMediaAddress(
   return addresses[0]!
 }
 
-function requestRemoteMedia(url: URL, address: LookupAddress): Promise<Response> {
+function requestRemoteMedia(url: URL, address: LookupAddress, signal?: AbortSignal): Promise<Response> {
   return new Promise((resolveResponse, reject) => {
     const request = resolveRemoteMediaRequest(url.protocol)(url, {
       headers: {
         host: url.host,
       },
       lookup: createPinnedRemoteMediaLookup(address),
+      signal,
     }, (response) => {
       const headers = new Headers()
       appendRemoteMediaHeaders(headers, response.headers)
@@ -639,7 +674,7 @@ export class MediaAdder<
 > {
   constructor(
     private readonly entity: TEntity,
-    private readonly source: MediaSourceInput,
+    private readonly source: MediaAdderSource,
     private readonly state: {
       readonly fileName?: string
       readonly name?: string
@@ -721,7 +756,7 @@ export class MediaAdder<
       collection,
       definition: mediaDefinition,
       source,
-      disk: this.state.disk ?? collection.disk ?? resolveImplicitDiskName(),
+      disk: this.state.disk ?? collection.disk ?? resolveMediaDefaultDisk(),
     })
   }
 }
@@ -745,6 +780,12 @@ async function attachMedia<
   const conversionsDisk = collection.conversionsDisk ?? disk
   const path = getMediaPathGenerator().originalPath({ uuid, fileName: source.fileName, extension: source.extension, collection })
   const obsolete: MediaItem[] = []
+  const prepared = await prepareStoredConversions({
+    definition: options.definition,
+    collection,
+    conversionsDisk,
+    source: { ...source, uuid },
+  })
   return await runMediaMutation({
     committedMessage: '[Holo Media] Attachment remains committed; post-commit cleanup or conversion dispatch failed.',
     afterRollback: () => { owner.forgetRelation('media') },
@@ -753,13 +794,7 @@ async function attachMedia<
         ? await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
         : []
       await mutation.put(disk, path, source.contents)
-      const generatedConversions = await generateStoredConversions({
-        definition: options.definition,
-        collection,
-        conversionsDisk,
-        source: { ...source, uuid },
-        mutation,
-      })
+      const generatedConversions = await storePreparedConversions(mutation, prepared)
       const max = await Media.query()
         .where('model_type', ownerDefinition.morphClass)
         .where('model_id', ownerId)

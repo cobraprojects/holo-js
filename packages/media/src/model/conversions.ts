@@ -13,6 +13,7 @@ import {
   getContentSize,
   sanitizeFileName,
   toBinaryContent,
+  type BinaryContent,
 } from '../runtime/binary'
 import type { GeneratedMediaConversions, Media } from './Media'
 import { type MediaMutation, runMediaMutation, removeStoredFiles } from './mutation'
@@ -127,15 +128,23 @@ export function resolveQueuedConversionNames(options: {
   )
 }
 
-export async function generateStoredConversions(options: {
+export type PreparedMediaConversion = {
+  readonly name: string
+  readonly path: string
+  readonly disk: string
+  readonly fileName: string
+  readonly mimeType?: string
+  readonly contents: BinaryContent
+}
+
+export async function prepareStoredConversions(options: {
   readonly definition: NormalizedMediaDefinition
   readonly collection: NormalizedMediaCollectionDefinition
   readonly source: MediaConversionExecutorSource
   readonly conversionsDisk: string
   readonly requestedConversions?: string | readonly string[]
   readonly includeQueued?: boolean
-  readonly mutation: MediaMutation
-}): Promise<GeneratedMediaConversions> {
+}): Promise<readonly PreparedMediaConversion[]> {
   const requested = normalizeRequestedConversions(options.requestedConversions)
   const matchingConversions = resolveMatchingConversions(
     options.definition,
@@ -144,11 +153,7 @@ export async function generateStoredConversions(options: {
     { includeQueued: options.includeQueued === true },
   )
 
-  if (matchingConversions.length === 0) {
-    return Object.freeze({})
-  }
-
-  const generatedConversions = Object.create(null) as Record<string, StoredMediaConversion>
+  const prepared: PreparedMediaConversion[] = []
   const executor = getMediaConversionExecutor()
 
   for (const conversion of matchingConversions) {
@@ -163,25 +168,40 @@ export async function generateStoredConversions(options: {
     }
 
     const generatedFileName = sanitizeFileName(generated.fileName ?? options.source.fileName)
-    const conversionPath = getMediaPathGenerator().conversionPath({
-      uuid: options.source.uuid,
-      fileName: options.source.fileName,
-      extension: options.source.extension,
-      collection: options.collection,
-      conversion,
-      generatedFileName,
-    })
-    const targetDisk = generated.disk ?? options.conversionsDisk
-    const conversionMimeType = generated.mimeType?.trim() || mimeTypeFromFileName(generatedFileName) || undefined
-    const conversionContents = await toBinaryContent(generated.contents)
-
-    await options.mutation.put(targetDisk, conversionPath, conversionContents)
-    generatedConversions[conversion.name] = Object.freeze({
-      path: conversionPath,
-      disk: targetDisk,
+    prepared.push(Object.freeze({
+      name: conversion.name,
+      path: getMediaPathGenerator().conversionPath({
+        uuid: options.source.uuid,
+        fileName: options.source.fileName,
+        extension: options.source.extension,
+        collection: options.collection,
+        conversion,
+        generatedFileName,
+      }),
+      disk: generated.disk ?? options.conversionsDisk,
       fileName: generatedFileName,
-      mimeType: conversionMimeType,
-      size: getContentSize(conversionContents),
+      mimeType: generated.mimeType?.trim() || mimeTypeFromFileName(generatedFileName) || undefined,
+      contents: await toBinaryContent(generated.contents),
+    }))
+  }
+
+  return Object.freeze(prepared)
+}
+
+export async function storePreparedConversions(
+  mutation: MediaMutation,
+  prepared: readonly PreparedMediaConversion[],
+): Promise<GeneratedMediaConversions> {
+  const generatedConversions = Object.create(null) as Record<string, StoredMediaConversion>
+
+  for (const conversion of prepared) {
+    await mutation.put(conversion.disk, conversion.path, conversion.contents)
+    generatedConversions[conversion.name] = Object.freeze({
+      path: conversion.path,
+      disk: conversion.disk,
+      fileName: conversion.fileName,
+      mimeType: conversion.mimeType,
+      size: getContentSize(conversion.contents),
     })
   }
 
@@ -237,6 +257,22 @@ export async function regenerateMediaEntityConversions(options: {
       )
     : {}
 
+  const prepared = await prepareStoredConversions({
+    definition,
+    collection,
+    conversionsDisk,
+    requestedConversions: requested,
+    includeQueued: options.includeQueued === true,
+    source: {
+      uuid: String(media.get('uuid')),
+      fileName: String(media.get('file_name')),
+      extension: media.get('extension') ?? undefined,
+      mimeType: media.get('mime_type') ?? undefined,
+      size: sourceContents.byteLength,
+      contents: sourceContents,
+    },
+  })
+
   return await runMediaMutation({
     committedMessage: '[Holo Media] Regeneration remains committed; post-commit cleanup or conversion dispatch failed.',
     afterRollback: async () => {
@@ -244,22 +280,7 @@ export async function regenerateMediaEntityConversions(options: {
       await media.refresh()
     },
     operation: async (mutation) => {
-      const regenerated = await generateStoredConversions({
-        definition,
-        collection,
-        conversionsDisk,
-        requestedConversions: requested,
-        includeQueued: options.includeQueued === true,
-        mutation,
-        source: {
-          uuid: String(media.get('uuid')),
-          fileName: String(media.get('file_name')),
-          extension: media.get('extension') ?? undefined,
-          mimeType: media.get('mime_type') ?? undefined,
-          size: sourceContents.byteLength,
-          contents: sourceContents,
-        },
-      })
+      const regenerated = await storePreparedConversions(mutation, prepared)
       const generatedConversions = Object.freeze({ ...nextBase, ...regenerated })
       media.forceFill({ generated_conversions: generatedConversions })
       await media.save()

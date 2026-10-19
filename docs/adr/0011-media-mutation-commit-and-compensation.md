@@ -8,7 +8,7 @@ Successful return types remain unchanged. A single failure uses a native error w
 
 Attachment, replacement, regeneration, and deletion are implemented through the private Media mutation module. It starts a
 write transaction, retains rollback compensation until the enclosing transaction completes, and
-defers obsolete-file cleanup and queued dispatch until commit. A failed post-commit effect retains
+defers obsolete-file cleanup and queued dispatch until commit. Image conversions are generated before the write transaction starts, so the transaction only stores files and records them. A failed post-commit effect retains
 the durable attachment; cleanup continues across obsolete files and dispatch is attempted even when
 cleanup fails. Native causes retain the failures. Database rollback callback failures preserve the
 original transaction failure alongside compensation failures through `AggregateError`.

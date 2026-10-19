@@ -1,8 +1,7 @@
 import type { Metadata, default as sharp } from 'sharp'
-import type { DecodedImageVerification } from './imageDecoding'
+import { imageDecodingLimits, type DecodedImageVerification } from './imageDecoding'
 
-const maximumDecodedPixels = 40_000_000
-const maximumFrames = 1_000
+export { imageDecodingLimits }
 
 const decodedFormatMatchers: Readonly<Record<string, (metadata: Metadata) => boolean>> = Object.freeze({
   'image/avif': metadata => metadata.format === 'heif' && metadata.compression === 'av1',
@@ -66,9 +65,9 @@ export async function verifyDecodedImage(contents: Uint8Array, mimeType: string,
   if (mimeType === 'image/gif' && !hasCompleteGifStructure(contents)) return invalid
   const decode = await loadSharp()
   try {
-    const image = decode(contents, { animated: true, failOn: 'warning', limitInputPixels: maximumDecodedPixels })
+    const image = decode(contents, { animated: true, failOn: 'warning', limitInputPixels: imageDecodingLimits.maximumDecodedPixels })
     const metadata = await image.metadata()
-    if (!matchesDecodedFormat(metadata) || (metadata.pages ?? 1) > maximumFrames) return invalid
+    if (!matchesDecodedFormat(metadata) || (metadata.pages ?? 1) > imageDecodingLimits.maximumFrames) return invalid
     await image.stats()
     const width = metadata.width
     const height = metadata.pageHeight ?? metadata.height

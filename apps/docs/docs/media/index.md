@@ -119,7 +119,7 @@ collection('avatars')
 
 Every model also has a `default` collection, used when you call `toMediaCollection()` with no name. Any other name you haven't defined throws an error.
 
-When a collection has no `disk()`, Holo uses the default disk if it's public, otherwise the `public` disk if one exists, otherwise the default disk.
+When a collection has no `disk()`, Holo stores its files on the media disk. Set it with `MEDIA_DISK` in your environment, or change it in `config/media.ts`. The default is `public`.
 
 ## Add media
 
@@ -141,7 +141,8 @@ The model must be saved first. Adding media to a record without a primary key th
 | A `Buffer`, `Uint8Array`, or `ArrayBuffer` | `post.addMedia(bytes).usingFileName('report.pdf')` |
 | An object with contents | `post.addMedia({ contents: bytes, fileName: 'a.png' })` |
 | A local file path | `post.addMedia('/tmp/upload-123.jpg')` or `post.addMedia({ path: '/tmp/upload-123.jpg' })` |
-| An `http` or `https` URL | `post.addMedia('https://example.com/photo.jpg')` |
+
+A string is always a file path. To download a file from a URL, use [addMediaFromUrl()](#add-media-from-a-url). To attach a file already stored on a disk, use [addMediaFromDisk()](#add-media-from-a-disk).
 
 Local paths must be inside your system's temp folder or your project's `storage/` folder. Any other path throws, so a user-supplied path can't read arbitrary files from your server.
 
@@ -197,8 +198,20 @@ await post
 The file name comes from the URL path. Use `usingFileName()` when the URL doesn't end in a useful name.
 
 ::: warning
-Remote downloads are limited to protect your server. Holo only fetches `http` and `https` URLs, refuses URLs that contain credentials or point at `localhost` or private network addresses, and doesn't follow redirects. Downloads are capped at the collection's `maxSize`, or 10 MB when the collection has none. A failed download throws an error.
+Remote downloads are limited to protect your server. Holo only fetches `http` and `https` URLs, refuses URLs that contain credentials or point at `localhost` or private network addresses, and doesn't follow redirects. Downloads are capped at the collection's `maxSize`, or 10 MB when the collection has none. A download must finish within 30 seconds, including reading the whole file. A failed or slow download throws an error.
 :::
+
+## Add media from a disk
+
+`addMediaFromDisk()` attaches a file that's already on a [storage disk](/storage/), such as a file your app saved earlier with `Storage.disk('local').put()`:
+
+```ts
+await post
+  .addMediaFromDisk('uploads/hero.jpg', 'local')
+  .toMediaCollection('images')
+```
+
+Holo copies the file to the collection's disk. The original stays where it is, so you can delete it yourself once the media is saved. If the file doesn't exist on that disk, the call throws an error.
 
 ## Get media
 
@@ -302,6 +315,7 @@ Every method and property a developer can call in the media library. Setup helpe
 
 - [addMedia()](#addmedia)
 - [addMediaFromUrl()](#addmediafromurl)
+- [addMediaFromDisk()](#addmediafromdisk)
 - [getMedia()](#getmedia)
 - [getFirstMedia()](#getfirstmedia)
 - [hasMedia()](#hasmedia)
@@ -316,7 +330,7 @@ Every method and property a developer can call in the media library. Setup helpe
 
 </div>
 
-**Upload chain** (returned by `addMedia()` and `addMediaFromUrl()`)
+**Upload chain** (returned by `addMedia()`, `addMediaFromUrl()`, and `addMediaFromDisk()`)
 
 - [usingFileName()](#usingfilename)
 - [usingName()](#usingname)
@@ -379,17 +393,20 @@ conversion('thumb').performOnCollections('images').width(400)
 
 ### defineMediaConfig()
 
-Wraps the object you export from `config/media.ts`. The media config doesn't have any options that Holo reads yet, so the helper only freezes the object.
+Wraps the object you export from `config/media.ts`. The only option is `disk`, the default disk for collections that don't set `disk()`.
 
 ```ts [config/media.ts]
+import { env } from '@holo-js/config'
 import { defineMediaConfig } from '@holo-js/media'
 
-export default defineMediaConfig({})
+export default defineMediaConfig({
+  disk: env('MEDIA_DISK', 'public'),
+})
 ```
 
 ### addMedia()
 
-Starts attaching a file to the record. It returns a chain of [upload methods](#usingfilename) that stores nothing until you call `toMediaCollection()`.
+Starts attaching a file to the record. It returns a chain of [upload methods](#usingfilename) that stores nothing until you call `toMediaCollection()`. The source is a file, binary contents, or a local path. A string is always a path, never a URL.
 
 ```ts
 await post.addMedia(input.image).toMediaCollection('images')
@@ -401,6 +418,14 @@ Same as `addMedia()`, but downloads the file from an `http` or `https` URL first
 
 ```ts
 await post.addMediaFromUrl('https://images.example.com/hero.jpg').toMediaCollection('images')
+```
+
+### addMediaFromDisk()
+
+Same as `addMedia()`, but copies a file that's already on a storage disk. The first argument is the file's path on that disk, and the second is the disk's name. See [Add media from a disk](#add-media-from-a-disk).
+
+```ts
+await post.addMediaFromDisk('uploads/hero.jpg', 'local').toMediaCollection('images')
 ```
 
 ### getMedia()

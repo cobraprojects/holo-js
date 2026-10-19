@@ -144,6 +144,14 @@ For example, `STORAGE_DISKS_MEDIA_BUCKET=blog-uploads` sets the bucket of a disk
 
 These overrides are read from the process environment when storage starts. Values that only exist in a `.env` file may not reach them, so for settings you want in `.env`, use `env()` in `config/storage.ts` instead.
 
+## Media
+
+Used in `config/media.ts`. See [Media Library](/media/).
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MEDIA_DISK` | `public` | Disk for media in collections that don't set `disk()`. |
+
 ## Mail
 
 Used in `config/mail.ts`. See [Mail Drivers](/mail/drivers).

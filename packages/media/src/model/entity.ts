@@ -1,7 +1,7 @@
 import { Entity } from '@holo-js/db'
 import { getMediaDefinition } from '../registry'
 import { Media } from './Media'
-import { MediaAdder, type MediaSourceInput } from './adder'
+import { MediaAdder, RemoteMediaSource, StoredMediaSource, type MediaSourceInput } from './adder'
 import { MediaItem } from './item'
 import { deleteMediaItems } from './mutation'
 import type { TableDefinition } from '@holo-js/db'
@@ -9,6 +9,7 @@ import type { TableDefinition } from '@holo-js/db'
 type MediaEntityPrototype = Entity<TableDefinition> & {
   addMedia(source: MediaSourceInput): MediaAdder
   addMediaFromUrl(url: string): MediaAdder
+  addMediaFromDisk(path: string, disk: string): MediaAdder
   getMedia(collectionName?: string): Promise<MediaItem[]>
   getMediaUrls(collectionName?: string, conversionName?: string): Promise<string[]>
   getMediaPaths(collectionName?: string, conversionName?: string): Promise<string[]>
@@ -88,7 +89,11 @@ export function installEntityMediaMethods(): void {
   }
 
   prototype.addMediaFromUrl = function addMediaFromUrl(url: string) {
-    return new MediaAdder(this, { url })
+    return new MediaAdder(this, new RemoteMediaSource(url))
+  }
+
+  prototype.addMediaFromDisk = function addMediaFromDisk(path: string, disk: string) {
+    return new MediaAdder(this, new StoredMediaSource(disk, path))
   }
 
   prototype.getMedia = async function getMedia(collectionName?: string) {
