@@ -209,10 +209,67 @@ describe('Validation input bounds', () => {
     if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })
   })
 
-  it('validates an unparseable form body as empty input', async () => {
+  it.each([
+    ['multipart/form-data; boundary=form', Error],
+    ['multipart/form-data; boundary=form', TypeError],
+    ['application/x-www-form-urlencoded', Error],
+    ['application/x-www-form-urlencoded', TypeError],
+  ] as const)('propagates body stream failures for %s (%s)', async (contentType, Failure) => {
+    const failure = new Failure('body stream failed')
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('name=Ava'))
+      },
+      pull(controller) {
+        controller.error(failure)
+      },
+    })
     const request = new Request('https://example.com/', {
       method: 'POST',
-      headers: { 'content-type': 'multipart/form-data; boundary=missing' },
+      headers: { 'content-type': contentType },
+      body,
+      ...{ duplex: 'half' },
+    })
+
+    await expect(safeParse(request, schema({ name: field.string().required() }))).rejects.toBe(failure)
+  })
+
+  it.each(['multipart/form-data', 'application/x-www-form-urlencoded'])('propagates consumed-body errors for %s', async (contentType) => {
+    const request = new Request('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': contentType },
+      body: 'name=Ava',
+    })
+    await request.text()
+
+    await expect(safeParse(request, schema({ name: field.string().required() }))).rejects.toBeInstanceOf(TypeError)
+  })
+
+  it.each(['urlencoded', 'multipart'])('preserves %s request values and files', async (format) => {
+    const entries = [['name', 'Ava'], ['tags[]', 'a'], ['tags[]', 'b']] as const
+    const body = format === 'multipart' ? formWith(entries) : new URLSearchParams(entries.map(([key, value]) => [key, value]))
+    if (body instanceof FormData) body.append('attachment', new File(['report'], 'report.txt', { type: 'text/plain' }))
+    const result = await safeParse(new Request('https://example.com/', { method: 'POST', body }), schema({
+      name: field.string().required(),
+      tags: field.array(field.string()),
+      attachment: field.file().optional(),
+    }))
+
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.data.name).toBe('Ava')
+      expect(result.data.tags).toEqual(['a', 'b'])
+      if (format === 'multipart') {
+        expect(result.data.attachment?.name).toBe('report.txt')
+        expect(await result.data.attachment?.text()).toBe('report')
+      }
+    }
+  })
+
+  it.each(['multipart/form-data', 'multipart/form-data; boundary=missing'])('validates malformed %s as empty input', async (contentType) => {
+    const request = new Request('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': contentType },
       body: 'not a multipart body',
     })
 

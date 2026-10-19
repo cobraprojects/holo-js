@@ -471,8 +471,10 @@ function parseJsonInput(text: string): unknown {
 }
 
 async function parseFormBody(input: Request): Promise<FormData> {
+  const body = await input.blob()
+  const form = new Response(body, { headers: input.headers })
   try {
-    return await input.formData()
+    return await form.formData()
   } catch {
     return new FormData()
   }
