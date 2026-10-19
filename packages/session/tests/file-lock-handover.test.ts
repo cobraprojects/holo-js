@@ -92,9 +92,10 @@ function liveHolders(): number {
 }
 
 async function tick(waiter: Acquisition, ms: number): Promise<void> {
-  const sleeping = nextSleep()
   await vi.advanceTimersByTimeAsync(ms)
-  await Promise.race([sleeping, waiter.ready])
+  while (!waiter.settled && vi.getTimerCount() === liveHolders()) {
+    await Promise.race([nextSleep(), waiter.ready])
+  }
   if (!waiter.settled && vi.getTimerCount() !== liveHolders() + 1) {
     throw new Error(`expected ${liveHolders() + 1} pending timers, found ${vi.getTimerCount()}`)
   }
@@ -157,8 +158,23 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(STALL_MS)
     expect(waiter.settledAt! - startedAt).toBeLessThan(STALL_MS + 2 * STEP_MS)
+    expect(waiter.error?.cause).toBeUndefined()
 
     await releaseAcquisition(holder)
+  })
+
+  it('reports the filesystem error when every rename fails without contention', async () => {
+    const asleep = nextSleep()
+    const waiter = startAcquisition('solo')
+    blockRenames('solo')
+    await asleep
+    const startedAt = Date.now()
+
+    await advanceTo(waiter, startedAt + STALL_MS + STEP_MS)
+    expect(waiter.settled).toBe(true)
+    expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
+    expect(waiter.error?.cause).toEqual(expect.objectContaining({ code: 'EPERM' }))
+    expect(waiter.release).toBeUndefined()
   })
 
   it('restarts the stall deadline when the lock changes hands', async () => {

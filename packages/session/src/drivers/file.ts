@@ -241,13 +241,17 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
   )
 }
 
+function acquireTimeoutError(recordPath: string, cause: unknown): Error {
+  return new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`, cause === undefined ? undefined : { cause })
+}
+
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
   const started = Date.now()
   const release = await acquireRecordLockBefore(recordPath, makeDirectory, {
     deadline: started + RECORD_LOCK_ACQUIRE_STALL_MS,
     hardDeadline: started + RECORD_LOCK_ACQUIRE_MAX_MS,
   })
-  if (!release) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+  if (!release) throw acquireTimeoutError(recordPath, undefined)
   return release
 }
 
@@ -273,9 +277,10 @@ async function acquireRecordLockBefore(
     } finally {
       await ownerHandle.close()
     }
+    let uncontendedFailure: unknown
     while (!acquired) {
       if (wait && Date.now() >= Math.min(deadline, wait.hardDeadline)) {
-        throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+        throw acquireTimeoutError(recordPath, uncontendedFailure)
       }
       try {
         await rename(pendingPath, lockPath)
@@ -286,6 +291,7 @@ async function acquireRecordLockBefore(
         const contended = code === 'EEXIST' || code === 'ENOTEMPTY'
           || (busy && await pathExists(lockPath))
         if (!contended && !busy) throw error
+        uncontendedFailure = contended ? undefined : error
         if (contended) {
           const identity = await readRecordLockIdentity(lockPath)
           if (wait && identity?.owner && identity.owner.token !== observedOwner) {
