@@ -1012,6 +1012,8 @@
         "@holo-js/queue": "catalog:",
       },
       "devDependencies": {
+        "@holo-js/db-mysql": "catalog:",
+        "@holo-js/db-postgres": "catalog:",
         "@holo-js/db-sqlite": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
