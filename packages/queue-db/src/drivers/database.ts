@@ -34,6 +34,12 @@ type DatabaseQueuedJobRow = {
   created_at: unknown
 }
 
+type ReservationCandidate = {
+  id: unknown
+  available_at: unknown
+  created_at: unknown
+}
+
 function normalizeDatabaseErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message
@@ -67,6 +73,8 @@ function wrapDatabaseError(
 
   return new DatabaseQueueDriverError(connectionName, action, error)
 }
+
+const RESERVATION_CANDIDATE_PAGE_SIZE = 100
 
 function normalizeQueueNames(
   queueNames: readonly string[] | undefined,
@@ -127,6 +135,77 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     })
   }
 
+  private async lockNextJob(
+    tx: DatabaseContext,
+    quotedTable: string,
+    queueName: string,
+    now: number,
+  ): Promise<DatabaseQueuedJobRow | undefined> {
+    const expiredReservationCutoff = this.getExpiredReservationCutoff(now)
+    const lockClause = tx.getCapabilities().lockForUpdate ? ' FOR UPDATE SKIP LOCKED' : ''
+    let after: ReservationCandidate | undefined
+
+    while (true) {
+      const candidates = await this.selectReservationCandidates(tx, quotedTable, queueName, now, expiredReservationCutoff, after)
+      for (const candidate of candidates) {
+        const [idPlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
+        const locked = await tx.queryCompiled<DatabaseQueuedJobRow>({
+          sql:
+            `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
+            + `FROM ${quotedTable} `
+            + `WHERE id = ${idPlaceholder} `
+            + `AND available_at <= ${availablePlaceholder} `
+            + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder})${lockClause}`,
+          bindings: [candidate.id, now, expiredReservationCutoff],
+          source: `queue:${this.name}:reserve:lock`,
+        })
+
+        if (locked.rows[0]) {
+          return locked.rows[0]
+        }
+      }
+
+      after = candidates.at(-1)
+      if (!after || candidates.length < RESERVATION_CANDIDATE_PAGE_SIZE) {
+        return undefined
+      }
+    }
+  }
+
+  private async selectReservationCandidates(
+    tx: DatabaseContext,
+    quotedTable: string,
+    queueName: string,
+    now: number,
+    expiredReservationCutoff: number,
+    after: ReservationCandidate | undefined,
+  ): Promise<readonly ReservationCandidate[]> {
+    const placeholders = createPlaceholders(tx, after ? 6 : 3)
+    const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = placeholders
+    const cursorCondition = after
+      ? `AND (available_at, created_at, id) > (${placeholders.slice(3).join(', ')}) `
+      : ''
+    const result = await tx.queryCompiled<ReservationCandidate>({
+      sql:
+        `SELECT id, available_at, created_at FROM ${quotedTable} `
+        + `WHERE queue = ${queuePlaceholder} `
+        + `AND available_at <= ${availablePlaceholder} `
+        + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
+        + cursorCondition
+        + 'ORDER BY available_at ASC, created_at ASC, id ASC '
+        + `LIMIT ${RESERVATION_CANDIDATE_PAGE_SIZE}`,
+      bindings: [
+        queueName,
+        now,
+        expiredReservationCutoff,
+        ...(after ? [after.available_at, after.created_at, after.id] : []),
+      ],
+      source: `queue:${this.name}:reserve:candidates`,
+    })
+
+    return result.rows
+  }
+
   async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
     job: QueueJobEnvelope<TPayload>,
   ): Promise<QueueDriverDispatchResult<TResult>> {
@@ -170,53 +249,25 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
 
       return await connection.transaction(async (tx: DatabaseContext) => {
         for (const queueName of queueNames) {
-          while (true) {
-            const now = Date.now()
-            const expiredReservationCutoff = this.getExpiredReservationCutoff(now)
-            const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
-            const selected = await tx.queryCompiled<DatabaseQueuedJobRow>({
-              sql:
-                `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
-                + `FROM ${quotedTable} `
-                + `WHERE queue = ${queuePlaceholder} `
-                + `AND available_at <= ${availablePlaceholder} `
-                + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
-                + 'ORDER BY available_at ASC, created_at ASC, id ASC '
-                + 'LIMIT 1',
-              bindings: [queueName, now, expiredReservationCutoff],
-              source: `queue:${this.name}:reserve:select`,
-            })
-
-            const row = selected.rows[0]
-            if (!row) {
-              break
-            }
-
-            const reservationId = `${input.workerId}:${randomUUID()}`
-            const nextAttempts = coerceRequiredInteger(row.attempts, 'Stored queue job attempts') + 1
-            const [
-              reservedAtPlaceholder,
-              reservationPlaceholder,
-              attemptsPlaceholder,
-              idPlaceholder,
-              queueNamePlaceholder,
-              expiredCutoffPlaceholder,
-            ] = createPlaceholders(tx, 6)
-            const updated = await tx.executeCompiled({
-              sql:
-                `UPDATE ${quotedTable} `
-                + `SET reserved_at = ${reservedAtPlaceholder}, reservation_id = ${reservationPlaceholder}, attempts = ${attemptsPlaceholder} `
-                + `WHERE id = ${idPlaceholder} `
-                + `AND queue = ${queueNamePlaceholder} `
-                + `AND (reserved_at IS NULL OR reserved_at <= ${expiredCutoffPlaceholder})`,
-              bindings: [now, reservationId, nextAttempts, row.id, queueName, expiredReservationCutoff],
-              source: `queue:${this.name}:reserve:update`,
-            })
-
-            if ((updated.affectedRows ?? 0) === 1) {
-              return this.createReservedJob(row, reservationId, now) as QueueReservedJob<TPayload>
-            }
+          const now = Date.now()
+          const row = await this.lockNextJob(tx, quotedTable, queueName, now)
+          if (!row) {
+            continue
           }
+
+          const reservationId = `${input.workerId}:${randomUUID()}`
+          const nextAttempts = coerceRequiredInteger(row.attempts, 'Stored queue job attempts') + 1
+          const [reservedAtPlaceholder, reservationPlaceholder, attemptsPlaceholder, idPlaceholder] = createPlaceholders(tx, 4)
+          await tx.executeCompiled({
+            sql:
+              `UPDATE ${quotedTable} `
+              + `SET reserved_at = ${reservedAtPlaceholder}, reservation_id = ${reservationPlaceholder}, attempts = ${attemptsPlaceholder} `
+              + `WHERE id = ${idPlaceholder}`,
+            bindings: [now, reservationId, nextAttempts, row.id],
+            source: `queue:${this.name}:reserve:update`,
+          })
+
+          return this.createReservedJob(row, reservationId, now) as QueueReservedJob<TPayload>
         }
 
         return null
