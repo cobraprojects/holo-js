@@ -51,16 +51,22 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
 
   let nextExpiryAt = Number.POSITIVE_INFINITY
 
-  const pruneExpiredBuckets = (now: Date): void => {
+  const refreshNextExpiry = (): void => {
     nextExpiryAt = Number.POSITIVE_INFINITY
 
+    for (const bucket of buckets.values()) {
+      nextExpiryAt = Math.min(nextExpiryAt, bucket.expiresAt.getTime())
+    }
+  }
+
+  const pruneExpiredBuckets = (now: Date): void => {
     for (const [key, bucket] of buckets) {
       if (isExpired(bucket, now)) {
         buckets.delete(key)
-      } else {
-        nextExpiryAt = Math.min(nextExpiryAt, bucket.expiresAt.getTime())
       }
     }
+
+    refreshNextExpiry()
   }
 
   const pruneTimer = setInterval(() => pruneExpiredBuckets(resolveNow()), pruneIntervalMs)
@@ -107,14 +113,15 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
 
         if (buckets.size >= maxBuckets) {
           reportCapacity(now, hitOptions.decaySeconds)
+          const freesAt = nextExpiryAt
           return Object.freeze({
             limited: true,
             snapshot: createSnapshot(key, {
               key,
               attempts: hitOptions.maxAttempts + 1,
-              expiresAt: new Date(now.getTime() + hitOptions.decaySeconds * 1000),
+              expiresAt: new Date(freesAt),
             }, hitOptions.maxAttempts),
-            retryAfterSeconds: hitOptions.decaySeconds,
+            retryAfterSeconds: Math.max(0, Math.ceil((freesAt - now.getTime()) / 1000)),
           })
         }
       }
@@ -133,7 +140,9 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
       })
     },
     async clear(key) {
-      return buckets.delete(key)
+      const deleted = buckets.delete(key)
+      refreshNextExpiry()
+      return deleted
     },
     async clearByPrefix(prefix) {
       let cleared = 0
@@ -147,11 +156,13 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
         cleared += 1
       }
 
+      refreshNextExpiry()
       return cleared
     },
     async clearAll() {
       const cleared = buckets.size
       buckets.clear()
+      refreshNextExpiry()
       return cleared
     },
     async close() {

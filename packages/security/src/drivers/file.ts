@@ -381,24 +381,37 @@ async function* bucketPathsAfter(
   bucketsRoot: string,
   after: string | undefined,
   onHeld: (count: number) => void,
+  onUnreadable?: (directory: string, error: unknown) => void,
 ): AsyncGenerator<string> {
   const [afterTop, afterMiddle] = after?.split('/') ?? []
   const isDirectory = (entry: Dirent) => entry.isDirectory()
   const isBucketFile = (entry: Dirent) => entry.isFile() && entry.name.endsWith('.json')
+  const readDirectory = async (directory: string, keep: (entry: Dirent) => boolean): Promise<string[]> => {
+    try {
+      return await readSortedEntries(directory, keep, onHeld)
+    } catch (error) {
+      if (!onUnreadable) {
+        throw error
+      }
 
-  for (const top of await readSortedEntries(bucketsRoot, isDirectory, onHeld)) {
+      onUnreadable(directory, error)
+      return []
+    }
+  }
+
+  for (const top of await readDirectory(bucketsRoot, isDirectory)) {
     if (afterTop !== undefined && top < afterTop) {
       continue
     }
 
     const topPath = join(bucketsRoot, top)
-    for (const middle of await readSortedEntries(topPath, isDirectory, onHeld)) {
+    for (const middle of await readDirectory(topPath, isDirectory)) {
       if (afterTop !== undefined && top === afterTop && afterMiddle !== undefined && middle < afterMiddle) {
         continue
       }
 
       const middlePath = join(topPath, middle)
-      for (const name of await readSortedEntries(middlePath, isBucketFile, onHeld)) {
+      for (const name of await readDirectory(middlePath, isBucketFile)) {
         const relativePath = `${top}/${middle}/${name}`
         if (after !== undefined && relativePath <= after) {
           continue
@@ -463,6 +476,15 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
   const reportSweepError = (error: unknown): void => {
     reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
   }
+  const reportedUnreadable = new Set<string>()
+  const reportUnreadable = (directory: string, error: unknown): void => {
+    if (reportedUnreadable.has(directory)) {
+      return
+    }
+
+    reportedUnreadable.add(directory)
+    reportSweepError(error)
+  }
 
   const sweepBucket = async (path: string, now: Date): Promise<void> => {
     try {
@@ -485,7 +507,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
   const runSweep = async (now: Date): Promise<void> => {
     let handled = 0
     let finished = false
-    const entries = bucketPathsAfter(bucketsRoot, cursor, recordHeldNames)
+    const entries = bucketPathsAfter(bucketsRoot, cursor, recordHeldNames, reportUnreadable)
 
     try {
       for await (const relativePath of entries) {

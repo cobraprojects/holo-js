@@ -1265,6 +1265,50 @@ describe('@holo-js/security rate-limit drivers', () => {
     await store.close?.()
   })
 
+  it('derives Retry-After at capacity from when the soonest live bucket frees a slot', async () => {
+    const now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 1,
+    })
+    await store.hit('limiter:login|user:held', {
+      maxAttempts: 2,
+      decaySeconds: 3_600,
+    })
+
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 1,
+    })).resolves.toMatchObject({
+      limited: true,
+      retryAfterSeconds: 3_600,
+      snapshot: { expiresAt: new Date(now.getTime() + 3_600_000) },
+    })
+    await store.close?.()
+  })
+
+  it('derives a short Retry-After at capacity when the soonest live bucket expires soon', async () => {
+    const now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 1,
+    })
+    await store.hit('limiter:login|user:held', {
+      maxAttempts: 2,
+      decaySeconds: 1,
+    })
+
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 3_600,
+    })).resolves.toMatchObject({
+      limited: true,
+      retryAfterSeconds: 1,
+      snapshot: { expiresAt: new Date(now.getTime() + 1_000) },
+    })
+    await store.close?.()
+  })
+
   it('reports a full memory store once per window', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -1778,6 +1822,53 @@ describe('@holo-js/security rate-limit drivers', () => {
         expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
         expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
         await store.close?.()
+      }, 120_000)
+
+      it('keeps sweeping past an unreadable shard and reports it once', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const probe = (index: number) => `limiter:login|user:probe-${index}`
+        const topOf = (key: string) => fileRateLimitDriverInternals.createBucketHash(key).slice(0, 2)
+
+        const unreadableKey = probe(0)
+        const unreadableTop = topOf(unreadableKey)
+        let healthyKey = ''
+        for (let index = 1; healthyKey === ''; index += 1) {
+          if (topOf(probe(index)) > unreadableTop) {
+            healthyKey = probe(index)
+          }
+        }
+        let kickerIndex = 0
+        while (topOf(probe(kickerIndex)) === unreadableTop || topOf(probe(kickerIndex)) === topOf(healthyKey)) {
+          kickerIndex += 1
+        }
+        const kicker = probe(kickerIndex)
+
+        await writeExpiredBucket(root, unreadableKey)
+        await writeExpiredBucket(root, healthyKey)
+        const unreadableShard = dirname(dirname(fileRateLimitDriverInternals.getBucketPath(root, unreadableKey)))
+        const healthyPath = fileRateLimitDriverInternals.getBucketPath(root, healthyKey)
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+        await chmod(unreadableShard, 0)
+        try {
+          const store = createFileRateLimitStore(root, { now: () => now })
+
+          await waitUntil(async () => {
+            await store.hit(kicker, {
+              maxAttempts: 2,
+              decaySeconds: 60,
+            })
+            return await access(healthyPath).then(() => false, () => true)
+          })
+
+          const unreadableReports = consoleError.mock.calls.filter(call => String(call[0]).includes('rate-limit expired-bucket sweep'))
+          expect(unreadableReports).toHaveLength(1)
+          await store.close?.()
+        } finally {
+          await chmod(unreadableShard, 0o755)
+          consoleError.mockRestore()
+        }
       }, 120_000)
 
       it('finishes an in-flight sweep on close and starts no more after it', async () => {
