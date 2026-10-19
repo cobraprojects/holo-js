@@ -1,22 +1,13 @@
 import { BlockList, isIP } from 'node:net'
-import type { HoloForwardedRequestResolver } from '@holo-js/kernel'
+import type { HoloForwardedRequest, HoloForwardedRequestResolver } from '@holo-js/kernel'
 
 export type SecurityTrustedProxies = readonly string[] | '*'
 
-export type ResolvedForwarding = {
+export type ResolvedForwarding = HoloForwardedRequest & {
   readonly address?: string
-  readonly protocol?: string
-  readonly host?: string
-  readonly rejection?: string
 }
 
 type HeaderReader = (name: string) => string | undefined
-
-type ForwardedHop = {
-  readonly chain: readonly string[]
-  readonly protocol?: string
-  readonly host?: string
-}
 
 const ipv4MappedPrefix = '::ffff:'
 
@@ -29,11 +20,11 @@ function canonicalAddress(address: string): string {
 }
 
 function bareAddress(value: string): string | undefined {
-  const unquoted = value.trim().replace(/^"|"$/gu, '')
-  if (isIP(unquoted)) return canonicalAddress(unquoted)
-  const bracketed = /^\[([^\]]+)\](?::\d+)?$/u.exec(unquoted)?.[1]
+  const trimmed = value.trim()
+  if (isIP(trimmed)) return canonicalAddress(trimmed)
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/u.exec(trimmed)?.[1]
   if (bracketed && isIP(bracketed) === 6) return canonicalAddress(bracketed)
-  const ipv4 = /^([\d.]+):\d+$/u.exec(unquoted)?.[1]
+  const ipv4 = /^([\d.]+):\d+$/u.exec(trimmed)?.[1]
   return ipv4 && isIP(ipv4) === 4 ? ipv4 : undefined
 }
 
@@ -58,8 +49,8 @@ export function normalizeTrustedProxies(value: SecurityTrustedProxies | undefine
   }))
 }
 
-function createTrustedAddressMatcher(trustedProxies: SecurityTrustedProxies): (address: string) => boolean {
-  if (trustedProxies === '*') return () => false
+function createTrustedAddressMatcher(trustedProxies: SecurityTrustedProxies, connectionAddress: string | undefined): (address: string) => boolean {
+  if (trustedProxies === '*') return address => address === connectionAddress
   const ranges = new BlockList()
   for (const entry of trustedProxies) {
     const range = parseRange(entry)
@@ -71,96 +62,31 @@ function createTrustedAddressMatcher(trustedProxies: SecurityTrustedProxies): (a
   return address => ranges.check(address, isIP(address) === 4 ? 'ipv4' : 'ipv6')
 }
 
-function lastListValue(value: string | undefined): string | undefined {
-  return value?.split(',').map(entry => entry.trim()).filter(Boolean).at(-1)
+const secureProtocols = new Set(['https', 'on', 'ssl', '1'])
+
+function firstListValue(value: string | undefined): string | undefined {
+  return value?.split(',')[0]?.trim() || undefined
 }
 
-function splitOutsideQuotes(value: string, separator: string): string[] {
-  const parts: string[] = []
-  let current = ''
-  let quoted = false
-  let escaped = false
-  for (const character of value) {
-    if (escaped) {
-      escaped = false
-    } else if (character === '\\' && quoted) {
-      escaped = true
-    } else if (character === '"') {
-      quoted = !quoted
-    } else if (character === separator && !quoted) {
-      parts.push(current)
-      current = ''
-      continue
-    }
-    current += character
-  }
-  parts.push(current)
-  return parts
+function forwardedProtocol(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  return secureProtocols.has(value.toLowerCase()) ? 'https' : 'http'
 }
 
-function unquote(value: string): string {
-  const trimmed = value.trim()
-  return trimmed.startsWith('"') && trimmed.endsWith('"')
-    ? trimmed.slice(1, -1).replace(/\\(.)/gu, '$1')
-    : trimmed
-}
-
-function parseForwardedElement(element: string): ReadonlyMap<string, string> {
-  const pairs = new Map<string, string>()
-  for (const pair of splitOutsideQuotes(element, ';')) {
-    const separator = pair.indexOf('=')
-    if (separator === -1) continue
-    const name = pair.slice(0, separator).trim().toLowerCase()
-    if (name && !pairs.has(name)) pairs.set(name, unquote(pair.slice(separator + 1)))
-  }
-  return pairs
-}
-
-function readXForwardedHop(readHeader: HeaderReader): ForwardedHop | undefined {
-  const forwardedFor = readHeader('x-forwarded-for')
-  const protocol = lastListValue(readHeader('x-forwarded-proto'))
-  const host = lastListValue(readHeader('x-forwarded-host'))
-  if (forwardedFor === undefined && protocol === undefined && host === undefined) return undefined
-  return {
-    chain: forwardedFor?.split(',').map(entry => entry.trim()).filter(Boolean) ?? [],
-    protocol,
-    host,
-  }
-}
-
-function readForwardedHop(readHeader: HeaderReader): ForwardedHop | undefined {
-  const forwarded = readHeader('forwarded')
-  if (forwarded === undefined) return undefined
-  const elements = splitOutsideQuotes(forwarded, ',').map(parseForwardedElement)
-  const nearest = elements.at(-1)
-  return {
-    chain: elements.flatMap(element => element.get('for') ?? []),
-    protocol: nearest?.get('proto'),
-    host: nearest?.get('host'),
-  }
-}
-
-function clientFromChain(chain: readonly string[], isTrusted: (address: string) => boolean): string | undefined {
-  for (let index = chain.length - 1; index >= 0; index -= 1) {
-    const entry = chain[index] ?? ''
+function clientAddress(
+  forwardedFor: string | undefined,
+  connectionAddress: string | undefined,
+  isTrusted: (address: string) => boolean,
+): string | undefined {
+  let client: string | undefined
+  let firstTrusted: string | undefined
+  for (const entry of [...forwardedFor?.split(',') ?? [], ...connectionAddress === undefined ? [] : [connectionAddress]]) {
     const address = bareAddress(entry)
-    if (address && isTrusted(address)) continue
-    return address ?? entry
+    if (!address) continue
+    if (isTrusted(address)) firstTrusted ??= address
+    else client = address
   }
-  const first = chain[0]
-  return first === undefined ? undefined : bareAddress(first) ?? first
-}
-
-function resolveHop(hop: ForwardedHop, connectionAddress: string | undefined, isTrusted: (address: string) => boolean): ResolvedForwarding {
-  return {
-    address: clientFromChain(hop.chain, isTrusted) ?? connectionAddress,
-    protocol: hop.protocol,
-    host: hop.host,
-  }
-}
-
-function agrees(left: string | undefined, right: string | undefined): boolean {
-  return left === undefined || right === undefined || left.toLowerCase() === right.toLowerCase()
+  return client ?? firstTrusted
 }
 
 export function resolveForwarding(
@@ -169,28 +95,21 @@ export function resolveForwarding(
   trustedProxies: SecurityTrustedProxies,
 ): ResolvedForwarding {
   const connectionAddress = rawConnectionAddress === undefined ? undefined : bareAddress(rawConnectionAddress) ?? rawConnectionAddress
-  if (trustedProxies !== '*' && trustedProxies.length === 0) return { address: connectionAddress }
-  const isTrusted = createTrustedAddressMatcher(trustedProxies)
-  const peerIsTrusted = connectionAddress === undefined || trustedProxies === '*' || isTrusted(connectionAddress)
-  if (!peerIsTrusted) return { address: connectionAddress }
-
-  const xForwarded = readXForwardedHop(readHeader)
-  const forwarded = readForwardedHop(readHeader)
-  const fromXForwarded = xForwarded && resolveHop(xForwarded, connectionAddress, isTrusted)
-  const fromForwarded = forwarded && resolveHop(forwarded, connectionAddress, isTrusted)
-  if (fromXForwarded && fromForwarded && !(
-    agrees(fromXForwarded.address, fromForwarded.address)
-    && agrees(fromXForwarded.protocol, fromForwarded.protocol)
-    && agrees(fromXForwarded.host, fromForwarded.host)
-  )) {
-    return { rejection: 'Forwarded and X-Forwarded headers must describe the same client.' }
+  const isTrusted = createTrustedAddressMatcher(trustedProxies, connectionAddress)
+  const fromTrustedProxy = connectionAddress === undefined ? trustedProxies === '*' : isTrusted(connectionAddress)
+  if (!fromTrustedProxy) return { address: connectionAddress }
+  return {
+    address: clientAddress(readHeader('x-forwarded-for'), connectionAddress, isTrusted),
+    protocol: forwardedProtocol(firstListValue(readHeader('x-forwarded-proto'))),
+    host: firstListValue(readHeader('x-forwarded-host')),
+    port: firstListValue(readHeader('x-forwarded-port')),
+    prefix: firstListValue(readHeader('x-forwarded-prefix')),
   }
-  return fromForwarded ?? fromXForwarded ?? { address: connectionAddress }
 }
 
 export function createForwardedRequestResolver(trustedProxies: SecurityTrustedProxies): HoloForwardedRequestResolver {
   return (readHeader, connectionAddress) => {
-    const { protocol, host, rejection } = resolveForwarding(readHeader, connectionAddress, trustedProxies)
-    return { protocol, host, rejection }
+    const { protocol, host, port, prefix } = resolveForwarding(readHeader, connectionAddress, trustedProxies)
+    return { protocol, host, port, prefix }
   }
 }

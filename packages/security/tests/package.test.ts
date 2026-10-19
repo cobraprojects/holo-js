@@ -584,11 +584,6 @@ describe('@holo-js/security csrf', () => {
       headers: {
         forwarded: 'for=203.0.113.10;proto="https";host=app.test',
       },
-    }))).toBe(true)
-    expect(isSecureRequest(new Request('http://app.test/register', {
-      headers: {
-        forwarded: 'for=203.0.113.10;host=app.test',
-      },
     }))).toBe(false)
   })
 

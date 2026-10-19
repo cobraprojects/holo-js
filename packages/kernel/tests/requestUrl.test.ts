@@ -81,6 +81,21 @@ describe('client-facing request URLs', () => {
     expect(seen).toEqual([{ host: 'public.example:8443', connectionAddress: '10.0.0.5' }])
   })
 
+  it('applies the forwarded port and path prefix to the public URL', () => {
+    requestUrlInternals.configureForwardedRequestResolver(() => ({ protocol: 'https', host: 'public.example:8080', port: '8443', prefix: '/blog/' }))
+    expect(resolveRequestUrl({ url: 'http://localhost/login?next=%2Fadmin', headers: { host: 'internal.example' } }).href)
+      .toBe('https://public.example:8443/blog/login?next=%2Fadmin')
+    requestUrlInternals.configureForwardedRequestResolver(() => ({ protocol: 'https', port: '443', prefix: '/' }))
+    expect(resolveRequestUrl({ url: 'http://localhost/login', headers: { host: 'internal.example:3000' } }).href)
+      .toBe('https://internal.example/login')
+  })
+
+  it('keeps the framework path for routed requests while applying the public origin', () => {
+    requestUrlInternals.configureForwardedRequestResolver(() => ({ protocol: 'https', host: 'public.example', port: '8443', prefix: '/blog' }))
+    expect(requestUrlInternals.resolveRoutedRequestUrl({ url: 'http://localhost/login?next=%2Fadmin', headers: { host: 'internal.example' } }).href)
+      .toBe('https://public.example:8443/login?next=%2Fadmin')
+  })
+
   it('treats a failing connection address provider as an unknown connection', () => {
     let received: string | undefined = 'unset'
     requestUrlInternals.provideConnectionAddress(() => {
@@ -122,8 +137,13 @@ describe('client-facing request URLs', () => {
     { protocol: 'wss' },
     { host: 'a b' },
     { host: 'app.test,evil.test' },
-    { rejection: 'Forwarded and X-Forwarded headers must describe the same client.' },
-  ])('reports malformed or rejected forwarded values %j as a bad request', (forwarded) => {
+    { port: '' },
+    { port: 'abc' },
+    { port: '65536' },
+    { prefix: 'blog' },
+    { prefix: '//attacker.example' },
+    { prefix: '/blog?next=/' },
+  ])('reports malformed forwarded values %j as a bad request', (forwarded) => {
     requestUrlInternals.configureForwardedRequestResolver(() => forwarded)
     let thrown: unknown
     try {

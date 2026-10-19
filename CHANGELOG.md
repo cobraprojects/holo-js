@@ -15,6 +15,7 @@
 
 ### Security
 
+- Read forwarded headers as Laravel's TrustProxies does. Honor only `X-Forwarded-For`, `-Host`, `-Port`, `-Proto`, and `-Prefix` from trusted proxies, taking the first value of each list except `X-Forwarded-For`, and ignore `Forwarded`. Trust headers from an unknown connection address only with `trustedProxies: '*'`, so Next.js apps with a proxy list ignore them. Skip `X-Forwarded-For` entries that aren't IP addresses, treat unknown `X-Forwarded-Proto` values as HTTP, and add `X-Forwarded-Prefix` to the path of `resolveRequestUrl()`. Nuxt requests over a Unix socket, as behind `nuxt dev`, come from `127.0.0.1`. Nuxt CSRF, broadcast-auth and realtime requests no longer take `X-Forwarded-Proto` from h3 for untrusted peers. Rate-limit keys keep the full client IP. See [Trusted proxies](apps/docs/docs/basics/security/cors-and-proxies.md#trusted-proxies).
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.

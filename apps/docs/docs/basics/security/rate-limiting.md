@@ -88,9 +88,9 @@ Each limiter counts attempts per **key**. With `.define()`, the key is:
 - `user:<id>` when a user is signed in through [Holo auth](/auth/), or
 - `ip:<client-ip>` for guests.
 
-The client IP is the address of the visitor's connection. Behind a load balancer, CDN, or reverse proxy, list your proxies in [`trustedProxies`](/basics/security/cors-and-proxies#trusted-proxies) so each guest is counted separately instead of as the proxy.
+The client IP is the address of the visitor's connection. Behind a load balancer, CDN, or reverse proxy, list your proxies in [`trustedProxies`](/basics/security/cors-and-proxies#trusted-proxies) so each guest is counted separately instead of as the proxy. The key holds the full address, including for IPv6, as in Laravel.
 
-In a Next.js app, Holo can only learn the client IP from a trusted proxy. Without `trustedProxies`, a limiter keyed by IP throws an error that tells you to set it.
+In a Next.js app, Holo can only learn the client IP with `trustedProxies: '*'`. Otherwise a limiter keyed by IP throws an error that tells you to set it.
 
 ### Custom keys
 

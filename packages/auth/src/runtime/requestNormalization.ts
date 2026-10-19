@@ -1,4 +1,4 @@
-import { resolveRequestUrl, type HoloRequestHeaders } from '@holo-js/kernel'
+import { requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
 
 export type AuthRuntimeRequestHeaders = HoloRequestHeaders
 
@@ -26,7 +26,7 @@ export type AuthRuntimeRequestLike = {
 }
 
 export type AuthRuntimeRequestInput = Request | AuthRuntimeRequestLike
-const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'forwarded', 'x-forwarded-host', 'x-forwarded-proto'] as const
+const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-port', 'x-forwarded-prefix', 'x-forwarded-proto'] as const
 
 function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
   return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
@@ -125,7 +125,7 @@ function getRequestLikeUrl(input: AuthRuntimeRequestLike, headers: Headers): str
     ?? input.path
     ?? '/'
 
-  return resolveRequestUrl({ url, headers }).href
+  return requestUrlInternals.resolveRoutedRequestUrl({ url, headers }).href
 }
 
 export function normalizeRequestInput(input: AuthRuntimeRequestInput): Request {

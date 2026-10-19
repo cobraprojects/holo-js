@@ -64,6 +64,8 @@ describe('@holo-js/forms contracts', () => {
     expect(formsInternals.normalizeRequestLikeInput(input)?.url).toBe('http://127.0.0.1:43201/signup?next=%2Fadmin')
     configureSecurityRuntime({ config: { trustedProxies: ['127.0.0.1'] } })
     expect(formsInternals.normalizeRequestLikeInput(input)?.url).toBe('https://public.example/signup?next=%2Fadmin')
+    expect(formsInternals.normalizeRequestLikeInput({ ...input, headers: { ...input.headers, 'x-forwarded-prefix': '/blog' } })?.url)
+      .toBe('https://public.example/signup?next=%2Fadmin')
   })
 
   it('returns validated data from validate and throws validation exceptions for failures', async () => {

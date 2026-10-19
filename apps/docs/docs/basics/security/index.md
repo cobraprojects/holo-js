@@ -391,7 +391,7 @@ Returns the visitor's IP address. Holo uses the address of the connection, or re
 const address = ip(request)
 ```
 
-In a Next.js app without `trustedProxies`, it throws, because Next.js doesn't expose the connection address.
+In a Next.js app without `trustedProxies: '*'`, it throws, because Next.js doesn't expose the connection address.
 
 See [trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
