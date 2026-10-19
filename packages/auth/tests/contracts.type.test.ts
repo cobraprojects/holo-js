@@ -332,6 +332,7 @@ describe('@holo-js/auth typing', () => {
       | 'impersonation_actor_required'
       | 'impersonation_nested_unsupported'
       | 'impersonation_already_active'
+      | 'impersonation_remember_unsupported'
       | 'registration_identifier_taken'
       | 'auth_user_missing'
       | 'provider_resolution_required'

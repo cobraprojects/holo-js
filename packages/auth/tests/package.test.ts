@@ -1700,9 +1700,7 @@ describe('@holo-js/auth package runtime', () => {
 
     await loginUsing(actor)
 
-    const established = await impersonate(target, {
-      remember: true,
-    })
+    const established = await impersonate(target)
 
     expect(established).toMatchObject({
       guard: 'web',
@@ -1742,6 +1740,59 @@ describe('@holo-js/auth package runtime', () => {
       email: actor.email,
     })
     expect(await impersonation()).toBeNull()
+  })
+
+  it('refuses to impersonate with remember and changes nothing', async () => {
+    const runtime = await configureRuntime()
+    const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    const target = await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
+    await loginUsing(actor)
+    const recordsBefore = await runtime.sessionStore.countRecords()
+    const targetTokenBefore = runtime.usersProvider.getRememberToken?.(target)
+
+    await expect(impersonate(target, { remember: true })).rejects.toMatchObject({ code: 'impersonation_remember_unsupported' })
+
+    expect(await runtime.sessionStore.countRecords()).toBe(recordsBefore)
+    expect(runtime.usersProvider.getRememberToken?.(target)).toBe(targetTokenBefore)
+    await expect(check()).resolves.toBe(true)
+    await expect(id()).resolves.toBe(actor.id)
+  })
+
+  it('cycles the actor remember token when a remembered actor logs out during impersonation, so a copied actor cookie no longer restores', async () => {
+    const runtime = await configureRuntime()
+    const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    const target = await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
+    const remembered = await loginUsing(actor, { remember: true })
+    const copiedActorCookie = rememberCookieValue(remembered.rememberToken)
+    await impersonate(target)
+
+    await logout()
+
+    expect(runtime.usersProvider.getRememberToken?.(actor)).not.toBe(JSON.parse(remembered.rememberToken!)[1])
+    const replay = createMemoryRequestContext(copiedActorCookie)
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    authRuntimeInternals.configureRuntime({ ...bindings, context: replay.context })
+    try {
+      await expect(auth.guard('web').check()).resolves.toBe(false)
+    } finally {
+      authRuntimeInternals.configureRuntime({ ...bindings, context: runtime.context })
+    }
+  })
+
+  it('issues no target recaller when impersonating from a remembered actor, and stops cleanly', async () => {
+    const runtime = await configureRuntime()
+    const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
+    const target = await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: null, email_verified_at: new Date() })
+    await loginUsing(actor, { remember: true })
+    const targetTokenBefore = runtime.usersProvider.getRememberToken?.(target)
+
+    const impersonated = await impersonate(target)
+
+    expect(impersonated.rememberToken).toBeUndefined()
+    expect(impersonated.cookies.some(cookie => cookie.startsWith('holo_session_remember='))).toBe(false)
+    expect(runtime.usersProvider.getRememberToken?.(target)).toBe(targetTokenBefore)
+    await expect(stopImpersonating()).resolves.toMatchObject({ id: actor.id })
+    await expect(id()).resolves.toBe(actor.id)
   })
 
   it('keeps the actor remember-me cookie while impersonating', async () => {

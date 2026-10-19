@@ -1991,6 +1991,9 @@ async function impersonateForGuard(
   user: unknown,
   options: AuthImpersonationOptions = {},
 ): Promise<AuthEstablishedSession> {
+  if (options.remember === true) {
+    throwAuthError('impersonation_remember_unsupported', 'Impersonation cannot issue remember-me cookies.', { guard: guardName })
+  }
   const actorGuard = options.actorGuard ?? guardName
   const actor = await resolveUserFromGuard(actorGuard)
   const actorState = await readGuardSessionState(actorGuard)
@@ -2030,7 +2033,6 @@ async function impersonateForGuard(
   return establishSessionForUser(serialized, {
     guard: guardName,
     provider: resolved.provider,
-    remember: options.remember === true,
     preserveRemember: true,
     payload: toSessionPayload(guardName, resolved.provider, serialized, impersonation),
   })
@@ -2133,8 +2135,9 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
       ...(readSessionPayloads(record) ?? {}),
     }
     const payload = payloads[guardName]
-    if (payload && !payload.impersonation && !payload.multiFactorChallengeExpiresAt) {
-      await cycleRememberToken(payload.provider, payload.userId)
+    const rememberedIdentity = payload?.impersonation?.actor ?? payload
+    if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
+      await cycleRememberToken(rememberedIdentity.provider, rememberedIdentity.userId)
     }
     if (!(guardName in payloads)) {
       await bindings.session.invalidate(sessionId)
