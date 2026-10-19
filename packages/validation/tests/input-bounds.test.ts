@@ -65,6 +65,8 @@ describe('Validation input bounds', () => {
       .toEqual(['The request contains an invalid list index.'])
     expect(await rootErrors(new URLSearchParams('rows[1][name]=a&rows[1][name]=b'), definition))
       .toEqual(['The request contains an invalid list index.'])
+    expect(await rootErrors(new URLSearchParams('tags[4294967294]=a&tags[]=b'), definition))
+      .toEqual(['The request contains an invalid list index.'])
   })
 
   it('enforces declared list maximums before validating items', async () => {
@@ -80,13 +82,23 @@ describe('Validation input bounds', () => {
       })).size(1),
     })
 
-    const result = await safeParse({ tags: ['a', 'b', 'c'], codes: ['x', 'y'] }, definition)
+    const rows = Array.from({ length: 3 }, (_, index) => ({
+      get name() {
+        checked.push(`row${index}`)
+        return 'row'
+      },
+    }))
+    const result = await safeParse({ tags: ['a', 'b', 'c'], codes: ['x', 'y'], rows }, schema({
+      ...definition.fields,
+      rows: field.array({ name: field.string() }).max(1),
+    }))
 
     expect(checked).toEqual([])
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.get('tags')).toEqual(['This field must contain 2 items or fewer.'])
       expect(result.errors.get('codes')).toEqual(['This field must contain exactly 1 item.'])
+      expect(result.errors.get('rows')).toEqual(['This field must contain 1 item or fewer.'])
     }
   })
 
@@ -153,5 +165,17 @@ describe('Validation input bounds', () => {
     expect(fullReads).toBe(0)
     expect(result.valid).toBe(false)
     if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be 1 KB or smaller.'])
+  })
+
+  it('rejects a transformed image that is too large to decode', async () => {
+    const original = new File([pngPixel], 'avatar.png', { type: 'image/png' })
+    const replacement = new File([pngPixel.subarray(0, 64), new Uint8Array(4096)], 'avatar.png', { type: 'image/png' })
+
+    const result = await safeParse({ avatar: original }, schema({
+      avatar: field.file().required().transform(() => replacement).image().maxSize('1kb'),
+    }))
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be an image.'])
   })
 })

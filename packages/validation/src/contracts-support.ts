@@ -29,6 +29,7 @@ export class MalformedInputError extends Error {
 }
 
 const INVALID_FIELD_NAME = 'The request contains an invalid field name.'
+const INVALID_LIST_INDEX = 'The request contains an invalid list index.'
 
 type ArrayIndexes = Map<unknown[], Set<number>>
 
@@ -309,7 +310,13 @@ function recordArrayIndex(indexes: ArrayIndexes, array: unknown[], index: number
   indexes.set(array, recorded)
 }
 
-export function assignNestedValue(target: Record<string, unknown> | unknown[], path: string, value: unknown, indexes: ArrayIndexes = new Map()): void {
+export function assignNestedValue(
+  target: Record<string, unknown> | unknown[],
+  path: string,
+  value: unknown,
+  indexes: ArrayIndexes = new Map(),
+  indexLimit = Number.POSITIVE_INFINITY,
+): void {
   const tokens = parsePathTokens(path)
   if (tokens.length === 0) {
     return
@@ -323,6 +330,9 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
     const last = index === tokens.length - 1
 
     if (Array.isArray(cursor)) {
+      if (typeof token === 'number' && token >= indexLimit) {
+        throw new MalformedInputError(INVALID_LIST_INDEX)
+      }
       recordArrayIndex(indexes, cursor, typeof token === 'number' ? token : cursor.length)
       if (token === '') {
         if (last) {
@@ -385,20 +395,19 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
 export function normalizeFormData(input: FormData | URLSearchParams): Record<string, unknown> {
   const output: Record<string, unknown> = {}
   const indexes: ArrayIndexes = new Map()
-  let variables = 0
+  const entries = Array.from(input.entries())
+  if (entries.filter(([, value]) => !isBlobLike(value)).length > MAX_INPUT_VARIABLES) {
+    throw new MalformedInputError('The request contains too many input variables.')
+  }
 
-  for (const [key, value] of input.entries()) {
-    if (!isBlobLike(value)) variables += 1
-    if (variables > MAX_INPUT_VARIABLES) {
-      throw new MalformedInputError('The request contains too many input variables.')
-    }
-    assignNestedValue(output, key, value, indexes)
+  for (const [key, value] of entries) {
+    assignNestedValue(output, key, value, indexes, entries.length)
   }
 
   for (const recorded of indexes.values()) {
     for (const index of recorded) {
       if (index >= recorded.size) {
-        throw new MalformedInputError('The request contains an invalid list index.')
+        throw new MalformedInputError(INVALID_LIST_INDEX)
       }
     }
   }
@@ -519,6 +528,17 @@ function coerceDate(value: unknown): unknown {
   return Number.isNaN(parsed.getTime()) ? value : parsed
 }
 
+export function declaredListLimit(definition: FieldDefinition): { readonly rule: FieldRule, readonly value: number } | undefined {
+  let limit: { readonly rule: FieldRule, readonly value: number } | undefined
+  for (const rule of definition.rules) {
+    const value = rule.args[0]
+    if ((rule.name === 'max' || rule.name === 'size') && typeof value === 'number' && (!limit || value < limit.value)) {
+      limit = { rule, value }
+    }
+  }
+  return limit
+}
+
 export function coerceFieldValue(definition: FieldDefinition, value: unknown): unknown {
   if (definition.kind === 'array') {
     if (value === undefined || (value === null && definition.rules.some(rule => rule.name === 'nullable'))) {
@@ -526,7 +546,8 @@ export function coerceFieldValue(definition: FieldDefinition, value: unknown): u
     }
 
     const rawItems = Array.isArray(value) ? value : [value]
-    if (!definition.item) {
+    const limit = declaredListLimit(definition)
+    if (!definition.item || (limit && rawItems.length > limit.value)) {
       return rawItems
     }
 

@@ -1,7 +1,7 @@
 import * as v from 'valibot'
 import { exactSizeAction, minAction, maxAction, asPipeItem, stringSchema, numberSchema, booleanSchema, dateSchema, emailAction, urlAction, uuidAction, integerAction } from './compiler-actions'
 import type { FieldRule, FieldDefinition, SchemaInputShape, SupportedRuleFamily, WebFileLike } from './contracts-types'
-import { isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
+import { declaredListLimit, isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
 
 import { createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
 
@@ -38,13 +38,7 @@ function makeCompiledArrayItemSchema(plan: SchemaPlan, parent: ExecutionNode): C
 }
 
 function makeListLimitSchema(definition: FieldDefinition): CompiledSchema | undefined {
-  let limit: { rule: FieldRule, value: number } | undefined
-  for (const rule of definition.rules) {
-    const value = rule.args[0]
-    if ((rule.name === 'max' || rule.name === 'size') && typeof value === 'number' && (!limit || value < limit.value)) {
-      limit = { rule, value }
-    }
-  }
+  const limit = declaredListLimit(definition)
   if (!limit) return undefined
   const { rule, value } = limit
   return v.pipeAsync(

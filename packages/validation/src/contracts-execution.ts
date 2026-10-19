@@ -79,7 +79,8 @@ export async function executeCustomRule(field: FieldExecution, rule: FieldRule, 
       }
       verification = await pending
     }
-    if (!verification) return
+    if (!verification && value === field.shapeValue) return
+    verification ??= { valid: false, aspectRatios: [] }
     const valid = verification.valid && (validator === 'image' || verification.aspectRatios[ratioRules.indexOf(rule)] === true)
     if (!valid) {
       field.customIssues.set(rule, resolveRuleMessage(rule, validator === 'image'
