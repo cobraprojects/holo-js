@@ -283,6 +283,9 @@ async function acquireRecordLockBefore(
       await ownerHandle.close()
     }
     while (!acquired) {
+      if (wait && Date.now() >= Math.min(deadline, wait.hardDeadline)) {
+        throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+      }
       try {
         await rename(pendingPath, lockPath)
         acquired = true
@@ -304,10 +307,6 @@ async function acquireRecordLockBefore(
         if (wait === undefined) {
           await rm(pendingPath, { recursive: true, force: true })
           return undefined
-        }
-        if (wait && Date.now() >= deadline) {
-          if (!contended) throw error
-          throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
         }
         await sleep(5)
       }

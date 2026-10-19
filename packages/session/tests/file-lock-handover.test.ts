@@ -29,6 +29,7 @@ type Acquisition = {
 
 let root: string
 let recordPath: string
+let lockPath: string
 let pendingPaths: Map<string, string>
 let acquisitions: Acquisition[]
 
@@ -96,6 +97,21 @@ async function tick(ms: number): Promise<void> {
   await untilWaitersSleep()
 }
 
+async function tickFreely(ms: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms)
+  for (let turn = 0; turn < 200; turn += 1) await new Promise(resolve => setImmediate(resolve))
+}
+
+async function releaseWithTicks(acquisition: Acquisition): Promise<void> {
+  let finished = false
+  const released = releaseAcquisition(acquisition).then(() => { finished = true })
+  for (let tickCount = 0; !finished; tickCount += 1) {
+    if (tickCount > 200) throw new Error(`${acquisition.label} never finished releasing`)
+    await tickFreely(STEP_MS)
+  }
+  await released
+}
+
 async function advanceTo(time: number): Promise<void> {
   while (Date.now() < time) await tick(Math.min(STEP_MS, time - Date.now()))
 }
@@ -118,6 +134,7 @@ describe('file session lock handover under a fake clock', () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'holo-file-lock-handover-'))
     recordPath = join(root, 'session.json')
+    lockPath = `${recordPath}.lock`
     pendingPaths = new Map()
     acquisitions = []
     windowsFs.blockedRenameSources.clear()
@@ -202,5 +219,36 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
     expect(waiter.settledAt! - startedAt).toBeLessThan(HARD_CAP_MS + 2 * STEP_MS)
+  })
+
+  it('times out instead of acquiring when a reclaim finishes past the hard cap', async () => {
+    let holder = startAcquisition('holder-0')
+    await untilTrue(() => holder.settled)
+    const waiter = startAcquisition('waiter')
+    blockRenames('waiter')
+    await untilWaitersSleep()
+    const startedAt = Date.now()
+
+    for (let cycle = 1; cycle <= 7; cycle += 1) {
+      await advanceTo(startedAt + cycle * 4_000)
+      expect(waiter.settled).toBe(false)
+      await releaseAcquisition(holder)
+      holder = startAcquisition(`holder-${cycle}`)
+      await untilAcquired(holder)
+    }
+
+    await advanceTo(startedAt + 28_500)
+    windowsFs.blockedUnlinkPrefixes.add(join(lockPath, 'owner.'))
+    await releaseWithTicks(holder)
+
+    while (Date.now() < startedAt + HARD_CAP_MS + 500) await tickFreely(STEP_MS)
+    windowsFs.blockedUnlinkPrefixes.clear()
+    unblockRenames('waiter')
+    for (let tickCount = 0; !waiter.settled && tickCount < 200; tickCount += 1) await tickFreely(STEP_MS)
+
+    expect(waiter.settled).toBe(true)
+    expect(waiter.release).toBeUndefined()
+    expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
+    expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS + 500)
   })
 })
