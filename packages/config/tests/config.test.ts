@@ -1582,6 +1582,7 @@ export default defineQueueConfig({
           driver: 'redis',
           connection: 'cache',
           queue: 'emails',
+          afterCommit: false,
           retryAfter: 120,
           blockFor: 7,
           redis: {
@@ -2472,6 +2473,7 @@ export default defineQueueConfig({
       driver: 'redis',
       connection: 'cache',
       queue: 'default',
+      afterCommit: false,
       retryAfter: 90,
       blockFor: 5,
       redis: {
