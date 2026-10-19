@@ -93,7 +93,7 @@ import {
   resolveRequestHeader,
 } from './runtime/requestAccess'
 import { authJwtInternals } from './runtime/jwt'
-import { normalizeRequestInput } from './runtime/requestNormalization'
+import { normalizeRequestInput, resolveClientAddress } from './runtime/requestNormalization'
 import {
   isTokenExpired,
   normalizeTokenRecord,
@@ -3090,6 +3090,7 @@ export const authRuntimeInternals = {
   parseSetCookieDefinition,
   readSessionPayload,
   redirectResponse,
+  resolveClientAddress,
   serializeCookie,
   syncHostedIdentity,
   toLookupCredentials,

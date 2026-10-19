@@ -313,7 +313,6 @@ export async function assertExampleAppAuthFlow({
   const throttleRegisterIp = `127.0.2.${flowAddress}`
   const requestHeaders = {
     'x-forwarded-for': clientIp,
-    'x-real-ip': clientIp,
   }
 
   const fetchAuthText = (path, options = {}) => fetchText(baseUrl, path, {
@@ -586,7 +585,6 @@ export async function assertExampleAppAuthFlow({
         headers: {
           origin: new URL(baseUrl).origin,
           'x-forwarded-for': '127.0.0.229',
-          'x-real-ip': '127.0.0.229',
         },
         allowFailure: true,
       })
@@ -612,7 +610,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.224',
-      'x-real-ip': '127.0.0.224',
     },
     allowFailure: true,
   })
@@ -631,7 +628,6 @@ export async function assertExampleAppAuthFlow({
       },
       headers: {
         'x-forwarded-for': throttleLoginIp,
-        'x-real-ip': throttleLoginIp,
       },
       allowFailure: true,
     })
@@ -649,7 +645,6 @@ export async function assertExampleAppAuthFlow({
       },
       headers: {
         'x-forwarded-for': throttleRegisterIp,
-        'x-real-ip': throttleRegisterIp,
       },
       allowFailure: true,
     })
@@ -668,7 +663,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.221',
-      'x-real-ip': '127.0.0.221',
     },
     jar: loggedInVerificationJar,
   })
@@ -745,7 +739,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.225',
-      'x-real-ip': '127.0.0.225',
     },
     allowFailure: true,
   })
@@ -808,7 +801,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.226',
-      'x-real-ip': '127.0.0.226',
     },
   })
   assert.equal(alreadyVerifiedResend.response.status, 200)
@@ -888,7 +880,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.227',
-      'x-real-ip': '127.0.0.227',
     },
     allowFailure: true,
   })
@@ -906,7 +897,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.226',
-      'x-real-ip': '127.0.0.226',
     },
     jar: adminJar,
   })
@@ -981,7 +971,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.222',
-      'x-real-ip': '127.0.0.222',
     },
     jar: rememberedJar,
   })
@@ -1008,7 +997,6 @@ export async function assertExampleAppAuthFlow({
     },
     headers: {
       'x-forwarded-for': '127.0.0.223',
-      'x-real-ip': '127.0.0.223',
     },
     jar: rememberedJar,
   })

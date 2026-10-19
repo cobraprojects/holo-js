@@ -69,7 +69,7 @@ describe('native csrf middleware', () => {
   })
 
   it.each([
-    { 'x-forwarded-proto': 'wss' },
+    { 'x-forwarded-port': 'abc' },
     { 'x-forwarded-host': 'a b' },
   ])('answers malformed trusted proxy headers %j with a bad request', async (headers) => {
     configureSecurity(true, '*')
@@ -81,6 +81,30 @@ describe('native csrf middleware', () => {
       app.use(defineEventHandler(() => 'handled'))
       const nuxtResponse = await toWebHandler(app)(new Request('https://app.test/page', { method, headers }))
       expect(nuxtResponse.status).toBe(400)
+    }
+  })
+
+  it('ignores X-Forwarded-Proto from an untrusted Nuxt peer when issuing the CSRF cookie', async () => {
+    const app = createApp()
+    app.use(nuxtCsrfProtection())
+    app.use(defineEventHandler(() => 'handled'))
+    const server = createServer(toNodeListener(app))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('Expected a TCP address')
+      const page = async () => {
+        const response = await fetch(`http://127.0.0.1:${address.port}/page`, { headers: { 'x-forwarded-proto': 'https' } })
+        return response.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN=')) ?? ''
+      }
+      configureSecurity()
+      expect(await page()).not.toMatch(/;\s*Secure/i)
+      configureSecurity(true, '*')
+      expect(await page()).toMatch(/;\s*Secure/i)
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     }
   })
 

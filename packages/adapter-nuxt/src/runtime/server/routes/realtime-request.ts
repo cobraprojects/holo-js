@@ -9,7 +9,7 @@ export async function createRealtimeRequest(event: H3Event): Promise<Request> {
     }
   }
 
-  return new Request(getRequestURL(event), {
+  return new Request(getRequestURL(event, { xForwardedProto: false }), {
     body: await readRawBody(event),
     headers,
     method: event.method,

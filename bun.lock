@@ -1012,6 +1012,8 @@
         "@holo-js/queue": "catalog:",
       },
       "devDependencies": {
+        "@holo-js/db-mysql": "catalog:",
+        "@holo-js/db-postgres": "catalog:",
         "@holo-js/db-sqlite": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -1023,6 +1025,7 @@
       "name": "@holo-js/queue-redis",
       "version": "0.3.28",
       "dependencies": {
+        "@holo-js/kernel": "catalog:",
         "bullmq": "catalog:",
         "ioredis": "catalog:",
         "tslib": "catalog:",
