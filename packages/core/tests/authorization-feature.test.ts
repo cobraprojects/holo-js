@@ -49,7 +49,7 @@ async function withFixtureScript<T>(
 
 describe('@holo-js/core authorization real-world feature integration', () => {
   it('uses the real auth user and the real Post model facade without fake actors', async () => {
-    runFixtureCommand('bunx', ['holo', 'prepare'])
+    runFixtureCommand('bun', ['run', 'prepare'])
     runFixtureCommand('bunx', ['holo', 'migrate:fresh', '--seed', '--force'])
 
     const script = `
