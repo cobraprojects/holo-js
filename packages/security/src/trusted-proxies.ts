@@ -46,9 +46,11 @@ export function normalizeTrustedProxies(value: SecurityTrustedProxies | undefine
 }
 
 function createTrustedAddressMatcher(trustedProxies: SecurityTrustedProxies, connectionAddress: string | undefined): (address: string) => boolean {
-  if (trustedProxies === '*') return address => address === connectionAddress
+  const entries = trustedProxies !== '*'
+    ? trustedProxies
+    : connectionAddress && isIP(connectionAddress) ? [connectionAddress] : []
   const ranges = new BlockList()
-  for (const entry of trustedProxies) {
+  for (const entry of entries) {
     const range = parseRange(entry)
     if (!range) continue
     const family = isIP(range.address) === 4 ? 'ipv4' : 'ipv6'

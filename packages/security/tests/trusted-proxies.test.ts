@@ -104,6 +104,16 @@ describe('trusted proxies', () => {
   })
 
   it.each([
+    ['2001:db8::1', '203.0.113.9, 2001:0db8:0:0:0:0:0:1'],
+    ['2001:0DB8::0001', '203.0.113.9, [2001:db8::1]:443'],
+    ['::ffff:10.0.0.8', '203.0.113.9, 10.0.0.8'],
+    ['10.0.0.8', '203.0.113.9, ::ffff:10.0.0.8'],
+  ])('with "*" recognizes the connecting proxy %s however its address is written in X-Forwarded-For %s', (connectionAddress, forwardedFor) => {
+    trustProxies('*', connectionAddress)
+    expect(ip(request({ 'x-forwarded-for': forwardedFor }))).toBe('203.0.113.9')
+  })
+
+  it.each([
     ['[2001:db8::7]:4711', '2001:db8::7'],
     ['192.0.2.43:47011', '192.0.2.43'],
     ['2001:db8::7', '2001:db8::7'],
