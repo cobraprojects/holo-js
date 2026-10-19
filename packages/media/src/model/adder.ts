@@ -332,6 +332,10 @@ async function readMediaSource(
     return resolveStorageMediaSource(input, overrideFileName, overrideName)
   }
 
+  if ((typeof input === 'string' && /^https?:\/\//i.test(input)) || (typeof input === 'object' && input !== null && 'url' in input)) {
+    throw new Error('[@holo-js/media] addMedia() reads file paths and binary contents. Use addMediaFromUrl() to download a URL.')
+  }
+
   if (typeof input === 'string' || isPathInput(input)) {
     const path = await resolveLocalMediaSourcePath(typeof input === 'string' ? input : input.path)
     const contents = await readFile(path)

@@ -119,7 +119,7 @@ collection('avatars')
 
 Every model also has a `default` collection, used when you call `toMediaCollection()` with no name. Any other name you haven't defined throws an error.
 
-When a collection has no `disk()`, Holo stores its files on the media disk. Set it with `MEDIA_DISK` in your environment, or change it in `config/media.ts`. The default is `public`.
+When a collection has no `disk()`, Holo stores its files on the media disk, set by `disk` in `config/media.ts`. New projects read it from `MEDIA_DISK`. The default is `public`. See [defineMediaConfig()](#definemediaconfig).
 
 ## Add media
 

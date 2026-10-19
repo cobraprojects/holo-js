@@ -1895,9 +1895,9 @@ describe('@holo-js/media', () => {
 
     const post = await Post.create({ title: 'String source' })
     await expect(post.addMedia('https://example.test/photo.png').toMediaCollection('images'))
-      .rejects.toThrow('ENOENT')
+      .rejects.toThrow('Use addMediaFromUrl() to download a URL.')
     await expect(post.addMedia({ url: 'https://example.test/photo.png' } as never).toMediaCollection('images'))
-      .rejects.toThrow()
+      .rejects.toThrow('Use addMediaFromUrl() to download a URL.')
     expect(requests).toBe(0)
     expect(await post.getMedia('images')).toEqual([])
   })

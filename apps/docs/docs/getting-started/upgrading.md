@@ -177,7 +177,7 @@ export default defineMediaConfig({
 
 Check this before deploying if your default storage disk is private or S3, since uploads otherwise go to `public`.
 
-Image conversions reject images over 40 million pixels or 1,000 frames, the same limits upload validation uses. Conversions also run before the database transaction starts. Use `addMediaFromDisk(path, disk)` to attach a file that's already on a storage disk.
+Image conversions reject images over 40 million pixels or 1,000 frames, the same limits upload validation uses. Holo generates images before its own database transaction starts. If your code calls `addMedia()` inside your own transaction, the image work still runs inside that transaction, so upload after it commits. Use `addMediaFromDisk(path, disk)` to attach a file that's already on a storage disk.
 
 ### Database queue workers on MySQL
 
