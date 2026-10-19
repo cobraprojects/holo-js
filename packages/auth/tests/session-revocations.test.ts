@@ -167,8 +167,10 @@ it('checks remember restoration before trusting it and preserves later legitimat
     context.setSessionId('web', current.sessionId)
     await auth.logoutOtherDevices()
   })
+  const requestContext = authRuntimeInternals.createMemoryAuthContext()
   const rememberedContext = {
-    ...authRuntimeInternals.createMemoryAuthContext(),
+    ...requestContext,
+    getRequestScope: () => requestContext,
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
   }
   authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: rememberedContext })

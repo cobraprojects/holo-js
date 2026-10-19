@@ -601,7 +601,7 @@ describe('@holo-js/auth package runtime', () => {
     authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
       ...(failurePoint === 'remember' ? { providers: { users: { ...runtime.usersProvider, async updateRememberToken() { throw failure } }, admins: runtime.adminsProvider } } : {}),
-      ...(failurePoint === 'cookie' ? { context: { ...runtime.context, async appendResponseCookie() { throw failure } } } : {}),
+      ...(failurePoint === 'cookie' ? { context: { ...runtime.context, getRequestScope: () => runtime.context, async appendResponseCookie() { throw failure } } } : {}),
     })
     await expect(auth.guard('web').loginUsing(created, { remember: true })).rejects.toBe(failure)
     await expect(getSessionRuntime().read(shared.sessionId)).resolves.toBeNull()
@@ -1704,10 +1704,12 @@ describe('@holo-js/auth package runtime', () => {
     expect(remembered.rememberToken).toBeTypeOf('string')
 
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
+    const requestContext = authRuntimeInternals.createMemoryAuthContext()
     authRuntimeInternals.configureRuntime({
       ...currentBindings,
       context: {
-        ...authRuntimeInternals.createMemoryAuthContext(),
+        ...requestContext,
+        getRequestScope: () => requestContext,
         getRequestCookie(name: string) {
           return name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined
         },
