@@ -357,7 +357,7 @@ Optional `string`. The queue name this job dispatches to by default. A `.onQueue
 
 ### `tries` {#tries}
 
-Optional integer, at least `1`. The total number of attempts on a worker, including the first. Defaults to `1`, so the job runs once. Your `--tries` worker flag overrides it.
+Optional integer, at least `1`. The total number of attempts on a worker, including the first. Defaults to `1`, so the job runs once. A run interrupted by a worker that stopped also counts as an attempt; see [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly). Your `--tries` worker flag overrides it.
 
 ### `backoff` {#backoff}
 

@@ -51,6 +51,8 @@ A job is saved to the table when, on a worker:
 - it throws on its last attempt (see `tries` in [Writing jobs](/queue/jobs#retries-and-backoff))
 - it calls `context.fail(error)`
 - it runs longer than its `timeout`
+- a worker stopped while running it and it has no tries left (see [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly))
+- its job name isn't registered in the app that runs the worker
 
 Jobs on the `sync` driver are never saved. Their errors are thrown back to the code that dispatched them.
 
