@@ -2,13 +2,13 @@
 
 ## Unreleased
 
-- Custom auth contexts can provide `getRequestScope()` for request-isolated remember-me state and concurrent guard restoration.
-
 - Make `@holo-js/validation` the only public schema-builder package. Remove schema builders from `@holo-js/forms` and remove the `@holo-js/forms/schema` entry.
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.
 
 ### Added
+
+- Add optional `AuthRuntimeContext.getRequestScope()` for request-isolated remember-me state and concurrent guard restoration. Remember-cookie writes require a scope; unscoped custom contexts retain uncached sequential restoration.
 
 - Add `exceptions.report` and `exceptions.dontReport` to `config/app.ts`, and `report(error)` from `@holo-js/core`. Errors that Queue hooks, Auth cleanup, Cache flexible refresh and driver disposal, query-cache invalidation listeners, the Broadcast worker and Realtime subscription callbacks previously logged to the console are reported with their capability and operation. A throwing or rejecting reporter never breaks the originating request or job. Without a reporter, errors go to `console.error`. `config:cache` keeps an `app` config with a reporter live, so it is loaded from `config/app.ts` at runtime. See [Reporting errors](apps/docs/docs/basics/errors.md#reporting-errors).
 - Add explicit other-device browser logout through `auth.logoutOtherDevices()` and session-guard `logoutOtherDevices()`, backed by durable provider/user revocation state. Retain the current logical browser session and reject the selected identity on other browsers' next authenticated request, including remember-cookie restoration. Unrelated identities and personal access tokens remain valid. Applications own recent reauthentication policy; Clerk and WorkOS logout affects Holo sessions, not upstream provider sessions.

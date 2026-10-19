@@ -40,13 +40,13 @@ let directory: string
 class Browser {
   readonly cookies = new Map<string, string>()
 
-  async request<TValue>(callback: () => Promise<TValue>, bindings: Partial<Parameters<typeof configureAuthRuntime>[0]> = {}, scoped = true): Promise<TValue> {
+  async request<TValue>(callback: () => Promise<TValue>, bindings: Partial<Parameters<typeof configureAuthRuntime>[0]> = {}, scoped: boolean | 'unscoped' = true): Promise<TValue> {
     const current = authRuntimeInternals.getRuntimeBindings()
     const requestCookies = new Map(this.cookies)
     const requestContext = createAsyncAuthContext()
     const memoryContext = authRuntimeInternals.createMemoryAuthContext()
     const context = {
-      ...(scoped ? requestContext : { ...memoryContext, getRequestScope: () => memoryContext }),
+      ...(scoped === true ? requestContext : scoped === false ? { ...memoryContext, getRequestScope: () => memoryContext } : memoryContext),
       getRequestCookie: (name: string) => requestCookies.get(name),
       appendResponseCookie: (setCookie: string) => this.receive(setCookie),
     }
@@ -224,12 +224,20 @@ describe('remember me', () => {
       getRequestCookie: (name: string) => browser.cookies.get(name),
       appendResponseCookie: (cookie: string) => browser.receive(cookie),
     }
+    if (!scoped) {
+      await browser.request(async () => {
+        await auth.loginUsingId(1, { remember: true })
+        await auth.guard('admin').loginUsingId(1, { remember: true })
+      })
+    }
     authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context })
     const request = <T,>(callback: () => Promise<T>) => storage.run(authRuntimeInternals.createMemoryAuthContext(), callback)
-    await request(async () => {
-      await auth.loginUsingId(1, { remember: true })
-      await auth.guard('admin').loginUsingId(1, { remember: true })
-    })
+    if (scoped) {
+      await request(async () => {
+        await auth.loginUsingId(1, { remember: true })
+        await auth.guard('admin').loginUsingId(1, { remember: true })
+      })
+    }
     browser.expireSession()
 
     await expect(request(async () => scoped
@@ -409,6 +417,26 @@ describe('remember me with other-device logout', () => {
       },
     }
   }
+
+  it.each(['remember', 'switch', 'logout', 'renew'])('rejects unscoped remember-cookie writes before changing authentication (%s)', async (action) => {
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: revocationStore() })
+    users.set(2, { id: 2, email: 'mina@app.test', password: 'scrypt$hash-two', remember_token: null })
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    const cookies = new Map(browser.cookies)
+    const token = users.get(1)!.remember_token
+
+    await expect(browser.request(async () => {
+      if (action === 'remember') await auth.guard('admin').loginUsingId(2, { remember: true })
+      if (action === 'switch') await auth.loginUsingId(2)
+      if (action === 'logout') await auth.logout()
+      if (action === 'renew') await auth.logoutOtherDevices()
+    }, {}, 'unscoped')).rejects.toMatchObject({ code: 'runtime_unconfigured' })
+
+    expect(browser.cookies).toEqual(cookies)
+    expect(users.get(1)!.remember_token).toBe(token)
+    await expect(browser.request(() => auth.user())).resolves.toMatchObject({ id: 1 })
+  })
 
   it('cycles the token and re-issues the current browser remember cookie', async () => {
     authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: revocationStore() })

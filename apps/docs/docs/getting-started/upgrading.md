@@ -353,12 +353,12 @@ npm run build
 
 Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4 and `ip()` calls from step 7. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
 
+### Give custom auth contexts a request scope
+
+If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
+
 ## Next steps
 
 - [Configuration](/getting-started/configuration)
 - [Packages](/reference/packages): what each `@holo-js/*` package is for
 - [Deploying Holo Apps](/deployment/)
-
-### Give custom auth contexts a request scope
-
-If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Without it, check remembered guards sequentially; remember-cookie reads remain uncached.

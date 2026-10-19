@@ -180,4 +180,4 @@ const siteUser = await auth.user()
 
 If you implement `AuthRuntimeContext`, provide `getRequestScope(): object` to return the same object throughout one request and a fresh object for each new request. This lets Holo restore several remembered guards concurrently into one browser session. `createMemoryAuthContext()` and `createAsyncAuthContext()` already provide it.
 
-Without this accessor, Holo reads remember cookies without caching across calls. Check remembered guards sequentially. The optional `getRememberToken` and `setRememberToken` methods are not required for restoration.
+Remember-cookie writes require a request scope. Without one, remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout throw `runtime_unconfigured` before changing authentication. You can still restore remembered guards sequentially; Holo reads remember cookies without caching across calls. The optional `getRememberToken` and `setRememberToken` methods are not required for restoration.

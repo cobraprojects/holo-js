@@ -410,7 +410,20 @@ function sessionGuardNames(bindings: RuntimeBindings): readonly string[] {
     .map(([name]) => name)
 }
 
+function requireRememberWriteScope(bindings: RuntimeBindings): void {
+  if (!authRequestScope(bindings.context)) {
+    throwAuthError('runtime_unconfigured', 'Remember-cookie writes require a request-scoped auth context. Provide getRequestScope().')
+  }
+}
+
+async function checkRememberWriteScope(bindings: RuntimeBindings, guardName: string, remember = false): Promise<void> {
+  if (!authRequestScope(bindings.context) && (remember || await getRememberRecaller(bindings, guardName))) {
+    requireRememberWriteScope(bindings)
+  }
+}
+
 async function rememberCookieFor(bindings: RuntimeBindings, guardName: string, recaller?: string): Promise<string | undefined> {
+  requireRememberWriteScope(bindings)
   await loadRememberCookies(bindings)
   const entries = new Map<string, string>()
   for (const name of sessionGuardNames(bindings)) {
@@ -1055,6 +1068,7 @@ async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: A
 async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const bindings = getRuntimeBindings()
   if (!bindings.sessionRevocations) throwAuthError('runtime_unconfigured', 'Other-device logout requires a durable session revocation store.')
+  await checkRememberWriteScope(bindings, guardName)
   await hydrateGuardContextFromRequest(guardName)
   const state = await readGuardSessionState(guardName, true)
   const metadata = state?.payload.revocation
@@ -1255,6 +1269,7 @@ async function establishLoginSessionForUser(
   },
 ): Promise<AuthEstablishedSession> {
   const bindings = getRuntimeBindings()
+  await checkRememberWriteScope(bindings, options.guard, options.remember)
   const credential = bindings.config.multiFactor.enabled
     ? await ensureMultiFactorStore().find(options.provider, user.id)
     : null
@@ -2022,6 +2037,7 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     })
   }
 
+  await checkRememberWriteScope(bindings, guardName)
   await hydrateGuardContextFromRequest(guardName)
 
   let clearSessionCookies = false
@@ -2229,6 +2245,9 @@ async function establishSessionForUser(
   },
 ): Promise<AuthEstablishedSession> {
   const bindings = getRuntimeBindings()
+  if (!options.preserveRemember || options.remember) {
+    await checkRememberWriteScope(bindings, options.guard, options.remember)
+  }
   const currentGuardSessionId = bindings.context.getSessionId(options.guard)
   const sharedSessionId = currentGuardSessionId
     ?? sessionGuardNames(bindings)
