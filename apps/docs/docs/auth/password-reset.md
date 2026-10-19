@@ -82,7 +82,7 @@ export const resetPasswordForm = schema({
 })
 ```
 
-`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time. Every call also takes at least 200 ms, as in Laravel's timebox, whether or not an account exists, so timing doesn't reveal it either. Send reset emails through a queue (see [Customize the email](#customize-the-email)) so that a slow mail server doesn't make a real account's request take longer than an unknown one.
+`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time. Every call also takes at least 200 ms, as Laravel does, whether or not an account exists, so timing doesn't reveal it either. Send reset emails through a queue (see [Customize the email](#customize-the-email)). Sending synchronously is the one way timing can still reveal an account: when the mail server takes longer than 200 ms, a real account's request takes longer than an unknown one.
 
 When a user is found, Holo deletes their older reset links, creates a new one, and emails it.
 

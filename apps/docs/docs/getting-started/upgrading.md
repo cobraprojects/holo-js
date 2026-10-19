@@ -385,7 +385,7 @@ Update the resend route and its page:
 
 - Call `resendEmailVerification()` with no arguments. Users are signed in after `login()`, including unverified users, so the verification page can post to the route without an address.
 - Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
-- Delete the email-keyed `emailVerificationResend` limiter and the resend form schema, and stop posting `email` from the page.
+- Delete the old `emailVerificationResend` limiter keyed by email and the resend form schema, and stop posting `email` from the page.
 
 ### Password reset cycles remember tokens
 

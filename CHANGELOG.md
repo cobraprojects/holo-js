@@ -71,7 +71,6 @@
 - Delete expired sessions as Laravel does: about 2 in 100 requests that write a session sweep expired file and database sessions. The file sweep skips locked sessions and never follows symbolic links. Redis sessions already expire through their TTL. See [Expired session cleanup](apps/docs/docs/basics/session.md#expired-session-cleanup).
 - Reject CORS configuration that combines wildcard origins with credentials. Wildcard origins answer `Access-Control-Allow-Origin: *`, and `X-XSRF-TOKEN` is an allowed header by default.
 - Encrypt the cookies Holo sets (session, remember-me and `XSRF-TOKEN`) with AES-256-GCM keyed from `APP_KEY`, bound to each cookie name. Changed, swapped, plaintext or foreign-key cookies are treated as absent. CSRF tokens are random values protected by the encrypted cookie instead of an HMAC signature; the `_token` field and `X-CSRF-TOKEN` header accept the plain token or the cookie value. Application cookies are not encrypted. See [Encrypted session, remember-me, and CSRF cookies](apps/docs/docs/getting-started/upgrading.md#encrypted-session-remember-me-and-csrf-cookies).
-
 - Pad failed logins and every reset-link request to at least 200 ms, as Laravel's timebox does, so response timing doesn't reveal whether an account exists. Successful logins are not delayed.
 - Password reset cycles the user's remember token, as Laravel does. Remember-me cookies issued before the reset stop restoring, and browsers that are still signed in keep their sessions.
 

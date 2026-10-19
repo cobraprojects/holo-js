@@ -106,7 +106,7 @@ When you pass `remember: true` to `login()` or `loginUsing()`, Holo also sets a 
 await login({ email, password, remember: true })
 ```
 
-Each user has one remember token, stored in the `remember_token` column of the `users` table. The auth migrations add it. Logging out, logging out other devices, and resetting the password each replace it, so remember-me cookies issued before then stop restoring. Keep it out of JSON output with the model's `hidden` list:
+Each user has one remember token, stored in the `remember_token` column of the `users` table. The auth migrations add it. Logging out, other-device logout, and resetting the password each replace it, so remember-me cookies issued before then stop restoring. Keep it out of JSON output with the model's `hidden` list:
 
 ```ts [server/models/User.ts]
 import { defineModel } from '@holo-js/db'

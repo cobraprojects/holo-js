@@ -318,7 +318,7 @@ if (session.multiFactorChallenge) {
 }
 ```
 
-Wrong credentials throw a validation exception with field errors, so your form shows them like any other validation error. A failed attempt takes at least 200 ms whether or not the account exists, as in Laravel's login timebox, so response timing doesn't reveal which emails have accounts. If [multi-factor auth](/auth/multi-factor) is enabled for the user, the session has a `multiFactorChallenge` and the user isn't fully signed in until they pass it. The result also includes `guard`, `provider`, `user`, `sessionId`, `rememberToken`, `cookies`, and `emailVerificationRequired`.
+Wrong credentials throw a validation exception with field errors, so your form shows them like any other validation error. A failed attempt takes at least 200 ms whether or not the account exists, as Laravel does, so response timing doesn't reveal which emails have accounts. If [multi-factor auth](/auth/multi-factor) is enabled for the user, the session has a `multiFactorChallenge` and the user isn't fully signed in until they pass it. The result also includes `guard`, `provider`, `user`, `sessionId`, `rememberToken`, `cookies`, and `emailVerificationRequired`.
 
 ### loginUsing()
 

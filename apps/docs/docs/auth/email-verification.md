@@ -122,7 +122,7 @@ import { serializeValidationException } from '@holo-js/validation'
 export async function POST() {
   const current = await user()
   if (!current) {
-    return Response.json({ ok: false, message: 'Sign in before requesting another verification email.' }, { status: 401 })
+    return Response.json({ ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }, { status: 401 })
   }
 
   try {
@@ -130,7 +130,7 @@ export async function POST() {
     await resendEmailVerification()
   } catch (error) {
     if (error instanceof SecurityRateLimitError) {
-      return Response.json({ ok: false, message: error.message }, { status: 429 })
+      return Response.json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
     }
 
     const payload = serializeValidationException(error)
@@ -152,7 +152,7 @@ export default defineEventHandler(async (event) => {
   const current = await user()
   if (!current) {
     setResponseStatus(event, 401)
-    return { ok: false, message: 'Sign in before requesting another verification email.' }
+    return { ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }
   }
 
   try {
@@ -161,7 +161,7 @@ export default defineEventHandler(async (event) => {
   } catch (error) {
     if (error instanceof SecurityRateLimitError) {
       setResponseStatus(event, 429)
-      return { ok: false, message: error.message }
+      return { ok: false, status: 429, errors: { _root: [error.message] } }
     }
 
     const payload = serializeValidationException(error)
@@ -184,7 +184,7 @@ import { serializeValidationException } from '@holo-js/validation'
 export async function POST() {
   const current = await user()
   if (!current) {
-    return json({ ok: false, message: 'Sign in before requesting another verification email.' }, { status: 401 })
+    return json({ ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }, { status: 401 })
   }
 
   try {
@@ -192,7 +192,7 @@ export async function POST() {
     await resendEmailVerification()
   } catch (error) {
     if (error instanceof SecurityRateLimitError) {
-      return json({ ok: false, message: error.message }, { status: 429 })
+      return json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
     }
 
     const payload = serializeValidationException(error)
