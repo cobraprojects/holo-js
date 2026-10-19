@@ -78,7 +78,7 @@ export default defineNotification({
 `queue` accepts:
 
 - `true`: queue on the default connection and queue.
-- An object with `connection`, `queue`, `delay`, and `afterCommit`.
+- An object with `connection`, `queue`, `delay`, `afterCommit`, `tries`, and `backoff`.
 - A function `(recipient, channel, context) => boolean | options`, to decide per channel:
 
 ```ts

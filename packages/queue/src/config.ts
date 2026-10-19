@@ -35,6 +35,7 @@ export type {
   QueueSyncConnectionConfig,
   HoloQueueConfig,
 } from './contracts'
+import { QUEUE_TIMER_MAX_SECONDS } from './contracts'
 
 type QueueRedisInlineConfig = NonNullable<QueueRedisConnectionConfig['redis']>
 type QueueRedisInlineClusterNodes = NonNullable<QueueRedisInlineConfig['clusters']>
@@ -42,7 +43,6 @@ type QueueRedisInlineClusterNodes = NonNullable<QueueRedisInlineConfig['clusters
 export const DEFAULT_QUEUE_CONNECTION = 'sync'
 export const DEFAULT_QUEUE_NAME = 'default'
 export const DEFAULT_QUEUE_RETRY_AFTER = 90
-const MAX_REDIS_QUEUE_RETRY_AFTER = Math.floor((2 ** 31 - 1) / 1000)
 export const DEFAULT_QUEUE_BLOCK_FOR = 5
 export const DEFAULT_QUEUE_SLEEP = 1
 export const DEFAULT_FAILED_JOBS_CONNECTION = 'default'
@@ -64,6 +64,7 @@ const DEFAULT_QUEUE_CONFIG: Readonly<NormalizedHoloQueueConfig> = Object.freeze(
       name: DEFAULT_QUEUE_CONNECTION,
       driver: 'sync' as const,
       queue: DEFAULT_QUEUE_NAME,
+      afterCommit: false,
     }),
   }),
 })
@@ -122,6 +123,36 @@ function normalizeOptionalRedisString(value: string | undefined): string | undef
   return value?.trim() || undefined
 }
 
+export function assertQueueTimeoutBelowRetryAfter(
+  subject: string,
+  timeoutSeconds: number | undefined,
+  connection: NormalizedQueueConnectionConfig,
+): void {
+  if (typeof timeoutSeconds !== 'number' || !('retryAfter' in connection) || typeof connection.retryAfter !== 'number') {
+    return
+  }
+
+  if (timeoutSeconds < connection.retryAfter) {
+    return
+  }
+
+  throw new Error(
+    `[Holo Queue] ${subject} timeout of ${timeoutSeconds} seconds must be less than connection "${connection.name}" retryAfter of ${connection.retryAfter} seconds.`,
+  )
+}
+
+function normalizeConnectionAfterCommit(name: string, value: unknown): boolean {
+  if (typeof value === 'undefined') {
+    return false
+  }
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`[Holo Queue] queue connection "${name}" afterCommit must be a boolean.`)
+  }
+
+  return value
+}
+
 function normalizeSyncConnection(
   name: string,
   config: QueueSyncConnectionConfig,
@@ -130,6 +161,7 @@ function normalizeSyncConnection(
     name,
     driver: 'sync',
     queue: normalizeQueueName(config.queue),
+    afterCommit: normalizeConnectionAfterCommit(name, config.afterCommit),
   })
 }
 
@@ -270,9 +302,10 @@ function normalizeRedisConnection(
     driver: 'redis',
     connection: resolvedRedisConnection?.name ?? connectionName ?? name,
     queue: normalizeQueueName(config.queue),
+    afterCommit: normalizeConnectionAfterCommit(name, config.afterCommit),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 1,
-      maximum: MAX_REDIS_QUEUE_RETRY_AFTER,
+      maximum: QUEUE_TIMER_MAX_SECONDS,
     }),
     blockFor: parseInteger(config.blockFor, DEFAULT_QUEUE_BLOCK_FOR, `queue connection "${name}" blockFor`, {
       minimum: 0,
@@ -289,11 +322,14 @@ function normalizeDatabaseConnection(
     name,
     driver: 'database',
     queue: normalizeQueueName(config.queue),
+    afterCommit: normalizeConnectionAfterCommit(name, config.afterCommit),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 1,
+      maximum: QUEUE_TIMER_MAX_SECONDS,
     }),
     sleep: parseInteger(config.sleep, DEFAULT_QUEUE_SLEEP, `queue connection "${name}" sleep`, {
       minimum: 0,
+      maximum: QUEUE_TIMER_MAX_SECONDS,
     }),
     connection: config.connection?.trim() || DEFAULT_FAILED_JOBS_CONNECTION,
     table: config.table?.trim() || DEFAULT_DATABASE_QUEUE_TABLE,
@@ -304,13 +340,14 @@ function normalizePluginConnection(
   name: string,
   config: QueuePluginConnectionConfig,
 ): NormalizedQueuePluginConnectionConfig {
-  const { driver, queue, ...options } = config
+  const { driver, queue, afterCommit, ...options } = config
 
   return Object.freeze({
     ...options,
     name,
     driver: normalizeConnectionName(driver, `queue connection "${name}" driver`),
     queue: normalizeQueueName(queue),
+    afterCommit: normalizeConnectionAfterCommit(name, afterCommit),
   })
 }
 

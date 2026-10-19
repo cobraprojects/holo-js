@@ -26,7 +26,7 @@ import type {
   HoloQueueConfig,
 } from './contracts'
 import { queueJobInternals } from './contracts'
-import { DEFAULT_QUEUE_NAME } from './config'
+import { DEFAULT_QUEUE_NAME, assertQueueTimeoutBelowRetryAfter } from './config'
 import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { syncQueueDriverFactory } from './drivers/sync'
 import { getRegisteredQueueJob } from './registry'
@@ -474,6 +474,10 @@ function createJobEnvelope<TPayload extends QueueJsonValue>(
     options.connection ?? registered.definition.connection,
   )
   const queue = normalizeQueueName(options.queue ?? registered.definition.queue ?? connection.queue ?? DEFAULT_QUEUE_NAME)
+  const tries = queueJobInternals.normalizeOptionalInteger(options.tries, 'Queue dispatch tries', { minimum: 1 })
+    ?? registered.definition.tries
+    ?? 1
+  assertQueueTimeoutBelowRetryAfter(`Queue job "${registered.name}"`, registered.definition.timeout, connection)
 
   return Object.freeze({
     id: randomUUID(),
@@ -482,7 +486,7 @@ function createJobEnvelope<TPayload extends QueueJsonValue>(
     queue,
     payload,
     attempts: 0,
-    maxAttempts: registered.definition.tries ?? 1,
+    maxAttempts: tries,
     ...(typeof options.delay === 'undefined' ? {} : { availableAt: normalizeDelay(options.delay) }),
     createdAt: Date.now(),
   })
@@ -497,10 +501,69 @@ function createDispatchEnvelope<TPayload extends QueueJsonValue>(
   return createJobEnvelope(jobName, payload, options)
 }
 
+type DatabaseTransactionConnection = {
+  getScope(): { kind: string }
+  afterCommit(callback: () => Promise<void>): void
+}
+
+type DatabaseModule = {
+  connectionAsyncContext: {
+    getActive(): { connection: DatabaseTransactionConnection } | undefined
+  }
+}
+
+const databaseSpecifier = '@holo-js/db'
+
+async function loadDatabaseModule(): Promise<DatabaseModule | null> {
+  try {
+    return await import(databaseSpecifier) as DatabaseModule
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error.code === 'ERR_MODULE_NOT_FOUND' || error.code === 'MODULE_NOT_FOUND')
+    ) {
+      return null
+    }
+
+    throw error
+  }
+}
+
+async function resolveOpenDatabaseTransaction(): Promise<DatabaseTransactionConnection | undefined> {
+  const database = await loadDatabaseModule()
+  const active = database?.connectionAsyncContext.getActive()?.connection
+  if (!active || active.getScope().kind === 'root') {
+    return undefined
+  }
+
+  return active
+}
+
 async function dispatchRecord(
   envelope: QueueJobEnvelope,
+  options: Pick<QueueDispatchOptions, 'afterCommit'> = {},
 ): Promise<QueueDispatchResult> {
   const driver = resolveConnectionDriver(envelope.connection)
+  const connection = resolveConnectionConfig(getQueueRuntimeState().config, envelope.connection)
+  const transaction = (options.afterCommit ?? connection.afterCommit)
+    ? await resolveOpenDatabaseTransaction()
+    : undefined
+
+  if (transaction) {
+    transaction.afterCommit(async () => {
+      await dispatchThroughDriver(driver, envelope)
+    })
+
+    return {
+      jobId: envelope.id,
+      connection: envelope.connection,
+      queue: envelope.queue,
+      synchronous: false,
+    }
+  }
+
   const result = await dispatchThroughDriver(driver, envelope)
 
   return {
@@ -555,6 +618,13 @@ class PendingQueueDispatch<TPayload extends QueueJsonValue> implements QueuePend
     }, this.completedHooks, this.failedHooks)
   }
 
+  afterCommit(): QueuePendingDispatch<TPayload> {
+    return new PendingQueueDispatch(this.jobName, this.payload, {
+      ...this.options,
+      afterCommit: true,
+    }, this.completedHooks, this.failedHooks)
+  }
+
   onComplete(callback: QueueDispatchCompletedHook): QueuePendingDispatch<TPayload> {
     return new PendingQueueDispatch(
       this.jobName,
@@ -600,7 +670,7 @@ class PendingQueueDispatch<TPayload extends QueueJsonValue> implements QueuePend
     this.executionPromise ??= (async () => {
       try {
         const envelope = createDispatchEnvelope(this.jobName, this.payload, this.options)
-        const result = await dispatchRecord(envelope)
+        const result = await dispatchRecord(envelope, { afterCommit: this.options.afterCommit })
 
         for (const hook of this.completedHooks) {
           try {

@@ -66,8 +66,9 @@ export default defineQueueConfig({
 | `connection` | `'default'` | Database connection name from `config/database.ts`. |
 | `table` | `'jobs'` | Table that holds waiting jobs. |
 | `queue` | `'default'` | Default queue name for this connection. |
-| `retryAfter` | `90` | Seconds before a job a worker took, but never finished, can be taken by another worker. Keep job timeouts shorter than this. Must be at least `1`. |
-| `sleep` | `1` | Seconds a worker waits before checking an empty queue again. |
+| `retryAfter` | `90` | Seconds before a job a worker took, but never finished, can be taken by another worker. Job timeouts must be shorter than this. Must be at least `1`. |
+| `sleep` | `1` | Seconds a worker waits before checking an empty queue again. At most `2147483`. |
+| `afterCommit` | `false` | Queue every job on this connection only after the surrounding database transaction commits. See [Dispatch after a database commit](/queue/jobs#dispatch-after-a-database-commit). |
 
 ### Create the jobs table
 
@@ -144,6 +145,7 @@ When `url` is set, it's used instead of `host` and `port`. See [Configuration](/
 | --- | --- | --- |
 | `connection` | the `default` in `config/redis.ts` | Redis connection name from `config/redis.ts`. |
 | `queue` | `'default'` | Default queue name for this connection. |
+| `afterCommit` | `false` | Queue every job on this connection only after the surrounding database transaction commits. See [Dispatch after a database commit](/queue/jobs#dispatch-after-a-database-commit). |
 | `retryAfter` | `90` | Seconds before a job held by a worker that stopped can be taken by another worker. A running worker keeps renewing its hold, so long jobs aren't handed out twice. Must be between `1` and `2147483` (about 24 days). |
 | `blockFor` | `5` | Seconds a worker waits on Redis for a new job before checking again. |
 | `redis` | none | Override Redis settings for this connection only: `url`, `host`, `port`, `username`, `password`, `db`, or `clusters`. |

@@ -1,4 +1,6 @@
 type QueueJsonPrimitive = string | number | boolean | null
+
+export const QUEUE_TIMER_MAX_SECONDS = Math.floor((2 ** 31 - 1) / 1000)
 export type QueueJsonValue = QueueJsonPrimitive | readonly QueueJsonValue[] | { readonly [key: string]: QueueJsonValue }
 
 type QueueJobDispatcher = <TPayload extends QueueJsonValue>(
@@ -132,7 +134,7 @@ function normalizeOptionalString(
 function normalizeOptionalInteger(
   value: number | undefined,
   label: string,
-  options: { minimum?: number } = {},
+  options: { minimum?: number, maximum?: number } = {},
 ): number | undefined {
   if (typeof value === 'undefined') {
     return undefined
@@ -144,6 +146,25 @@ function normalizeOptionalInteger(
 
   if (typeof options.minimum === 'number' && value < options.minimum) {
     throw new Error(`[Holo Queue] ${label} must be greater than or equal to ${options.minimum}.`)
+  }
+
+  if (typeof options.maximum === 'number' && value > options.maximum) {
+    throw new Error(`[Holo Queue] ${label} must be less than or equal to ${options.maximum}.`)
+  }
+
+  return value
+}
+
+function normalizeOptionalBoolean(
+  value: boolean | undefined,
+  label: string,
+): boolean | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`[Holo Queue] ${label} must be a boolean when provided.`)
   }
 
   return value
@@ -230,6 +251,7 @@ export interface QueueJobDefinition<TPayload extends QueueJsonValue = QueueJsonV
   readonly tries?: number
   readonly backoff?: number | readonly number[]
   readonly timeout?: number
+  readonly failOnTimeout?: boolean
   readonly onCompleted?: QueueJobCompletedHook<TPayload, TResult>
   readonly onFailed?: QueueJobFailedHook<TPayload>
   handle(payload: TPayload, context: QueueJobContext): Promise<TResult> | TResult
@@ -258,6 +280,8 @@ export interface QueueDispatchOptions {
   readonly connection?: string
   readonly queue?: string
   readonly delay?: QueueDelayValue
+  readonly tries?: number
+  readonly afterCommit?: boolean
 }
 
 export interface QueueDispatchResult {
@@ -342,6 +366,7 @@ export interface QueuePendingDispatch<TPayload extends QueueJsonValue = QueueJso
   onConnection(name: string): QueuePendingDispatch<TPayload>
   onQueue(name: string): QueuePendingDispatch<TPayload>
   delay(value: QueueDelayValue): QueuePendingDispatch<TPayload>
+  afterCommit(): QueuePendingDispatch<TPayload>
   onComplete(callback: QueueDispatchCompletedHook): QueuePendingDispatch<TPayload>
   onFailed(callback: QueueDispatchFailedHook): QueuePendingDispatch<TPayload>
   then<TResult1 = QueueDispatchResult, TResult2 = never>(
@@ -453,6 +478,7 @@ export interface QueueWorkerOptions {
   readonly stopWhenEmpty?: boolean
   readonly sleep?: number
   readonly tries?: number
+  readonly backoff?: number | readonly number[]
   readonly timeout?: number
   readonly maxJobs?: number
   readonly maxTime?: number
@@ -526,7 +552,8 @@ export function normalizeQueueJobDefinition<
     ...(typeof job.connection === 'undefined' ? {} : { connection: normalizeOptionalString(job.connection, 'Job connection') }),
     ...(typeof job.queue === 'undefined' ? {} : { queue: normalizeOptionalString(job.queue, 'Job queue') }),
     ...(typeof job.tries === 'undefined' ? {} : { tries: normalizeOptionalInteger(job.tries, 'Job tries', { minimum: 1 }) }),
-    ...(typeof job.timeout === 'undefined' ? {} : { timeout: normalizeOptionalInteger(job.timeout, 'Job timeout', { minimum: 0 }) }),
+    ...(typeof job.timeout === 'undefined' ? {} : { timeout: normalizeOptionalInteger(job.timeout, 'Job timeout', { minimum: 0, maximum: QUEUE_TIMER_MAX_SECONDS }) }),
+    ...(typeof job.failOnTimeout === 'undefined' ? {} : { failOnTimeout: normalizeOptionalBoolean(job.failOnTimeout, 'Job failOnTimeout') }),
     ...(typeof job.backoff === 'undefined' ? {} : { backoff: normalizeBackoff(job.backoff) }),
     ...(typeof job.onCompleted === 'undefined' ? {} : { onCompleted: normalizeOptionalHook(job.onCompleted, 'Job onCompleted hook') }),
     ...(typeof job.onFailed === 'undefined' ? {} : { onFailed: normalizeOptionalHook(job.onFailed, 'Job onFailed hook') }),
@@ -566,6 +593,7 @@ export interface QueueRedisConnectionConfig {
   readonly driver: 'redis'
   readonly connection?: string
   readonly queue?: string
+  readonly afterCommit?: boolean
   readonly retryAfter?: number | string
   readonly blockFor?: number | string
   readonly redis?: {
@@ -586,6 +614,7 @@ export interface QueueRedisConnectionConfig {
 export interface QueueDatabaseConnectionConfig {
   readonly driver: 'database'
   readonly queue?: string
+  readonly afterCommit?: boolean
   readonly retryAfter?: number | string
   readonly sleep?: number | string
   readonly connection?: string
@@ -595,6 +624,7 @@ export interface QueueDatabaseConnectionConfig {
 export interface QueueSyncConnectionConfig {
   readonly driver: 'sync'
   readonly queue?: string
+  readonly afterCommit?: boolean
 }
 
 export interface QueuePluginConnectionConfig {
@@ -625,6 +655,7 @@ export interface NormalizedQueueSyncConnectionConfig {
   readonly name: string
   readonly driver: 'sync'
   readonly queue: string
+  readonly afterCommit: boolean
 }
 
 export interface NormalizedQueueRedisConnectionConfig {
@@ -632,6 +663,7 @@ export interface NormalizedQueueRedisConnectionConfig {
   readonly driver: 'redis'
   readonly connection: string
   readonly queue: string
+  readonly afterCommit: boolean
   readonly retryAfter: number
   readonly blockFor: number
   readonly redis: {
@@ -673,6 +705,7 @@ export interface NormalizedQueueDatabaseConnectionConfig {
   readonly name: string
   readonly driver: 'database'
   readonly queue: string
+  readonly afterCommit: boolean
   readonly retryAfter: number
   readonly sleep: number
   readonly connection: string
@@ -683,6 +716,7 @@ export interface NormalizedQueuePluginConnectionConfig {
   readonly name: string
   readonly driver: string
   readonly queue: string
+  readonly afterCommit: boolean
   readonly [key: string]: unknown
 }
 
@@ -706,6 +740,7 @@ export const queueJobInternals = {
   normalizeQueueJobDefinition,
   normalizeBackoff,
   normalizeOptionalHook,
+  normalizeOptionalBoolean,
   normalizeOptionalInteger,
   normalizeOptionalString,
   resolveQueueJobDefinitionName,

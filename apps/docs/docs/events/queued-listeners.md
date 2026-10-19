@@ -58,6 +58,20 @@ export default defineListener({
 
 `delay` is a number of seconds, or a `Date` to run at.
 
+`tries` and `backoff` retry a failing queued listener. `tries` is the total number of attempts, and it defaults to one. `backoff` is the wait before each retry, in seconds, or an array of waits per retry. Like the other queue options, they need `queue: true`.
+
+```ts
+defineListener({
+  listensTo: [UserRegistered],
+  queue: true,
+  tries: 3,
+  backoff: [10, 60],
+  handle(event) {
+    return sendWelcomeEmail(event.payload.userId)
+  },
+})
+```
+
 You can override these per dispatch:
 
 ```ts [server/lib/billing.ts]

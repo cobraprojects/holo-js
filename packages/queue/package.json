@@ -33,6 +33,14 @@
     "@holo-js/config": "catalog:",
     "@holo-js/kernel": "catalog:"
   },
+  "peerDependencies": {
+    "@holo-js/db": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/db": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "tsup": "catalog:",

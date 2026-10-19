@@ -73,6 +73,7 @@ await SendDigest.dispatch({ userId: 42 })
 | `.onConnection(name)` | Use a different connection from `config/queue.ts`. |
 | `.onQueue(name)` | Put the job on a different queue name. |
 | `.delay(value)` | Wait before the job can run. Pass seconds, or a `Date`. |
+| `.afterCommit()` | Queue the job only after the surrounding database transaction commits. Dispatches right away when no transaction is open. |
 | `.onComplete(callback)` | Called with `{ jobId, connection, queue, synchronous }` once the job is queued. |
 | `.onFailed(callback)` | Called with the error if the job couldn't be queued. |
 
@@ -155,6 +156,18 @@ await DB.transaction(async () => {
 
 The callback runs only if the transaction commits. `DB.afterCommit()` throws when called outside a transaction.
 
+You can also chain `.afterCommit()` onto a dispatch. It queues the job only after the surrounding transaction commits, and dispatches right away when no transaction is open:
+
+```ts
+await DB.transaction(async () => {
+  const order = await Order.create({ total: 4999 })
+
+  await SendOrderReceipt.dispatch({ orderId: order.id }).afterCommit()
+})
+```
+
+Set `afterCommit: true` on a connection in `config/queue.ts` to defer every dispatch to it. The default is `false`. If the transaction rolls back, the job is never queued.
+
 ## Retries and backoff
 
 By default a job runs once. If it throws, it fails. Set `tries` to let a worker run it again:
@@ -173,18 +186,31 @@ export default defineJob<{ userId: number }>({
 
 - a number waits the same time before every retry
 - an array sets the wait per retry, so `[10, 60, 300]` waits 10s, then 60s, then 300s for every retry after that
-- with no `backoff`, the retry is available right away
+- with no `backoff`, the retry is available right away, unless the worker sets `--backoff`
 
 Retries only happen on a worker. With the `sync` driver, an error in `handle()` is thrown back to the code that dispatched the job.
 
 ## Timeouts
 
-`timeout` is the number of seconds a job may run on a worker. When it runs longer, the worker marks it failed and moves on, without retrying it.
+`timeout` is the number of seconds a job may run on a worker. When `handle()` runs longer, the worker stops with a `QueueWorkerTimeoutError`, and the job stays reserved. After the connection's `retryAfter`, a worker runs it again. That run counts as an attempt, so the job is retried while `tries` remain and fails once they're used up.
+
+Set `failOnTimeout: true` to fail the job right away on a timeout, without a retry:
+
+```ts
+export default defineJob<{ reportId: string }>({
+  tries: 3,
+  timeout: 120,
+  failOnTimeout: true,
+  async handle(payload) {
+    await buildReport(payload.reportId)
+  },
+})
+```
 
 The worker doesn't stop your handler's code when it times out. Make the work inside `handle()` safe to finish late, or give it its own time limit.
 
-::: tip
-Keep `timeout` shorter than the connection's `retryAfter` (90 seconds by default). Otherwise a job that is still running can be handed to a second worker. See [Drivers](/queue/drivers).
+::: warning Keep the timeout below `retryAfter`
+A job's `timeout`, and the worker's `--timeout`, must be less than the connection's `retryAfter` (90 seconds by default). Otherwise a job that is still running can be handed to a second worker. Holo rejects the dispatch, or refuses to start the worker, when that happens. See [Drivers](/queue/drivers). Timeouts are also capped at 2147483 seconds, the longest delay Node can schedule.
 :::
 
 ## The job context
@@ -272,6 +298,7 @@ Everything you can call or set on a job, grouped by task. Each item links to its
 - [`tries`](#tries)
 - [`backoff`](#backoff)
 - [`timeout`](#timeout)
+- [`failOnTimeout`](#failontimeout)
 - [`onCompleted()`](#oncompleted-payload-result-context)
 - [`onFailed()`](#onfailed-payload-error-context)
 
@@ -297,6 +324,7 @@ Everything you can call or set on a job, grouped by task. Each item links to its
 - [`.onConnection()`](#onconnection-name)
 - [`.onQueue()`](#onqueue-name)
 - [`.delay()`](#delay-value)
+- [`.afterCommit()`](#aftercommit)
 - [`.onComplete()`](#oncomplete-callback)
 - [`.onFailed()`](#onfailed-callback)
 - [`.dispatch()`](#dispatch-chain)
@@ -361,7 +389,7 @@ Optional integer, at least `1`. The total number of attempts on a worker, includ
 
 ### `backoff` {#backoff}
 
-Optional. A number of seconds, or an array of non-negative integers. It sets how long to wait before each retry. With an array, the retry uses the entry for its position, and retries past the end use the last entry. With no `backoff`, the retry is available right away.
+Optional. A number of seconds, or an array of non-negative integers. It sets how long to wait before each retry. With an array, the retry uses the entry for its position, and retries past the end use the last entry. With no `backoff`, the worker's `--backoff` value applies, and if there isn't one, the retry is available right away.
 
 ```ts
 export default defineJob<{ userId: number }>({
@@ -377,7 +405,11 @@ The wait is 10s after the first failed attempt, and 60s after every later failur
 
 ### `timeout` {#timeout}
 
-Optional non-negative integer, in seconds. A worker fails the job when `handle()` runs longer than this. The worker's `--timeout` flag overrides it. See [Timeouts](#timeouts).
+Optional non-negative integer, in seconds, less than the connection's `retryAfter` and at most `2147483`. A worker stops when `handle()` runs longer than this. The worker's `--timeout` flag overrides it. See [Timeouts](#timeouts).
+
+### `failOnTimeout` {#failontimeout}
+
+Optional boolean, default `false`. When `true`, a run that exceeds `timeout` fails the job right away, with no retry. See [Timeouts](#timeouts).
 
 ### `onCompleted(payload, result, context)` {#oncompleted-payload-result-context}
 
@@ -514,7 +546,7 @@ Thrown by `context.release()` when the job runs inline, from `dispatchSync()` or
 
 ### `QueueWorkerTimeoutError` {#queueworkertimeouterror}
 
-Given to `onFailed()` and to the worker's `onJobFailed` hook when a job runs past its `timeout`. Its message includes the job name and the limit. Check it with `instanceof`.
+Thrown when a run exceeds its `timeout`. The worker stops with it, and it's given to `onFailed()` and the worker's `onJobFailed` hook when the job has `failOnTimeout`. Its message includes the job name and the limit. Check it with `instanceof`.
 
 ### `QueueWorkerUnsupportedDriverError` {#queueworkerunsupporteddrivererror}
 

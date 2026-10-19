@@ -14,6 +14,8 @@ import {
   resolveStringFlag,
   collectMultiStringFlag,
   resolveBooleanFlag,
+  parseBackoffFlag,
+  formatBackoffFlag,
   parseNumberFlag,
   splitCsv,
   extractEnvironmentOption,
@@ -1458,13 +1460,14 @@ export function createInternalCommands(
     {
       name: 'queue:work',
       description: 'Run the queue worker for an async queue connection.',
-      usage: 'holo queue:work [--connection <name>] [--queue <name>] [--once] [--stop-when-empty] [--sleep N] [--tries N] [--timeout N] [--max-jobs N] [--max-time N]',
+      usage: 'holo queue:work [--connection <name>] [--queue <name>] [--once] [--stop-when-empty] [--sleep N] [--tries N] [--backoff N[,N...]] [--timeout N] [--max-jobs N] [--max-time N]',
       source: 'internal',
       async prepare(input) {
         const connection = resolveStringFlag(input.flags, 'connection', 'c')
         const queueNames = (collectMultiStringFlag(input.flags, 'queue', 'q') ?? []).flatMap(entry => splitCsv(entry))
         const sleep = parseNumberFlag(input.flags, 'sleep')
         const tries = parseNumberFlag(input.flags, 'tries')
+        const backoff = parseBackoffFlag(input.flags)
         const timeout = parseNumberFlag(input.flags, 'timeout')
         const maxJobs = parseNumberFlag(input.flags, 'max-jobs')
         const maxTime = parseNumberFlag(input.flags, 'max-time')
@@ -1477,6 +1480,7 @@ export function createInternalCommands(
             ['stop-when-empty']: resolveBooleanFlag(input.flags, 'stop-when-empty'),
             ...(typeof sleep === 'number' ? { sleep } : {}),
             ...(typeof tries === 'number' ? { tries } : {}),
+            ...(typeof backoff === 'undefined' ? {} : { backoff: formatBackoffFlag(backoff) }),
             ...(typeof timeout === 'number' ? { timeout } : {}),
             ...(typeof maxJobs === 'number' ? { ['max-jobs']: maxJobs } : {}),
             ...(typeof maxTime === 'number' ? { ['max-time']: maxTime } : {}),
@@ -1492,6 +1496,7 @@ export function createInternalCommands(
           stopWhenEmpty: commandContext.flags['stop-when-empty'] === true,
           ...(typeof commandContext.flags.sleep === 'number' ? { sleep: commandContext.flags.sleep } : {}),
           ...(typeof commandContext.flags.tries === 'number' ? { tries: commandContext.flags.tries } : {}),
+          ...(typeof commandContext.flags.backoff === 'string' ? { backoff: parseBackoffFlag({ backoff: commandContext.flags.backoff }) } : {}),
           ...(typeof commandContext.flags.timeout === 'number' ? { timeout: commandContext.flags.timeout } : {}),
           ...(typeof commandContext.flags['max-jobs'] === 'number' ? { maxJobs: commandContext.flags['max-jobs'] } : {}),
           ...(typeof commandContext.flags['max-time'] === 'number' ? { maxTime: commandContext.flags['max-time'] } : {}),
@@ -1501,13 +1506,14 @@ export function createInternalCommands(
     {
       name: 'queue:listen',
       description: 'Watch queue-related project files and restart the queue worker on change.',
-      usage: 'holo queue:listen [--connection <name>] [--queue <name>] [--sleep N] [--tries N] [--timeout N] [--max-jobs N] [--max-time N]',
+      usage: 'holo queue:listen [--connection <name>] [--queue <name>] [--sleep N] [--tries N] [--backoff N[,N...]] [--timeout N] [--max-jobs N] [--max-time N]',
       source: 'internal',
       async prepare(input) {
         const connection = resolveStringFlag(input.flags, 'connection', 'c')
         const queueNames = (collectMultiStringFlag(input.flags, 'queue', 'q') ?? []).flatMap(entry => splitCsv(entry))
         const sleep = parseNumberFlag(input.flags, 'sleep')
         const tries = parseNumberFlag(input.flags, 'tries')
+        const backoff = parseBackoffFlag(input.flags)
         const timeout = parseNumberFlag(input.flags, 'timeout')
         const maxJobs = parseNumberFlag(input.flags, 'max-jobs')
         const maxTime = parseNumberFlag(input.flags, 'max-time')
@@ -1518,6 +1524,7 @@ export function createInternalCommands(
             ...(queueNames && queueNames.length > 0 ? { queue: queueNames } : {}),
             ...(typeof sleep === 'number' ? { sleep } : {}),
             ...(typeof tries === 'number' ? { tries } : {}),
+            ...(typeof backoff === 'undefined' ? {} : { backoff: formatBackoffFlag(backoff) }),
             ...(typeof timeout === 'number' ? { timeout } : {}),
             ...(typeof maxJobs === 'number' ? { ['max-jobs']: maxJobs } : {}),
             ...(typeof maxTime === 'number' ? { ['max-time']: maxTime } : {}),

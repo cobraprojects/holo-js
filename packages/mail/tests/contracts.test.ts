@@ -9,6 +9,7 @@ import {
   isAttachmentQueueSafe,
   isMailDefinition,
   mergeMailDefinitionInputs,
+  normalizeMailConfig,
   normalizeMailDefinition,
   resolveAttachmentDefinition,
   resolveNormalizedAttachment,
@@ -179,6 +180,33 @@ describe('@holo-js/mail contracts', () => {
         },
       ],
     })).toThrow('Inline attachments must define a contentId')
+  })
+
+  it('accepts and rejects queued mail tries and backoff', () => {
+    const base = { to: 'ava@example.com', subject: 'Retries', text: 'Retry' }
+    expect(defineMail({ ...base, queue: { queued: true, tries: 3, backoff: [1, 5] } }).queue).toEqual({
+      queued: true,
+      tries: 3,
+      backoff: [1, 5],
+    })
+    expect(defineMail({ ...base, queue: { queued: true, backoff: 0 } }).queue).toEqual({ queued: true, backoff: 0 })
+    expect(() => defineMail({ ...base, queue: { tries: 0 } }))
+      .toThrow('[Holo Mail] Mail queue tries must be an integer greater than or equal to 1.')
+    expect(() => defineMail({ ...base, queue: { tries: 1.5 } }))
+      .toThrow('[Holo Mail] Mail queue tries must be an integer greater than or equal to 1.')
+    expect(() => defineMail({ ...base, queue: { backoff: -1 } }))
+      .toThrow('[Holo Mail] Mail queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+    expect(() => defineMail({ ...base, queue: { backoff: [] } }))
+      .toThrow('[Holo Mail] Mail queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+    expect(() => defineMail({ ...base, queue: { backoff: [1, -1] } }))
+      .toThrow('[Holo Mail] Mail queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+    expect(() => normalizeMailConfig({ queue: { tries: 0 } }))
+      .toThrow('[Holo Mail] Mail queue tries must be an integer greater than or equal to 1.')
+    expect(() => normalizeMailConfig({ mailers: { log: { driver: 'log', queue: { backoff: [] } } } }))
+      .toThrow('[Holo Mail] Mail queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+    expect(normalizeMailConfig({ queue: { tries: 2, backoff: [1] } }).queue).toMatchObject({ tries: 2, backoff: [1] })
+    expect(normalizeMailConfig({ queue: { tries: 2 }, mailers: { log: { driver: 'log', queue: { tries: 4 } } } }).mailers.log?.queue)
+      .toMatchObject({ tries: 4 })
   })
 
   it('covers internal helpers, merge behavior, and alternate contract shapes', () => {
