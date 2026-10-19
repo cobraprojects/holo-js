@@ -108,6 +108,29 @@ describe('Validation input bounds', () => {
     }
   })
 
+  it('keeps item errors for undersized lists and skips items for oversized ones', async () => {
+    const checked: string[] = []
+    const definition = schema({
+      emails: field.array(field.string().email().custom((value) => {
+        checked.push(value)
+        return true
+      })).size(2),
+    })
+
+    const undersized = await safeParse({ emails: ['invalid'] }, definition)
+    expect(undersized.valid).toBe(false)
+    if (!undersized.valid) {
+      expect(undersized.errors.get('emails')).toEqual(['This field must contain exactly 2 items.'])
+      expect(undersized.errors.get('emails.0')).toEqual(['This field must be a valid email address.'])
+    }
+
+    checked.length = 0
+    const oversized = await safeParse({ emails: ['a@example.com', 'b@example.com', 'invalid'] }, definition)
+    expect(oversized.valid).toBe(false)
+    if (!oversized.valid) expect(oversized.errors.get('emails')).toEqual(['This field must contain exactly 2 items.'])
+    expect(checked).toEqual([])
+  })
+
   it('validates malformed JSON as empty input', async () => {
     const definition = schema({ name: field.string().required() })
     const request = new Request('https://example.com/', {

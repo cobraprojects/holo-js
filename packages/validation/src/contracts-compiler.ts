@@ -1,5 +1,5 @@
 import * as v from 'valibot'
-import { exactSizeAction, minAction, maxAction, asPipeItem, stringSchema, numberSchema, booleanSchema, dateSchema, emailAction, urlAction, uuidAction, integerAction } from './compiler-actions'
+import { exactSizeAction, minAction, maxAction, oversizedListAction, asPipeItem, stringSchema, numberSchema, booleanSchema, dateSchema, emailAction, urlAction, uuidAction, integerAction } from './compiler-actions'
 import type { FieldRule, FieldDefinition, SchemaInputShape, SupportedRuleFamily, WebFileLike } from './contracts-types'
 import { declaredListLimit, isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
 
@@ -43,7 +43,7 @@ function makeListLimitSchema(definition: FieldDefinition): CompiledSchema | unde
   const { rule, value } = limit
   return v.pipeAsync(
     v.unknown(),
-    asPipeItem(rule.name === 'max' ? maxAction(definition, value, rule.message) : exactSizeAction(definition, value, rule.message)),
+    asPipeItem(oversizedListAction(definition, rule.name === 'max' ? 'max' : 'size', value, rule.message)),
   )
 }
 
