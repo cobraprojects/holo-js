@@ -343,7 +343,7 @@ await Post.withoutEvents(async () => {
 
 ## Write guarded columns
 
-Mass assignment rules from `fillable` and `guarded` apply whenever you assign attributes. Assigning a blocked column throws a `SecurityError`:
+Mass assignment rules from `fillable` and `guarded` apply whenever you assign attributes. Assigning a blocked column throws a `SecurityError`, including through property assignment or `Object.assign()`. Other properties you assign onto a model, such as `attributes` or `original`, are never saved:
 
 ```ts
 await User.create({ name: 'Ada', is_admin: true })

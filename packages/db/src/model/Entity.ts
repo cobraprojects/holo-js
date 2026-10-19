@@ -58,41 +58,50 @@ type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends 
   resolveRelationProperty?(entity: EntityBase<TTable>, key: string): unknown
 }
 
+let readOriginalAttribute: (entity: EntityBase, key: string) => unknown
+
 class EntityBase<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
 > {
-  private attributes: Record<string, unknown>
-  private original: Record<string, unknown>
-  private changes: Record<string, unknown>
-  private persisted: boolean
-  private relations: Record<string, unknown>
-  private relationLoads = new Map<string, Promise<unknown>>()
-  private peerCollection?: readonly EntityBase<TTable, TRelations>[]
-  private hiddenOverrides = new Set<string>()
-  private visibleOverrides = new Set<string>()
-  private visibleOnly: string[] | null = null
-  private appendedOverrides: string[] | null = null
+  #attributes: Record<string, unknown>
+  #original: Record<string, unknown>
+  #changes: Record<string, unknown>
+  #persisted: boolean
+  #relations: Record<string, unknown>
+  #relationLoads = new Map<string, Promise<unknown>>()
+  #peerCollection?: readonly EntityBase<TTable, TRelations>[]
+  #hiddenOverrides = new Set<string>()
+  #visibleOverrides = new Set<string>()
+  #visibleOnly: string[] | null = null
+  #appendedOverrides: string[] | null = null
+
+  static {
+    readOriginalAttribute = (entity, key) => entity.#original[key]
+  }
+
+  readonly #repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>
 
   constructor(
-    private readonly repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>,
+    repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>,
     attributes: Partial<ModelRecord<TTable>>,
     exists = true,
   ) {
-    this.attributes = { ...attributes }
-    this.original = exists ? { ...attributes } : {}
-    this.changes = exists ? {} : { ...attributes }
-    this.persisted = exists
-    this.relations = {}
+    this.#repository = repository
+    this.#attributes = { ...attributes }
+    this.#original = exists ? { ...attributes } : {}
+    this.#changes = exists ? {} : { ...attributes }
+    this.#persisted = exists
+    this.#relations = {}
     initializeEntityModelProperties(this, this.getRepositoryRuntime())
   }
 
   getRepository(): ModelRepositoryLike<TTable> {
-    return this.repository
+    return this.#repository
   }
 
   private getRepositoryRuntime(): EntityRepositoryRuntime<TTable, TRelations> {
-    return this.repository as EntityRepositoryRuntime<TTable, TRelations>
+    return this.#repository as EntityRepositoryRuntime<TTable, TRelations>
   }
 
   is(other: unknown): boolean {
@@ -102,7 +111,7 @@ class EntityBase<
 
     const thisRepository = this.getRepositoryRuntime()
     const otherRepository = other.getRepository() as EntityRepositoryRuntime<TableDefinition, RelationMap>
-    const thisKey = this.attributes[thisRepository?.definition?.primaryKey]
+    const thisKey = this.#attributes[thisRepository?.definition?.primaryKey]
     const otherKey = other.toAttributes()[otherRepository?.definition?.primaryKey]
 
     return Boolean(
@@ -125,7 +134,7 @@ class EntityBase<
   }
 
   exists(): boolean {
-    return this.persisted
+    return this.#persisted
   }
 
   trashed(): boolean {
@@ -135,31 +144,31 @@ class EntityBase<
       return false
     }
 
-    return this.attributes[column] !== null && typeof this.attributes[column] !== 'undefined'
+    return this.#attributes[column] !== null && typeof this.#attributes[column] !== 'undefined'
   }
 
   get<TKey extends Extract<keyof ModelRecord<TTable>, string>>(key: TKey): ModelRecord<TTable>[TKey] {
     const repo = this.getRepositoryRuntime()
-    const hasAttribute = Object.prototype.hasOwnProperty.call(this.attributes, key)
+    const hasAttribute = Object.prototype.hasOwnProperty.call(this.#attributes, key)
     if (!hasAttribute && typeof repo.shouldPreventAccessingMissingAttributes === 'function' && repo.shouldPreventAccessingMissingAttributes(key)) {
       throw new HydrationError(`Attribute "${String(key)}" is missing from model "${repo.definition.name}".`)
     }
 
     const value = typeof repo.resolveAttribute === 'function'
-      ? repo.resolveAttribute(key, this, this.attributes[key])
-      : this.attributes[key]
+      ? repo.resolveAttribute(key, this, this.#attributes[key])
+      : this.#attributes[key]
     return value as ModelRecord<TTable>[TKey]
   }
 
   set<TKey extends Extract<keyof ModelRecord<TTable>, string>>(key: TKey, value: ModelRecord<TTable>[TKey]): this {
     this.getRepositoryRuntime().assertMassAssignable?.({ [key]: value })
-    this.attributes[key] = value
+    this.#attributes[key] = value
     return this
   }
 
   fill(values: Partial<ModelRecord<TTable>>): this {
     this.getRepositoryRuntime().assertMassAssignable?.(values)
-    Object.assign(this.attributes, values)
+    Object.assign(this.#attributes, values)
     return this
   }
 
@@ -169,13 +178,13 @@ class EntityBase<
   }
 
   forceFill(values: Partial<ModelRecord<TTable>>): this {
-    Object.assign(this.attributes, values)
+    Object.assign(this.#attributes, values)
     return this
   }
 
   isDirty(key?: Extract<keyof ModelRecord<TTable>, string>): boolean {
     if (key) {
-      return !valuesAreEqual(this.attributes[key], this.original[key])
+      return !valuesAreEqual(this.#attributes[key], this.#original[key])
     }
 
     return Object.keys(this.getDirty()).length > 0
@@ -187,29 +196,29 @@ class EntityBase<
 
   getDirty(): Partial<ModelUpdatePayload<TTable>> {
     return Object.fromEntries(
-      Object.entries(this.attributes).filter(([key, value]) => !valuesAreEqual(this.original[key], value)),
+      Object.entries(this.#attributes).filter(([key, value]) => !valuesAreEqual(this.#original[key], value)),
     ) as Partial<ModelUpdatePayload<TTable>>
   }
 
   getChanges(): Partial<ModelUpdatePayload<TTable>> {
-    return { ...this.changes } as Partial<ModelUpdatePayload<TTable>>
+    return { ...this.#changes } as Partial<ModelUpdatePayload<TTable>>
   }
 
   wasChanged(key?: Extract<keyof ModelRecord<TTable>, string>): boolean {
     if (key) {
-      return Object.prototype.hasOwnProperty.call(this.changes, key)
+      return Object.prototype.hasOwnProperty.call(this.#changes, key)
     }
 
-    return Object.keys(this.changes).length > 0
+    return Object.keys(this.#changes).length > 0
   }
 
   syncOriginal(): this {
-    this.original = { ...this.attributes }
+    this.#original = { ...this.#attributes }
     return this
   }
 
   syncChanges(): this {
-    this.changes = { ...this.getDirty() }
+    this.#changes = { ...this.getDirty() }
     return this
   }
 
@@ -217,38 +226,38 @@ class EntityBase<
     entity: EntityBase<TTable>,
     changes: Record<string, unknown> = {},
   ): this {
-    this.attributes = { ...entity.toAttributes() }
-    this.original = { ...entity.toAttributes() }
-    this.changes = { ...changes }
-    this.persisted = true
+    this.#attributes = { ...entity.toAttributes() }
+    this.#original = { ...entity.toAttributes() }
+    this.#changes = { ...changes }
+    this.#persisted = true
     return this
   }
 
   bindPeerCollection(peers: readonly EntityBase<TTable, TRelations>[]): this {
-    this.peerCollection = peers
+    this.#peerCollection = peers
     return this
   }
 
   getPeerCollection(): readonly EntityBase<TTable, TRelations>[] | undefined {
-    return this.peerCollection
+    return this.#peerCollection
   }
 
   getPendingRelationLoad(name: string): Promise<unknown> | undefined {
-    return this.relationLoads.get(name)
+    return this.#relationLoads.get(name)
   }
 
   setPendingRelationLoad(name: string, load: Promise<unknown>): this {
-    this.relationLoads.set(name, load)
+    this.#relationLoads.set(name, load)
     return this
   }
 
   clearPendingRelationLoad(name: string): this {
-    this.relationLoads.delete(name)
+    this.#relationLoads.delete(name)
     return this
   }
 
   toAttributes(): ModelRecord<TTable> {
-    return { ...this.attributes } as ModelRecord<TTable>
+    return { ...this.#attributes } as ModelRecord<TTable>
   }
 
   setRelation(name: string, value: unknown): this {
@@ -259,19 +268,19 @@ class EntityBase<
         get: () => this.getRelation(name),
       })
     }
-    this.relations[name] = value
+    this.#relations[name] = value
     return this
   }
 
   setComputed(name: string, value: unknown): this {
-    this.attributes[name] = value
+    this.#attributes[name] = value
     return this
   }
 
   makeHidden(...keys: readonly string[]): this {
     for (const key of keys) {
-      this.hiddenOverrides.add(key)
-      this.visibleOverrides.delete(key)
+      this.#hiddenOverrides.add(key)
+      this.#visibleOverrides.delete(key)
     }
 
     return this
@@ -279,53 +288,53 @@ class EntityBase<
 
   makeVisible(...keys: readonly string[]): this {
     for (const key of keys) {
-      this.visibleOverrides.add(key)
-      this.hiddenOverrides.delete(key)
+      this.#visibleOverrides.add(key)
+      this.#hiddenOverrides.delete(key)
     }
 
     return this
   }
 
   setHidden(keys: readonly string[]): this {
-    this.hiddenOverrides = new Set(keys)
-    this.visibleOverrides.clear()
-    this.visibleOnly = null
+    this.#hiddenOverrides = new Set(keys)
+    this.#visibleOverrides.clear()
+    this.#visibleOnly = null
     return this
   }
 
   setVisible(keys: readonly string[]): this {
-    this.visibleOnly = [...keys]
-    this.hiddenOverrides.clear()
-    this.visibleOverrides = new Set(keys)
+    this.#visibleOnly = [...keys]
+    this.#hiddenOverrides.clear()
+    this.#visibleOverrides = new Set(keys)
     return this
   }
 
   append(...keys: readonly string[]): this {
-    const next = this.appendedOverrides ?? []
-    this.appendedOverrides = [...new Set([...next, ...keys])]
+    const next = this.#appendedOverrides ?? []
+    this.#appendedOverrides = [...new Set([...next, ...keys])]
     return this
   }
 
   setAppends(keys: readonly string[]): this {
-    this.appendedOverrides = [...keys]
+    this.#appendedOverrides = [...keys]
     return this
   }
 
   withoutAppends(): this {
-    this.appendedOverrides = []
+    this.#appendedOverrides = []
     return this
   }
 
   getRelation<TRelation = unknown>(name: string): TRelation {
-    return this.relations[name] as TRelation
+    return this.#relations[name] as TRelation
   }
 
   hasRelation(name: string): boolean {
-    return Object.prototype.hasOwnProperty.call(this.relations, name)
+    return Object.prototype.hasOwnProperty.call(this.#relations, name)
   }
 
   getLoadedRelations(): Readonly<Record<string, unknown>> {
-    return { ...this.relations }
+    return { ...this.#relations }
   }
 
   getSerializationConfig(): {
@@ -335,15 +344,15 @@ class EntityBase<
     readonly appended: readonly string[] | null
   } {
     return {
-      hidden: this.hiddenOverrides,
-      visible: this.visibleOverrides,
-      visibleOnly: this.visibleOnly,
-      appended: this.appendedOverrides,
+      hidden: this.#hiddenOverrides,
+      visible: this.#visibleOverrides,
+      visibleOnly: this.#visibleOnly,
+      appended: this.#appendedOverrides,
     }
   }
 
   forgetRelation(name: string): this {
-    Reflect.deleteProperty(this.relations, name)
+    Reflect.deleteProperty(this.#relations, name)
     return this
   }
 
@@ -441,10 +450,10 @@ class EntityBase<
   }
 
   private applyPersistedEntity(persisted: EntityBase<TTable, TRelations>, changes: Record<string, unknown>): void {
-    this.attributes = { ...persisted.toAttributes() }
-    this.original = { ...persisted.original }
-    this.changes = { ...changes }
-    this.persisted = true
+    this.#attributes = { ...persisted.toAttributes() }
+    this.#original = { ...persisted.#original }
+    this.#changes = { ...changes }
+    this.#persisted = true
   }
 
   private async persistEntity(
@@ -457,7 +466,7 @@ class EntityBase<
       throw new HydrationError(errorMessage)
     }
 
-    const pendingChanges = this.persisted ? this.getDirty() : this.toAttributes()
+    const pendingChanges = this.#persisted ? this.getDirty() : this.toAttributes()
     const persisted = await method.call(repo, this)
     this.applyPersistedEntity(persisted, pendingChanges)
     return this
@@ -467,7 +476,7 @@ class EntityBase<
     methodName: 'deleteEntity' | 'deleteEntityQuietly',
     errorMessage: string,
   ): Promise<void> {
-    if (!this.persisted) {
+    if (!this.#persisted) {
       throw new HydrationError('Cannot delete an entity that has not been persisted yet.')
     }
 
@@ -478,7 +487,7 @@ class EntityBase<
     }
 
     await method.call(repo, this)
-    this.persisted = typeof repo.shouldKeepEntityPersistedOnDelete === 'function'
+    this.#persisted = typeof repo.shouldKeepEntityPersistedOnDelete === 'function'
       ? repo.shouldKeepEntityPersistedOnDelete(this)
       : false
   }
@@ -502,7 +511,7 @@ class EntityBase<
     methodName: 'forceDeleteEntity' | 'forceDeleteEntityQuietly',
     errorMessage: string,
   ): Promise<void> {
-    if (!this.persisted) {
+    if (!this.#persisted) {
       throw new HydrationError('Cannot force-delete an entity that has not been persisted yet.')
     }
 
@@ -513,7 +522,7 @@ class EntityBase<
     }
 
     await method.call(repo, this)
-    this.persisted = false
+    this.#persisted = false
   }
 
   private async loadAggregateDefinitions(aggregates: readonly ModelAggregateLoad[]): Promise<this> {
@@ -537,7 +546,7 @@ class EntityBase<
     }
     const getRelationDefinition = repo.getRelationDefinition.bind(repo)
 
-    const parentRelations = Object.entries(this.relations)
+    const parentRelations = Object.entries(this.#relations)
       .filter(([name]) => {
         const relation = getRelationDefinition(name)
         return relation.kind === 'belongsTo' || relation.kind === 'morphTo'
@@ -552,7 +561,7 @@ class EntityBase<
 
     await this.save()
 
-    const childRelations = Object.entries(this.relations)
+    const childRelations = Object.entries(this.#relations)
       .filter(([name]) => {
         const relation = getRelationDefinition(name)
         return relation.kind !== 'belongsTo' && relation.kind !== 'morphTo'
@@ -614,7 +623,7 @@ class EntityBase<
   }
 
   async refresh(): Promise<this> {
-    if (!this.persisted) {
+    if (!this.#persisted) {
       throw new HydrationError('Cannot refresh an entity that has not been persisted yet.')
     }
 
@@ -624,11 +633,11 @@ class EntityBase<
     }
 
     const refreshed = await repo.refreshEntity(this)
-    this.attributes = { ...refreshed.toAttributes() }
-    this.original = { ...refreshed.toAttributes() }
-    this.changes = {}
-    this.relations = {}
-    this.persisted = true
+    this.#attributes = { ...refreshed.toAttributes() }
+    this.#original = { ...refreshed.toAttributes() }
+    this.#changes = {}
+    this.#relations = {}
+    this.#persisted = true
     return this
   }
 
@@ -928,5 +937,5 @@ export function getEntityKeyForSave<TTable extends TableDefinition, TRelations e
   entity: EntityBase<TTable, TRelations>,
   primaryKey: string,
 ): unknown {
-  return entity['original'][primaryKey] ?? entity.get(primaryKey as never)
+  return readOriginalAttribute(entity as unknown as EntityBase, primaryKey) ?? entity.get(primaryKey as never)
 }

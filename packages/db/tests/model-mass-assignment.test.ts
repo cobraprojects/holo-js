@@ -145,6 +145,40 @@ describe('model mass assignment', () => {
     })
   })
 
+  it('ignores internal state injected onto a loaded model when saving', async () => {
+    const db = await openDatabase()
+    await createTestTable(db, accounts)
+    await db.table('accounts').insert({ code: 'a', name: 'Ada', role: 'member' })
+
+    const Account = defineModelFromTable(accounts, { fillable: ['name'], timestamps: false })
+
+    const account = await Account.findOrFail('a')
+    const body = JSON.parse(`{
+      "attributes": { "code": "a", "name": "Ada", "role": "admin" },
+      "original": { "code": "a", "name": "Ada", "role": "member" },
+      "changes": { "role": "admin" },
+      "persisted": false,
+      "repository": {}
+    }`) as Record<string, unknown>
+    Object.assign(account, body)
+    expect(account.get('role')).toBe('member')
+    expect(account.isDirty()).toBe(false)
+    await account.save()
+    await account.update({ name: 'Ada Lovelace' })
+    await expect(db.table('accounts').where('code', 'a').first()).resolves.toMatchObject({ name: 'Ada Lovelace', role: 'member' })
+    expect(account.toJSON()).toMatchObject({ code: 'a', name: 'Ada Lovelace', role: 'member' })
+
+    const prototyped = await Account.findOrFail('a')
+    Object.assign(prototyped, JSON.parse('{ "__proto__": { "attributes": { "role": "admin" } } }') as Record<string, unknown>)
+    await expect(db.table('accounts').where('code', 'a').first()).resolves.toMatchObject({ role: 'member' })
+
+    const assigned = await Account.findOrFail('a')
+    expect(() => Object.assign(assigned, { role: 'admin' })).toThrow('Column "role" is not writable on model "Account".')
+    expect(() => { (assigned as unknown as Record<string, unknown>).role = 'admin' }).toThrow('Column "role" is not writable on model "Account".')
+    await assigned.save()
+    await expect(db.table('accounts').where('code', 'a').first()).resolves.toMatchObject({ role: 'member' })
+  })
+
   it('saves and deletes the row the model was loaded from after its key changes', async () => {
     const db = await openDatabase()
     await createTestTable(db, accounts)
