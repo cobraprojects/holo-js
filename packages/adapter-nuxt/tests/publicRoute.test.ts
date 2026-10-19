@@ -28,7 +28,7 @@ async function project() {
       assets: { driver: 'public', visibility: 'public', root: './runtime-assets' },
     },
   })}\n`)
-  configureHoloRuntimeConfig({ holo: { appEnv: 'test', appDebug: false, projectRoot: root } })
+  configureHoloRuntimeConfig({ holo: { projectRoot: root } })
   const app = createApp()
   app.use(storageHandler)
   return { root, request: toWebHandler(app) }

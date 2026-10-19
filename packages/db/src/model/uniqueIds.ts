@@ -14,7 +14,6 @@ import type {
 export function applyGeneratedUniqueIds<TTable extends TableDefinition>(
   definition: ModelDefinition<TTable>,
   values: Partial<ModelRecord<TTable>>,
-  generatedColumns: Set<string>,
 ): Partial<ModelRecord<TTable>> {
   const config = definition.uniqueIdConfig
   if (!config) return values
@@ -29,7 +28,6 @@ export function applyGeneratedUniqueIds<TTable extends TableDefinition>(
       throw new DatabaseError(`${definition.name} unique ID generator must return a non-empty string.`, 'INVALID_UNIQUE_ID')
     }
     output[column] = generated as ModelRecord<TTable>[typeof column]
-    generatedColumns.add(column)
   }
   return output
 }

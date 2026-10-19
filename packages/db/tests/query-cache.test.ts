@@ -189,7 +189,7 @@ describe('native database and cache integration', () => {
   })
 
   it('preserves cache configuration across from and model queries', async () => {
-    const User = defineModelFromTable(users, { timestamps: false })
+    const User = defineModelFromTable(users, { guarded: [], timestamps: false })
     expect((await User.where('id', 1).cache(60).first())?.get('name')).toBe('Ava')
     await User.where('id', 1).update({ name: 'Model update' })
     expect((await User.where('id', 1).cache(60).first())?.get('name')).toBe('Model update')
@@ -230,6 +230,7 @@ describe('native database and cache integration', () => {
 
   it('rolls back model writes and preserves cached rows when a lifecycle hook rejects', async () => {
     const User = defineModelFromTable(users, {
+      guarded: [],
       timestamps: false,
       events: { updated() { throw new Error('observer rejected') } },
     })

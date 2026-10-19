@@ -118,6 +118,7 @@ function createSharedModelDefinitionFields<
     fillable: Object.freeze([...(options.fillable ?? [])]),
     hasExplicitFillable: typeof options.fillable !== 'undefined',
     guarded: Object.freeze([...(options.guarded ?? [])]),
+    hasExplicitGuarded: typeof options.guarded !== 'undefined',
     scopes: (options.scopes ?? {}) as TScopes,
     globalScopes: { ...(options.globalScopes ?? {}) },
     relations,

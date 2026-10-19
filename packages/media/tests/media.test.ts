@@ -1847,7 +1847,7 @@ describe('@holo-js/media', () => {
     const conversionDiskItem = new MediaItem(publicManual)
     expect(conversionDiskItem.getPath('fallback' as never)).toBe('/s3/manual-2/fallback.txt')
 
-    const { id: _omittedId, ...manualAttributes } = publicManual.toAttributes()
+    const { id: _omittedId, created_at: _omittedCreatedAt, updated_at: _omittedUpdatedAt, ...manualAttributes } = publicManual.toAttributes()
     const absoluteUrlMedia = await Media.create({
       ...manualAttributes,
       uuid: 'absolute-url',
