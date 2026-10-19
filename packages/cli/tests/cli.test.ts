@@ -4124,6 +4124,36 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-db": "${expectedHoloPackageRange}"`)
   }, 30_000)
 
+  it('prepares a scaffolded broadcast project that has no .env, as a fresh clone would', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-clone-'))
+    tempDirs.push(projectRoot)
+    await projectInternals.scaffoldProject(projectRoot, {
+      projectName: 'Broadcast Clone',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })
+    await linkWorkspaceDb(projectRoot)
+    await rm(join(projectRoot, '.env'), { force: true })
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+    expect(packageJson.scripts.prepare).toBe('holo key:generate && holo install broadcast && holo prepare')
+    const offlineEnv = await createOfflinePackageManagerEnv(projectRoot)
+
+    const keyGenerated = runCliProcess(projectRoot, ['key:generate'], { env: offlineEnv })
+    expect(keyGenerated.status, keyGenerated.stderr || keyGenerated.stdout).toBe(0)
+    const broadcastInstalled = runCliProcess(projectRoot, ['install', 'broadcast'], { env: offlineEnv })
+    expect(broadcastInstalled.status, broadcastInstalled.stderr || broadcastInstalled.stdout).toBe(0)
+    const prepared = runCliProcess(projectRoot, ['prepare'], { env: offlineEnv })
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+
+    const env = await readFile(join(projectRoot, '.env'), 'utf8')
+    expect(env).toMatch(/^BROADCAST_APP_ID=[a-f0-9]{16}$/m)
+    expect(env).toMatch(/^BROADCAST_APP_KEY=[a-f0-9]{32}$/m)
+    expect(env).toMatch(/^BROADCAST_APP_SECRET=[A-Za-z0-9_-]{43}$/m)
+  }, 120_000)
+
   it('installs Next.js broadcast support without requiring framework Flux bootstrap files', async () => {
     const nextRoot = await createTempProject()
     tempDirs.push(nextRoot)
@@ -4946,7 +4976,7 @@ export default defineCacheConfig({
     expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/cache/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
   }, 60000)
 
-  it('caches config placeholders and clears the cache through the CLI', async () => {
+  it('caches evaluated config values and clears the cache through the CLI', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
 
@@ -4971,8 +5001,9 @@ export default defineAppConfig({
 
     const cachePath = join(projectRoot, '.holo-js/generated/config-cache.json')
     const cacheContents = await readFile(cachePath, 'utf8')
-    expect(cacheContents).toContain('"APP_KEY"')
-    expect(cacheContents).not.toContain('super-secret')
+    expect(cacheContents).toContain('"key": "super-secret"')
+    expect(cacheContents).toContain('"name": "Cached App"')
+    expect(cacheContents).not.toContain('__holoEnv')
 
     await writeProjectFile(projectRoot, 'config/app.ts', 'export default (() => { throw new Error("live config should not load") })()')
 

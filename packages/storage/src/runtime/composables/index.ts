@@ -1,4 +1,5 @@
 import { createHmac, createHash } from 'node:crypto'
+import { localStoragePathInternals } from '@holo-js/kernel'
 import { createWriteStream, openAsBlob } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -165,7 +166,7 @@ function getStorageRuntimeGlobals(): StorageRuntimeGlobals {
 }
 
 function encodeStorageSegment(segment: string): string {
-  return encodeURIComponent(segment)
+  return segment.replace(/[%:$]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
 }
 
 function encodeRfc3986ExtraCharacters(value: string): string {
@@ -211,6 +212,19 @@ function normalizeKey(input: string): string {
     .filter(Boolean)
     .map(encodeStorageSegment)
     .join(':')
+}
+
+function assertNotReservedLocalName(input: string, driver: RuntimeDiskConfig['driver']): void {
+  if (driver !== 's3' && normalizeRelativePath(input).split('/').filter(Boolean).at(-1)?.endsWith('$')) {
+    throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
+  }
+}
+
+function normalizeFileKey(input: string, driver: RuntimeDiskConfig['driver']): string {
+  if (driver !== 's3') validateLocalStoragePath(input)
+  const key = normalizeKey(input)
+  assertNotReservedLocalName(input, driver)
+  return key
 }
 
 function normalizeDirectory(input = ''): string {
@@ -310,9 +324,17 @@ function joinUrl(base: string, path: string): string {
   return `${baseWithoutSuffix}/${normalizedPath}${suffix}`
 }
 
+function validateLocalStoragePath(path: string): void {
+  for (const segment of path.trimStart().replace(/\\/g, '/').split('/').filter(Boolean)) {
+    localStoragePathInternals.assertValidSegment(segment)
+  }
+}
+
 function joinFilePath(base: string, path: string): string {
+  validateLocalStoragePath(path)
   const normalizedBase = base.replace(/\/+$/, '')
-  const normalizedPath = normalizeKey(path).replaceAll(':', '/')
+  assertNoTraversal(path)
+  const normalizedPath = normalizeRelativePath(path).split('/').filter(Boolean).join('/')
 
   if (!normalizedPath) {
     return normalizedBase
@@ -649,26 +671,26 @@ function createDisk(diskName?: string): StorageInstance {
     visibility: disk.visibility,
 
     async put(path, contents) {
-      await backend.setItemRaw(normalizeKey(path), await normalizeContent(contents))
+      await backend.setItemRaw(normalizeFileKey(path, disk.driver), await normalizeContent(contents))
       return true
     },
 
     async putJson(path, value) {
-      await backend.setItemRaw(normalizeKey(path), JSON.stringify(value))
+      await backend.setItemRaw(normalizeFileKey(path, disk.driver), JSON.stringify(value))
       return true
     },
 
     async get(path) {
-      return asString(await backend.getItemRaw(normalizeKey(path)))
+      return asString(await backend.getItemRaw(normalizeFileKey(path, disk.driver)))
     },
 
     async getBytes(path) {
-      return toUint8Array(await backend.getItemRaw(normalizeKey(path)))
+      return toUint8Array(await backend.getItemRaw(normalizeFileKey(path, disk.driver)))
     },
 
     async stat(path) {
       if (!backend.getItemStat) throw new StorageMetadataUnsupportedError()
-      const file = await backend.getItemStat(normalizeKey(path), { sampleBytes: fileContentSampleBytes })
+      const file = await backend.getItemStat(normalizeFileKey(path, disk.driver), { sampleBytes: fileContentSampleBytes })
       if (!file) return null
       const { mimeType } = await inspectFileContent(file.sample, path)
       return { size: file.size, mimeType }
@@ -679,7 +701,7 @@ function createDisk(diskName?: string): StorageInstance {
         throw new StorageStreamingUnsupportedError()
       }
 
-      return backend.getItemStream(normalizeKey(path), {
+      return backend.getItemStream(normalizeFileKey(path, disk.driver), {
         chunkBytes: normalizeStreamChunkBytes(options.chunkBytes),
         ...(options.signal ? { signal: options.signal } : {}),
       })
@@ -691,7 +713,7 @@ function createDisk(diskName?: string): StorageInstance {
       }
 
       try {
-        await backend.setItemStream(normalizeKey(path), source, {
+        await backend.setItemStream(normalizeFileKey(path, disk.driver), source, {
           overwrite: options.overwrite ?? true,
         })
         return true
@@ -709,7 +731,7 @@ function createDisk(diskName?: string): StorageInstance {
     },
 
     async exists(path) {
-      return backend.hasItem(normalizeKey(path))
+      return backend.hasItem(normalizeFileKey(path, disk.driver))
     },
 
     async missing(path) {
@@ -718,14 +740,14 @@ function createDisk(diskName?: string): StorageInstance {
 
     async delete(path) {
       const paths = Array.isArray(path) ? path : [path]
-      const keys = paths.map(normalizeKey)
+      const keys = paths.map(item => normalizeFileKey(item, disk.driver))
       await Promise.all(keys.map(key => backend.removeItem(key)))
       return true
     },
 
     async copy(from, to) {
-      const fromKey = normalizeKey(from)
-      const toKey = normalizeKey(to)
+      const fromKey = normalizeFileKey(from, disk.driver)
+      const toKey = normalizeFileKey(to, disk.driver)
       const value = await backend.getItemRaw(fromKey)
       if (value === null) {
         return false
@@ -736,8 +758,8 @@ function createDisk(diskName?: string): StorageInstance {
     },
 
     async move(from, to) {
-      const fromKey = normalizeKey(from)
-      const toKey = normalizeKey(to)
+      const fromKey = normalizeFileKey(from, disk.driver)
+      const toKey = normalizeFileKey(to, disk.driver)
       const value = await backend.getItemRaw(fromKey)
       if (value === null) {
         return false
@@ -786,6 +808,7 @@ function createDisk(diskName?: string): StorageInstance {
         return `s3://${disk.bucket}/${normalizeRelativePath(path)}`
       }
 
+      assertNotReservedLocalName(path, disk.driver)
       return joinFilePath(disk.root ?? './storage/app', path)
     },
 
@@ -794,6 +817,7 @@ function createDisk(diskName?: string): StorageInstance {
         throw new Error(`[Holo Storage] Disk "${disk.name}" is private. Use get() or temporaryUrl() instead.`)
       }
 
+      assertNotReservedLocalName(path, disk.driver)
       return joinUrl(resolveBaseUrl(disk, config), path)
     },
 
@@ -897,7 +921,7 @@ export async function withStorageFiles<TResult>(
       const disk = useStorage(source.disk)
       let blob: Blob
       if (disk.getItemBlob) {
-        const stored = await disk.getItemBlob(normalizeKey(source.path))
+        const stored = await disk.getItemBlob(normalizeFileKey(source.path, disk.driver))
         if (!stored) throw new Error('[Holo Storage] File not found.')
         blob = stored
       } else {

@@ -6,7 +6,7 @@ async function createCsrfToken(baseUrl, jar = createCookieJar()) {
   assert.ok(page.response.status < 400, page.text)
   const cookie = jar.header().split('; ').find(value => value.startsWith('XSRF-TOKEN='))
   assert.ok(cookie, 'Expected the real app to issue its CSRF cookie.')
-  return { token: decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)), cookie }
+  return { token: decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)), cookie, header: jar.header() }
 }
 
 function createCookieJar() {
@@ -323,7 +323,7 @@ export async function assertExampleAppAuthFlow({
     },
   })
   const applyCsrf = async (options = {}) => {
-    const { token: csrfToken, cookie: csrfCookie } = await createCsrfToken(baseUrl, options.jar)
+    const { token: csrfToken, header: csrfHeader } = await createCsrfToken(baseUrl, options.jar)
     const headers = new Headers(options.headers ?? {})
     headers.set('X-CSRF-TOKEN', csrfToken)
 
@@ -335,7 +335,7 @@ export async function assertExampleAppAuthFlow({
       }
     }
 
-    appendCookieHeader(headers, csrfCookie)
+    appendCookieHeader(headers, csrfHeader)
 
     return {
       ...options,
@@ -376,12 +376,12 @@ export async function assertExampleAppAuthFlow({
     headers.set('accept', 'application/json')
     headers.set('x-sveltekit-action', 'true')
     if (loginRequiresCsrf) {
-      const { token: csrfToken, cookie: csrfCookie } = await createCsrfToken(baseUrl, options.jar)
+      const { token: csrfToken, header: csrfHeader } = await createCsrfToken(baseUrl, options.jar)
       body.set('_token', csrfToken)
       if (options.jar) {
-        assert.ok(options.jar.header().includes(csrfCookie))
+        assert.ok(options.jar.header().includes(csrfHeader))
       } else {
-        appendCookieHeader(headers, csrfCookie)
+        appendCookieHeader(headers, csrfHeader)
       }
     }
 

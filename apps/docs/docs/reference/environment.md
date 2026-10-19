@@ -35,7 +35,7 @@ MAIL_PORT=587
 
 - Quotes around values are removed. `\n`, `\r`, and `\t` are turned into real characters.
 - Lines starting with `#` are comments. A leading `export ` is allowed.
-- When `env('KEY', fallback)` has a boolean fallback, `true`, `1`, `yes`, and `on` mean `true`, and `false`, `0`, `no`, and `off` mean `false`. A number fallback converts the value to a number. An empty value uses the fallback.
+- When `env('KEY', fallback)` has a boolean fallback, `true`, `1`, `yes`, and `on` mean `true`, and `false`, `0`, `no`, and `off` mean `false`. A number fallback converts the value to a number. An empty value uses the fallback. A value that doesn't convert throws an error that names the variable, so a typo like `APP_DEBUG=ture` fails at startup instead of silently using the fallback.
 
 ## Runtime
 
@@ -217,15 +217,15 @@ Used in `config/broadcast.ts`. See [Broadcast Drivers and Config](/broadcasting/
 | Variable | Default | Description |
 | --- | --- | --- |
 | `BROADCAST_CONNECTION` | `holo` | Default broadcast connection. |
-| `BROADCAST_APP_ID` | `app-id` | App ID shared by the app and the worker. |
-| `BROADCAST_APP_KEY` | `app-key` | Public app key. |
-| `BROADCAST_APP_SECRET` | `app-secret` | Secret used to sign channel auth. |
+| `BROADCAST_APP_ID` | none | App ID shared by the app and the worker. |
+| `BROADCAST_APP_KEY` | none | Public app key. |
+| `BROADCAST_APP_SECRET` | none | Secret used to sign channel auth. |
 | `BROADCAST_HOST` | `127.0.0.1` | Host the app and clients use to reach the worker. |
 | `BROADCAST_PORT` | `8080` | Worker port. |
 | `BROADCAST_SCHEME` | `http` | `https` turns on TLS. |
 
 ::: danger
-The broadcast defaults (`app-key`, `app-secret`) are placeholders. Set real random values for `BROADCAST_APP_KEY` and `BROADCAST_APP_SECRET` in production.
+Holo has no default for the broadcast app ID, key, or secret. `holo new` writes generated values into `.env`, and `holo install broadcast` does the same for an existing app. Set your own values in production.
 :::
 
 ## Next steps

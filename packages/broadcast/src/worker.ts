@@ -1,8 +1,9 @@
 import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import type {
-  NormalizedHoloBroadcastConfig,
+import {
+  requireBroadcastCredentials,
+  type NormalizedHoloBroadcastConfig,
 } from './config'
 import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
 import { captureErrorReporter, type HoloErrorReporter } from '@holo-js/kernel/error-reporting'
@@ -50,6 +51,7 @@ type WorkerConnectionInfo = {
 type WorkerWebSocketConnection = WorkerConnectionInfo & {
   readonly send: (payload: string) => void
   readonly close: (code?: number, reason?: string) => void
+  readonly bufferedAmount: () => number
 }
 
 type ResolvedPublishBody = PublishBody & {
@@ -80,11 +82,14 @@ type SocketState = {
   readonly socketId: string
   readonly app: BroadcastWorkerApp
   readonly headers: Headers
-  readonly send: (payload: string) => void
+  readonly send: (payload: string) => boolean
   readonly close: (code?: number, reason?: string) => void
   readonly subscribedChannels: Set<string>
   readonly realtimeSubscriptions: Map<string, BroadcastRealtimeSubscription>
   readonly realtimeSubscriptionTokens: Map<string, object>
+  readonly presenceCleanupPending: Set<string>
+  messageWindowStartedAt: number
+  messagesInWindow: number
   active: boolean
   pendingMessage: Promise<void>
 }
@@ -135,6 +140,11 @@ export interface BroadcastWorkerStats {
   }
 }
 
+function rejectSocketConnection(socket: { close(code?: number, reason?: string): void }, error: unknown, report: HoloErrorReporter): void {
+  report(error, { capability: 'broadcast', operation: 'worker.socketConnect' })
+  socket.close(4200, 'Reconnect')
+}
+
 function createScalingMessageListener(
   runtime: Pick<BroadcastWorkerRuntime, 'receiveScalingMessage'>,
   report: HoloErrorReporter,
@@ -152,20 +162,28 @@ export interface StartedBroadcastWorker {
   readonly stop: () => Promise<void>
 }
 
+type BunWebSocketLike = {
+  data: WorkerConnectionInfo
+  send(value: string): void
+  close(code?: number, reason?: string): void
+  getBufferedAmount(): number
+}
+
 type BroadcastWorkerBunGlobal = {
   serve(options: {
     readonly hostname?: string
     readonly port?: number
     readonly fetch: (request: Request, server: { upgrade(request: Request, options?: { data?: unknown }): boolean }) => Promise<Response> | Response
     readonly websocket: {
-      open: (socket: { data: WorkerConnectionInfo, send(value: string): void, close(code?: number, reason?: string): void }) => void
-      message: (socket: { data: WorkerConnectionInfo, send(value: string): void, close(code?: number, reason?: string): void }, message: string | Uint8Array) => void
-      close: (socket: { data: WorkerConnectionInfo, send(value: string): void, close(code?: number, reason?: string): void }) => void
+      open: (socket: BunWebSocketLike) => void
+      message: (socket: BunWebSocketLike, message: string | Uint8Array) => void
+      close: (socket: BunWebSocketLike) => void
     }
   }): BunServerLike
 }
 
 type NodeWebSocketLike = {
+  readonly bufferedAmount: number
   send(value: string): void
   close(code?: number, reason?: string): void
   on(event: 'message', listener: (data: string | Uint8Array | Buffer | readonly Buffer[] | ArrayBuffer) => void): unknown
@@ -186,6 +204,14 @@ type NodeWebSocketServerLike = {
 
 type NodeWebSocketModuleLike = {
   WebSocketServer: new (options: { noServer: true, maxPayload: number }) => NodeWebSocketServerLike
+}
+
+function isOverBufferedBound(connection: { readonly bufferedAmount: () => number }): boolean {
+  return connection.bufferedAmount() > MAX_BUFFERED_BYTES_PER_CONNECTION
+}
+
+function wouldExceedBufferedBound(connection: { readonly bufferedAmount: () => number }, payload: string): boolean {
+  return connection.bufferedAmount() + Buffer.byteLength(payload) > MAX_BUFFERED_BYTES_PER_CONNECTION
 }
 
 function isAllowedWorkerOrigin(request: Request, allowedOrigins: readonly string[]): boolean {
@@ -321,6 +347,29 @@ type BroadcastScalingAdapter = {
 }
 
 const MAX_PUBLISH_TIMESTAMP_SKEW_SECONDS = 300
+const SUBSCRIPTION_ERROR_MESSAGE = 'Unable to authorize the channel subscription.'
+const REALTIME_ERROR_MESSAGE = 'Realtime request failed.'
+const PUBLISH_ERROR_MESSAGE = 'Broadcast publish failed.'
+const REALTIME_SUBSCRIPTION_LIMIT_MESSAGE = 'Too many realtime subscriptions.'
+const MAX_CHANNELS_PER_CONNECTION = 100
+const MAX_REALTIME_SUBSCRIPTIONS_PER_CONNECTION = 100
+const MAX_MESSAGES_PER_CONNECTION_PER_WINDOW = 200
+const MESSAGE_RATE_WINDOW_MS = 1000
+const MAX_BUFFERED_BYTES_PER_CONNECTION = 4 * 1024 * 1024
+const SUBSCRIPTION_LIMIT_STATUS = 429
+const POLICY_VIOLATION_CLOSE_CODE = 1008
+const MESSAGE_RATE_EXCEEDED_REASON = 'Message rate limit exceeded'
+const SLOW_CONSUMER_REASON = 'Slow consumer'
+
+class BroadcastSubscriptionDeniedError extends Error {
+  readonly status: number
+
+  constructor(status: number) {
+    super(`[@holo-js/broadcast] Channel authorization was denied (${status}).`)
+    this.name = 'BroadcastSubscriptionDeniedError'
+    this.status = status
+  }
+}
 
 type BroadcastWorkerScalingRuntime = {
   readonly driver: 'redis'
@@ -468,12 +517,12 @@ function verifyClientChannelAuth(
 ): { readonly whispers: readonly string[], readonly member?: PresenceMember } {
   const [key, signature] = clientAuth.auth.split(':', 2)
   if (key !== app.key || !signature) {
-    throw new Error('[@holo-js/broadcast] Channel authorization signature is invalid.')
+    throw new BroadcastSubscriptionDeniedError(403)
   }
 
   const expected = signChannelAuth(app.secret, socketId, channel, clientAuth.channelData ?? '')
   if (!safeEqual(signature, expected)) {
-    throw new Error('[@holo-js/broadcast] Channel authorization signature is invalid.')
+    throw new BroadcastSubscriptionDeniedError(403)
   }
 
   return parseSignedChannelData(clientAuth.channelData)
@@ -492,7 +541,7 @@ function isRealtimeSubscriptionCurrent(socket: SocketState, id: string, token: o
 }
 
 function createSocketId(): string {
-  return `${randomInt(1, 999_999)}.${randomInt(1, 999_999)}`
+  return `${randomInt(1, 1_000_000_000)}.${randomInt(1, 1_000_000_000)}`
 }
 
 function createScalingNodeId(): string {
@@ -820,6 +869,7 @@ function buildWorkerApps(config: NormalizedHoloBroadcastConfig): Readonly<Record
     }
 
     const holoConnection = connection as Extract<NormalizedHoloBroadcastConfig['connections'][string], { readonly driver: 'holo' }>
+    requireBroadcastCredentials(holoConnection, 'run the broadcast worker', name)
     const authEndpoint = typeof holoConnection.clientOptions.authEndpoint === 'string'
       ? normalizeRequiredString(holoConnection.clientOptions.authEndpoint, `Broadcast connection "${name}" authEndpoint`)
       : undefined
@@ -885,8 +935,12 @@ async function authenticateSubscription(
       }),
     })
     const response = await fetcher(authRequest)
+    if (response.status >= 500) {
+      throw new Error(`[@holo-js/broadcast] Channel authorization endpoint failed (${response.status}).`)
+    }
+
     if (!response.ok) {
-      throw new Error(`[@holo-js/broadcast] Channel authorization rejected (${response.status}).`)
+      throw new BroadcastSubscriptionDeniedError(response.status)
     }
 
     const body = await response.json() as Record<string, unknown>
@@ -917,15 +971,18 @@ async function authenticateSubscription(
       connection: app.connection,
     })
     : null
+  if (typeof resolvedUser === 'undefined' || resolvedUser === null) {
+    throw new BroadcastSubscriptionDeniedError(403)
+  }
 
   const authorized = await authorizeBroadcastChannel({
     channel: canonical,
     socketId: connection.socketId,
-    user: resolvedUser ?? null,
+    user: resolvedUser,
   }, channelAuth)
 
   if (!authorized.ok) {
-    throw new Error(`[@holo-js/broadcast] Channel authorization denied for "${channel}".`)
+    throw new BroadcastSubscriptionDeniedError(403)
   }
 
   return Object.freeze({
@@ -955,7 +1012,33 @@ function resolveRealtimeErrorStatus(error: unknown): number | undefined {
     return 403
   }
 
+  if (name !== 'RealtimeAuthUnavailableError' && isRealtimeApplicationError(error)) {
+    return 400
+  }
+
   return undefined
+}
+
+const CLIENT_FACING_REALTIME_ERROR_NAMES = new Set(['AuthorizationError', 'ValidationException'])
+
+function isClientFacingRealtimeError(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false
+  }
+
+  const name = typeof error.name === 'string' ? error.name : ''
+  return CLIENT_FACING_REALTIME_ERROR_NAMES.has(name)
+    || (name !== 'RealtimeAuthUnavailableError' && isRealtimeApplicationError(error))
+}
+
+function isRealtimeApplicationError(error: object): boolean {
+  for (let prototype: unknown = Object.getPrototypeOf(error); isRecord(prototype); prototype = Object.getPrototypeOf(prototype)) {
+    if (typeof prototype.constructor === 'function' && prototype.constructor.name === 'RealtimeError') {
+      return true
+    }
+  }
+
+  return false
 }
 
 function resolveRealtimeErrorCode(error: unknown): string | undefined {
@@ -997,7 +1080,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const presenceMembers = new Map<string, Map<string, PresenceMember>>()
   const presenceSockets = new Map<string, Map<string, string>>()
   const scaling = options.scaling
-  const startedAt = options.now?.() ?? Date.now()
+  const currentTime = (): number => options.now?.() ?? performance.now()
+  const startedAt = currentTime()
   const scalingUnsubscribe = options.scalingUnsubscribe
     ? Promise.resolve(options.scalingUnsubscribe)
     : scaling && options.scalingAutoSubscribe !== false
@@ -1184,8 +1268,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         continue
       }
 
-      socket.send(pusherEvent(event, data, channel))
-      deliveredSockets += 1
+      if (socket.send(pusherEvent(event, data, channel))) {
+        deliveredSockets += 1
+      }
     }
 
     return Object.freeze({
@@ -1235,9 +1320,20 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
   function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
     const status = resolveRealtimeErrorStatus(error)
+    const kind = resolveRealtimeErrorKind(error, status)
+    if (!isClientFacingRealtimeError(error) || (typeof status === 'number' && status >= 500)) {
+      report(error, { capability: 'broadcast', operation: 'worker.realtime' })
+      sendRealtimeMessage(socket, 'holo:realtime:error', {
+        id,
+        message: REALTIME_ERROR_MESSAGE,
+        kind: kind === 'authorization' ? 'runtime' : kind,
+        status: 500,
+      })
+      return
+    }
+
     const code = resolveRealtimeErrorCode(error)
     const name = error instanceof Error ? error.name : undefined
-    const kind = resolveRealtimeErrorKind(error, status)
     sendRealtimeMessage(socket, 'holo:realtime:error', {
       id,
       message: error instanceof Error ? error.message : String(error),
@@ -1300,6 +1396,16 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
           id: request.id,
           action: request.action,
           result,
+        })
+        return
+      }
+
+      if (exceedsRealtimeSubscriptionLimit(socket, request.id)) {
+        sendRealtimeMessage(socket, 'holo:realtime:error', {
+          id: request.id,
+          message: REALTIME_SUBSCRIPTION_LIMIT_MESSAGE,
+          kind: 'runtime',
+          status: SUBSCRIPTION_LIMIT_STATUS,
         })
         return
       }
@@ -1514,10 +1620,98 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
   }
 
+  function isSocketCurrent(socket: SocketState): boolean {
+    return socket.active && connectedSockets.get(socket.socketId) === socket
+  }
+
+  function admitSocketMessage(socket: SocketState): boolean {
+    const time = currentTime()
+    if (time - socket.messageWindowStartedAt >= MESSAGE_RATE_WINDOW_MS) {
+      socket.messageWindowStartedAt = time
+      socket.messagesInWindow = 0
+    }
+    socket.messagesInWindow += 1
+    return socket.messagesInWindow <= MAX_MESSAGES_PER_CONNECTION_PER_WINDOW
+  }
+
+  function exceedsChannelLimit(socket: SocketState, channel: string): boolean {
+    const heldChannels = new Set([...socket.subscribedChannels, ...socket.presenceCleanupPending])
+    return !heldChannels.has(channel) && heldChannels.size >= MAX_CHANNELS_PER_CONNECTION
+  }
+
+  function exceedsRealtimeSubscriptionLimit(socket: SocketState, id: string): boolean {
+    return !socket.realtimeSubscriptionTokens.has(id)
+      && socket.realtimeSubscriptionTokens.size >= MAX_REALTIME_SUBSCRIPTIONS_PER_CONNECTION
+  }
+
+  function closeSocket(socket: SocketState, code: number, reason: string): void {
+    socket.close(code, reason)
+    disconnectSocket(socket.socketId)
+  }
+
+  function closeSlowSocket(socket: SocketState): void {
+    socket.active = false
+    queueMicrotask(() => {
+      if (connectedSockets.get(socket.socketId) !== socket) {
+        return
+      }
+
+      socket.close(POLICY_VIOLATION_CLOSE_CODE, SLOW_CONSUMER_REASON)
+      disconnectSocket(socket.socketId)
+    })
+  }
+
+  function sendSubscriptionError(socket: SocketState, channel: string, status: number): void {
+    if (!isSocketCurrent(socket)) {
+      return
+    }
+
+    socket.send(pusherEvent('pusher:subscription_error', {
+      type: 'AuthError',
+      error: SUBSCRIPTION_ERROR_MESSAGE,
+      status,
+    }, channel))
+  }
+
+  async function rollBackFailedPresenceSubscription(socket: SocketState, channel: string, error: unknown): Promise<void> {
+    report(error, { capability: 'broadcast', operation: 'worker.subscription' })
+    socket.subscribedChannels.delete(channel)
+    const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
+    if (removedPresenceMember.removed && removedPresenceMember.member) {
+      deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
+    }
+    await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).then(
+      () => {
+        socket.presenceCleanupPending.delete(channel)
+      },
+      (cleanupError: unknown) => {
+        report(cleanupError, { capability: 'broadcast', operation: 'worker.subscription' })
+        socket.presenceCleanupPending.add(channel)
+      },
+    )
+    sendSubscriptionError(socket, channel, 500)
+  }
+
   async function handleSubscribe(socket: SocketState, rawChannel: string, clientAuth?: ClientChannelAuth): Promise<void> {
     const channel = normalizeRequiredString(rawChannel, 'Subscription channel')
-    const authorization = await authenticateSubscription(socket.app, socket, channel, clientAuth, options.channelAuth, options.fetch)
-    if (!socket.active || connectedSockets.get(socket.socketId) !== socket) {
+    if (exceedsChannelLimit(socket, channel)) {
+      sendSubscriptionError(socket, channel, SUBSCRIPTION_LIMIT_STATUS)
+      return
+    }
+
+    let authorization: Awaited<ReturnType<typeof authenticateSubscription>>
+    try {
+      authorization = await authenticateSubscription(socket.app, socket, channel, clientAuth, options.channelAuth, options.fetch)
+    } catch (error) {
+      if (!(error instanceof BroadcastSubscriptionDeniedError)) {
+        report(error, { capability: 'broadcast', operation: 'worker.subscription' })
+      }
+
+      sendSubscriptionError(socket, channel, error instanceof BroadcastSubscriptionDeniedError ? error.status : 500)
+      return
+    }
+
+    if (!isSocketCurrent(socket)) {
       return
     }
 
@@ -1540,15 +1734,21 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     const { kind } = parseChannelKind(channel)
     if (kind === 'presence') {
       const member = authorization.member ?? Object.freeze({ id: socket.socketId })
-      const synchronized = await synchronizePresenceChannel(
-        socket.app,
-        channel,
-        member,
-        socket.socketId,
-      )
-      if (synchronized.isNewMember) {
-        deliverPresenceMemberAddedLocal(socket.app.appId, channel, member, socket.socketId)
-        await publishScalingPresenceMemberAdded(socket.app, channel, socket.socketId, member)
+      try {
+        const synchronized = await synchronizePresenceChannel(
+          socket.app,
+          channel,
+          member,
+          socket.socketId,
+        )
+        socket.presenceCleanupPending.delete(channel)
+        if (synchronized.isNewMember) {
+          deliverPresenceMemberAddedLocal(socket.app.appId, channel, member, socket.socketId)
+          await publishScalingPresenceMemberAdded(socket.app, channel, socket.socketId, member)
+        }
+      } catch (error) {
+        await rollBackFailedPresenceSubscription(socket, channel, error)
+        return
       }
       const presence = getPresenceRosterPayload(key)
       socket.send(pusherEvent('pusher_internal:subscription_succeeded', {
@@ -1568,6 +1768,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
     }
     await removePresenceMemberFromScaling(socket.app, socket.socketId, channel)
+    socket.presenceCleanupPending.delete(channel)
     if (removedPresenceMember.removed && removedPresenceMember.member) {
       await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member)
     }
@@ -1718,8 +1919,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         appId: app.appId,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Broadcast publish failed.'
-      return new Response(message, { status: 500 })
+      report(error, { capability: 'broadcast', operation: 'worker.publish' })
+      return new Response(PUBLISH_ERROR_MESSAGE, { status: 500 })
     }
     return new Response(JSON.stringify({
       ok: true,
@@ -1731,6 +1932,47 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         'content-type': 'application/json; charset=utf-8',
       },
     })
+  }
+
+  function disconnectSocket(socketId: string): void {
+    const socket = connectedSockets.get(socketId)
+    if (!socket) {
+      return
+    }
+
+    socket.active = false
+    connectedSockets.delete(socketId)
+    for (const subscription of socket.realtimeSubscriptions.values()) {
+      unsubscribeRealtimeSubscription(subscription, report)
+    }
+    socket.realtimeSubscriptions.clear()
+    socket.realtimeSubscriptionTokens.clear()
+    const channelsToCleanup = [...new Set([...socket.subscribedChannels, ...socket.presenceCleanupPending])]
+    socket.presenceCleanupPending.clear()
+    const scalingCleanupTasks = channelsToCleanup.map((channel) => {
+      const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
+      if (removedPresenceMember.removed && removedPresenceMember.member) {
+        deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
+      }
+
+      return async () => {
+        if (removedPresenceMember.removed && removedPresenceMember.member) {
+          await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member).catch((error) => {
+            report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
+          })
+        }
+        await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((error) => {
+          report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
+        })
+      }
+    })
+    socket.subscribedChannels.clear()
+    const cleanupTask = socket.pendingMessage.then(async () => {
+      await Promise.all(scalingCleanupTasks.map(async (task) => {
+        await task()
+      }))
+    })
+    socket.pendingMessage = cleanupTask
   }
 
   return Object.freeze({
@@ -1763,27 +2005,63 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       return new Response('Not Found', { status: 404 })
     },
     connectWebSocket(connection: WorkerWebSocketConnection): void {
-      connectedSockets.set(connection.socketId, {
+      if (connectedSockets.has(connection.socketId)) {
+        throw new Error(`[@holo-js/broadcast] Socket id "${connection.socketId}" is already connected.`)
+      }
+
+      const socket: SocketState = {
         socketId: connection.socketId,
         app: connection.app,
         headers: connection.headers,
-        send: connection.send,
+        send(payload) {
+          if (!socket.active) {
+            return false
+          }
+
+          if (wouldExceedBufferedBound(connection, payload)) {
+            closeSlowSocket(socket)
+            return false
+          }
+
+          connection.send(payload)
+          if (isOverBufferedBound(connection)) {
+            closeSlowSocket(socket)
+          }
+          return true
+        },
         close: connection.close,
         subscribedChannels: new Set(),
         realtimeSubscriptions: new Map(),
         realtimeSubscriptionTokens: new Map(),
+        presenceCleanupPending: new Set(),
+        messageWindowStartedAt: currentTime(),
+        messagesInWindow: 0,
         active: true,
         pendingMessage: Promise.resolve(),
-      })
+      }
+      connectedSockets.set(connection.socketId, socket)
 
-      connection.send(pusherEvent('pusher:connection_established', {
-        socket_id: connection.socketId,
-        activity_timeout: 120,
-      }))
+      try {
+        connection.send(pusherEvent('pusher:connection_established', {
+          socket_id: connection.socketId,
+          activity_timeout: 120,
+        }))
+      } catch (error) {
+        socket.active = false
+        if (connectedSockets.get(connection.socketId) === socket) {
+          connectedSockets.delete(connection.socketId)
+        }
+        throw error
+      }
     },
     async receiveWebSocketMessage(socketId: string, rawMessage: string): Promise<void> {
       const socket = connectedSockets.get(socketId)
       if (!socket) {
+        return
+      }
+
+      if (!admitSocketMessage(socket)) {
+        closeSocket(socket, POLICY_VIOLATION_CLOSE_CODE, MESSAGE_RATE_EXCEEDED_REASON)
         return
       }
 
@@ -1823,49 +2101,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     async receiveScalingMessage(payload: string): Promise<void> {
       await handleScalingMessage(payload)
     },
-    disconnectWebSocket(socketId: string): void {
-      const socket = connectedSockets.get(socketId)
-      if (!socket) {
-        return
-      }
-
-      socket.active = false
-      connectedSockets.delete(socketId)
-      for (const subscription of socket.realtimeSubscriptions.values()) {
-        unsubscribeRealtimeSubscription(subscription, report)
-      }
-      socket.realtimeSubscriptions.clear()
-      socket.realtimeSubscriptionTokens.clear()
-      const channelsToCleanup = [...socket.subscribedChannels]
-      const scalingCleanupTasks = channelsToCleanup.map((channel) => {
-        const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
-        if (removedPresenceMember.removed && removedPresenceMember.member) {
-          deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
-        }
-
-        return async () => {
-          if (removedPresenceMember.removed && removedPresenceMember.member) {
-            await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member).catch((error) => {
-              report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
-            })
-          }
-          await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((error) => {
-            report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
-          })
-        }
-      })
-      socket.subscribedChannels.clear()
-      const cleanupTask = socket.pendingMessage.then(async () => {
-        await Promise.all(scalingCleanupTasks.map(async (task) => {
-          await task()
-        }))
-      })
-      socket.pendingMessage = cleanupTask
-    },
+    disconnectWebSocket: disconnectSocket,
     getStats(): BroadcastWorkerStats {
       return Object.freeze({
         nodeId: scaling?.nodeId ?? 'standalone',
-        uptimeMs: (options.now?.() ?? Date.now()) - startedAt,
+        uptimeMs: currentTime() - startedAt,
         apps: Object.freeze(Object.values(appsByKey).map(app => app.connection)),
         appScopes: Object.freeze(Object.values(appsByKey).map(app => Object.freeze({
           connection: app.connection,
@@ -1887,7 +2127,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     async close(): Promise<void> {
       await Promise.all([...connectedSockets.values()].map(async socket => {
         socket.close(1001, 'Worker shutdown')
-        this.disconnectWebSocket(socket.socketId)
+        disconnectSocket(socket.socketId)
         await socket.pendingMessage
       }))
       const unsubscribe = await scalingUnsubscribe
@@ -1973,6 +2213,7 @@ export async function startBroadcastWorker(
   const pathPrefix = config.worker.path.replace(/\/$/, '')
   const appPathRegex = new RegExp(`^${escapeRegExp(pathPrefix)}/([^/]+)$`)
   if (bun?.serve) {
+    const rejectedSockets = new WeakSet<object>()
     const server = bun.serve({
       hostname: config.worker.host,
       port: config.worker.port,
@@ -2006,18 +2247,29 @@ export async function startBroadcastWorker(
       },
       websocket: {
         open(socket) {
-          runtime.connectWebSocket({
-            ...socket.data,
-            send(payload) {
-              socket.send(payload)
-            },
-            /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
-            close(code, reason) {
-              socket.close(code, reason)
-            },
-          })
+          try {
+            runtime.connectWebSocket({
+              ...socket.data,
+              send(payload) {
+                socket.send(payload)
+              },
+              /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
+              close(code, reason) {
+                socket.close(code, reason)
+              },
+              bufferedAmount() {
+                return socket.getBufferedAmount()
+              },
+            })
+          } catch (error) {
+            rejectedSockets.add(socket)
+            rejectSocketConnection(socket, error, report)
+          }
         },
         message(socket, message) {
+          if (rejectedSockets.has(socket)) {
+            return
+          }
           const messageBytes = typeof message === 'string'
             ? Buffer.byteLength(message)
             : message.byteLength
@@ -2036,6 +2288,10 @@ export async function startBroadcastWorker(
           })
         },
         close(socket) {
+          if (rejectedSockets.has(socket)) {
+            return
+          }
+
           runtime.disconnectWebSocket(socket.data.socketId)
         },
       },
@@ -2075,15 +2331,23 @@ export async function startBroadcastWorker(
     const connectionInfo = requestConnectionInfo.get(request)!
 
     const socketId = connectionInfo.socketId
-    runtime.connectWebSocket({
-      ...connectionInfo,
-      send(payload) {
-        socket.send(payload)
-      },
-      close(code, reason) {
-        socket.close(code, reason)
-      },
-    })
+    try {
+      runtime.connectWebSocket({
+        ...connectionInfo,
+        send(payload) {
+          socket.send(payload)
+        },
+        close(code, reason) {
+          socket.close(code, reason)
+        },
+        bufferedAmount() {
+          return socket.bufferedAmount
+        },
+      })
+    } catch (error) {
+      rejectSocketConnection(socket, error, report)
+      return
+    }
     socket.on('message', (message) => {
       const messageBytes = getNodeWebSocketMessageBytes(message)
       if (messageBytes > config.worker.maxMessageBytes) {

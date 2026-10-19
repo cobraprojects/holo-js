@@ -23,12 +23,10 @@ export {
   configEvaluationInternals,
   configureEnvRuntime,
   env,
-  isEnvPlaceholder,
   loadEnvironment,
   resolveAppEnvironment,
   resolveEnvironmentFileOrder,
   resolveProjectAppEnvironmentSync,
-  resolveEnvPlaceholders,
 } from './env'
 export {
   clearConfigCache,

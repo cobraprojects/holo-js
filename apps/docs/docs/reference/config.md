@@ -20,7 +20,7 @@ export default defineCacheConfig({
 - The file name is the config name: `config/cache.ts` is read with `useConfig('cache')`.
 - `.ts`, `.mts`, `.js`, `.mjs`, `.cts`, and `.cjs` all work.
 - Every option is optional. Holo fills in the defaults below.
-- `env('KEY', fallback)` reads an [environment variable](/reference/environment). When the fallback is a number or boolean, the value is converted to that type (`'true'`, `'1'`, `'yes'`, `'on'` become `true`). An empty value uses the fallback.
+- `env('KEY', fallback)` reads an [environment variable](/reference/environment). When the fallback is a number or boolean, the value is converted to that type (`'true'`, `'1'`, `'yes'`, `'on'` become `true`). An empty value uses the fallback. A value that doesn't convert throws an error that names the variable.
 
 ### Reading config in your code
 
@@ -442,7 +442,7 @@ CORS headers. Created by `holo install security` or `holo install auth`. See [CO
 | `paths` | `['/api/*']` | Paths that get CORS headers. |
 | `origins` | `[]` | Allowed origins. |
 | `methods` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | Allowed methods. |
-| `headers` | `Content-Type`, `Authorization`, `X-CSRF-TOKEN`, `X-Requested-With` | Allowed request headers. |
+| `headers` | `Content-Type`, `Authorization`, `X-CSRF-TOKEN`, `X-XSRF-TOKEN`, `X-Requested-With` | Allowed request headers. |
 | `credentials` | `false` | Allow cookies on cross-origin requests. |
 | `maxAge` | `7200` | Seconds browsers may cache the preflight response. |
 | `statefulDomains` | `[]` | Frontend domains (`host:port`) that use session cookies. |

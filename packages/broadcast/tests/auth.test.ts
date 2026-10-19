@@ -466,6 +466,8 @@ describe('@holo-js/broadcast channel auth runtime', () => {
             id: 'ord_5',
           }
         },
+        appKey: 'app-key',
+        appSecret: 'app-secret',
       })
     }
     const nextResponse = await nextStyleHandler(new Request('http://localhost/broadcasting/auth', {
@@ -479,7 +481,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       }),
     }))
     expect(nextResponse.status).toBe(200)
-    await expect(nextResponse.json()).resolves.toEqual({
+    await expect(nextResponse.json()).resolves.toMatchObject({
       ok: true,
       channel: 'orders.ord_5',
       type: 'private',
@@ -500,7 +502,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       }),
     }))
     expect(prefixedPrivateResponse.status).toBe(200)
-    await expect(prefixedPrivateResponse.json()).resolves.toEqual({
+    await expect(prefixedPrivateResponse.json()).resolves.toMatchObject({
       ok: true,
       channel: 'private-orders.ord_5',
       type: 'private',

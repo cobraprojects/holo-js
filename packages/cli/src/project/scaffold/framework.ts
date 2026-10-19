@@ -163,6 +163,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
 
   if (optionalPackages.includes('security')) {
     dependencies['@holo-js/security'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/session'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('cache')) {
@@ -176,7 +177,9 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     packageManager: resolvePackageManagerVersion(options.packageManager),
     scripts: {
       ...framework.scaffold.scripts,
-      prepare: 'holo key:generate && holo prepare',
+      prepare: optionalPackages.includes('broadcast')
+        ? 'holo key:generate && holo install broadcast && holo prepare'
+        : 'holo key:generate && holo prepare',
       dev: 'holo dev',
       build: 'holo build',
       start: 'holo start',

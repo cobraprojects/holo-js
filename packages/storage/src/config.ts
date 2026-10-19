@@ -49,11 +49,6 @@ export interface NormalizedHoloStorageConfig {
   readonly disks: Readonly<Record<string, DiskConfig>>
 }
 
-export interface StorageConfig {
-  driver: string
-  [key: string]: unknown
-}
-
 export interface RuntimeDiskConfig {
   name: string
   driver: NormalizedStorageDriver
@@ -237,33 +232,6 @@ export function normalizeDiskConfig(diskName: string, config: DiskConfig): Runti
   }
 }
 
-export function buildStorageConfig(config: RuntimeDiskConfig): StorageConfig {
-  return buildStorageConfigWithDriver(config)
-}
-
-export function buildStorageConfigWithDriver(
-  config: RuntimeDiskConfig,
-  s3Driver = 's3',
-): StorageConfig {
-  if (config.driver === 's3') {
-    return {
-      driver: s3Driver,
-      bucket: config.bucket,
-      region: config.region,
-      endpoint: config.endpoint,
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey,
-      sessionToken: config.sessionToken,
-      forcePathStyleEndpoint: config.forcePathStyleEndpoint,
-    }
-  }
-
-  return {
-    driver: 'fs',
-    base: config.root ?? resolveDefaultRoot(config.driver),
-  }
-}
-
 function mergeDiskDefinitions(
   ...diskGroups: Array<Record<string, DiskConfig> | undefined>
 ): Record<string, DiskConfig> {
@@ -342,32 +310,7 @@ export function hasPublicLocalDisk(config: HoloStorageRuntimeConfig): boolean {
   })
 }
 
-export interface NitroStorageLike {
-  storage: Record<string, unknown>
-  [key: string]: unknown
-}
-
-export interface StorageAdapterOptionsLike {
-  nitro: NitroStorageLike
-}
-
-export function applyNitroStorageConfig(
-  opts: StorageAdapterOptionsLike,
-  normalized: HoloStorageRuntimeConfig,
-  s3Driver: string,
-): void {
-  const existingStorage = opts.nitro.storage || {}
-  opts.nitro.storage = Object.fromEntries(
-    Object.entries(existingStorage).filter(([key]) => !key.startsWith('holo:')),
-  )
-
-  for (const disk of Object.values(normalized.disks)) {
-    opts.nitro.storage[`holo:${disk.name}`] = buildStorageConfigWithDriver(disk, s3Driver)
-  }
-}
-
 export const storageInternals = {
-  applyNitroStorageConfig,
   hasPublicLocalDisk,
   mergeModuleOptions,
   normalizeRoutePrefix,

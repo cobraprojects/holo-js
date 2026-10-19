@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir as defaultMkdir, open, readFile, readdir, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { constants as fsConstants, type Dir } from 'node:fs'
+import { mkdir as defaultMkdir, lstat, open, opendir, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
 
 const RECORD_LOCK_STALE_MS = 10_000
+const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
+const releasedRecordLockTokens = new Set<string>()
 type MakeDirectory = typeof defaultMkdir
 
 type RecordLockOwner = {
@@ -55,8 +59,23 @@ function getFlashPath(recordPath: string): string {
   return `${recordPath}.flash`
 }
 
+const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const BUSY_FILE_RETRY_MS = 1_000
+
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+}
+
 function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  return errorCode(error) === 'ENOENT'
+}
+
+function isBusyFileError(error: unknown): boolean {
+  return BUSY_FILE_ERROR_CODES.has(errorCode(error) ?? '')
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  return await stat(path).then(() => true, () => false)
 }
 
 function parseRecordLockOwner(value: unknown): RecordLockOwner | undefined {
@@ -109,7 +128,7 @@ async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdent
   try {
     fileName = (await readdir(lockPath)).find(name => name.startsWith('owner.') && name.endsWith('.json'))
   } catch (error) {
-    if (isMissingFileError(error)) return undefined
+    if (isMissingFileError(error) || isBusyFileError(error)) return undefined
     throw error
   }
   const identityPath = fileName ? join(lockPath, fileName) : lockPath
@@ -119,6 +138,7 @@ async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdent
       owner = parseRecordLockOwner(JSON.parse(await readFile(identityPath, 'utf8')) as unknown)
       if (owner && recordLockOwnerFileName(owner) !== fileName) owner = undefined
     } catch (error) {
+      if (isBusyFileError(error)) return undefined
       if (!(error instanceof SyntaxError) && !isMissingFileError(error)) throw error
     }
   }
@@ -136,32 +156,52 @@ function recordLockIdentityMatches(left: RecordLockIdentity, right: RecordLockId
     && left.owner?.token === right.owner?.token
 }
 
-async function removeRecordLock(lockPath: string, fileName?: string): Promise<boolean> {
+async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 0): Promise<boolean> {
+  const deadline = Date.now() + settleMs
   if (fileName) {
-    try { await unlink(join(lockPath, fileName)) } catch (error) { if (!isMissingFileError(error)) throw error }
+    for (;;) {
+      try {
+        await unlink(join(lockPath, fileName))
+        break
+      } catch (error) {
+        if (isMissingFileError(error)) break
+        if (!isBusyFileError(error)) throw error
+        if (Date.now() >= deadline) return false
+        await sleep(5)
+      }
+    }
   }
-  try {
-    await rmdir(lockPath)
-    return true
-  } catch (error) {
-    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
-    if (code === 'ENOENT' || code === 'ENOTEMPTY' || code === 'EEXIST') return false
-    throw error
+  for (;;) {
+    try {
+      await rmdir(lockPath)
+      return true
+    } catch (error) {
+      const code = errorCode(error)
+      if (code === 'ENOENT') return true
+      if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && !isBusyFileError(error)) throw error
+      if (Date.now() >= deadline) return false
+      await sleep(5)
+    }
   }
 }
 
 async function reclaimStaleLock(lockPath: string, expected: RecordLockIdentity): Promise<boolean> {
   if (!recordLockIdentityMatches(expected, await readRecordLockIdentity(lockPath))) return false
-  return removeRecordLock(lockPath, expected.fileName)
+  const removed = await removeRecordLock(lockPath, expected.fileName, BUSY_FILE_RETRY_MS)
+  if (removed && expected.owner) releasedRecordLockTokens.delete(expected.owner.token)
+  return removed
 }
 
 async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdentity | undefined> {
   const identity = await readRecordLockIdentity(lockPath)
   if (!identity) return undefined
+  if (!identity.fileName) return identity
   const owner = identity.owner
   if (owner?.host === hostname()) {
     if (owner.pid === process.pid) {
-      if (owner.processToken === PROCESS_INSTANCE_TOKEN) return undefined
+      if (owner.processToken === PROCESS_INSTANCE_TOKEN) {
+        return releasedRecordLockTokens.has(owner.token) ? identity : undefined
+      }
     } else {
       return processIsRunning(owner.pid) ? undefined : identity
     }
@@ -171,47 +211,104 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
   return stale ? identity : undefined
 }
 
+async function releaseRecordLock(recordPath: string, lockPath: string, ownerFileName: string, ownerToken: string): Promise<void> {
+  if (await removeRecordLock(lockPath, ownerFileName, BUSY_FILE_RETRY_MS)) return
+  releasedRecordLockTokens.add(ownerToken)
+  reportError(
+    new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; a later operation in this process will reclaim it.`),
+    { capability: 'session', operation: 'file.releaseLock' },
+  )
+}
+
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
+  const release = await acquireRecordLockBefore(recordPath, makeDirectory, Date.now() + 5_000)
+  if (!release) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+  return release
+}
+
+async function acquireRecordLockBefore(
+  recordPath: string,
+  makeDirectory: MakeDirectory,
+  deadline: number | undefined,
+): Promise<(() => Promise<void>) | undefined> {
   const lockPath = `${recordPath}.lock`
-  const deadline = Date.now() + 5_000
   const owner = Object.freeze({ host: hostname(), pid: process.pid, processToken: PROCESS_INSTANCE_TOKEN, token: randomUUID() })
   const pendingPath = `${lockPath}.${owner.token}.pending`
+  const ownerFileName = recordLockOwnerFileName(owner)
   await makeDirectory(pendingPath)
-  let ownerHandle
   let acquired = false
   try {
-    ownerHandle = await open(join(pendingPath, recordLockOwnerFileName(owner)), 'wx', 0o600)
-    await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
-    await ownerHandle.sync()
+    const ownerHandle = await open(join(pendingPath, ownerFileName), 'wx', 0o600)
+    try {
+      await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
+      await ownerHandle.sync()
+    } finally {
+      await ownerHandle.close()
+    }
     while (!acquired) {
       try {
         await rename(pendingPath, lockPath)
         acquired = true
       } catch (error) {
-        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
-        if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error
-        const reclaimable = await reclaimableRecordLock(lockPath)
-        if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
-        if (Date.now() >= deadline) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+        const code = errorCode(error)
+        const busy = isBusyFileError(error)
+        const contended = code === 'EEXIST' || code === 'ENOTEMPTY'
+          || (busy && await pathExists(lockPath))
+        if (!contended && !busy) throw error
+        if (contended) {
+          const reclaimable = await reclaimableRecordLock(lockPath)
+          if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
+        }
+        if (deadline === undefined) {
+          await rm(pendingPath, { recursive: true, force: true })
+          return undefined
+        }
+        if (Date.now() >= deadline) {
+          if (!contended) throw error
+          throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
+        }
         await sleep(5)
       }
     }
-    const handle = ownerHandle
+    const ownerPath = join(lockPath, ownerFileName)
     const heartbeat = setInterval(() => {
       const now = new Date()
-      void handle.utimes(now, now).catch(() => undefined)
+      void utimes(ownerPath, now, now).catch(() => undefined)
     }, RECORD_LOCK_HEARTBEAT_MS)
     heartbeat.unref()
     return async () => {
       clearInterval(heartbeat)
-      await handle.close()
-      await removeRecordLock(lockPath, recordLockOwnerFileName(owner))
+      await releaseRecordLock(recordPath, lockPath, ownerFileName, owner.token)
     }
   } catch (error) {
-    await ownerHandle?.close()
-    if (acquired) await removeRecordLock(lockPath, recordLockOwnerFileName(owner))
+    if (acquired) await releaseRecordLock(recordPath, lockPath, ownerFileName, owner.token)
     else await rm(pendingPath, { recursive: true, force: true })
     throw error
+  }
+}
+
+async function renameReplacing(source: string, target: string): Promise<void> {
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  for (;;) {
+    try {
+      await rename(source, target)
+      return
+    } catch (error) {
+      if (!isBusyFileError(error) || Date.now() >= deadline) throw error
+      await sleep(5)
+    }
+  }
+}
+
+async function readFileSettled(path: string): Promise<string> {
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  for (;;) {
+    try {
+      return await readFile(path, 'utf8')
+    } catch (error) {
+      if (!isBusyFileError(error) || Date.now() >= deadline) throw error
+      await sleep(5)
+    }
   }
 }
 
@@ -219,7 +316,7 @@ async function writePathAtomically(path: string, contents: string): Promise<void
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
   try {
     await writeFile(temporaryPath, contents, { encoding: 'utf8', mode: 0o600 })
-    await rename(temporaryPath, path)
+    await renameReplacing(temporaryPath, path)
   } finally {
     await rm(temporaryPath, { force: true })
   }
@@ -240,7 +337,7 @@ function deserializeFlashEntries(raw: string): Map<string, unknown> {
 
 async function readFlashEntries(recordPath: string): Promise<Map<string, unknown>> {
   try {
-    return deserializeFlashEntries(await readFile(getFlashPath(recordPath), 'utf8'))
+    return deserializeFlashEntries(await readFileSettled(getFlashPath(recordPath)))
   } catch (error) {
     if (isMissingFileError(error)) return new Map()
     throw error
@@ -249,7 +346,7 @@ async function readFlashEntries(recordPath: string): Promise<Map<string, unknown
 
 async function readActiveRecord(recordPath: string): Promise<SessionRecord | null> {
   try {
-    const record = deserializeRecord(await readFile(recordPath, 'utf8'))
+    const record = deserializeRecord(await readFileSettled(recordPath))
     return record.expiresAt.getTime() > Date.now() ? record : null
   } catch (error) {
     if (isMissingFileError(error)) return null
@@ -290,11 +387,84 @@ async function acquireRecordLocks(
   }
 }
 
+async function readRecordWithoutFollowingLinks(recordPath: string): Promise<SessionRecord | null> {
+  const handle = await open(recordPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    return deserializeRecord(await handle.readFile({ encoding: 'utf8' }))
+  } catch {
+    return null
+  } finally {
+    await handle.close()
+  }
+}
+
+function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory): (now: Date) => Promise<number> {
+  let directory: Dir | undefined
+  let sweeping = false
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function closeDirectory(): Promise<void> {
+    const current = directory
+    directory = undefined
+    await current?.close()
+  }
+
+  return async (now) => {
+    if (sweeping) return 0
+    sweeping = true
+    clearTimeout(idleTimer)
+    try {
+      directory ??= await opendir(root)
+      let removed = 0
+      for (let inspected = 0; inspected < SWEEP_ENTRY_LIMIT; inspected += 1) {
+        const entry = await directory.read()
+        if (!entry) {
+          await closeDirectory()
+          break
+        }
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+        const recordPath = join(root, entry.name)
+        try {
+          if (!(await lstat(recordPath)).isFile()) continue
+          const candidate = await readRecordWithoutFollowingLinks(recordPath)
+          if (!candidate || candidate.expiresAt.getTime() > now.getTime()) continue
+
+          const release = await acquireRecordLockBefore(recordPath, makeDirectory, undefined)
+          if (!release) continue
+          try {
+            const current = await readRecordWithoutFollowingLinks(recordPath)
+            if (current && current.expiresAt.getTime() <= now.getTime()) {
+              await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
+              removed += 1
+            }
+          } finally {
+            await release()
+          }
+        } catch (error) {
+          if (!isMissingFileError(error) && (error as NodeJS.ErrnoException).code !== 'ELOOP') throw error
+        }
+      }
+      return removed
+    } catch (error) {
+      await closeDirectory()
+      if (isMissingFileError(error)) return 0
+      throw error
+    } finally {
+      sweeping = false
+      if (directory) {
+        idleTimer = setTimeout(() => { void closeDirectory().catch(() => undefined) }, 60_000)
+        idleTimer.unref()
+      }
+    }
+  }
+}
+
 function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: MakeDirectory): SessionStore {
+  const sweepExpired = createExpiredSessionSweeper(root, makeDirectory)
   return {
     async read(sessionId) {
       try {
-        return deserializeRecord(await readFile(getRecordPath(root, sessionId), 'utf8'))
+        return deserializeRecord(await readFileSettled(getRecordPath(root, sessionId)))
       } catch (error) {
         if (isMissingFileError(error)) return null
         throw error
@@ -364,6 +534,27 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
         await release()
       }
     },
+    async setDataIfAbsent(sessionId, key, value) {
+      await makeDirectory(root, { recursive: true, mode: 0o700 })
+      const recordPath = getRecordPath(root, sessionId)
+      const release = await acquireRecordLock(recordPath, makeDirectory)
+      try {
+        const record = await readActiveRecord(recordPath)
+        if (!record) {
+          await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
+          return { found: false }
+        }
+        const existing = record.data[key]
+        if (Object.hasOwn(record.data, key) && (key !== '_token' || (typeof existing === 'string' && existing))) {
+          return { found: true, value: existing }
+        }
+        await writePathAtomically(recordPath, serializeRecord({ ...record, data: { ...record.data, [key]: value } }))
+        return { found: true, value }
+      } finally {
+        await release()
+      }
+    },
+    sweepExpired,
     async take(sessionId, key) {
       await makeDirectory(root, { recursive: true, mode: 0o700 })
       const recordPath = getRecordPath(root, sessionId)

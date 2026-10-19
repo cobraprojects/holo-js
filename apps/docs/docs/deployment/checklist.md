@@ -38,7 +38,7 @@ Skip this if `QUEUE_CONNECTION=sync`.
 Skip this if you don't use the `holo` broadcast driver.
 
 - [ ] `holo broadcast:work` runs as a supervised process behind a proxy with WebSocket support.
-- [ ] `BROADCAST_APP_KEY` and `BROADCAST_APP_SECRET` are real random values, not the `app-key` / `app-secret` defaults.
+- [ ] `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, and `BROADCAST_APP_SECRET` are set to values from `holo new` or `holo install broadcast`, not copied from a development `.env`.
 - [ ] `BROADCAST_SCHEME=https`, and `worker.allowedOrigins` lists your app's URL.
 - [ ] More than one worker? Redis scaling is turned on. See [Scaling in Production](/broadcasting/production).
 

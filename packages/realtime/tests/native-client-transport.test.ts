@@ -138,19 +138,19 @@ it('hydrates a public query store, shares unchanged rows across real patches, an
   leaveSecond()
 })
 
-it('reports native query rejection once and continues delivering an independent valid subscription', async () => {
+it('reports native query rejection once with a generic message and continues delivering an independent valid subscription', async () => {
   const native = await startNativeQueryTransport()
   const errors: string[] = []
   const rejected: unknown[] = []
   const leaveRejected = native.transport.subscribe('missing.query', {}, snapshot => rejected.push(snapshot), error => errors.push(error instanceof Error ? error.message : String(error)))
   const snapshots: RealtimeSubscriptionSnapshot<readonly { id: number, score: number | null }[]>[] = []
   const leaveValid = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => snapshots.push(snapshot), error => { throw error })
-  await expect.poll(() => errors).toEqual(['Unknown query: missing.query'])
+  await expect.poll(() => errors).toEqual(['Realtime request failed.'])
   await expect.poll(() => snapshots.length).toBe(1)
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
   await expect.poll(() => snapshots.at(-1)?.data[0]?.score).toBe(42)
   expect(rejected).toEqual([])
-  expect(errors).toEqual(['Unknown query: missing.query'])
+  expect(errors).toEqual(['Realtime request failed.'])
   leaveRejected()
   leaveValid()
   await expect.poll(() => native.connections()).toBe(0)
