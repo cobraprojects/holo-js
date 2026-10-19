@@ -2172,6 +2172,21 @@ async function updateUserRecord(
   return serializeUser(adapter, updated, providerName)
 }
 
+async function verifyIssuedEmail(record: EmailVerificationTokenRecord): Promise<AuthenticatedAuthUser | null> {
+  const { adapter } = getProviderAdapter(record.provider)
+  const user = await adapter.findById(record.userId)
+  if (user) {
+    const current = serializeUser(adapter, user, record.provider)
+    if (typeof current.email !== 'string' || current.email.trim() !== record.email) {
+      return null
+    }
+  }
+
+  return await updateUserRecord(record.provider, record.userId, {
+    email_verified_at: new Date(),
+  })
+}
+
 function createEmailVerificationFacade(): AuthEmailVerificationFacade {
   return Object.freeze({
     async create(user: unknown, options: { readonly guard?: string, readonly expiresAt?: Date } = {}): Promise<EmailVerificationTokenResult> {
@@ -2261,9 +2276,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }
 
-        const updated = await store.redeem(record, () => updateUserRecord(record.provider, record.userId, {
-          email_verified_at: new Date(),
-        }))
+        const updated = await store.redeem(record, () => verifyIssuedEmail(record))
         if (!updated) {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }
@@ -2874,6 +2887,7 @@ export const authRuntimeInternals = {
   getProviderIdentifiers,
   getRuntimeBindings,
   hashTokenSecret,
+  hasVerifiedEmail,
   isResponseInterrupt: isAuthResponseInterrupt,
   jwt: authJwtInternals,
   normalizeRequestInput,

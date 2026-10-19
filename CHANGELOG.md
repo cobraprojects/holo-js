@@ -20,6 +20,7 @@
 
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.
 
+- Link a social sign-in to an existing local user only when that user's email is verified. A provider-verified email matching an unverified local user now throws `SocialAuthConflictError` (`social_identity_conflict`) instead of signing in as that user. Email verification tokens only verify the address they were sent to and are rejected after the user's email changes. See [Link an existing account](apps/docs/docs/auth/social-login.md#link-an-existing-account).
 - Make email-verification and password-reset token redemption single-use under concurrent requests. Coordinate the claim and user mutation transactionally when Core proves they share the same database context. Password reset also revokes sibling tokens for the same provider, email and broker table before user mutation.
 - Fail closed after authenticated-session transition failures: invalidate the new session, clear affected request identities, keep the previous session identifier invalidated, and report cleanup failures alongside the original error. Ordinary login and rotation preserve other devices' authentication.
 - Make token-guard `logout()` revoke its verified current token before clearing request identity. A deletion failure rejects logout and preserves that request identity; other tokens and browser sessions remain valid.

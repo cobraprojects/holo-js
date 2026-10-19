@@ -16,6 +16,7 @@ import {
   decryptTokens,
   redirect,
   resetSocialAuthRuntime,
+  SocialAuthConflictError,
   socialAuth,
   type SocialAuthFacade,
   socialAuthInternals,
@@ -588,7 +589,7 @@ describe('@holo-js/auth-social', () => {
       name: 'Ava',
       email: 'ava@example.com',
       password: null,
-      email_verified_at: null,
+      email_verified_at: new Date(),
     })
 
     let redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
@@ -717,6 +718,44 @@ describe('@holo-js/auth-social', () => {
 
     expect(await runtime.persistence.db.table('users').count()).toBe(0)
     expect(await runtime.persistence.db.table('admins').count()).toBe(1)
+  })
+
+  it('refuses to link a verified social email onto an unverified local account', async () => {
+    const runtime = await configureRuntime()
+    const existing = await runtime.usersProvider.create({
+      name: 'Unverified Local User',
+      email: 'ava@example.com',
+      password: 'secret',
+      email_verified_at: null,
+    })
+
+    const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
+    const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
+    runtime.exchangeProfiles.set('code-unverified-local', {
+      profile: {
+        id: 'google-unverified-local',
+        email: 'ava@example.com',
+        emailVerified: true,
+        name: 'Verified Social User',
+      },
+      tokens: {
+        accessToken: 'unverified-local-token',
+      },
+    })
+
+    const result = callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-unverified-local`))
+    await expect(result).rejects.toBeInstanceOf(SocialAuthConflictError)
+    await expect(result).rejects.toMatchObject({
+      name: 'SocialAuthConflictError',
+      code: 'social_identity_conflict',
+      provider: 'google',
+      providerUserId: 'google-unverified-local',
+      email: 'ava@example.com',
+      message: '[@holo-js/auth-social] Social email "ava@example.com" from "google" matches an existing local user and must be linked explicitly.',
+    })
+    expect(await runtime.identityStore.findByProviderUserId('google', 'google-unverified-local')).toBeNull()
+    expect(await runtime.persistence.db.table('users').count()).toBe(1)
+    expect((await runtime.usersProvider.findById(existing.id))?.email_verified_at ?? null).toBeNull()
   })
 
   it('does not bind an unverified social email onto an existing local account', async () => {

@@ -181,7 +181,7 @@ Holo never treats a Facebook email as verified. If `emailVerification.required` 
 ## How Holo finds the local user
 
 1. If this social account signed in before, Holo loads the user it's linked to.
-2. Otherwise, if the provider gives a verified email and a user with that email exists, Holo links the social account to that user.
+2. Otherwise, if the provider gives a verified email and a user with that email exists, Holo links the social account to that user, but only when the user has verified that email in your app too. If the user hasn't, the callback throws a `SocialAuthConflictError`. See [Link an existing account](#link-an-existing-account).
 3. Otherwise Holo creates a user with the profile's `name`, `email`, and `avatar`, a `null` password, and `email_verified_at` set when the email is verified. Without a verified email, the user gets a placeholder email like `<id>@github.social.local`.
 
 The link is stored in the `auth_identities` table, along with the profile and the provider's access tokens.
@@ -191,6 +191,26 @@ When [email verification](/auth/email-verification) is required, Holo refuses to
 :::
 
 Your `users` table needs nullable `password` and `avatar` columns for this, which the auth migrations include.
+
+### Link an existing account
+
+Holo never links a social account to a user whose email isn't verified, because anyone can sign up with an address they don't own. If a provider's verified email matches such a user, `callback()` throws a `SocialAuthConflictError` with `code` (`social_identity_conflict`), `provider`, `providerUserId`, and `email`. Catch it and send the user to sign in:
+
+```ts
+import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
+
+try {
+  const result = await callback('google', request)
+  // ...
+} catch (error) {
+  if (error instanceof SocialAuthConflictError) {
+    // Ask the user to sign in with their password and verify their email
+  }
+  throw error
+}
+```
+
+To link the accounts, the user signs in with their password and [verifies their email](/auth/email-verification). The next time they continue with the provider, Holo links the social account to them.
 
 ## Provider options
 

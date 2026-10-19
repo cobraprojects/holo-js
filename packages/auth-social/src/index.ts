@@ -140,6 +140,25 @@ export interface SocialCallbackFailure {
   readonly message: string
 }
 
+export class SocialAuthConflictError extends Error {
+  readonly code = 'social_identity_conflict'
+  readonly provider: string
+  readonly providerUserId: string
+  readonly email: string
+
+  constructor(options: {
+    readonly provider: string
+    readonly providerUserId: string
+    readonly email: string
+  }) {
+    super(`[@holo-js/auth-social] Social email "${options.email}" from "${options.provider}" matches an existing local user and must be linked explicitly.`)
+    this.name = 'SocialAuthConflictError'
+    this.provider = options.provider
+    this.providerUserId = options.providerUserId
+    this.email = options.email
+  }
+}
+
 const SOCIAL_BINDINGS_KEY = '__holoAuthSocialBindings__'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
@@ -587,6 +606,13 @@ async function resolveLinkedUserForProviderConfig(
 
   const trustedEmail = hasVerifiedEmail ? profile.email?.trim() : undefined
   let localUser = await findUserByEmail(adapter, trustedEmail)
+  if (localUser && !authRuntimeInternals.hasVerifiedEmail(serializeLocalUser(adapter, localUser, authProvider))) {
+    throw new SocialAuthConflictError({
+      provider,
+      providerUserId: profile.id,
+      email: trustedEmail!,
+    })
+  }
   if (!localUser) {
     localUser = requireUserRecord(await adapter.create({
       name: profile.name ?? '',
