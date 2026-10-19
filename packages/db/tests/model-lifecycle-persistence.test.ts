@@ -444,6 +444,68 @@ describe('model lifecycle persistence', () => {
     expect((await db.table('stamped').get())[0]?.updated_at).toBeNull()
   })
 
+  it('fires saved without an update when an updating handler reverts every change', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string() })
+    await createTestTable(db, slugged)
+    await db.table('slugged').insert({ id: 1, title: 'Hello' })
+    const events: string[] = []
+    const Post = defineModelFromTable(slugged, {
+      timestamps: false,
+      fillable: ['title'],
+      events: {
+        saving: [() => { events.push('saving') }],
+        updating: [entity => {
+          events.push('updating')
+          asTestEntity(entity).set('title', 'Hello')
+        }],
+        updated: [() => { events.push('updated') }],
+        saved: [() => { events.push('saved') }],
+      },
+    })
+
+    const post = await Post.findOrFail(1)
+    post.set('title', 'Changed')
+    await post.save()
+
+    expect(events).toEqual(['saving', 'updating', 'saved'])
+    expect(await db.table('slugged').get()).toMatchObject([{ title: 'Hello' }])
+  })
+
+  it('writes only updated_at when an updating handler reverts every change on a timestamped model', async () => {
+    const db = await openDatabase()
+    const stamped = defineTable('stamped', {
+      id: column.id(),
+      title: column.string(),
+      created_at: column.timestamp().nullable(),
+      updated_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, stamped)
+    await db.table('stamped').insert({ id: 1, title: 'Hello', created_at: null, updated_at: null })
+    const events: string[] = []
+    const Post = defineModelFromTable(stamped, {
+      fillable: ['title'],
+      events: {
+        saving: [() => { events.push('saving') }],
+        updating: [entity => {
+          events.push('updating')
+          asTestEntity(entity).set('title', 'Hello')
+        }],
+        updated: [() => { events.push('updated') }],
+        saved: [() => { events.push('saved') }],
+      },
+    })
+
+    const post = await Post.findOrFail(1)
+    post.set('title', 'Changed')
+    await post.save()
+
+    expect(events).toEqual(['saving', 'updating', 'updated', 'saved'])
+    const row = (await db.table('stamped').get())[0]
+    expect(row).toMatchObject({ title: 'Hello' })
+    expect(row?.updated_at).not.toBeNull()
+  })
+
   it('runs the full update path when a saving handler dirties a clean timestamped model', async () => {
     const db = await openDatabase()
     const stamped = defineTable('stamped', {

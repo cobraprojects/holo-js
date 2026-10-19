@@ -1744,6 +1744,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const dirty = this.sanitizeWritePayload(entity.getDirty(), 'update', false, false)
       if (Object.keys(dirty).length === 0) {
+        await this.dispatchEvent('saved', entity)
         return entity
       }
 

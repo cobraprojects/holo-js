@@ -63,7 +63,7 @@ Events fire in this order:
 - **Force delete:** `deleting`, `forceDeleting`, `forceDeleted`, `deleted`
 - **Restore:** `restoring`, `restored`
 
-Calling `save()` on a model with no changes fires `saving` and then `saved`, and writes nothing. It doesn't touch `updated_at`, and it doesn't fire `updating` or `updated`. If a `saving` handler changes an attribute, the save takes the normal update path and fires `updating`, `updated`, and `saved`.
+Calling `save()` on a model with no changes fires `saving` and then `saved`, and writes nothing. It doesn't touch `updated_at`, and it doesn't fire `updating` or `updated`. If a `saving` handler changes an attribute, the save takes the normal update path and fires `updating`, `updated`, and `saved`. If an `updating` handler reverts every change, the save fires `updating` and `saved` with no `UPDATE`. A timestamped model still writes `updated_at` in that case and fires `updated`, because the timestamp is then the only change.
 
 ## Writing observers
 
