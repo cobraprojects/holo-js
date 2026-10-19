@@ -33,14 +33,6 @@ export interface FileRateLimitStoreOptions {
   readonly lockTimeoutMs?: number
 }
 
-type FileRateLimitSweepCursor = {
-  readonly shards: AsyncGenerator<string>
-  dir?: {
-    readonly path: string
-    readonly handle: Dir
-  }
-}
-
 type FileRateLimitSweepStats = {
   inFlight: boolean
   runsStarted: number
@@ -369,52 +361,28 @@ async function withBucketLock<TValue>(
   }
 }
 
-async function readDirectoryNames(directory: string, keep: (entry: Dirent) => boolean): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') {
-      return []
-    }
+type FileRateLimitWalkStep =
+  | { readonly kind: 'unit' }
+  | { readonly kind: 'bucket', readonly path: string }
 
-    throw error
-  })
-
-  return entries.filter(keep).map(entry => entry.name).sort()
+type FileRateLimitShardListing = {
+  readonly names: readonly string[]
 }
 
-async function* shardDirectories(
-  bucketsRoot: string,
-  onHeld: (count: number) => void,
-  onUnreadable?: (directory: string, error: unknown) => void,
-): AsyncGenerator<string> {
-  const readShards = async (directory: string): Promise<string[]> => {
-    try {
-      const names = await readDirectoryNames(directory, entry => entry.isDirectory())
-      onHeld(names.length)
-      return names
-    } catch (error) {
-      if (!onUnreadable) {
-        throw error
-      }
+const UNIT_STEP: FileRateLimitWalkStep = { kind: 'unit' }
 
-      onUnreadable(directory, error)
-      return []
-    }
-  }
-
-  for (const top of await readShards(bucketsRoot)) {
-    const topPath = join(bucketsRoot, top)
-    for (const middle of await readShards(topPath)) {
-      yield join(topPath, middle)
-    }
+function* chargeUnits(count: number): Generator<FileRateLimitWalkStep> {
+  for (let index = 0; index < count; index += 1) {
+    yield UNIT_STEP
   }
 }
 
-async function openShard(
+async function readShardEntries(
   directory: string,
   onUnreadable?: (directory: string, error: unknown) => void,
-): Promise<Dir | undefined> {
+): Promise<Dirent[] | undefined> {
   try {
-    return await opendir(directory)
+    return await readdir(directory, { withFileTypes: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined
@@ -429,17 +397,105 @@ async function openShard(
   }
 }
 
-async function* bucketFilePaths(bucketsRoot: string): AsyncGenerator<string> {
-  for await (const shard of shardDirectories(bucketsRoot, () => undefined)) {
-    const handle = await openShard(shard)
-    if (!handle) {
-      continue
+async function* readShardListing(
+  directory: string,
+  onHeld: (count: number) => void,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): AsyncGenerator<FileRateLimitWalkStep, FileRateLimitShardListing | undefined> {
+  yield UNIT_STEP
+  const entries = await readShardEntries(directory, onUnreadable)
+  onHeld(entries?.length ?? 0)
+  yield* chargeUnits(entries?.length ?? 0)
+  yield UNIT_STEP
+
+  if (!entries) {
+    return undefined
+  }
+
+  return {
+    names: entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort(),
+  }
+}
+
+async function openShard(
+  directory: string,
+  counter: { openHandles: number },
+  onUnreadable?: (directory: string, error: unknown) => void,
+): Promise<Dir | undefined> {
+  try {
+    const handle = await opendir(directory)
+    counter.openHandles += 1
+    return handle
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
     }
 
-    for await (const entry of handle) {
-      if (entry.isFile() && entry.name.endsWith('.json')) {
-        yield join(shard, entry.name)
+    if (!onUnreadable) {
+      throw error
+    }
+
+    onUnreadable(directory, error)
+    return undefined
+  }
+}
+
+async function readShardEntry(
+  handle: Dir,
+  directory: string,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): Promise<Dirent | null> {
+  try {
+    return await handle.read()
+  } catch (error) {
+    if (!onUnreadable) {
+      throw error
+    }
+
+    onUnreadable(directory, error)
+    return null
+  }
+}
+
+async function* walkBucketTree(
+  bucketsRoot: string,
+  counter: { openHandles: number },
+  onHeld: (count: number) => void,
+  onUnreadable?: (directory: string, error: unknown) => void,
+): AsyncGenerator<FileRateLimitWalkStep> {
+  const tops = yield* readShardListing(bucketsRoot, onHeld, onUnreadable)
+
+  for (const top of tops?.names ?? []) {
+    const topPath = join(bucketsRoot, top)
+    const middles = yield* readShardListing(topPath, onHeld, onUnreadable)
+
+    for (const middle of middles?.names ?? []) {
+      const leaf = join(topPath, middle)
+      yield UNIT_STEP
+      const handle = await openShard(leaf, counter, onUnreadable)
+      if (!handle) {
+        continue
       }
+
+      try {
+        for (let entry = await readShardEntry(handle, leaf, onUnreadable); entry !== null; entry = await readShardEntry(handle, leaf, onUnreadable)) {
+          yield entry.isFile() && entry.name.endsWith('.json')
+            ? { kind: 'bucket', path: join(leaf, entry.name) }
+            : UNIT_STEP
+        }
+      } finally {
+        counter.openHandles -= 1
+        await handle.close().catch(() => undefined)
+      }
+      yield UNIT_STEP
+    }
+  }
+}
+
+async function* bucketFilePaths(bucketsRoot: string): AsyncGenerator<string> {
+  for await (const step of walkBucketTree(bucketsRoot, { openHandles: 0 }, () => undefined)) {
+    if (step.kind === 'bucket') {
+      yield step.path
     }
   }
 }
@@ -490,7 +546,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     stats.peakHeldNames = Math.max(stats.peakHeldNames, count)
   }
   let cycleStartedAt: number | undefined
-  let cursor: FileRateLimitSweepCursor | undefined
+  let cursor: AsyncGenerator<FileRateLimitWalkStep> | undefined
   let inFlight: Promise<void> | undefined
   let closed = false
 
@@ -528,61 +584,33 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
   const closeCursor = async (): Promise<void> => {
     const current = cursor
     cursor = undefined
-    if (!current) {
-      return
-    }
-
-    if (current.dir) {
-      await current.dir.handle.close().catch(() => undefined)
-      stats.openHandles -= 1
-    }
-    await current.shards.return(undefined)
+    await current?.return(undefined)
   }
 
   const runSweep = async (now: Date): Promise<void> => {
-    let handled = 0
+    let units = 0
     let finished = false
 
     try {
-      cursor ??= { shards: shardDirectories(bucketsRoot, recordHeldNames, reportUnreadable) }
+      cursor ??= walkBucketTree(bucketsRoot, stats, recordHeldNames, reportUnreadable)
 
-      while (handled < SWEEP_BATCH_SIZE && !closed) {
-        const current = cursor
-        const dir = current.dir
-        if (!dir) {
-          const next = await current.shards.next()
-          if (next.done) {
-            finished = true
-            break
-          }
-
-          const handle = await openShard(next.value, reportUnreadable)
-          if (handle) {
-            current.dir = { path: next.value, handle }
-            stats.openHandles += 1
-          }
-          continue
+      while (units < SWEEP_BATCH_SIZE && !closed) {
+        const next = await cursor.next()
+        if (next.done) {
+          finished = true
+          break
         }
 
-        const entry = await dir.handle.read()
-        recordHeldNames(1)
-        if (entry === null) {
-          await dir.handle.close()
-          stats.openHandles -= 1
-          current.dir = undefined
-          continue
-        }
-
-        if (entry.isFile() && entry.name.endsWith('.json')) {
-          await sweepBucket(join(dir.path, entry.name), now)
-          handled += 1
+        units += 1
+        if (next.value.kind === 'bucket') {
+          await sweepBucket(next.value.path, now)
         }
       }
     } catch (error) {
       reportSweepError(error)
       finished = true
     } finally {
-      stats.maxEntriesPerRun = Math.max(stats.maxEntriesPerRun, handled)
+      stats.maxEntriesPerRun = Math.max(stats.maxEntriesPerRun, units)
       if (finished || closed) {
         await closeCursor()
       }

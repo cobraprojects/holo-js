@@ -1908,6 +1908,70 @@ describe('@holo-js/security rate-limit drivers', () => {
         await store.close?.()
       }, 120_000)
 
+      it('charges empty shard directories against each run so the walk stays bounded', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const hex = (value: number) => value.toString(16).padStart(2, '0')
+        for (let index = 0; index < 4_096; index += 1) {
+          await mkdir(join(root, 'buckets', hex(index % 256), hex(Math.floor(index / 256))), { recursive: true })
+        }
+        await writeFile(join(root, 'buckets', 'ff', '0f', 'z-expired.json'), JSON.stringify({
+          namespaceHash: 'namespace',
+          keyHash: 'expired',
+          prefixHashes: ['prefix'],
+          attempts: 1,
+          expiresAt: '2026-04-16T11:59:00.000Z',
+        }), 'utf8')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(8)
+        await store.close?.()
+      }, 120_000)
+
+      it('charges non-JSON entries against each run so a shard of them cannot run unbounded', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const noisy = join(root, 'buckets', 'aa', 'bb')
+        await mkdir(noisy, { recursive: true })
+        for (let index = 0; index < 3_000; index += 1) {
+          await writeFile(join(noisy, `note-${index}.txt`), 'not a bucket', 'utf8')
+        }
+        await mkdir(join(root, 'buckets', 'cc', 'dd'), { recursive: true })
+        await writeFile(join(root, 'buckets', 'cc', 'dd', 'after-noise.json'), JSON.stringify({
+          namespaceHash: 'namespace',
+          keyHash: 'after-noise',
+          prefixHashes: ['prefix'],
+          attempts: 1,
+          expiresAt: '2026-04-16T11:59:00.000Z',
+        }), 'utf8')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
+        await store.close?.()
+      }, 120_000)
+
       it('keeps one shard handle open between runs and releases it on close', async () => {
         const root = await createSweepRoot()
         const now = sweepStart
