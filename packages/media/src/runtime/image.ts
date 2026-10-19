@@ -1,4 +1,5 @@
 import { mimeTypeFromFileName } from '@holo-js/kernel/file-content'
+import { imageDecodingLimits } from '@holo-js/kernel/image-decoding'
 import {
   normalizeOutputFormat,
   replaceFileExtension,
@@ -48,10 +49,17 @@ export function createDefaultMediaConversionExecutor(): MediaConversionExecutor 
 
       try {
         const sharp = await loadSharp()
-        let pipeline = sharp(await toBuffer(source.contents), {
+        const image = sharp(await toBuffer(source.contents), {
           animated: true,
           failOn: 'warning',
-        }).rotate()
+          limitInputPixels: imageDecodingLimits.maximumDecodedPixels,
+        })
+        const metadata = await image.metadata()
+        if ((metadata.pages ?? 1) > imageDecodingLimits.maximumFrames) {
+          throw new Error(`The image has more than ${imageDecodingLimits.maximumFrames} frames.`)
+        }
+
+        let pipeline = image.rotate()
 
         if (conversion.width || conversion.height) {
           pipeline = pipeline.resize({

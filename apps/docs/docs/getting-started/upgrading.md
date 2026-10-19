@@ -158,6 +158,37 @@ On every framework, local disks now refuse to delete through symlinks that lead 
 
 New files and folders on local disks use Laravel's permissions: `0600` files and `0700` folders on private disks, and `0644` files and `0755` folders on public disks. Existing files and folders keep their permissions. If another OS user serves your public files, check that it can still read them.
 
+### Media strings are file paths
+
+`addMedia()` no longer downloads a string that starts with `http://` or `https://`. A string is always a local file path, so `post.addMedia('https://example.com/photo.jpg')` now throws instead of downloading the file. Replace it with `addMediaFromUrl()`:
+
+```ts
+// Before
+await post.addMedia('https://example.com/photo.jpg').toMediaCollection('images')
+
+// After
+await post.addMediaFromUrl('https://example.com/photo.jpg').toMediaCollection('images')
+```
+
+`addMedia({ url })` is also removed. Use `addMediaFromUrl(url)` in its place.
+
+Remote downloads now have a 30-second limit for the whole download, including reading the file. Slow downloads throw an error instead of waiting indefinitely.
+
+Collections without `disk()` now use the media disk, which is `public` unless `config/media.ts` sets `disk`. Before 0.4.0 they used the default storage disk when it was public, and otherwise the `public` disk if one existed. Projects created before 0.4.0 have an empty `config/media.ts`, and that file doesn't read `MEDIA_DISK`, so setting the variable does nothing until you change the file to:
+
+```ts [config/media.ts]
+import { env } from '@holo-js/config'
+import { defineMediaConfig } from '@holo-js/media/config'
+
+export default defineMediaConfig({
+  disk: env('MEDIA_DISK', 'public'),
+})
+```
+
+Check this before deploying if your default storage disk is private or S3, since uploads otherwise go to `public`.
+
+Image conversions reject images over 40 million pixels or 1,000 frames, the same limits upload validation uses. Holo generates images before its own database transaction starts. If your code calls `addMedia()` inside your own transaction, the image work still runs inside that transaction, so upload after it commits. Use `addMediaFromDisk(path, disk)` to attach a file that's already on a storage disk.
+
 ### Database queue workers on MySQL
 
 The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).

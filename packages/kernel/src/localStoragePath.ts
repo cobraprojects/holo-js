@@ -38,4 +38,8 @@ function assertValidSegment(segment: string): void {
   if (problem) throw new Error(`[Holo Storage] ${problem}.`)
 }
 
-export const localStoragePathInternals = { assertValidSegment, segmentProblem, windowsStorageNameProblem }
+function splitLocalStoragePath(path: string): string[] {
+  return path.trimStart().replace(/\\/g, '/').split('/').filter(Boolean)
+}
+
+export const localStoragePathInternals = { assertValidSegment, segmentProblem, splitLocalStoragePath, windowsStorageNameProblem }
