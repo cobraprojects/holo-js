@@ -325,7 +325,7 @@ function joinUrl(base: string, path: string): string {
 }
 
 function validateLocalStoragePath(path: string): void {
-  for (const segment of path.trimStart().replace(/\\/g, '/').split('/').filter(Boolean)) {
+  for (const segment of localStoragePathInternals.splitLocalStoragePath(path)) {
     localStoragePathInternals.assertValidSegment(segment)
   }
 }

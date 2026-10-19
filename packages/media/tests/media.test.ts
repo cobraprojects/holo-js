@@ -2038,6 +2038,23 @@ describe('@holo-js/media', () => {
     expect(observed.streamedBytes).toBeLessThanOrEqual(64 * 1024)
   })
 
+  it('names disk files from a backslash-separated path the way storage reads them', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const post = await Post.create({ title: 'Backslash path' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads\\photo.png', 'local').toMediaCollection('images'))
+
+    expect(media.fileName).toBe('photo.png')
+    expect(media.mimeType).toBe('image/png')
+  })
+
   it('attaches disk files that fit the collection limit', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],

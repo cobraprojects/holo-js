@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { basename, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { config } from '@holo-js/config'
+import { localStoragePathInternals } from '@holo-js/kernel'
 import { inspectFileContent } from '@holo-js/kernel/file-content'
 import {
   Storage,
@@ -416,7 +417,7 @@ async function resolveStorageMediaSource(
   },
 ): Promise<ReadMediaSource> {
   const disk = Storage.disk(input.disk)
-  const fileName = sanitizeFileName(overrideFileName ?? basename(input.path))
+  const fileName = sanitizeFileName(overrideFileName ?? localStoragePathInternals.splitLocalStoragePath(input.path).at(-1) ?? '')
   if (typeof options.maxSize === 'number') {
     await rejectOversizedStoredFile(disk, input, fileName, options.maxSize, options.collectionName)
   }
