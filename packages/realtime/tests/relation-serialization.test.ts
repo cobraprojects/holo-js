@@ -276,6 +276,90 @@ describe('realtime relation serialization', () => {
     expect(JSON.stringify([snapshots, patches])).not.toContain('body')
   })
 
+  it('refreshes a hidden belongs-to relation when a plain relation shares its foreign key', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    const Plain = defineModel(authorsTable(), { timestamps: false })
+    const Hidden = defineModel(authorsTable(), { timestamps: false, hidden: ['password'] })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: {
+        plain: belongsTo(() => Plain, 'author_id'),
+        hidden: belongsTo(() => Hidden, 'author_id'),
+      },
+    })
+    const handler = () => db.model(Post).query().with('plain', 'hidden').orderBy('id').getJson()
+    const snapshots: unknown[] = []
+    let reads = 0
+    await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: () => {
+        reads += 1
+        return handler()
+      },
+    }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').where('id', 1).update({ author_id: 2 }),
+    }))
+
+    expect(snapshots.at(-1)).toEqual(await handler())
+    expect(reads).toBe(2)
+  })
+
+  it('keeps plain belongs-to patching when a belongs-to-many relation is loaded alongside it', async () => {
+    const context = await openRealtimeDatabase()
+    const { db, adapter } = context
+    await seedAuthorsAndPosts(context)
+    await adapter.execute('CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL)')
+    await adapter.execute('CREATE TABLE post_tags (post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL)')
+    await adapter.execute("INSERT INTO tags VALUES (1, 'news'), (2, 'tech')")
+    await adapter.execute('INSERT INTO post_tags VALUES (1, 1), (1, 2)')
+    const Author = defineModel(authorsTable(), { timestamps: false })
+    const Tag = defineModel(defineGeneratedTable('tags', { id: column.id(), label: column.string() }), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: {
+        author: belongsTo(() => Author, 'author_id'),
+        tags: belongsToMany(() => Tag, 'post_tags', 'post_id', 'tag_id'),
+      },
+    })
+    const handler = () => db.model(Post).query().with('author', 'tags').orderBy('id').getJson()
+    const snapshots: unknown[] = []
+    let reads = 0
+    await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: () => {
+        reads += 1
+        return handler()
+      },
+    }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').where('id', 1).update({ author_id: 2 }),
+    }))
+
+    expect(snapshots.at(-1)).toEqual(await handler())
+    expect(reads).toBe(1)
+  })
+
   it('keeps belongs-to patching for plain related models with one handler run', async () => {
     const context = await openRealtimeDatabase()
     const { db } = context

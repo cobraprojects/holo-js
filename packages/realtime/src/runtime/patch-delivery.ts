@@ -447,7 +447,7 @@ function hasPatchableColumnTarget(
       continue
     }
 
-    if (includeSelectedColumns && readPatchPathKey(candidate.query, candidate) !== readPatchPathKey(target.query, target)) {
+    if (includeSelectedColumns && !isResultPathPrefix(target.query.resultPath, candidate.query.resultPath)) {
       continue
     }
 
@@ -464,12 +464,25 @@ function hasPatchableColumnTarget(
     }
 
     const relation = candidate.query.relation
-    if (relation?.kind === 'belongsToParentKey' && relation.foreignKey === column) {
+    if (
+      relation?.kind === 'belongsToParentKey'
+      && relation.foreignKey === column
+      && (!includeSelectedColumns || target.query.relation?.kind !== 'belongsToParentKey' || target.query.relation.relationKey === relation.relationKey)
+    ) {
       return true
     }
   }
 
   return false
+}
+
+function isResultPathPrefix(
+  prefix: readonly unknown[] | undefined,
+  path: readonly unknown[] | undefined,
+): boolean {
+  const base = prefix ?? EMPTY_RESULT_PATH
+  const candidatePath = path ?? EMPTY_RESULT_PATH
+  return base.length <= candidatePath.length && base.every((segment, index) => candidatePath[index] === segment)
 }
 
 function candidateCoversSelectedColumn(
