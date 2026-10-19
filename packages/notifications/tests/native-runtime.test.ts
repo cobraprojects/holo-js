@@ -11,6 +11,7 @@ import {
   configureNotificationsRuntime,
   defineNotification,
   listNotifications,
+  type NotificationChannel,
   normalizeNotificationsConfig,
   notify,
   notifyMany,
@@ -19,6 +20,12 @@ import {
   resetNotificationChannelRegistry,
   resetNotificationsRuntime,
 } from '../src'
+
+declare module '../src/contracts' {
+  interface HoloNotificationChannelRegistry {
+    readonly flaky: NotificationChannel<unknown, unknown, void>
+  }
+}
 
 let harness: SQLiteQueueHarness
 const recipient = { id: 'native-recipient', type: 'users' }

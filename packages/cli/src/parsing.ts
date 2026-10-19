@@ -540,16 +540,15 @@ export function resolveBooleanFlag(
 
 export function parseBackoffFlag(
   flags: Readonly<Record<string, CommandFlagValue>>,
-  name = 'backoff',
 ): number | readonly number[] | undefined {
-  const raw = resolveStringFlag(flags, name)
+  const raw = resolveStringFlag(flags, 'backoff')
   if (typeof raw === 'undefined') {
     return undefined
   }
 
   const entries = raw.split(',').map(entry => entry.trim())
   if (!entries.every(entry => /^\d+$/.test(entry))) {
-    throw new Error(`Flag "--${name}" must be a non-negative integer or a comma-separated list of them.`)
+    throw new Error('Flag "--backoff" must be a non-negative integer or a comma-separated list of them.')
   }
 
   const values = entries.map(entry => Number.parseInt(entry, 10))

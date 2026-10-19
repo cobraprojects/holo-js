@@ -69,7 +69,7 @@ function normalizeQueueNames(
 function normalizeNonNegativeInteger(
   value: number | undefined,
   label: string,
-  maximum?: number,
+  options: { maximum?: number } = {},
 ): number | undefined {
   if (typeof value === 'undefined') {
     return undefined
@@ -79,8 +79,8 @@ function normalizeNonNegativeInteger(
     throw new Error(`[Holo Queue] ${label} must be a non-negative integer.`)
   }
 
-  if (typeof maximum === 'number' && value > maximum) {
-    throw new Error(`[Holo Queue] ${label} must be less than or equal to ${maximum}.`)
+  if (typeof options.maximum === 'number' && value > options.maximum) {
+    throw new Error(`[Holo Queue] ${label} must be less than or equal to ${options.maximum}.`)
   }
 
   return value
@@ -361,9 +361,9 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
     connectionName,
   )
   const queueNames = normalizeQueueNames(options.queueNames, connection.queue)
-  const sleepSeconds = normalizeNonNegativeInteger(options.sleep, 'Queue worker sleep', QUEUE_TIMER_MAX_SECONDS)
+  const sleepSeconds = normalizeNonNegativeInteger(options.sleep, 'Queue worker sleep', { maximum: QUEUE_TIMER_MAX_SECONDS })
     ?? ('sleep' in connection && typeof connection.sleep === 'number' ? connection.sleep : 1)
-  const timeout = normalizeNonNegativeInteger(options.timeout, 'Queue worker timeout', QUEUE_TIMER_MAX_SECONDS)
+  const timeout = normalizeNonNegativeInteger(options.timeout, 'Queue worker timeout', { maximum: QUEUE_TIMER_MAX_SECONDS })
   assertQueueTimeoutBelowRetryAfter('Queue worker', timeout, connection)
   const backoff = queueJobInternals.normalizeBackoff(options.backoff)
   const maxJobs = normalizePositiveInteger(options.maxJobs, 'Queue worker maxJobs')

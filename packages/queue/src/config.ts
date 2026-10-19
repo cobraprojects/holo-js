@@ -325,7 +325,6 @@ function normalizeDatabaseConnection(
     afterCommit: normalizeConnectionAfterCommit(name, config.afterCommit),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 1,
-      maximum: QUEUE_TIMER_MAX_SECONDS,
     }),
     sleep: parseInteger(config.sleep, DEFAULT_QUEUE_SLEEP, `queue connection "${name}" sleep`, {
       minimum: 0,

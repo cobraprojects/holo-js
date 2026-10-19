@@ -287,6 +287,7 @@ describe('@holo-js/queue native worker behavior', () => {
       handle(_payload, context) {
         attempts.push(context.attempt)
         if (context.attempt === 1) return new Promise<void>(() => {})
+        return undefined
       },
     }, { name: 'hung' })
     const job = await harness.enqueue('hung', { maxAttempts: 2 })

@@ -42,6 +42,7 @@
     }
   },
   "devDependencies": {
+    "@holo-js/db": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

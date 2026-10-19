@@ -1496,7 +1496,7 @@ export function createInternalCommands(
           stopWhenEmpty: commandContext.flags['stop-when-empty'] === true,
           ...(typeof commandContext.flags.sleep === 'number' ? { sleep: commandContext.flags.sleep } : {}),
           ...(typeof commandContext.flags.tries === 'number' ? { tries: commandContext.flags.tries } : {}),
-          ...(typeof commandContext.flags.backoff === 'string' ? { backoff: parseBackoffFlag({ backoff: commandContext.flags.backoff }) } : {}),
+          ...(typeof commandContext.flags.backoff === 'string' ? { backoff: parseBackoffFlag(commandContext.flags) } : {}),
           ...(typeof commandContext.flags.timeout === 'number' ? { timeout: commandContext.flags.timeout } : {}),
           ...(typeof commandContext.flags['max-jobs'] === 'number' ? { maxJobs: commandContext.flags['max-jobs'] } : {}),
           ...(typeof commandContext.flags['max-time'] === 'number' ? { maxTime: commandContext.flags['max-time'] } : {}),
