@@ -782,7 +782,7 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
         return localSubmission
       }
 
-      if (!isSafeMethod(method)) {
+      if (!isSafeMethod(method) && !(options.csrf && !options.submitter)) {
         const csrfField = await getClientCsrfField()
         if (csrfField && !formData.has(csrfField.name)) {
           formData.set(csrfField.name, csrfField.value)

@@ -79,8 +79,8 @@ The CSRF token now lives in the visitor's [session](/basics/session), as in Lara
 - **Tokens reissue after upgrading.** The first unsafe request each browser sends after the upgrade gets `419`, because its session has no token yet. The next page load stores a token in the session and issues a new `XSRF-TOKEN` cookie.
 - **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf` without Auth, add `@holo-js/session` to your dependencies. Without a `config/session.ts`, Holo uses the default file session store.
 - **Send the session cookie.** Visitors without a session get one on their first page load. Scripts and tests that post with only the `XSRF-TOKEN` cookie must also send the `holo_session` cookie (or your `session.cookie.name`).
-- **Use `X-XSRF-TOKEN` for the cookie value.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value. The new `X-XSRF-TOKEN` header accepts the cookie value. Your own `fetch` calls can keep sending the cookie value in `X-CSRF-TOKEN`.
-- **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`.
+- **`X-XSRF-TOKEN` is also accepted.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value, so existing `fetch` calls keep working. The new `X-XSRF-TOKEN` header accepts the cookie value, as in Laravel.
+- **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`, and the cookie value is no longer added as `_token`.
 
 ### CORS wildcard origins with credentials
 

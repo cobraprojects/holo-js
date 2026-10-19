@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { createApp, defineEventHandler, getResponseHeader, readRawBody, toNodeListener, toWebHandler } from 'h3'
+import { createApp, defineEventHandler, getResponseHeader, readRawBody, toNodeListener, toWebHandler, toWebRequest } from 'h3'
 import { NextRequest } from 'next/server.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } from '../src'
@@ -55,6 +55,17 @@ describe('native csrf middleware', () => {
       expect(await response.json()).toEqual({ body })
     }
   })
+  it('renders the stored session token in Nuxt handlers on the first visit', async () => {
+    const sessions = configureSecurity()
+    const app = createApp()
+    app.use(nuxtCsrfProtection())
+    app.use(defineEventHandler(async event => ({ token: await csrf.token(toWebRequest(event)) })))
+
+    const response = await toWebHandler(app)(new Request('http://localhost/page'))
+
+    expect(await response.json()).toEqual({ token: sessions.tokens.get('guest-1') })
+  })
+
   it('serves credentialed CORS preflight and preserves CORS headers on CSRF rejection', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({ csrf: { enabled: true } }),

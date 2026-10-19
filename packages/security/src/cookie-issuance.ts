@@ -18,6 +18,7 @@ type SecurityCookie = {
 }
 
 export type PreparedCsrfCookies = {
+  readonly token?: string
   readonly cookies: readonly SecurityCookie[]
   readonly sessionCookies: readonly string[]
 }
@@ -53,7 +54,7 @@ export async function prepareCsrfCookies(
   if (shouldIssueClientConfig) {
     cookies.push({ name: SECURITY_CLIENT_CONFIG_COOKIE, value: clientConfig, options })
   }
-  return { cookies, sessionCookies }
+  return { token, cookies, sessionCookies }
 }
 
 export function appendSetCookies(response: Response, setCookies: readonly string[]): Response {
@@ -61,8 +62,14 @@ export function appendSetCookies(response: Response, setCookies: readonly string
     return response
   }
 
-  const headers = new Headers(response.headers)
+  const headers = new Headers()
   for (const setCookie of setCookies) {
+    headers.append('Set-Cookie', setCookie)
+  }
+  response.headers.forEach((value, name) => {
+    if (name !== 'set-cookie') headers.append(name, value)
+  })
+  for (const setCookie of response.headers.getSetCookie()) {
     headers.append('Set-Cookie', setCookie)
   }
 

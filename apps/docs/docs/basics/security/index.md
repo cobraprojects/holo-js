@@ -237,7 +237,7 @@ const input = await csrf.input(request)
 
 ### csrf.cookie() {#csrf-cookie}
 
-Returns the `Set-Cookie` value for the CSRF token cookie. Pass an explicit token as the second argument to use that token instead.
+Returns the `Set-Cookie` value for the `XSRF-TOKEN` cookie, which holds the session token encrypted. Pass an explicit token as the second argument to encrypt that token instead.
 
 ```ts
 response.headers.set('Set-Cookie', await csrf.cookie(request))

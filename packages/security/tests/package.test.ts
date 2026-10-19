@@ -853,7 +853,7 @@ describe('@holo-js/security csrf', () => {
     }))).resolves.not.toBe('forged-token')
   })
 
-  it('rejects malformed encrypted tokens and skips invalid cookie fragments', () => {
+  it('rejects malformed encrypted tokens', () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({
         csrf: {
@@ -863,15 +863,6 @@ describe('@holo-js/security csrf', () => {
       csrfSigningKey: 'test-signing-key',
     })
 
-    expect(securityExports.csrfInternals.parseCookieHeader('broken; XSRF-TOKEN=value')).toEqual({
-      'XSRF-TOKEN': 'value',
-    })
-    expect(securityExports.csrfInternals.parseCookieHeader('tracking=%; XSRF-TOKEN=value')).toEqual({
-      'XSRF-TOKEN': 'value',
-    })
-    expect(securityExports.csrfInternals.parseCookieHeader('%=value; XSRF-TOKEN=value')).toEqual({
-      'XSRF-TOKEN': 'value',
-    })
     expect(securityExports.csrfInternals.decryptCsrfToken('missing-separator')).toBeUndefined()
     expect(securityExports.csrfInternals.decryptCsrfToken('nonce.short')).toBeUndefined()
   })

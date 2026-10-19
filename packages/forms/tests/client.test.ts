@@ -112,6 +112,28 @@ describe('@holo-js/forms client', () => {
     expect(endpoint.headers[1]?.['x-csrf-token']).toBeUndefined()
   })
 
+  it('sends only the bootstrapped token when the browser also holds a CSRF cookie', async () => {
+    const browserGlobal = globalThis as typeof globalThis & { document?: { cookie?: string } }
+    const originalDocument = browserGlobal.document
+    browserGlobal.document = { cookie: 'XSRF-TOKEN=stale-cookie-token' }
+    onTestFinished(() => {
+      if (originalDocument) browserGlobal.document = originalDocument
+      else delete browserGlobal.document
+    })
+    const endpoint = await createFormHttpEndpoint(request => request.url === '/csrf'
+      ? Response.json({ token: 'plain-session-token' })
+      : Response.json({ ok: true, status: 201, data: { submitted: true } }, { status: 201 }))
+    const client = useForm(schema({ email: field.string().required().email() }), {
+      action: `${endpoint.url}/enquiries`,
+      csrf: { endpoint: `${endpoint.url}/csrf` },
+      initialValues: { email: 'ava@example.com' },
+    })
+
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 201 })
+    expect(endpoint.headers[1]?.['x-csrf-token']).toBe('plain-session-token')
+    expect(endpoint.requests[1]?.body).not.toContain('stale-cookie-token')
+  })
+
   it('preserves a failed HTTP CSRF bootstrap and does not submit the form', async () => {
     const endpoint = await createFormHttpEndpoint(new Response('Unavailable', { status: 503 }))
     const client = useForm(schema({ email: field.string().required().email() }), {

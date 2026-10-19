@@ -3,6 +3,7 @@ import type { SecurityCsrfSessionAccessor } from '../../src'
 export type MemoryCsrfSessions = SecurityCsrfSessionAccessor & {
   readonly tokens: Map<string, string>
   readonly writes: string[]
+  readonly reads: string[]
 }
 
 export const TEST_SESSION_COOKIE = 'browser'
@@ -14,12 +15,15 @@ function sessionIdOf(request: Request): string | undefined {
 export function memoryCsrfSessions(initial: Readonly<Record<string, string>> = {}): MemoryCsrfSessions {
   const tokens = new Map<string, string>(Object.entries(initial))
   const writes: string[] = []
+  const reads: string[] = []
   let created = 0
   return {
     tokens,
     writes,
+    reads,
     async read(request) {
       const id = sessionIdOf(request)
+      reads.push(id ?? '')
       return id ? tokens.get(id) : undefined
     },
     async write(request, token) {

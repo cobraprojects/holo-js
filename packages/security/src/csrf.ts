@@ -13,42 +13,7 @@ import { rateLimit } from './rate-limit'
 import { getSecurityRuntime } from './runtime'
 
 const requestTokenCache = new WeakMap<Request, string>()
-
-function parseCookieHeader(header: string | null | undefined): Readonly<Record<string, string>> {
-  if (!header) {
-    return Object.freeze({})
-  }
-
-  const decodeCookiePart = (value: string): string | undefined => {
-    try {
-      return decodeURIComponent(value)
-    } catch {
-      return undefined
-    }
-  }
-
-  const entries = header
-    .split(';')
-    .map(segment => segment.trim())
-    .filter(Boolean)
-    .map((segment) => {
-      const separator = segment.indexOf('=')
-      if (separator <= 0) {
-        return undefined
-      }
-
-      const key = decodeCookiePart(segment.slice(0, separator))
-      const value = decodeCookiePart(segment.slice(separator + 1))
-      if (!key || typeof value === 'undefined') {
-        return undefined
-      }
-
-      return [key, value] as const
-    })
-    .filter((entry): entry is readonly [string, string] => !!entry)
-
-  return Object.freeze(Object.fromEntries(entries))
-}
+const persistedTokens = new WeakMap<Request, string>()
 
 function serializeCookie(name: string, value: string, options: { readonly secure?: boolean } = {}): string {
   const attributes = [
@@ -125,8 +90,17 @@ function csrfSession(): SecurityCsrfSessionAccessor {
   return session
 }
 
+async function readSessionToken(request: Request): Promise<string | undefined> {
+  const stored = await csrfSession().read(request)
+  if (stored) {
+    persistedTokens.set(request, stored)
+  }
+
+  return stored
+}
+
 async function getSessionToken(request: Request): Promise<string | undefined> {
-  return requestTokenCache.get(request) ?? await csrfSession().read(request)
+  return persistedTokens.get(request) ?? requestTokenCache.get(request) ?? await readSessionToken(request)
 }
 
 function getHeaderToken(request: Request): string | undefined {
@@ -139,19 +113,33 @@ function getXsrfHeaderToken(request: Request): string | undefined {
   return value ? decryptCsrfToken(value) : undefined
 }
 
-async function readFormToken(request: Request): Promise<string | undefined> {
-  const { field } = getSecurityRuntime().config.csrf
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
+}
+
+async function readBodyToken(request: Request, field: string): Promise<string | undefined> {
   try {
-    const formData = await request.clone().formData()
-    const value = formData.get(field)
-    return typeof value === 'string' && value ? value : undefined
+    const contentType = request.headers.get('content-type') ?? ''
+    if (/[/+]json\b/i.test(contentType)) {
+      const body: unknown = await request.clone().json()
+      return body && typeof body === 'object' && !Array.isArray(body) && Object.hasOwn(body, field)
+        ? nonEmptyString((body as Readonly<Record<string, unknown>>)[field])
+        : undefined
+    }
+
+    return nonEmptyString((await request.clone().formData()).get(field))
   } catch {
     return undefined
   }
 }
 
+async function readInputToken(request: Request): Promise<string | undefined> {
+  const { field } = getSecurityRuntime().config.csrf
+  return await readBodyToken(request, field) ?? nonEmptyString(new URL(request.url).searchParams.get(field))
+}
+
 async function getSubmittedToken(request: Request): Promise<string | undefined> {
-  const token = await readFormToken(request) ?? getHeaderToken(request)
+  const token = await readInputToken(request) ?? getHeaderToken(request)
   return token ? decryptCsrfToken(token) ?? token : getXsrfHeaderToken(request)
 }
 
@@ -177,15 +165,16 @@ async function ensureSessionToken(request: Request): Promise<{
   readonly token: string
   readonly sessionCookies: readonly string[]
 }> {
-  const existing = await getSessionToken(request)
-  if (existing) {
-    return { token: existing, sessionCookies: [] }
+  const stored = persistedTokens.get(request) ?? await readSessionToken(request)
+  if (stored) {
+    return { token: stored, sessionCookies: [] }
   }
 
-  const created = createCsrfToken()
-  const sessionCookies = await csrfSession().write(request, created)
-  requestTokenCache.set(request, created)
-  return { token: created, sessionCookies }
+  const token = requestTokenCache.get(request) ?? createCsrfToken()
+  const sessionCookies = await csrfSession().write(request, token)
+  requestTokenCache.set(request, token)
+  persistedTokens.set(request, token)
+  return { token, sessionCookies }
 }
 
 function resolveShouldProtect(request: Request, options: SecurityProtectOptions = {}): boolean {
@@ -276,18 +265,22 @@ export const csrf = Object.freeze({
   verify,
 }) satisfies SecurityCsrfFacade
 
+function rememberSessionToken(request: Request, token: string): void {
+  persistedTokens.set(request, token)
+}
+
 export const csrfInternals = {
   createCsrfToken,
+  rememberSessionToken,
   ensureSessionToken,
   requestTokenCache,
   getHeaderToken,
   getXsrfHeaderToken,
   isSecureRequest,
-  readFormToken,
+  readInputToken,
   isExcludedPath,
   isSafeMethod,
   matchesPathPattern,
-  parseCookieHeader,
   serializeCookie,
   decryptCsrfToken,
   encryptCsrfToken,

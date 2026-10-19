@@ -13,3 +13,4 @@ Recorded departures:
 - The Nuxt form-failure cookie carries errors but no submitted values, because it is a client-readable cookie rather than Laravel's server-side session.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.
 - The `_token` field and `X-CSRF-TOKEN` header accept the encrypted `XSRF-TOKEN` cookie value as well as the plain session token, because browser submitters, including Next.js Server Actions, can neither read the plain token nor always set request headers. The check is the same as Laravel's `X-XSRF-TOKEN` path: decrypt with the cookie's name and key, then compare with the session token in constant time.
+- CORS configuration rejects wildcard origins combined with credentials, where Laravel's CORS middleware reflects the request's origin, because reflecting any origin with credentials lets every website read cookie-authenticated responses.

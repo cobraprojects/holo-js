@@ -66,6 +66,36 @@ describe('session-stored CSRF token', () => {
     expect(sessions.writes).toEqual(['guest-1'])
   })
 
+  it('lets a session cookie set by the page override the new guest session cookie', async () => {
+    const sessions = memorySessions()
+    configure(sessions)
+    const request = new Request('https://app.test/auth/callback')
+
+    const response = await csrfProtection()({
+      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
+      resolve: () => new Response('signed in', { headers: { 'Set-Cookie': 'browser=signed-in; Path=/; HttpOnly' } }),
+    })
+
+    expect(response.headers.getSetCookie().filter(cookie => cookie.startsWith('browser='))).toEqual([
+      'browser=guest-1; Path=/; HttpOnly; SameSite=Lax',
+      'browser=signed-in; Path=/; HttpOnly',
+    ])
+  })
+
+  it('stores a token read before the middleware ran instead of skipping the session write', async () => {
+    const sessions = memorySessions()
+    configure(sessions)
+    const request = new Request('https://app.test/profile')
+    const earlyToken = await csrf.token(request)
+
+    await csrfProtection()({
+      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
+      resolve: () => new Response('page'),
+    })
+
+    expect(sessions.tokens.get('guest-1')).toBe(earlyToken)
+  })
+
   it('issues the XSRF-TOKEN cookie as the encrypted session token', async () => {
     const sessions = memorySessions()
     sessions.tokens.set('browser-a', 'session-token-a')
@@ -122,6 +152,44 @@ describe('session-stored CSRF token', () => {
 
     configureSecurityRuntime({ config: defineSecurityConfig({ csrf: { enabled: true } }), csrfSigningKey: 'another-key', csrfSession: sessions })
     await expect(csrf.verify(post('browser-a', { field: encrypted }))).rejects.toBeInstanceOf(SecurityCsrfError)
+  })
+
+  it('accepts _token from a JSON body or the query string like Laravel request input', async () => {
+    const sessions = memorySessions()
+    sessions.tokens.set('browser-a', 'session-token-a')
+    configure(sessions)
+    const encrypted = xsrfCookieOf(await csrf.cookie(post('browser-a')))
+    const json = (body: unknown, query = '') => new Request(`https://app.test/profile${query}`, {
+      method: 'POST',
+      headers: { cookie: 'browser=browser-a', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    await expect(csrf.verify(json({ _token: 'session-token-a', title: 'Guide' }))).resolves.toBeUndefined()
+    await expect(csrf.verify(json({ _token: encrypted }))).resolves.toBeUndefined()
+    await expect(csrf.verify(json({ title: 'Guide' }, '?_token=session-token-a'))).resolves.toBeUndefined()
+    await expect(csrf.verify(json({ _token: 'wrong' }, '?_token=session-token-a'))).rejects.toBeInstanceOf(SecurityCsrfError)
+    await expect(csrf.verify(json({ _token: ['session-token-a'] }))).rejects.toBeInstanceOf(SecurityCsrfError)
+    await expect(csrf.verify(json('session-token-a'))).rejects.toBeInstanceOf(SecurityCsrfError)
+  })
+
+  it('reads the session token once per request', async () => {
+    const sessions = memorySessions()
+    sessions.tokens.set('browser-a', 'session-token-a')
+    configure(sessions)
+    const request = new Request('https://app.test/profile', { headers: { cookie: 'browser=browser-a' } })
+
+    await csrfProtection()({
+      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
+      resolve: async () => {
+        await csrf.input(request)
+        await csrf.input(request)
+        await csrf.token(request)
+        return new Response('page')
+      },
+    })
+
+    expect(sessions.reads).toEqual(['browser-a'])
   })
 
   it('rejects a token planted by another browser or subdomain', async () => {
