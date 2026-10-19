@@ -460,7 +460,7 @@ export function renderScaffoldAppConfig(
     `  url: env('APP_URL', '${defaultUrl}'),`,
     "  timezone: env('APP_TIMEZONE', 'UTC'),",
     "  env: env('APP_ENV', 'production'),",
-    '  debug: env(\'APP_DEBUG\', true),',
+    '  debug: env(\'APP_DEBUG\', false),',
     '  paths: {',
     '    models: \'server/models\',',
     '    migrations: \'server/db/migrations\',',
