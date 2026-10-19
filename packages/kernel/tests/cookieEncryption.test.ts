@@ -3,8 +3,10 @@ import { decryptCookieValue, encryptCookieValue } from '../src/index'
 
 const appKey = 'base64-application-key-for-cookie-tests'
 
-function flipLastCharacter(value: string): string {
-  return `${value.slice(0, -1)}${value.endsWith('A') ? 'B' : 'A'}`
+function tamperPayload(value: string): string {
+  const payload = Buffer.from(value, 'base64url')
+  payload[payload.length - 1] = payload[payload.length - 1]! ^ 1
+  return payload.toString('base64url')
 }
 
 describe('Holo-owned cookie encryption', () => {
@@ -20,7 +22,7 @@ describe('Holo-owned cookie encryption', () => {
   it('rejects tampered values, other cookie names, other keys, and plaintext', () => {
     const encrypted = encryptCookieValue('holo_session', 'session-id', appKey)
 
-    expect(decryptCookieValue('holo_session', flipLastCharacter(encrypted), appKey)).toBeUndefined()
+    expect(decryptCookieValue('holo_session', tamperPayload(encrypted), appKey)).toBeUndefined()
     expect(decryptCookieValue('holo_session_remember', encrypted, appKey)).toBeUndefined()
     expect(decryptCookieValue('holo_session', encrypted, 'another-application-key')).toBeUndefined()
     expect(decryptCookieValue('holo_session', 'session-id', appKey)).toBeUndefined()
