@@ -220,7 +220,7 @@ Set these on your server or hosting provider. Don't commit them.
 | Setting | Why |
 | --- | --- |
 | `APP_ENV=production`, `APP_DEBUG=false` | Turns off development behavior and detailed error output |
-| `APP_KEY` | The app's signing key, used for CSRF tokens and other signed values. `npx holo key:generate` writes one to `.env` if it's missing; keep the same key across deploys |
+| `APP_KEY` | The app's secret key. Holo uses it to encrypt the session and CSRF cookies and to sign other values. `npx holo key:generate` writes one to `.env` if it's missing; keep the same key across deploys |
 | `APP_URL` | Your public URL. Used for links in emails and for the broadcast server's allowed origin |
 | `DB_URL` (or your database's settings) | Your production database |
 | `SESSION_SECURE=true` | Sends the session cookie over HTTPS only |

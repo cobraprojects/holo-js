@@ -1,6 +1,7 @@
 import { createApp, createError, defineEventHandler } from 'h3'
-import { expect, it } from 'vitest'
-import { isValidationException, serializeValidationException, ValidationException, validationInternals } from '@holo-js/validation'
+import { expect, it, onTestFinished } from 'vitest'
+import { requestUrlInternals } from '@holo-js/kernel'
+import { field, isValidationException, schema, serializeValidationException, validate, ValidationException, validationInternals } from '@holo-js/validation'
 import handleValidationError from '../src/runtime/server/error'
 import { serve } from './support/http'
 
@@ -59,4 +60,55 @@ it('preserves serialized H3 validation fields and retry metadata over HTTP', asy
   expect(response.status).toBe(429)
   expect(response.headers.get('retry-after')).toBe('30')
   expect(await response.json()).toEqual(payload)
+})
+
+const loginSchema = schema({ email: field.string().required().email(), password: field.password().required() })
+
+function loginApp() {
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(async () => {
+    await validate({ email: 'invalid', password: 'nuxt-password' }, loginSchema)
+  }))
+  return app
+}
+
+function submitLoginForm(baseUrl: string) {
+  return fetch(baseUrl + '/login', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { accept: 'text/html', referer: baseUrl + '/login' },
+    body: new URLSearchParams({ email: 'invalid', password: 'nuxt-password' }),
+  })
+}
+
+function readFormFailureCookie(response: Response) {
+  const cookie = response.headers.get('set-cookie') ?? ''
+  const value = cookie.split(';')[0]?.split('=').slice(1).join('=') ?? ''
+  return { cookie, payload: JSON.parse(decodeURIComponent(value)) as Record<string, unknown> }
+}
+
+it('answers JSON validation failures without the submitted password', async () => {
+  const response = await fetch(await serve(loginApp()), { method: 'POST', headers: { accept: 'application/json' } })
+  expect(response.status).toBe(422)
+  const body = await response.text()
+  expect(JSON.parse(body)).toMatchObject({ values: { email: 'invalid' } })
+  expect(body).not.toContain('nuxt-password')
+})
+
+it('flashes form failures in a cookie that carries no submitted values', async () => {
+  const response = await submitLoginForm(await serve(loginApp()))
+  expect(response.status).toBe(303)
+  const { cookie, payload } = readFormFailureCookie(response)
+  expect(payload).toMatchObject({ bag: 'default', errors: { email: ['This field must be a valid email address.'] } })
+  expect(payload).not.toHaveProperty('values')
+  expect(cookie).not.toContain('invalid%22')
+  expect(cookie).not.toMatch(/;\s*Secure/i)
+})
+
+it('marks the form failure cookie Secure when the request arrived over HTTPS', async () => {
+  requestUrlInternals.configureForwardedRequestResolver(() => ({ protocol: 'https' }))
+  onTestFinished(() => requestUrlInternals.configureForwardedRequestResolver(undefined))
+  const response = await submitLoginForm(await serve(loginApp()))
+  expect(response.status).toBe(303)
+  expect(readFormFailureCookie(response).cookie).toMatch(/;\s*Secure/i)
 })

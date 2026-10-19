@@ -50,6 +50,7 @@ describe('SvelteKit validation hooks', () => {
       expect(action.type).toBe('failure')
       expect(action.status).toBe(422)
       expect(JSON.parse(action.data)).toMatchObject({ values: { email: value } })
+      expect(action.data).not.toContain('private-password')
     }
   })
   it('preserves browser redirects and filters sensitive flashed values', async () => {
@@ -81,7 +82,9 @@ describe('SvelteKit validation hooks', () => {
       return new Response('success')
     } })
     expect(response.status).toBe(422)
-    expect(await response.json()).toMatchObject({ valid: false, status: 422, values: { email: 'invalid-email' } })
+    const body = await response.text()
+    expect(JSON.parse(body)).toMatchObject({ valid: false, status: 422, values: { email: 'invalid-email' } })
+    expect(body).not.toContain('private-password')
   })
 
   it('cleans failures after handler errors and ignores late validation reports', async () => {
