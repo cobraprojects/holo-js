@@ -1130,7 +1130,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         connectionName: this.getConnectionName(),
         dependencies,
         orderBy: relation.pivotOrderBy,
-        patchable: relation.pivotWheres.length === 0 && relatedRowsArePatchable(related),
+        patchable: relation.pivotWheres.length === 0 && relatedRowsArePatchable(related) && this.pivotRowsArePatchable(relation),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignPivotKey,
           operator: '=' as const,
@@ -1165,6 +1165,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         tableName: related.definition.table.tableName,
       }))
     }
+  }
+
+  private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
+    return !relation.pivotModel || !modelNeedsSerialization(this.resolveRelatedRepository(relation.pivotModel).definition)
   }
 
   private createBelongsToManyRelatedObservationMetadata(

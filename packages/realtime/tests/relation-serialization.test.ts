@@ -410,6 +410,101 @@ describe('realtime relation serialization', () => {
     expect(JSON.stringify(snapshots)).not.toContain('rotated-secret')
   })
 
+  it('refreshes belongs-to-many relations whose pivot model hides a pivot column', async () => {
+    const context = await openRealtimeDatabase()
+    const { db, adapter } = context
+    await seedAuthorsAndPosts(context)
+    await adapter.execute('CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL)')
+    await adapter.execute('CREATE TABLE author_tags (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, note TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO tags VALUES (1, 'news'), (2, 'tech')")
+    await adapter.execute("INSERT INTO author_tags (author_id, tag_id, note) VALUES (1, 1, 'pivot-note-one')")
+    const Tag = defineModel(defineGeneratedTable('tags', { id: column.id(), label: column.string() }), { timestamps: false })
+    const AuthorTag = defineModel(defineGeneratedTable('author_tags', {
+      id: column.id(),
+      author_id: column.integer(),
+      tag_id: column.integer(),
+      note: column.string(),
+    }), { timestamps: false, hidden: ['note'] })
+    const Author = defineModel(authorsTable(), {
+      timestamps: false,
+      relations: {
+        tags: belongsToMany(() => Tag, 'author_tags', 'author_id', 'tag_id')
+          .withPivot('note')
+          .using(() => AuthorTag),
+      },
+    })
+    const handler = () => db.model(Author).query().with('tags').orderBy('id').getJson()
+    const snapshots: unknown[] = []
+    const patches: unknown[] = []
+    let reads = 0
+    await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: () => {
+        reads += 1
+        return handler()
+      },
+    }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onPatch: patch => { patches.push(patch) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('author_tags').where('id', 1).update({ note: 'pivot-note-updated' }),
+    }))
+
+    expect(snapshots.at(-1)).toEqual(await handler())
+    expect(JSON.stringify([snapshots, patches])).not.toContain('pivot-note')
+    expect(reads).toBe(2)
+  })
+
+  it('keeps belongs-to-many patching for a plain pivot model with one handler run', async () => {
+    const context = await openRealtimeDatabase()
+    const { db, adapter } = context
+    await seedAuthorsAndPosts(context)
+    await adapter.execute('CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL)')
+    await adapter.execute('CREATE TABLE author_tags (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, note TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO tags VALUES (1, 'news'), (2, 'tech')")
+    await adapter.execute("INSERT INTO author_tags (author_id, tag_id, note) VALUES (1, 1, 'pivot-note-one')")
+    const Tag = defineModel(defineGeneratedTable('tags', { id: column.id(), label: column.string() }), { timestamps: false })
+    const AuthorTag = defineModel(defineGeneratedTable('author_tags', {
+      id: column.id(),
+      author_id: column.integer(),
+      tag_id: column.integer(),
+      note: column.string(),
+    }), { timestamps: false })
+    const Author = defineModel(authorsTable(), {
+      timestamps: false,
+      relations: {
+        tags: belongsToMany(() => Tag, 'author_tags', 'author_id', 'tag_id')
+          .withPivot('note')
+          .using(() => AuthorTag),
+      },
+    })
+    let reads = 0
+    const patches: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: () => {
+        reads += 1
+        return db.model(Author).query().with('tags').orderBy('id').getJson()
+      },
+    }), {}, {
+      onData: () => {},
+      onPatch: patch => { patches.push(patch) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('author_tags').where('id', 1).update({ note: 'pivot-note-updated' }),
+    }))
+
+    expect(reads).toBe(1)
+    expect(JSON.stringify(patches)).toContain('pivot-note-updated')
+  })
+
   it('keeps plain belongs-to patching when a belongs-to-many relation is loaded alongside it', async () => {
     const context = await openRealtimeDatabase()
     const { db, adapter } = context
