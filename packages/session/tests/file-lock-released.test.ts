@@ -116,6 +116,38 @@ describe('released file locks across processes', () => {
     expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
+  it('reports that other processes must wait when the release cannot be published, and schedules one retry', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedWritePrefixes.add(lockPath)
+    await holder()
+
+    expect(reports).toHaveLength(1)
+    expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
+    expect(owner.pendingRecordLockReleaseRetries.size).toBe(1)
+    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedWritePrefixes.clear()
+    await Promise.all(owner.pendingRecordLockReleaseRetries)
+  }, 15_000)
+
+  it('lets another process reclaim the lease once a scheduled retry publishes the release', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedWritePrefixes.add(lockPath)
+    await holder()
+
+    windowsFs.blockedWritePrefixes.clear()
+    await Promise.all(owner.pendingRecordLockReleaseRetries)
+    expect(owner.pendingRecordLockReleaseRetries.size).toBe(0)
+
+    windowsFs.blockedUnlinkPrefixes.clear()
+    const other = await loadProcess()
+    await (await other.acquireRecordLock(recordPath, mkdir))()
+    expect(other.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
+
   it('does not reclaim a lease its own process still holds', async () => {
     const owner = await loadProcess()
     const holder = await owner.acquireRecordLock(recordPath, mkdir)

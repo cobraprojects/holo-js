@@ -64,6 +64,8 @@ function getFlashPath(recordPath: string): string {
 
 const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
 const BUSY_FILE_RETRY_MS = 1_000
+const RECORD_LOCK_RELEASE_RETRY_MS = 1_000
+const pendingRecordLockReleaseRetries = new Set<Promise<void>>()
 
 function errorCode(error: unknown): string | undefined {
   return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
@@ -228,6 +230,25 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   }
 }
 
+async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
+  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+  if (await markRecordLockReleased(lockPath, owner)) return
+  reportError(
+    new Error(`[@holo-js/session] Could not release file session lock for "${recordPath}" on the scheduled retry; other processes can reclaim it only after this process reclaims it or exits.`),
+    { capability: 'session', operation: 'file.releaseLock' },
+  )
+}
+
+function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner): void {
+  const retry: Promise<void> = new Promise<void>(resolve => {
+    const timer = setTimeout(() => resolve(retryRecordLockRelease(recordPath, lockPath, owner)), RECORD_LOCK_RELEASE_RETRY_MS)
+    timer.unref()
+  })
+    .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
+    .finally(() => { pendingRecordLockReleaseRetries.delete(retry) })
+  pendingRecordLockReleaseRetries.add(retry)
+}
+
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
   try {
     let removalFailure: { readonly error: unknown } | undefined
@@ -236,10 +257,13 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
     } catch (error) {
       removalFailure = { error }
     }
-    await markRecordLockReleased(lockPath, owner)
+    const published = await markRecordLockReleased(lockPath, owner)
+    if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
     if (removalFailure) throw removalFailure.error
     reportError(
-      new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
+      new Error(published
+        ? `[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`
+        : `[@holo-js/session] Could not remove file session lock for "${recordPath}" or publish its release; other processes may wait until this process reclaims the lease or exits, and a retry is scheduled.`),
       { capability: 'session', operation: 'file.releaseLock' },
     )
   } finally {
@@ -635,6 +659,7 @@ export function createFileSessionStore(root: string): SessionStore {
 
 export const fileSessionDriverInternals = {
   heldRecordLockTokens,
+  pendingRecordLockReleaseRetries,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,
