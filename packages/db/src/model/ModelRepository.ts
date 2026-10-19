@@ -1833,8 +1833,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         [deletedAtColumn]: null,
       })
       entity.set(deletedAtColumn as never, null as never)
-      const restored = this.hydrate(entity.toAttributes())
-      restored.syncOriginal()
+      const restored = this.hydrate({ ...entity.toAttributes(), [primaryKey]: id })
+      const key = { [primaryKey]: entity.get(primaryKey) } as never
+      if (getForceFilledColumns(entity).has(primaryKey)) {
+        restored.forceFill(key)
+      } else {
+        restored.fill(key)
+      }
       await this.dispatchEvent('restored', restored)
       await this.touchOwners(restored)
       return restored

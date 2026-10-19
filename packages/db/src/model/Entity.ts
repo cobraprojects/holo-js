@@ -449,8 +449,8 @@ class EntityBase<
 
   private applyPersistedEntity(persisted: EntityBase<TTable, TRelations>, changes: Record<string, unknown>): void {
     this.attributes = { ...persisted.toAttributes() }
-    this.original = { ...persisted.toAttributes() }
-    this.forceFilledColumns.clear()
+    this.original = { ...persisted.original }
+    this.forceFilledColumns = new Set(persisted.forceFilledColumns)
     this.changes = { ...changes }
     this.persisted = true
   }

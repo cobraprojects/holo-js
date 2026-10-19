@@ -179,4 +179,36 @@ describe('model mass assignment', () => {
     await removed.forceDelete()
     await expect(db.table('members').get()).resolves.toMatchObject([{ code: 'b', name: 'Grace' }])
   })
+
+  it('keeps the restored row as the target of later writes after its key changes', async () => {
+    const db = await openDatabase()
+    const members = defineTable('members', {
+      code: column.string().primaryKey(),
+      name: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, members)
+    await db.table('members').insert({ code: 'a', name: 'Ada', deleted_at: '2020-01-01T00:00:00.000Z' })
+    await db.table('members').insert({ code: 'b', name: 'Grace', deleted_at: '2020-01-01T00:00:00.000Z' })
+
+    const Member = defineModelFromTable(members, { fillable: ['code', 'name'], softDeletes: true, timestamps: false })
+
+    const member = await Member.withTrashed().findOrFail('a')
+    member.set('code', 'z')
+    const restored = await member.restore()
+    expect(restored.get('code')).toBe('z')
+    expect(restored.isDirty('code')).toBe(true)
+
+    restored.set('name', 'Ada Lovelace')
+    await restored.save()
+    await expect(db.table('members').orderBy('code').get()).resolves.toMatchObject([
+      { code: 'b', name: 'Grace', deleted_at: expect.anything() },
+      { code: 'z', name: 'Ada Lovelace', deleted_at: null },
+    ])
+
+    const reassigned = await Member.withTrashed().findOrFail('z')
+    reassigned.set('code', 'b')
+    await (await reassigned.restore()).forceDelete()
+    await expect(db.table('members').get()).resolves.toMatchObject([{ code: 'b', name: 'Grace' }])
+  })
 })
