@@ -5,11 +5,17 @@ export type WindowsFsState = {
   readonly blockedRenameSources: Set<string>
   readonly blockedUnlinkPrefixes: Set<string>
   readonly blockedWritePrefixes: Set<string>
+  readonly ioErrorOpenPrefixes: Set<string>
+  readonly ioErrorUnlinkPrefixes: Set<string>
   readonly renameAttempts: Map<string, number>
 }
 
 function permissionDenied(operation: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`EPERM: operation not permitted, ${operation}`), { code: 'EPERM' })
+}
+
+function ioError(operation: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`EIO: i/o error, ${operation}`), { code: 'EIO' })
 }
 
 function startsWithAny(path: string, prefixes: Set<string>): boolean {
@@ -21,7 +27,12 @@ export function windowsFsOverrides(actual: typeof FsPromises, state: WindowsFsSt
   const model = createWindowsFsModel(actual)
   return {
     rmdir: model.rmdir,
+    open: async (...args) => {
+      if (startsWithAny(String(args[0]), state.ioErrorOpenPrefixes)) throw ioError('open')
+      return await actual.open(...args)
+    },
     unlink: async (path, ...rest) => {
+      if (startsWithAny(String(path), state.ioErrorUnlinkPrefixes)) throw ioError('unlink')
       if (startsWithAny(String(path), state.blockedUnlinkPrefixes)) throw permissionDenied('unlink')
       return await model.unlink(path, ...rest)
     },

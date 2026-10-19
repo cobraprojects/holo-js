@@ -229,16 +229,22 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
 }
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) {
+  try {
+    let removalFailure: { readonly error: unknown } | undefined
+    try {
+      if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+    } catch (error) {
+      removalFailure = { error }
+    }
+    await markRecordLockReleased(lockPath, owner)
+    if (removalFailure) throw removalFailure.error
+    reportError(
+      new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
+      { capability: 'session', operation: 'file.releaseLock' },
+    )
+  } finally {
     heldRecordLockTokens.delete(owner.token)
-    return
   }
-  await markRecordLockReleased(lockPath, owner)
-  heldRecordLockTokens.delete(owner.token)
-  reportError(
-    new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
-    { capability: 'session', operation: 'file.releaseLock' },
-  )
 }
 
 function acquireTimeoutError(recordPath: string, cause: unknown): Error {

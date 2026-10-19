@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), renameAttempts: new Map() }))
+const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map() }))
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof FsPromises>()
@@ -89,6 +89,32 @@ describe('released file locks across processes', () => {
     for (const path of paths) await (await owner.acquireRecordLock(path, mkdir))()
     expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 60_000)
+
+  it('an I/O error on unlink rejects the release, keeps no held state, and the owner reclaims after recovery', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    windowsFs.ioErrorUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedWritePrefixes.add(lockPath)
+    await expect(holder()).rejects.toMatchObject({ code: 'EIO' })
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+    expect(await readdir(lockPath)).toHaveLength(1)
+
+    windowsFs.ioErrorUnlinkPrefixes.clear()
+    windowsFs.blockedWritePrefixes.clear()
+    await (await owner.acquireRecordLock(recordPath, mkdir))()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
+
+  it('an I/O error during acquisition, after the token is held, leaves no held state', async () => {
+    const owner = await loadProcess()
+    windowsFs.ioErrorOpenPrefixes.add(root)
+    await expect(owner.acquireRecordLock(recordPath, mkdir)).rejects.toMatchObject({ code: 'EIO' })
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+
+    windowsFs.ioErrorOpenPrefixes.clear()
+    await (await owner.acquireRecordLock(recordPath, mkdir))()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
 
   it('does not reclaim a lease its own process still holds', async () => {
     const owner = await loadProcess()
