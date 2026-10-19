@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { openAsBlob } from 'node:fs'
-import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { localStoragePathInternals } from '@holo-js/kernel'
+import { type Dirent, openAsBlob } from 'node:fs'
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 import type * as StorageFeature from '@holo-js/storage'
 import type { RuntimeDiskConfig } from '@holo-js/storage'
@@ -29,10 +30,9 @@ export function resolveStorageKeyPath(root: string, key: string): string {
     .split(':')
     .flatMap(segment => segment.split('/'))
     .filter(Boolean)
+    .map(decodeStorageKeySegment)
 
-  if (segments.includes('..')) {
-    throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
-  }
+  for (const segment of segments) localStoragePathInternals.assertValidSegment(segment)
 
   const rootPath = resolve(root)
   const targetPath = resolve(rootPath, ...segments)
@@ -44,6 +44,24 @@ export function resolveStorageKeyPath(root: string, key: string): string {
   }
 
   return targetPath
+}
+
+function decodeStorageKeySegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
+function encodeStorageKeySegment(name: string): string {
+  return name.replace(/[%:$]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+function storageKeySegmentFromEntry(entry: Dirent): string {
+  return entry.isFile() && entry.name.endsWith('$')
+    ? `${encodeStorageKeySegment(entry.name.slice(0, -1))}$`
+    : encodeStorageKeySegment(entry.name)
 }
 
 async function resolveStorageReadPath(root: string, key: string): Promise<string | null> {
@@ -64,9 +82,28 @@ async function resolveExistingRealPath(path: string): Promise<string | null> {
   try {
     return await realpath(path)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null
     throw error
   }
+}
+
+async function resolveStorageDeletePath(root: string, key: string): Promise<string | null> {
+  const rootPath = resolve(root)
+  const targetPath = resolveStorageKeyPath(rootPath, key)
+  const resolvedRoot = await resolveExistingRealPath(rootPath)
+  if (!resolvedRoot) return null
+  const resolvedParent = await resolveExistingRealPath(dirname(targetPath))
+  if (!resolvedParent) return null
+  const resolvedTarget = await resolveExistingRealPath(targetPath)
+  if (
+    targetPath === rootPath
+    || !storagePathIsInside(resolvedRoot, resolvedParent)
+    || (resolvedTarget && !storagePathIsInside(resolvedRoot, resolvedTarget))
+  ) {
+    throw new Error('[Holo Storage] Storage paths must stay inside the configured disk root.')
+  }
+  return join(resolvedParent, basename(targetPath))
 }
 
 function storagePathIsInside(root: string, target: string): boolean {
@@ -74,10 +111,10 @@ function storagePathIsInside(root: string, target: string): boolean {
   return relativeTarget === '' || (!relativeTarget.startsWith(`..${sep}`) && relativeTarget !== '..' && !isAbsolute(relativeTarget))
 }
 
-async function resolveStorageWritePath(root: string, key: string): Promise<string> {
+async function resolveStorageWritePath(root: string, key: string, directoryMode: number): Promise<string> {
   const rootPath = resolve(root)
   const unresolvedTarget = resolveStorageKeyPath(rootPath, key)
-  await mkdir(rootPath, { recursive: true })
+  await mkdir(rootPath, { recursive: true, mode: directoryMode })
   const resolvedRoot = await realpath(rootPath)
   const targetPath = resolve(resolvedRoot, relative(rootPath, unresolvedTarget))
   if (!storagePathIsInside(resolvedRoot, targetPath)) {
@@ -90,7 +127,7 @@ async function resolveStorageWritePath(root: string, key: string): Promise<strin
   for (const segment of parentSegments) {
     currentPath = join(currentPath, segment)
     try {
-      await mkdir(currentPath)
+      await mkdir(currentPath, { mode: directoryMode })
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
@@ -101,6 +138,271 @@ async function resolveStorageWritePath(root: string, key: string): Promise<strin
   }
 
   return targetPath
+}
+
+export interface DecodedStorageName {
+  readonly from: string
+  readonly to: string
+}
+
+export interface SkippedStorageName {
+  readonly path: string
+  readonly reason: string
+}
+
+export interface StorageNameDecodingResult {
+  readonly renamed: readonly DecodedStorageName[]
+  readonly skipped: readonly SkippedStorageName[]
+}
+
+function decodeLegacyStorageName(name: string): string | null {
+  if (!name.includes('%')) return null
+  try {
+    const decoded = decodeURIComponent(name)
+    return decoded !== name && encodeURIComponent(decoded) === name ? decoded : null
+  } catch {
+    return null
+  }
+}
+
+function isStorageMetadataEntry(entry: Dirent): boolean {
+  return !entry.isDirectory() && entry.name.endsWith('$')
+}
+
+function decodeLegacyStorageEntry(entry: Dirent): string | null {
+  if (isStorageMetadataEntry(entry)) {
+    const decoded = decodeLegacyStorageName(entry.name.slice(0, -1))
+    return decoded === null ? null : `${decoded}$`
+  }
+
+  return decodeLegacyStorageName(entry.name)
+}
+
+function storageNameDecodingSkipReason(entry: Dirent, decoded: string, platform: NodeJS.Platform): string | null {
+  const isMetadata = isStorageMetadataEntry(entry)
+  if (decoded === '.' || decoded === '..' || /[\\/]/u.test(decoded) || decoded.includes('\u0000')) {
+    return 'the decoded name is not a valid file name'
+  }
+  if (platform === 'win32') {
+    const windowsProblem = localStoragePathInternals.windowsStorageNameProblem(decoded)
+    if (windowsProblem) return windowsProblem
+  }
+  if (entry.isFile() && !isMetadata && decoded.endsWith('$')) {
+    return 'local file names ending in "$" are reserved for metadata'
+  }
+  if (decodeLegacyStorageName(isMetadata ? decoded.slice(0, -1) : decoded) !== null) {
+    return 'the decoded name still looks URL-encoded, so rename it by hand'
+  }
+
+  return null
+}
+
+async function storagePathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+interface StorageNameDecodingOptions {
+  readonly platform?: NodeJS.Platform
+  readonly rename?: (from: string, to: string) => Promise<void>
+}
+
+interface DecodeRename {
+  readonly entry: Dirent
+  readonly from: string
+  readonly to: string
+  readonly decodedName: string
+  reason: string | null
+}
+
+function errorCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code ?? 'unknown error'
+}
+
+function destinationExistsError(to: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`[Holo Storage] "${to}" already exists.`), { code: 'EEXIST' })
+}
+
+async function moveWithoutReplacing(from: string, to: string): Promise<void> {
+  try {
+    await link(from, to)
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') throw destinationExistsError(to)
+    if (await storagePathExists(to)) throw destinationExistsError(to)
+    await rename(from, to)
+    return
+  }
+  await unlink(from)
+}
+
+function decodedNameCollisionKey(name: string): string {
+  return name.normalize('NFC').toLowerCase()
+}
+
+async function planDecodeRename(
+  entry: Dirent,
+  directory: string,
+  segments: readonly string[],
+  platform: NodeJS.Platform,
+): Promise<DecodeRename | null> {
+  const decodedName = decodeLegacyStorageEntry(entry)
+  if (decodedName === null) return null
+
+  const from = [...segments, entry.name].join('/')
+  const to = [...segments, decodedName].join('/')
+  if (entry.isSymbolicLink()) return { entry, from, to, decodedName, reason: 'symbolic links are never followed' }
+
+  const reason = storageNameDecodingSkipReason(entry, decodedName, platform)
+    ?? (await storagePathExists(join(directory, decodedName)) ? `"${to}" already exists` : null)
+  return { entry, from, to, decodedName, reason }
+}
+
+async function decodeLocalStorageNames(
+  root: string,
+  options: StorageNameDecodingOptions = {},
+): Promise<StorageNameDecodingResult> {
+  const platform = options.platform ?? process.platform
+  const renamePath = options.rename ?? moveWithoutReplacing
+  const renamed: DecodedStorageName[] = []
+  const skipped: SkippedStorageName[] = []
+  const resolvedRoot = await resolveExistingRealPath(resolve(root))
+  if (!resolvedRoot) return { renamed, skipped }
+
+  const visit = async (directory: string, segments: readonly string[]): Promise<void> => {
+    const resolvedDirectory = await realpath(directory)
+    if (!storagePathIsInside(resolvedRoot, resolvedDirectory)) {
+      throw new Error('[Holo Storage] Storage paths must stay inside the configured disk root.')
+    }
+
+    const entries = (await readdir(resolvedDirectory, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())
+      .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    const byName = new Map(entries.map(entry => [entry.name, entry]))
+
+    const units: Dirent[][] = []
+    for (const entry of entries) {
+      if (isStorageMetadataEntry(entry)) {
+        const owner = byName.get(entry.name.slice(0, -1))
+        if (owner && !isStorageMetadataEntry(owner)) continue
+      }
+      const metadata = byName.get(`${entry.name}$`)
+      units.push(metadata && isStorageMetadataEntry(metadata) && !isStorageMetadataEntry(entry) ? [entry, metadata] : [entry])
+    }
+
+    const plans: DecodeRename[][] = []
+    for (const unit of units) {
+      const members: DecodeRename[] = []
+      for (const entry of unit) {
+        const member = await planDecodeRename(entry, resolvedDirectory, segments, platform)
+        if (member) members.push(member)
+      }
+      const [data, metadata] = members
+      if (data && metadata) {
+        if (data.reason === null && metadata.reason !== null) {
+          data.reason = metadata.entry.isSymbolicLink() ? 'its metadata is a symbolic link' : 'its metadata was skipped'
+        }
+        if (metadata.reason === null && data.reason !== null) {
+          metadata.reason = data.entry.isSymbolicLink() ? 'its file is a symbolic link' : 'its file was skipped'
+        }
+      }
+      if (members.length > 0) plans.push(members)
+    }
+
+    const collisionReason = 'its decoded name matches another name when case or Unicode normalization is ignored'
+    const plannedNames = new Set(plans.flat().map(member => member.entry.name))
+    const unchangedNames = new Set(entries.filter(entry => !plannedNames.has(entry.name)).map(entry => decodedNameCollisionKey(entry.name)))
+    for (const members of plans) {
+      if (members.some(member => unchangedNames.has(decodedNameCollisionKey(member.decodedName)))) {
+        for (const member of members) member.reason ??= collisionReason
+      }
+    }
+
+    const plansByTarget = new Map<string, Set<DecodeRename[]>>()
+    for (const members of plans) {
+      for (const member of members) {
+        const key = decodedNameCollisionKey(member.decodedName)
+        plansByTarget.set(key, (plansByTarget.get(key) ?? new Set()).add(members))
+      }
+    }
+    for (const colliding of plansByTarget.values()) {
+      if (colliding.size < 2) continue
+      for (const members of colliding) {
+        for (const member of members) {
+          member.reason ??= collisionReason
+        }
+      }
+    }
+
+    const renamedFolders = new Map<string, string>()
+    for (const members of plans) {
+      if (members.some(member => member.reason !== null)) {
+        for (const member of members) skipped.push({ path: member.from, reason: member.reason ?? 'its file was skipped' })
+        continue
+      }
+
+      const occupied: DecodeRename[] = []
+      for (const member of members) {
+        if (await storagePathExists(join(resolvedDirectory, member.decodedName))) occupied.push(member)
+      }
+      if (occupied.length > 0) {
+        for (const member of members) {
+          skipped.push({
+            path: member.from,
+            reason: occupied.includes(member)
+              ? `"${member.to}" already exists`
+              : isStorageMetadataEntry(member.entry) ? 'its file was skipped' : 'its metadata was skipped',
+          })
+        }
+        continue
+      }
+
+      const done: DecodeRename[] = []
+      try {
+        for (const member of members) {
+          await renamePath(join(resolvedDirectory, member.entry.name), join(resolvedDirectory, member.decodedName))
+          done.push(member)
+        }
+        for (const member of members) {
+          renamed.push({ from: member.from, to: member.to })
+          if (member.entry.isDirectory()) renamedFolders.set(member.entry.name, member.decodedName)
+        }
+      } catch (error) {
+        const code = errorCode(error)
+        const restoreFailures = new Map<DecodeRename, string>()
+        for (const member of [...done].reverse()) {
+          try {
+            await renamePath(join(resolvedDirectory, member.decodedName), join(resolvedDirectory, member.entry.name))
+          } catch (restoreError) {
+            restoreFailures.set(member, errorCode(restoreError))
+            if (member.entry.isDirectory()) renamedFolders.set(member.entry.name, member.decodedName)
+          }
+        }
+        for (const member of members) {
+          const restoreFailure = restoreFailures.get(member)
+          skipped.push({
+            path: member.from,
+            reason: restoreFailure === undefined
+              ? `rename failed: ${code}; the name was left unchanged`
+              : `rename failed: ${code}; could not restore its name: ${restoreFailure}`,
+          })
+        }
+      }
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const currentName = renamedFolders.get(entry.name) ?? entry.name
+      await visit(join(resolvedDirectory, currentName), [...segments, currentName])
+    }
+  }
+
+  await visit(resolvedRoot, [])
+  return { renamed, skipped }
 }
 
 type StreamWriteHandle = {
@@ -116,7 +418,9 @@ async function writeCompleteChunk(handle: StreamWriteHandle, chunk: Uint8Array):
   }
 }
 
-function createFileStorageBackend(root: string): StorageBackend {
+function createFileStorageBackend(root: string, visibility: RuntimeDiskConfig['visibility'] = 'private'): StorageBackend {
+  const directoryMode = visibility === 'public' ? 0o755 : 0o700
+  const fileMode = visibility === 'public' ? 0o644 : 0o600
   const normalizeChunkBytes = (value = 64 * 1024): number => {
     if (!Number.isInteger(value) || value < 4 * 1024 || value > 1024 * 1024) {
       throw new Error('[Holo Storage] Stream chunkBytes must be an integer from 4096 through 1048576.')
@@ -131,7 +435,8 @@ function createFileStorageBackend(root: string): StorageBackend {
     const keys: string[] = []
 
     for (const entry of entries) {
-      const nextPrefix = prefix ? `${prefix}:${entry.name}` : entry.name
+      const segment = storageKeySegmentFromEntry(entry)
+      const nextPrefix = prefix ? `${prefix}:${segment}` : segment
       const entryPath = join(currentRoot, entry.name)
 
       if (entry.isDirectory()) {
@@ -153,35 +458,34 @@ function createFileStorageBackend(root: string): StorageBackend {
     cursor: string | null,
     limit: number,
   ): Promise<{ readonly nextCursor: string | null, readonly paths: readonly string[] }> {
-    const retained: string[] = []
-    const insert = (key: string): void => {
-      let low = 0
-      let high = retained.length
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2)
-        if ((retained[middle] ?? '') < key) low = middle + 1
-        else high = middle
-      }
-      retained.splice(low, 0, key)
-      if (retained.length > limit + 1) retained.pop()
-    }
+    const collected: string[] = []
     const visit = async (directory: string, keyPrefix: string): Promise<void> => {
       const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
         throw error
       })
-      for (const entry of entries) {
-        const key = keyPrefix ? `${keyPrefix}:${entry.name}` : entry.name
-        const entryPath = join(directory, entry.name)
-        if (entry.isDirectory()) await visit(entryPath, key)
-        else if (entry.isFile() && (!cursor || key > cursor)) insert(key)
+      const ordered = entries
+        .filter(entry => entry.isDirectory() || entry.isFile())
+        .map((entry) => {
+          const segment = storageKeySegmentFromEntry(entry)
+          const key = keyPrefix ? `${keyPrefix}:${segment}` : segment
+          return { entry, key, order: entry.isDirectory() ? `${key}:` : key }
+        })
+        .sort((left, right) => left.order < right.order ? -1 : left.order > right.order ? 1 : 0)
+      for (const { entry, key, order } of ordered) {
+        if (collected.length > limit) return
+        if (entry.isDirectory()) {
+          if (!cursor || cursor < order || cursor.startsWith(order)) await visit(join(directory, entry.name), key)
+        } else if (!cursor || key > cursor) {
+          collected.push(key)
+        }
       }
     }
 
     await visit(currentRoot, prefix)
-    const page = retained.slice(0, limit)
+    const page = collected.slice(0, limit)
     return Object.freeze({
-      nextCursor: retained.length > limit ? page.at(-1) ?? null : null,
+      nextCursor: collected.length > limit ? page.at(-1) ?? null : null,
       paths: Object.freeze(page),
     })
   }
@@ -271,9 +575,9 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void> {
-      const targetPath = await resolveStorageWritePath(root, key)
+      const targetPath = await resolveStorageWritePath(root, key, directoryMode)
       const temporaryPath = `${targetPath}.holo-write-${randomUUID()}.tmp`
-      const handle = await open(temporaryPath, 'wx')
+      const handle = await open(temporaryPath, 'wx', fileMode)
       try {
         const contents = typeof value === 'string'
           ? new TextEncoder().encode(value)
@@ -292,9 +596,9 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async setItemStream(key, source, options): Promise<void> {
-      const targetPath = await resolveStorageWritePath(root, key)
+      const targetPath = await resolveStorageWritePath(root, key, directoryMode)
       const temporaryPath = `${targetPath}.holo-stream-${randomUUID()}.tmp`
-      const handle = await open(temporaryPath, 'wx')
+      const handle = await open(temporaryPath, 'wx', fileMode)
 
       try {
         for await (const chunk of source) {
@@ -328,13 +632,27 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async hasItem(key: string): Promise<boolean> {
-      return (await this.getItemRaw(key)) !== null
+      const targetPath = await resolveStorageReadPath(root, key)
+      if (!targetPath) return false
+      try {
+        return (await stat(targetPath)).isFile()
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ENOTDIR') return false
+        throw error
+      }
     },
 
     async removeItem(key: string): Promise<void> {
-      const targetPath = resolveStorageKeyPath(root, key)
-      await rm(targetPath, { force: true })
-      await rm(`${targetPath}$`, { force: true })
+      const targetPaths = [await resolveStorageDeletePath(root, key), await resolveStorageDeletePath(root, `${key}$`)]
+      for (const targetPath of targetPaths) {
+        if (!targetPath) continue
+        try {
+          await unlink(targetPath)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+      }
     },
 
     async getKeys(base = ''): Promise<string[]> {
@@ -370,11 +688,19 @@ function createFileStorageBackend(root: string): StorageBackend {
 
     async clear(base = ''): Promise<void> {
       const prefix = base.replace(/:+$/, '')
-      const targetPath = prefix ? resolveStorageKeyPath(root, prefix) : root
-      await rm(targetPath, { recursive: true, force: true })
-      if (!prefix) {
-        await mkdir(root, { recursive: true })
+      if (prefix) {
+        const targetPath = await resolveStorageDeletePath(root, prefix)
+        if (targetPath) await rm(targetPath, { recursive: true, force: true })
+        return
       }
+
+      const resolvedRoot = await resolveExistingRealPath(resolve(root))
+      if (!resolvedRoot) {
+        await mkdir(root, { recursive: true, mode: directoryMode })
+        return
+      }
+      const entries = await readdir(resolvedRoot)
+      await Promise.all(entries.map(entry => rm(join(resolvedRoot, entry), { recursive: true, force: true })))
     },
   }
 }
@@ -426,7 +752,7 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
   for (const [diskName, disk] of Object.entries(runtimeStorage.disks)) {
     const factory = disk.driver === 's3'
       ? await createS3StorageBackendFactory(projectRoot, disk)
-      : () => createFileStorageBackend(disk.root as string)
+      : () => createFileStorageBackend(disk.root as string, disk.visibility)
     factories.set(diskName, factory)
   }
 
@@ -460,6 +786,8 @@ export async function resetOptionalStorageRuntime(): Promise<void> {
 
 export const storageRuntimeInternals = {
   createFileStorageBackend,
+  decodeLocalStorageNames,
+  moveWithoutReplacing,
   importOptionalModule,
   writeCompleteChunk,
 }

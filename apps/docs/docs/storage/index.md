@@ -236,7 +236,7 @@ With `overwrite: false`, it returns `false` instead of replacing a file that alr
 
 ## Unsupported operations
 
-`stat()`, `listFiles()`, `readStream()`, and `writeStream()` need support from the disk's backend. When a backend doesn't support them, they throw one of these errors, all exported from `@holo-js/storage/runtime`:
+`stat()`, `listFiles()`, `readStream()`, and `writeStream()` need support from the disk's backend. Local and S3 disks support all four in Next.js, Nuxt, SvelteKit, and plain Node. When a custom backend doesn't support them, they throw one of these errors, all exported from `@holo-js/storage/runtime`:
 
 | Method | Error |
 | --- | --- |
@@ -249,6 +249,10 @@ With `overwrite: false`, it returns `false` instead of replacing a file that alr
 ## Safe paths
 
 Paths are always relative to the disk root. Holo rejects paths that contain `..` segments, so user input can't reach files outside the disk. Leading slashes are removed, so `/reports/a.txt` and `reports/a.txt` are the same file.
+
+On local disks, symlinks can't lead outside the disk root either. Reads, writes, `delete()`, `removeItem()`, and `clear()` throw an error when the path goes through a symlink that points outside the disk. Deleting a symlink that points to another file on the same disk removes only the link.
+
+Like Laravel, local disks create files with mode `0600` and folders with `0700` on private disks, and `0644` and `0755` on public disks. Your process umask can restrict them further.
 
 ## Override config with environment variables
 
@@ -462,7 +466,7 @@ const info = await Storage.stat('uploads/report.pdf')
 
 ### exists()
 
-Returns `true` when a file exists at the path.
+Returns `true` when a file exists at the path. It returns `false` for a folder.
 
 ```ts
 if (await Storage.exists('reports/daily.txt')) {
@@ -516,7 +520,9 @@ const page = await Storage.listFiles('exports', { limit: 200 })
 
 Returns where the file lives on the backend: a filesystem path under the disk root for local disks, or `s3://bucket/key` for S3 disks.
 
-Local disks URL-encode each part of the name on disk, so `path('exports/May report.csv')` returns `<root>/exports/May%20report.csv`. That's the file Holo wrote, so you can pass it straight to other tools.
+Local disks store files under their exact names, so `path('exports/May report.csv')` returns `<root>/exports/May report.csv`. You can pass it straight to other tools. On Windows, local file and folder names must follow Windows naming rules: colons (including alternate data streams), reserved device names, invalid characters, and trailing dots or spaces are rejected by `path()` and file operations, and public and temporary URLs for such names return 404. POSIX disks keep supporting literal names such as `report:2026.txt`; S3 object names follow S3 rules.
+
+On local disks, file names ending in `$` are reserved for [metadata](#low-level-key-methods), so writing or reading `prices.json$`, or asking for its `path()`, `url()`, or `temporaryUrl()`, throws an error.
 
 ```ts
 const location = Storage.disk('s3').path('backups/db.sql')
@@ -566,7 +572,7 @@ const isPublic = Storage.disk('public').visibility === 'public'
 
 ### Low-level key methods
 
-These methods work on raw keys, where folders are separated by `:` and not `/`, and each folder or file name is URL-encoded, so `exports/May report.csv` is the key `exports:May%20report.csv`. The file methods above convert `/` paths to keys for you, so prefer them for app code.
+These methods work on raw keys, where folders are separated by `:` and not `/`. Inside each folder or file name, only `%`, `:`, and `$` are escaped, as `%25`, `%3A`, and `%24`, so `exports/Q1: 100% done.csv` is the key `exports:Q1%3A 100%25 done.csv`. The file methods above convert `/` paths to keys for you, so prefer them for app code.
 
 - **getItem(key)** returns a value parsed from JSON, or `null`. Use it with values written by `setItem()`.
 - **getItemRaw(key)** returns the stored bytes or text, or `null`.
@@ -575,7 +581,7 @@ These methods work on raw keys, where folders are separated by `:` and not `/`, 
 - **hasItem(key)** returns `true` when a key exists.
 - **removeItem(key)** deletes a key.
 - **getKeys(base?)** returns every key under a base key, or every key when `base` is omitted.
-- **clear(base?)** deletes every key under a base key, or everything when `base` is omitted.
+- **clear(base?)** deletes every key under a base key, or everything when `base` is omitted. On local disks, clearing everything empties the disk root folder and keeps the folder itself.
 - **getMeta(key)**, **setMeta(key, value)**, and **removeMeta(key)** store a sidecar value for a key.
 
 ```ts

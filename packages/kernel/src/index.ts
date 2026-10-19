@@ -16,3 +16,4 @@ export {
   type HoloRequestInput,
 } from './requestUrl'
 export { decryptCookieValue, encryptCookieValue } from './cookieEncryption'
+export { localStoragePathInternals } from './localStoragePath'

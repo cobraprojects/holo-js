@@ -150,7 +150,6 @@
     "unused-file:apps/docs/scripts/check-anchors.mjs",
     "unused-file:apps/docs/scripts/check-names.mjs",
     "unused-file:packages/adapter-nuxt/build.config.ts",
-    "unused-file:packages/adapter-nuxt/src/runtime/drivers/s3.ts",
     "unused-file:packages/adapter-nuxt/src/runtime/server/imports/storage.ts",
     "unused-file:packages/adapter-nuxt/src/runtime/server/routes/broadcast-auth.post.ts",
     "unused-file:packages/adapter-nuxt/src/runtime/server/routes/broadcast-config.get.ts",
@@ -189,6 +188,7 @@
     "unused-file:tests/example-app-realtime-browser-flow.mjs",
     "unused-file:tests/example-app-request-security.mjs",
     "unused-file:tests/example-app-storage-metadata.mjs",
+    "unused-file:tests/example-app-storage-runtime.mjs",
     "unused-file:tests/example-app-token-auth-flow.mjs",
     "unused-file:tests/support/local-package-registry-server.mjs"
   ],

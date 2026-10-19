@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { HoloStorageRuntimeConfig, RuntimeDiskConfig } from './config'
+import { localStoragePathInternals } from '@holo-js/kernel'
 
 const temporaryRouteSegment = '__holo_private'
 
@@ -15,7 +16,7 @@ function isLocalDisk(disk: RuntimeDiskConfig | undefined): disk is LocalDisk {
 }
 
 function isSafeSegment(segment: string): boolean {
-  return segment.length > 0 && segment !== '.' && segment !== '..' && !/[\\/]/u.test(segment) && !segment.includes('\u0000')
+  return localStoragePathInternals.segmentProblem(segment) === null
 }
 
 export function createTemporaryLocalStorageUrl(
@@ -27,8 +28,12 @@ export function createTemporaryLocalStorageUrl(
   if (!isLocalDisk(disk)) throw new Error('[Holo Storage] Temporary local URLs require a local disk.')
   if (!config.appKey) throw new Error('[Holo Storage] Temporary local URLs require the configured application key.')
   if (!config.appUrl) throw new Error('[Holo Storage] Temporary local URLs require the configured application URL.')
-  const segments = [disk.name, ...path.split('/')]
-  if (!segments.every(isSafeSegment)) throw new Error('[Holo Storage] Invalid temporary local storage path.')
+  const fileSegments = path.split('/')
+  if (fileSegments.filter(Boolean).at(-1)?.endsWith('$')) {
+    throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
+  }
+  if (!fileSegments.every(isSafeSegment)) throw new Error('[Holo Storage] Invalid temporary local storage path.')
+  const segments = [disk.name, ...fileSegments]
   const url = new URL(config.appUrl)
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('[Holo Storage] Temporary local URLs require an HTTP application URL.')
   url.pathname = `${url.pathname.replace(/\/+$/u, '')}/${config.routePrefix.replace(/^\/+|\/+$/gu, '')}/${temporaryRouteSegment}/${segments.map(encodeURIComponent).join('/')}`
@@ -65,10 +70,10 @@ export function resolveTemporaryLocalStorageRequest(
   } catch {
     return null
   }
-  if (segments.length < 2 || !segments.every(isSafeSegment)) return null
   const [diskName, ...fileSegments] = segments
-  const disk = diskName ? config.disks[diskName] : undefined
+  if (fileSegments.length === 0 || fileSegments.at(-1)?.endsWith('$') || !fileSegments.every(isSafeSegment)) return null
+  const disk = diskName && Object.hasOwn(config.disks, diskName) ? config.disks[diskName] : undefined
   if (!isLocalDisk(disk)) return null
   const root = resolve(projectRoot, disk.root)
-  return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments.map(encodeURIComponent)) }
+  return { disk: { ...disk, root }, absolutePath: resolve(root, ...fileSegments) }
 }

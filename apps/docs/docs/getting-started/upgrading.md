@@ -107,9 +107,46 @@ aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%
     done
 ```
 
-Files on local disks keep their names. For those, `path()` now returns the file Holo actually wrote, such as `<root>/reports/Q1%20caf%C3%A9.pdf`. If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys with URL-encoded names, the same as local disks.
+Local disks also change to exact names; see [Local file names](#local-file-names). If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys in the same format as local disks.
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
+
+### Local file names
+
+Local disks now store files under their exact names, like Laravel. Before 0.4.0, Holo stored `reports/Q1 café.pdf` as `reports/Q1%20caf%C3%A9.pdf` on disk. After upgrading, Holo looks for `reports/Q1 café.pdf`, and `path()` returns that location.
+
+After you deploy 0.4.0, rename the existing files once for each local disk:
+
+```bash
+npx holo storage:decode-names --disk=local
+npx holo storage:decode-names --disk=public
+```
+
+The command prints what it renamed and what it skipped, and running it again right away changes nothing. Run it once, before new uploads arrive, and rename skipped files by hand. See [storage:decode-names](/reference/cli#storage-decode-names).
+
+Low-level keys still use `:` between folders, but only `%`, `:`, and `$` are escaped inside a name, so the key for `reports/Q1 café.pdf` is `reports:Q1 café.pdf` instead of `reports:Q1%20caf%C3%A9.pdf`. Old-style keys still read the same file. On local disks, file names ending in `$` are now reserved for metadata, so `put('prices.json$', ...)` throws an error.
+
+### Local storage on Nuxt and symlinks
+
+Nuxt apps now use the same local disk code as Next.js, SvelteKit, and plain Node. On Nuxt, `stat()`, `listFiles()`, `readStream()`, and `writeStream()` now work on local disks instead of throwing an unsupported-operation error. Files keep their names and locations, so no data moves.
+
+The Nuxt adapter no longer adds `holo:<disk>` entries to Nitro's `storage` option or a `holoStorage` key to `runtimeConfig`. If your server code calls Nitro's `useStorage('holo:local')`, switch to Holo's disk:
+
+```ts [server/api/report.get.ts]
+import { useStorage } from '@holo-js/storage/runtime'
+
+export default defineEventHandler(async () => {
+  return await useStorage('local').get('reports/daily.txt')
+})
+```
+
+`@holo-js/storage` no longer exports the Nitro helpers `applyNitroStorageConfig()`, `buildStorageConfig()`, `buildStorageConfigWithDriver()`, or the `StorageConfig`, `NitroStorageLike`, and `StorageAdapterOptionsLike` types.
+
+On every framework, local disks now refuse to delete through symlinks that lead outside the disk root. `delete()`, `removeItem()`, and `clear(base)` throw instead of deleting the outside file, and `clear()` with no base empties the disk root without replacing a symlinked root folder. `exists()` returns `false` for a folder instead of throwing. If your app keeps files outside the disk root and links them in, delete them through a disk whose root contains them.
+
+### Local disk permissions
+
+New files and folders on local disks use Laravel's permissions: `0600` files and `0700` folders on private disks, and `0644` files and `0755` folders on public disks. Existing files and folders keep their permissions. If another OS user serves your public files, check that it can still read them.
 
 ### Database queue workers on MySQL
 
