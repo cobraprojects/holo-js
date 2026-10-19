@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formFailureInternals } from '../src/runtime/server/form-failure'
+import { applyFormFailureRedirect, formFailureInternals, type NitroResponse } from '../src/runtime/server/form-failure'
 
 describe('Nuxt form failure internals', () => {
   it('writes the first fallback response cookie as a string', () => {
@@ -12,5 +12,17 @@ describe('Nuxt form failure internals', () => {
     const response = { headers: { 'set-cookie': 'session=value' } }
     formFailureInternals.appendSetCookie({}, response, 'holo_form_failure=value')
     expect(response.headers['set-cookie']).toEqual(['session=value', 'holo_form_failure=value'])
+  })
+
+  it('marks the flashed failure cookie Secure for requests served directly over TLS', () => {
+    const response: NitroResponse = {}
+    applyFormFailureRedirect(
+      { path: '/login', node: { req: { method: 'POST', headers: { host: 'app.test' }, socket: { encrypted: true } } } },
+      response,
+      { ok: false, status: 422, valid: false, errors: { email: ['Invalid.'] }, values: { email: 'ava' } },
+    )
+    const cookie = String((response.headers as Record<string, unknown>)['set-cookie'])
+    expect(cookie).toMatch(/; Secure$/)
+    expect(decodeURIComponent(cookie)).not.toContain('ava')
   })
 })
