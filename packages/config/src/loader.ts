@@ -199,7 +199,8 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   },
 ): LoadedHoloConfig<TCustom> {
   const resolvedRawConfig = resolveEnvPlaceholders(rawConfig, options.environment.values)
-  const app = normalizeAppConfig(resolvedRawConfig.app as HoloAppConfig | undefined)
+  const rawApp = resolvedRawConfig.app as HoloAppConfig | undefined
+  const app = normalizeAppConfig({ ...rawApp, env: rawApp?.env ?? options.environment.name })
   const redis = normalizeRedisConfig(resolvedRawConfig.redis as HoloRedisConfig | undefined)
   const firstPartyConfig = composeRegisteredConfig(resolvedRawConfig, {
     app,

@@ -441,7 +441,7 @@ function getResolvedConfig(): NormalizedHoloMailConfig {
 }
 
 function resolveCurrentEnvironment(): HoloAppEnv {
-  return normalizeMailEnvironment(process.env.APP_ENV ?? process.env.NODE_ENV)
+  return normalizeMailEnvironment(process.env.APP_ENV, 'production')
 }
 
 function createPreviewPolicy(config: NormalizedHoloMailConfig = getResolvedConfig()): MailPreviewPolicy {

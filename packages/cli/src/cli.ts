@@ -1,7 +1,7 @@
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { clearConfigCache, resolveConfigCachePath } from '@holo-js/config'
+import { clearConfigCache, loadEnvironment, resolveConfigCachePath } from '@holo-js/config'
 import {
   parseTokens,
   isInteractive,
@@ -16,6 +16,7 @@ import {
   resolveBooleanFlag,
   parseNumberFlag,
   splitCsv,
+  extractEnvironmentOption,
   SUPPORTED_INSTALL_TARGETS,
   SUPPORTED_CACHE_INSTALL_DRIVERS,
   SUPPORTED_QUEUE_INSTALL_DRIVERS,
@@ -2044,7 +2045,7 @@ export function createInternalCommands(
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
             force: commandContext.flags.force === true,
-            environment: process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development',
+            environment: (await loadEnvironment({ cwd: context.projectRoot, processEnv: process.env })).name,
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No seeders were executed.')
@@ -2109,7 +2110,7 @@ export function createInternalCommands(
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
             force: commandContext.flags.force === true,
-            environment: process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development',
+            environment: (await loadEnvironment({ cwd: context.projectRoot, processEnv: process.env })).name,
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No seeders were executed.')
@@ -2190,8 +2191,13 @@ export function findCommand(
   return registry.find(command => command.name === name || command.aliases?.includes(name))
 }
 
-export async function runCli(argv: readonly string[], io: IoStreams): Promise<number> {
+export async function runCli(input: readonly string[], io: IoStreams): Promise<number> {
   try {
+    const { argv, envName } = extractEnvironmentOption(input)
+    if (envName) {
+      process.env.APP_ENV = envName
+    }
+
     const requestedCommandName = argv[0]
     if (requestedCommandName === '--version' || requestedCommandName === '-v') {
       writeLine(io.stdout, HOLO_PACKAGE_VERSION)

@@ -14,10 +14,11 @@ Holo loads `.env` files from your project root, then applies real environment va
 
 If both `.env.production` and `.env.prod` exist, `.env.production` is used and `.env.prod` is ignored with a warning.
 
-The environment is chosen from the first of `HOLO_ENV`, `APP_ENV`, or `NODE_ENV` that is set in the **real environment** (not in a `.env` file). It must be `development`, `production`, or `test`; anything else counts as `development`.
+The environment comes from `APP_ENV`. The `--env` option wins over a real environment variable, which wins over `APP_ENV` in `.env`. If none of them sets it, the environment is `production`. It must be `development`, `production`, or `test`; any other value stops Holo with an error.
 
 ```bash
 APP_ENV=production npx holo start
+npx holo migrate --env=test
 ```
 
 ::: warning
@@ -42,8 +43,8 @@ These are read by Holo directly, not through config files.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `HOLO_ENV` | none | Picks the environment. Takes priority over `APP_ENV` and `NODE_ENV`. |
-| `NODE_ENV` | none | Used to pick the environment when `HOLO_ENV` and `APP_ENV` aren't set. In production, Holo uses the [config cache](/reference/cli#config-cache) if one exists. |
+| `APP_ENV` | `production` | Picks the environment and which `.env` files load. See [Env files and loading order](#env-files-and-loading-order). |
+| `NODE_ENV` | none | Not used to pick the environment. `holo start` sets it to `production` for the framework server. |
 | `PORT` | framework default | Port for `holo dev` and `holo start` when you don't pass `--port`. Must be a whole number up to 65535. |
 
 ## App
@@ -56,7 +57,7 @@ Used in `config/app.ts`. See [app.ts](/reference/config#app-ts).
 | `APP_KEY` | empty | Secret key for signing CSRF tokens and storage URLs and encrypting social tokens. Create it with `npx holo key:generate`. |
 | `APP_URL` | `http://localhost:3000` (`5173` for SvelteKit) | Public URL of the app. Also used for the broadcast worker's allowed origins and auth endpoint. |
 | `APP_TIMEZONE` | `UTC` | App timezone. |
-| `APP_ENV` | `development` | `development`, `production`, or `test`. Also decides whether `holo seed` needs `--force`. |
+| `APP_ENV` | `production` | `development`, `production`, or `test`. Sets `app.env` and decides whether `holo seed` needs `--force`. New projects set it to `development` in `.env`. |
 | `APP_DEBUG` | `true` | Show detailed errors. |
 
 ## Database

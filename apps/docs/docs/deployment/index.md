@@ -130,7 +130,7 @@ APP_KEY=your-generated-key
 APP_URL=https://blog.example.com
 ```
 
-Generate `APP_KEY` once with `npx holo key:generate` and keep it the same across deploys. `APP_ENV` (or `NODE_ENV`) must be set in the real environment, not only in a file, because it decides which `.env` files load. See [Environment Variables](/reference/environment).
+Generate `APP_KEY` once with `npx holo key:generate` and keep it the same across deploys. When `APP_ENV` isn't set, Holo runs as `production`. Don't copy your development `.env` to the server: its `APP_ENV=development` would win over that default. See [Environment Variables](/reference/environment).
 
 ## Next steps
 

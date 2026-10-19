@@ -122,7 +122,7 @@ Each seeder runs in a transaction. If it throws, everything it wrote rolls back.
 
 ### Seeding in production
 
-Holo refuses to seed when the environment is `production`. It reads the environment from `APP_ENV`, then `NODE_ENV`, and defaults to `development`. Pass `--force` when you really mean it:
+Holo refuses to seed when the environment is `production`. The environment comes from `APP_ENV` and is `production` when `APP_ENV` isn't set. Pass `--force` when you really mean it:
 
 ```bash
 npx holo seed --only roles --force
@@ -178,7 +178,7 @@ The seeder run accepts these options. The CLI sets them from the flags in [Runni
 | `only` | Names of the seeders to run. Unknown names throw. |
 | `quietly` | Turn off model events and observers while seeding |
 | `force` | Allow seeding when `environment` is `production` |
-| `environment` | Environment name used for the production check. The CLI uses `APP_ENV`, then `NODE_ENV`, then `development`. |
+| `environment` | Environment name used for the production check. The CLI passes the [app environment](/reference/environment#env-files-and-loading-order). |
 
 ## Next steps
 

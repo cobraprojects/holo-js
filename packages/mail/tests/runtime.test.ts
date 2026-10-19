@@ -235,6 +235,7 @@ describe('@holo-js/mail runtime', () => {
   })
 
   it('renders html, json, and text preview responses and maps preview errors', async () => {
+    process.env.APP_ENV = 'test'
     configureMailRuntime({
       config: {
         ...normalizeMailConfig(),
@@ -293,6 +294,32 @@ describe('@holo-js/mail runtime', () => {
     await expect(previewMail(markdown)).resolves.toMatchObject({
       subject: 'Preview',
     })
+  })
+
+  it('reads the preview environment from APP_ENV only and treats a missing value as production', async () => {
+    configureMailRuntime({
+      config: {
+        ...normalizeMailConfig(),
+        from: { email: 'config@example.com' },
+        preview: {
+          allowedEnvironments: ['development'],
+        },
+      },
+    })
+    const mail = defineMail({
+      to: 'ava@example.com',
+      subject: 'Preview',
+      markdown: '# Preview',
+    })
+    Reflect.deleteProperty(process.env, 'APP_ENV')
+    process.env.NODE_ENV = 'development'
+
+    const disabled = await renderMailPreview(mail)
+    expect(disabled.status).toBe(403)
+    await expect(disabled.text()).resolves.toContain('"production"')
+
+    process.env.APP_ENV = 'development'
+    expect((await renderMailPreview(mail)).status).toBe(200)
   })
 
   it('re-normalizes overrides and preserves preview validation', async () => {

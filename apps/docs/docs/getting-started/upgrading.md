@@ -38,6 +38,27 @@ Holo adapters now use your app's framework packages as peer dependencies instead
 
 Holo's own dependencies now require patched releases too: `ws` 8.21.0, `sharp` 0.35.5, and `mysql2` 3.22.0 or newer. Your package manager installs these for you. If your lockfile pins older versions, refresh it after upgrading.
 
+### Application environment from `APP_ENV`
+
+The environment now comes only from `APP_ENV`. The `--env` option wins over `APP_ENV` from your shell, which wins over `APP_ENV` in `.env`. When none of them sets it, the environment is `production` instead of `development`. Holo uses that environment to pick which `.env` files load. `HOLO_ENV` is no longer read, and `NODE_ENV` no longer picks the environment. A value other than `development`, `production`, or `test` now stops Holo with an error instead of counting as `development`.
+
+Before installing 0.4.0:
+
+1. Add `APP_ENV=development` to your local `.env`. Without it, local commands and `holo dev` run as `production`.
+2. Replace `HOLO_ENV` with `APP_ENV`, or with `--env`, in scripts, CI, and hosting settings.
+3. Set `APP_ENV` anywhere you relied on `NODE_ENV` to pick the environment. For example, Vitest sets `NODE_ENV=test`, so set `APP_ENV: 'test'` in your test config as shown in [Testing](/testing/).
+4. In `config/app.ts`, set the environment the way new projects do:
+
+```ts [config/app.ts]
+import { defineAppConfig, env } from '@holo-js/config'
+
+export default defineAppConfig({
+  env: env('APP_ENV', 'production'),
+})
+```
+
+`holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

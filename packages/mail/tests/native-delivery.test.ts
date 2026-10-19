@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
-import { afterEach, expect, it, onTestFinished } from 'vitest'
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import { configureMailRuntime, defineMail, MailSendError, normalizeMailConfig, previewMail, renderMailPreview, resetMailRuntime, sendMail } from '../src'
 
 async function startSmtpProvider(rejectRecipient = false) {
@@ -72,7 +72,14 @@ async function startSmtpProvider(rejectRecipient = false) {
   return { messages, commands, port: address.port }
 }
 
-afterEach(() => resetMailRuntime())
+beforeEach(() => {
+  vi.stubEnv('APP_ENV', 'test')
+})
+
+afterEach(() => {
+  resetMailRuntime()
+  vi.unstubAllEnvs()
+})
 
 async function runNativeMailWorker(port: number, operation: 'queue' | 'transaction' | 'queued-transaction' | 'storage' | 'log' | 'delayed' | 'builtins' | 'plugin' | 'broken-plugin', s3Port?: number): Promise<{ stdout: string, stderr: string }> {
   const harnessPath = resolve(import.meta.dirname, '../../queue-db/tests/support/sqlite-queue.ts')
