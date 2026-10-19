@@ -160,4 +160,25 @@ export default defineAppConfig({ name: 'Env App' })
 
     expect(loaded.app.env).toBe('production')
   })
+
+  it('rejects a config cache written before 0.4.0 and loads live config instead', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({ name: 'Live App', env: env('APP_ENV', 'production') })
+`, 'utf8')
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/config-cache.json'), JSON.stringify({
+      version: 3,
+      environment: { name: 'production', loadedFiles: [], warnings: [] },
+      configFiles: [join(root, 'config/app.ts')],
+      config: { app: { name: 'Cached App', env: 'development' } },
+    }), 'utf8')
+
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: true })
+
+    expect(loaded.app.name).toBe('Live App')
+    expect(loaded.app.env).toBe('production')
+  })
 })

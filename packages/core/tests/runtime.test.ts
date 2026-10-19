@@ -2544,6 +2544,56 @@ export default defineAppConfig({
     }
   })
 
+  it('denies mail previews when a pre-0.4.0 config cache says development but the environment is production', async () => {
+    vi.stubEnv('APP_ENV', undefined)
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/config-cache.json'), JSON.stringify({
+      version: 3,
+      environment: { name: 'production', loadedFiles: [], warnings: [] },
+      configFiles: [join(root, 'config/app.ts'), join(root, 'config/database.ts'), join(root, 'config/mail.ts')],
+      config: {
+        app: { name: 'Runtime App', key: 'base64:key', env: 'development' },
+        database: { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ':memory:', logging: false } } },
+        mail: { default: 'fake', from: { email: 'noreply@app.test' }, mailers: { fake: { driver: 'fake' } } },
+      },
+    }), 'utf8')
+
+    try {
+      const runtime = await createHolo(root, { preferCache: true })
+      await runtime.initialize()
+
+      const response = await renderMailPreview({ to: 'ava@example.com', subject: 'Preview', text: 'Hello' })
+      expect(response.status).toBe(403)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('authorizes mail previews from the resolved application environment, not app.env', async () => {
+    vi.stubEnv('APP_ENV', undefined)
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'development' })
+`, 'utf8')
+    await writeMailConfig(root)
+
+    try {
+      const runtime = await createHolo(root)
+      await runtime.initialize()
+
+      const response = await renderMailPreview({ to: 'ava@example.com', subject: 'Preview', text: 'Hello' })
+      expect(response.status).toBe(403)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('boots auth with mail delivery when mail is configured without notifications', async () => {
     const root = await createProject()
     const databasePath = join(root, 'auth.sqlite')
