@@ -94,7 +94,7 @@
 - Run set mutators after each lifecycle handler on the fields that handler changed, so a later handler on the same or a later event sees normalized values. Each value is still mutated once per assignment.
 - Persist attribute changes made in `creating`, `updating`, and `saving` handlers, and apply mutators once per write, including `make().save()` and factories. Models loaded with `withCount()` or `withExists()` save without writing the computed values, and in-place changes to JSON and date attributes are detected and saved. Factories and `holo seed` run seeders without mass-assignment guards, as Laravel does. See [lifecycle, factories, and seeders](apps/docs/docs/getting-started/upgrading.md#lifecycle-factories-and-seeders).
 - Publish packages from CI. The Release workflow runs on pushes to `main` and publishes every package version that npm doesn't have yet, with npm provenance. The publish job runs only for `main` and uses the `release` environment, which holds the `NPM_TOKEN` secret. Without the secret, the run logs a notice and succeeds without publishing. Only the publish step receives the token.
-- `bun run release` stops the running `changeset publish` and then restores the package manifests it rewrites when a publish is interrupted with SIGINT, SIGTERM, or SIGHUP, not only when the publish fails.
+- `bun run release` stops the running `changeset publish` and every process it started, then restores the package manifests it rewrites when a publish is interrupted with SIGINT, SIGTERM, or SIGHUP, not only when the publish fails. Processes that ignore SIGTERM get SIGKILL after five seconds, and manifests are restored only after they have all exited.
 
 ### Compatibility and upgrade requirements
 

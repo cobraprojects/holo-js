@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { once } from 'node:events'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,7 +10,8 @@ import { collectPackageManifestFailures } from './validate-dependency-version-po
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const interruptSignals = ['SIGINT', 'SIGTERM', 'SIGHUP']
-let activePublish
+let activeTree
+const publishStopGraceMs = 5000
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -164,33 +164,92 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot, op
   }
 }
 
-function runChangesetPublish() {
-  const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return error.code !== 'ESRCH'
+  }
+}
 
-  return new Promise((resolvePublish, rejectPublish) => {
-    const child = spawn(changesetBinary, ['publish'], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    })
-    activePublish = child
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
 
-    child.on('error', (error) => {
-      activePublish = undefined
-      rejectPublish(error)
-    })
-    child.on('close', (code) => {
-      activePublish = undefined
-      resolvePublish(code ?? 1)
-    })
+async function waitForProcessGroupExit(pid, timeoutMs = Infinity) {
+  const deadline = Date.now() + timeoutMs
+  while (processGroupAlive(pid)) {
+    if (Date.now() >= deadline) return false
+    await sleep(50)
+  }
+  return true
+}
+
+export function startProcessTree(command, args, options = {}) {
+  const posix = process.platform !== 'win32'
+  const graceMs = options.graceMs ?? publishStopGraceMs
+  const child = spawn(command, args, {
+    cwd: options.cwd ?? repoRoot,
+    stdio: 'inherit',
+    detached: posix,
   })
+  const leaderClosed = new Promise((resolveClose, rejectClose) => {
+    child.on('error', rejectClose)
+    child.on('close', code => resolveClose(code ?? 1))
+  })
+  const exited = leaderClosed.then(async (code) => {
+    if (posix) await waitForProcessGroupExit(child.pid)
+    return code
+  })
+
+  const signalTree = (signal) => {
+    if (!posix) {
+      spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' })
+      return
+    }
+
+    try {
+      process.kill(-child.pid, signal)
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error
+    }
+  }
+
+  let stopping
+  return {
+    exited,
+    stop(signal) {
+      stopping ??= (async () => {
+        signalTree(signal)
+        if (!posix) {
+          await leaderClosed
+          return
+        }
+        if (await waitForProcessGroupExit(child.pid, graceMs)) return
+
+        signalTree('SIGKILL')
+        await waitForProcessGroupExit(child.pid)
+      })()
+      return stopping
+    },
+  }
+}
+
+async function runChangesetPublish() {
+  const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
+  const tree = startProcessTree(changesetBinary, ['publish'])
+  activeTree = tree
+
+  try {
+    return await tree.exited
+  } finally {
+    activeTree = undefined
+  }
 }
 
 async function stopActivePublish(signal) {
-  if (!activePublish) return
-
-  const exited = once(activePublish, 'close')
-  activePublish.kill(signal)
-  await exited
+  await activeTree?.stop(signal)
 }
 
 async function publishWithResolvedCatalogs() {

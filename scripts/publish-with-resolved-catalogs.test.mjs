@@ -350,3 +350,86 @@ test('catalog resolver keeps waiting for the interrupt hook when a second signal
   assert.match(output, /hook-finished/)
   assert.equal(await readFile(manifestPath, 'utf8'), originalManifest)
 })
+
+const fakePublisherSource = [
+  "import { spawn } from 'node:child_process'",
+  "const [grandchildPath, ...grandchildArgs] = process.argv.slice(2)",
+  "spawn(process.execPath, [grandchildPath, ...grandchildArgs], { stdio: 'inherit' })",
+  'setInterval(() => {}, 1000)',
+]
+
+const fakeGrandchildSource = [
+  "import { readFileSync, writeFileSync } from 'node:fs'",
+  "const [manifestPath, markerPath, mode] = process.argv.slice(2)",
+  'writeFileSync(`${markerPath}.pid`, String(process.pid))',
+  'const finish = () => {',
+  "  const resolved = readFileSync(manifestPath, 'utf8').includes('^0.3.28')",
+  '  writeFileSync(markerPath, `resolved:${resolved}`)',
+  '  process.exit(0)',
+  '}',
+  "if (mode === 'stubborn') {",
+  "  process.on('SIGTERM', () => {})",
+  '} else {',
+  "  process.on('SIGTERM', () => setTimeout(finish, 300))",
+  '}',
+  "writeFileSync(`${markerPath}.ready`, '')",
+  'setInterval(() => {}, 1000)',
+]
+
+async function runFakePublishInterrupt({ mode, graceMs }) {
+  const originalManifest = '{ "name": "@holo-js/example", "dependencies": { "@holo-js/core": "catalog:" } }\n'
+  const root = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{"@holo-js/core":"^0.3.28"}}}'],
+    'packages/example/package.json': originalManifest.split('\n'),
+    'fake/publisher.mjs': fakePublisherSource,
+    'fake/grandchild.mjs': fakeGrandchildSource,
+  })
+  const manifestPath = join(root, 'packages/example/package.json')
+  const markerPath = join(root, 'fake/marker')
+  const modulePath = fileURLToPath(new URL('./publish-with-resolved-catalogs.mjs', import.meta.url))
+  const harness = [
+    `import { existsSync } from 'node:fs'`,
+    `import { startProcessTree, withResolvedCatalogManifests } from ${JSON.stringify(modulePath)}`,
+    'let tree',
+    'await withResolvedCatalogManifests(async () => {',
+    `  tree = startProcessTree(process.execPath, [${JSON.stringify(join(root, 'fake/publisher.mjs'))}, ${JSON.stringify(join(root, 'fake/grandchild.mjs'))}, ${JSON.stringify(manifestPath)}, ${JSON.stringify(markerPath)}, ${JSON.stringify(mode)}], { cwd: ${JSON.stringify(root)}, graceMs: ${graceMs} })`,
+    `  while (!existsSync(${JSON.stringify(`${markerPath}.ready`)})) await new Promise(resolve => setTimeout(resolve, 20))`,
+    `  process.stdout.write('published\\n')`,
+    '  await tree.exited',
+    '  await new Promise(() => setInterval(() => {}, 1000))',
+    `}, ${JSON.stringify(root)}, { onInterrupt: signal => tree.stop(signal) })`,
+  ].join('\n')
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', harness], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+  let output = ''
+  child.stdout.on('data', (chunk) => {
+    output += chunk
+  })
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', () => {
+      if (output.includes('published')) resolve()
+    })
+    child.once('exit', code => reject(new Error(`publish child exited early with code ${code}`)))
+  })
+
+  child.kill('SIGTERM')
+  const [, signal] = await once(child, 'exit')
+  return { signal, manifestPath, markerPath, originalManifest }
+}
+
+test('catalog resolver restores manifests only after the publish grandchild exits on interrupt', async () => {
+  const { signal, manifestPath, markerPath, originalManifest } = await runFakePublishInterrupt({ mode: 'cooperative', graceMs: 5000 })
+
+  assert.equal(signal, 'SIGTERM')
+  assert.equal(await readFile(`${markerPath}`, 'utf8'), 'resolved:true')
+  assert.equal(await readFile(manifestPath, 'utf8'), originalManifest)
+})
+
+test('catalog resolver escalates to SIGKILL for a publish tree that ignores SIGTERM after the grace period', async () => {
+  const { signal, manifestPath, markerPath, originalManifest } = await runFakePublishInterrupt({ mode: 'stubborn', graceMs: 200 })
+
+  assert.equal(signal, 'SIGTERM')
+  assert.equal(await readFile(manifestPath, 'utf8'), originalManifest)
+  const grandchildPid = Number(await readFile(`${markerPath}.pid`, 'utf8'))
+  assert.throws(() => process.kill(grandchildPid, 0), { code: 'ESRCH' })
+})
