@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { decryptCookieValue, encryptCookieValue } from '@holo-js/kernel'
 import type {
   CookieSerializeOptions,
   CreateSessionInput,
@@ -526,16 +527,25 @@ export function cookie(name: string, value: string, options?: CookieSerializeOpt
   return cookies.make(name, value, options)
 }
 
+function encryptedCookie(name: string, value: string, options?: CookieSerializeOptions): string {
+  const appKey = getSessionRuntimeState().bindings?.appKey
+  return serializeCookie(name, value ? encryptCookieValue(name, value, appKey) : '', options)
+}
+
+function decryptCookie(name: string, value: string): string | undefined {
+  return decryptCookieValue(name, value, getSessionRuntimeState().bindings?.appKey)
+}
+
 export function sessionCookie(value: string, options?: CookieSerializeOptions): string {
   const name = getSessionRuntimeState().bindings?.config.cookie.name ?? 'holo_session'
-  return cookie(name, value, options)
+  return encryptedCookie(name, value, options)
 }
 
 export function rememberMeCookie(value: string, options?: CookieSerializeOptions): string {
   const bindings = getSessionRuntimeState().bindings
   const name = `${bindings?.config.cookie.name ?? 'holo_session'}_remember`
   const maxAge = options?.maxAge ?? ((bindings?.config.rememberMeLifetime ?? 0) * 60)
-  return cookie(name, value, {
+  return encryptedCookie(name, value, {
     ...options,
     maxAge,
   })
@@ -560,6 +570,7 @@ export function getSessionRuntime(): SessionRuntimeFacade {
     cookie,
     sessionCookie,
     rememberMeCookie,
+    decryptCookie,
   }
 }
 

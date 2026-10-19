@@ -308,11 +308,13 @@ const clearCookie = cookies.forget('holo_cart')
 | Function | Returns |
 |---|---|
 | `cookie(name, value, options?)` | A `Set-Cookie` value using your config defaults |
-| `sessionCookie(value, options?)` | Same, named after `cookie.name` in your config |
-| `rememberMeCookie(value, options?)` | Same, named `<cookie.name>_remember`, lasting `rememberMeLifetime` |
+| `sessionCookie(value, options?)` | Same, named after `cookie.name` in your config, with the value encrypted |
+| `rememberMeCookie(value, options?)` | Same, named `<cookie.name>_remember`, lasting `rememberMeLifetime`, with the value encrypted |
 | `cookies.make(name, value, options?)` | Same as `cookie()` |
 | `cookies.forget(name, options?)` | A `Set-Cookie` value that deletes the cookie |
 | `parseCookieHeader(header)` | An object of cookie names to values from a `Cookie` header |
+
+`sessionCookie()` and `rememberMeCookie()` encrypt the value with your app key (`APP_KEY`) so the browser can't read or change it. [Auth](/auth/session-and-cookies) decrypts them on the next request. They throw if `APP_KEY` is empty. `cookie()` and `cookies.make()` write the value as given.
 
 Options override the config for one cookie: `path`, `domain`, `secure`, `httpOnly`, `sameSite`, `partitioned`, `maxAge` (in **seconds**), and `expires` (a `Date`).
 
@@ -462,13 +464,13 @@ const setCookie = cookie('theme', 'dark', { maxAge: 60 * 60 * 24 * 365 })
 
 `sessionCookie(value: string, options?: CookieSerializeOptions): string`
 
-Like `cookie()`, but the name is your session cookie name (`holo_session` by default).
+Like `cookie()`, but the name is your session cookie name (`holo_session` by default) and the value is encrypted with your app key.
 
 ### rememberMeCookie()
 
 `rememberMeCookie(value: string, options?: CookieSerializeOptions): string`
 
-Like `cookie()`, but named `<session cookie name>_remember`. It lasts `rememberMeLifetime` unless you pass `maxAge`.
+Like `cookie()`, but named `<session cookie name>_remember` and the value is encrypted with your app key. It lasts `rememberMeLifetime` unless you pass `maxAge`.
 
 ### cookies.make()
 

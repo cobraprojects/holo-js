@@ -95,7 +95,7 @@ export default defineSecurityConfig({
 See [CSRF protection](/basics/security/csrf) for the `csrf` block, [rate limiting](/basics/security/rate-limiting) for `rateLimit`, and [CORS and proxies](/basics/security/cors-and-proxies) for `config/cors.ts`.
 
 ::: warning
-CSRF tokens and signed tokens are signed with your app key (`key` in `config/app.ts`, usually `APP_KEY` in `.env`). If the key is empty, every protected request fails. Changing the key invalidates all existing tokens.
+The CSRF cookie is encrypted, and signed tokens are signed, with your app key (`key` in `config/app.ts`, usually `APP_KEY` in `.env`). If the key is empty, every protected request fails. Changing the key invalidates all existing tokens.
 :::
 
 ## Error statuses
