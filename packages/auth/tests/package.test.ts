@@ -5336,7 +5336,7 @@ describe('@holo-js/auth package runtime', () => {
       ...refreshed,
       context: {
         ...refreshed.context,
-        getRequestCookie: name => name === rememberCookie?.name ? rememberCookieValue(JSON.stringify([created.id, 'admin-token', 'a'.repeat(64)]), 'admin') : undefined,
+        getRequestCookie: name => name === rememberCookie?.name ? rememberCookieValue(JSON.stringify([created.id, 'admin-token', 'a'.repeat(64), Date.now() + 60_000]), 'admin') : undefined,
       },
     })
     await expect(getAuthRuntime().guard('web').user()).resolves.toBeNull()

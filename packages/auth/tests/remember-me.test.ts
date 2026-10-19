@@ -127,7 +127,7 @@ describe('remember me', () => {
     const stored = users.get(1)!
     expect(browser.cookies.get('holo_session_remember')).not.toContain(stored.remember_token!)
     expect(decryptRemember(browser)).toEqual({
-      web: [1, stored.remember_token, expect.stringMatching(/^[a-f0-9]{64}$/)],
+      web: [1, stored.remember_token, expect.stringMatching(/^[a-f0-9]{64}$/), expect.any(Number)],
     })
   })
 
@@ -146,6 +146,34 @@ describe('remember me', () => {
     const sessionOnly = new Browser()
     sessionOnly.cookies.set('holo_session', restoredSessionId!)
     await expect(sessionOnly.request(() => auth.check())).resolves.toBe(true)
+  })
+
+  it.each([
+    { elapsed: 43200 * 60_000 - 1, restored: true },
+    { elapsed: 43200 * 60_000, restored: false },
+    { elapsed: 43200 * 60_000 + 1, restored: false },
+  ])('enforces the remember lifetime on replayed cookies after $elapsed milliseconds', async ({ elapsed, restored }) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const issuedAt = Date.now()
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    browser.expireSession()
+
+    vi.setSystemTime(issuedAt + elapsed)
+    await expect(browser.request(() => auth.check())).resolves.toBe(restored)
+  })
+
+  it('authenticates the remember expiry and rejects a plaintext extension', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    const payload = decryptRemember(browser) as { web: [number, string, string, number] }
+    expect(payload.web[3]).toBe(Date.now() + 43200 * 60_000)
+    payload.web[3] += 60_000
+    browser.cookies.set('holo_session_remember', JSON.stringify(payload))
+    browser.expireSession()
+
+    await expect(browser.request(() => auth.check())).resolves.toBe(false)
   })
 
   it('restores a remembered user when the session cookie points at an expired session', async () => {
@@ -204,7 +232,7 @@ describe('remember me', () => {
       await auth.guard('admin').loginUsingId(2, { remember: true })
     }, {}, scoped)
 
-    expect(decryptRemember(browser)).toEqual({ admin: [2, expect.any(String), expect.any(String)] })
+    expect(decryptRemember(browser)).toEqual({ admin: [2, expect.any(String), expect.any(String), expect.any(Number)] })
     browser.expireSession()
     await expect(browser.request(() => auth.check())).resolves.toBe(false)
   })

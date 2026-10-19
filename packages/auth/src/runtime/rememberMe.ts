@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
-export type RememberRecaller = readonly [userId: string | number, token: string, passwordHashDigest: string]
+export type RememberRecaller = readonly [userId: string | number, token: string, passwordHashDigest: string, expiresAt: number]
 
 export function createRememberToken(): string {
   return randomBytes(45).toString('base64url')
@@ -19,12 +19,15 @@ export function rememberSecretsMatch(expected: string, actual: string): boolean 
 
 function isRememberRecaller(value: unknown): value is RememberRecaller {
   return Array.isArray(value)
-    && value.length === 3
+    && value.length === 4
     && ((typeof value[0] === 'string' && value[0].length > 0) || (typeof value[0] === 'number' && Number.isSafeInteger(value[0])))
     && typeof value[1] === 'string'
     && value[1].length > 0
     && typeof value[2] === 'string'
     && value[2].length > 0
+    && typeof value[3] === 'number'
+    && Number.isSafeInteger(value[3])
+    && value[3] > 0
 }
 
 export function encodeRememberRecaller(recaller: RememberRecaller): string {

@@ -100,7 +100,7 @@ Holo extends the idle window on each request, up to the absolute lifetime.
 
 ## Remember me
 
-When you pass `remember: true` to `login()` or `loginUsing()`, Holo also sets a remember-me cookie. When the session expires, the next request uses that cookie to start a fresh session, so the user stays signed in for up to `rememberMeLifetime`.
+When you pass `remember: true` to `login()` or `loginUsing()`, Holo also sets a remember-me cookie. When the session expires, the next request uses that cookie to start a fresh session, so the user stays signed in for up to `rememberMeLifetime`. The encrypted cookie includes an authenticated expiry. The server rejects it at that expiry even if a client keeps or replays the cookie.
 
 ```ts
 await login({ email, password, remember: true })

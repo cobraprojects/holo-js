@@ -453,7 +453,9 @@ function getRememberToken(adapter: ErasedAuthProviderAdapter, user: unknown): st
 }
 
 function rememberRecallerFor(adapter: ErasedAuthProviderAdapter, user: unknown, token: string): string {
-  return encodeRememberRecaller([adapter.getId(user), token, hashPasswordForRemember(getPasswordHash(adapter, user))])
+  const cookie = parseSetCookieDefinition(getRuntimeBindings().session.rememberMeCookie(''))
+  const expiresAt = Date.now() + (cookie?.options.maxAge ?? 0) * 1000
+  return encodeRememberRecaller([adapter.getId(user), token, hashPasswordForRemember(getPasswordHash(adapter, user)), expiresAt])
 }
 
 async function ensureRememberRecaller(providerName: string, userId: string | number): Promise<string> {
@@ -546,7 +548,7 @@ async function restoreRememberedSessionNow(
 
 async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName: string, encoded: string): Promise<boolean> {
   const recaller = decodeRememberRecaller(encoded)
-  if (!recaller) return false
+  if (!recaller || recaller[3] <= Date.now()) return false
   const guard = getGuardConfig(guardName)
   const { adapter } = getProviderAdapter(guard.provider)
   const user = await adapter.findById(recaller[0])
