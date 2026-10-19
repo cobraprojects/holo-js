@@ -38,6 +38,10 @@ Files on local disks keep their names. For those, `path()` now returns the file 
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
 
+### Database queue workers on MySQL
+
+The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a job runs once even when many workers share a jobs table. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
+
 ### Node.js 22.14 or newer
 
 Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.

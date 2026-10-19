@@ -89,6 +89,10 @@ npx holo migrate
 npx holo queue:work
 ```
 
+### Run several workers
+
+You can run as many workers as you need against the same jobs table. Each job is taken by one worker only. On MySQL and PostgreSQL, a worker skips jobs another worker is taking and moves on to the next one, so workers don't wait on each other. The `database` driver needs MySQL 8.0.17 or later. On SQLite, workers take jobs one at a time, because SQLite allows one write at a time.
+
 ## Redis
 
 The `redis` driver keeps jobs in Redis, using [BullMQ](https://docs.bullmq.io). Workers wait on Redis for new jobs instead of polling a table. Use it when you run Redis already or process many jobs.

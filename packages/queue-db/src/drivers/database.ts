@@ -169,54 +169,41 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
       const queueNames = normalizeQueueNames(input.queueNames, this.connection.queue)
 
       return await connection.transaction(async (tx: DatabaseContext) => {
+        const lockClause = tx.getCapabilities().lockForUpdate ? ' FOR UPDATE SKIP LOCKED' : ''
         for (const queueName of queueNames) {
-          while (true) {
-            const now = Date.now()
-            const expiredReservationCutoff = this.getExpiredReservationCutoff(now)
-            const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
-            const selected = await tx.queryCompiled<DatabaseQueuedJobRow>({
-              sql:
-                `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
-                + `FROM ${quotedTable} `
-                + `WHERE queue = ${queuePlaceholder} `
-                + `AND available_at <= ${availablePlaceholder} `
-                + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
-                + 'ORDER BY available_at ASC, created_at ASC, id ASC '
-                + 'LIMIT 1',
-              bindings: [queueName, now, expiredReservationCutoff],
-              source: `queue:${this.name}:reserve:select`,
-            })
+          const now = Date.now()
+          const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
+          const selected = await tx.queryCompiled<DatabaseQueuedJobRow>({
+            sql:
+              `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
+              + `FROM ${quotedTable} `
+              + `WHERE queue = ${queuePlaceholder} `
+              + `AND available_at <= ${availablePlaceholder} `
+              + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
+              + 'ORDER BY available_at ASC, created_at ASC, id ASC '
+              + `LIMIT 1${lockClause}`,
+            bindings: [queueName, now, this.getExpiredReservationCutoff(now)],
+            source: `queue:${this.name}:reserve:select`,
+          })
 
-            const row = selected.rows[0]
-            if (!row) {
-              break
-            }
-
-            const reservationId = `${input.workerId}:${randomUUID()}`
-            const nextAttempts = coerceRequiredInteger(row.attempts, 'Stored queue job attempts') + 1
-            const [
-              reservedAtPlaceholder,
-              reservationPlaceholder,
-              attemptsPlaceholder,
-              idPlaceholder,
-              queueNamePlaceholder,
-              expiredCutoffPlaceholder,
-            ] = createPlaceholders(tx, 6)
-            const updated = await tx.executeCompiled({
-              sql:
-                `UPDATE ${quotedTable} `
-                + `SET reserved_at = ${reservedAtPlaceholder}, reservation_id = ${reservationPlaceholder}, attempts = ${attemptsPlaceholder} `
-                + `WHERE id = ${idPlaceholder} `
-                + `AND queue = ${queueNamePlaceholder} `
-                + `AND (reserved_at IS NULL OR reserved_at <= ${expiredCutoffPlaceholder})`,
-              bindings: [now, reservationId, nextAttempts, row.id, queueName, expiredReservationCutoff],
-              source: `queue:${this.name}:reserve:update`,
-            })
-
-            if ((updated.affectedRows ?? 0) === 1) {
-              return this.createReservedJob(row, reservationId, now) as QueueReservedJob<TPayload>
-            }
+          const row = selected.rows[0]
+          if (!row) {
+            continue
           }
+
+          const reservationId = `${input.workerId}:${randomUUID()}`
+          const nextAttempts = coerceRequiredInteger(row.attempts, 'Stored queue job attempts') + 1
+          const [reservedAtPlaceholder, reservationPlaceholder, attemptsPlaceholder, idPlaceholder] = createPlaceholders(tx, 4)
+          await tx.executeCompiled({
+            sql:
+              `UPDATE ${quotedTable} `
+              + `SET reserved_at = ${reservedAtPlaceholder}, reservation_id = ${reservationPlaceholder}, attempts = ${attemptsPlaceholder} `
+              + `WHERE id = ${idPlaceholder}`,
+            bindings: [now, reservationId, nextAttempts, row.id],
+            source: `queue:${this.name}:reserve:update`,
+          })
+
+          return this.createReservedJob(row, reservationId, now) as QueueReservedJob<TPayload>
         }
 
         return null
