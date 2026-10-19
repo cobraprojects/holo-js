@@ -303,3 +303,41 @@ describe('createPublicStorageResponse', () => {
     }
   })
 })
+
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+  if (!descriptor) throw new Error('Missing platform descriptor')
+  Object.defineProperty(process, 'platform', { value: platform })
+  try {
+    return await run()
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor)
+  }
+}
+
+describe('public storage names on Windows', () => {
+  afterEach(async () => {
+    await Promise.all(Array.from(tempRoots, root => rm(root, { recursive: true, force: true })))
+    tempRoots.clear()
+  })
+
+  it('refuses requests that Windows would resolve to a metadata sidecar or device, and still serves normal files', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await writeFile(join(publicRoot, 'report.txt'), 'report')
+    await writeFile(join(publicRoot, 'report.txt$'), '{"owner":"ops"}')
+    for (const alias of ['report.txt$.', 'report.txt$ ', 'nul.txt', 'CON']) {
+      await writeFile(join(publicRoot, alias), 'metadata alias')
+    }
+    const config = storageConfig('./storage/app/public')
+    const request = (path: string) => createPublicStorageResponse(projectRoot, config, new Request(`https://app.test/storage/${path}`))
+
+    await withPlatform('win32', async () => {
+      for (const path of ['report.txt%24.', 'report.txt%24%20', 'nul.txt', 'CON', 'report.txt%24']) {
+        expect((await request(path)).status, path).toBe(404)
+      }
+      const served = await request('report.txt')
+      expect(served.status).toBe(200)
+      await expect(served.text()).resolves.toBe('report')
+    })
+  })
+})

@@ -23,17 +23,20 @@ function windowsStorageNameProblem(name: string): string | null {
   return null
 }
 
-function assertValidSegment(segment: string): void {
+function segmentProblem(segment: string): string | null {
   if (segment === '..') {
-    throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
+    return 'Storage paths must not contain ".." segments'
   }
-  if (segment === '.' || /[\\/]/u.test(segment) || segment.includes('\u0000')) {
-    throw new Error('[Holo Storage] Storage path segments must be file or folder names.')
+  if (segment === '' || segment === '.' || /[\\/]/u.test(segment) || segment.includes('\u0000')) {
+    return 'Storage path segments must be file or folder names'
   }
-  if (process.platform === 'win32') {
-    const problem = windowsStorageNameProblem(segment)
-    if (problem) throw new Error(`[Holo Storage] ${problem}.`)
-  }
+
+  return process.platform === 'win32' ? windowsStorageNameProblem(segment) : null
 }
 
-export const localStoragePathInternals = { assertValidSegment, windowsStorageNameProblem }
+function assertValidSegment(segment: string): void {
+  const problem = segmentProblem(segment)
+  if (problem) throw new Error(`[Holo Storage] ${problem}.`)
+}
+
+export const localStoragePathInternals = { assertValidSegment, segmentProblem, windowsStorageNameProblem }

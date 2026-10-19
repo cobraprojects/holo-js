@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { HoloStorageRuntimeConfig, RuntimeDiskConfig } from './config'
+import { localStoragePathInternals } from '@holo-js/kernel'
 
 const temporaryRouteSegment = '__holo_private'
 
@@ -15,7 +16,7 @@ function isLocalDisk(disk: RuntimeDiskConfig | undefined): disk is LocalDisk {
 }
 
 function isSafeSegment(segment: string): boolean {
-  return segment.length > 0 && segment !== '.' && segment !== '..' && !/[\\/]/u.test(segment) && !segment.includes('\u0000') && !(process.platform === 'win32' && segment.includes(':'))
+  return localStoragePathInternals.segmentProblem(segment) === null
 }
 
 export function createTemporaryLocalStorageUrl(

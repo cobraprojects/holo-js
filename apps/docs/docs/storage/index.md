@@ -520,7 +520,7 @@ const page = await Storage.listFiles('exports', { limit: 200 })
 
 Returns where the file lives on the backend: a filesystem path under the disk root for local disks, or `s3://bucket/key` for S3 disks.
 
-Local disks store files under their exact names, so `path('exports/May report.csv')` returns `<root>/exports/May report.csv`. You can pass it straight to other tools. On Windows, local file and folder names must follow Windows naming rules: colons (including alternate data streams), reserved device names, invalid characters, and trailing dots or spaces are rejected by `path()` and file operations. POSIX disks keep supporting literal names such as `report:2026.txt`; S3 object names follow S3 rules.
+Local disks store files under their exact names, so `path('exports/May report.csv')` returns `<root>/exports/May report.csv`. You can pass it straight to other tools. On Windows, local file and folder names must follow Windows naming rules: colons (including alternate data streams), reserved device names, invalid characters, and trailing dots or spaces are rejected by `path()` and file operations, and public and temporary URLs for such names return 404. POSIX disks keep supporting literal names such as `report:2026.txt`; S3 object names follow S3 rules.
 
 On local disks, file names ending in `$` are reserved for [metadata](#low-level-key-methods), so writing or reading `prices.json$` throws an error.
 

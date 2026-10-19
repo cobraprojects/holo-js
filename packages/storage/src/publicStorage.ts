@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { type FileHandle, open, realpath, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { type FileContentInspection, fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
+import { localStoragePathInternals } from '@holo-js/kernel'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
@@ -130,7 +131,7 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
 
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
-  if (!segments?.length || segments.at(-1)?.endsWith('$') || segments.some(segment => segment === '.' || segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000') || (process.platform === 'win32' && segment.includes(':')))) {
+  if (!segments?.length || segments.at(-1)?.endsWith('$') || segments.some(segment => localStoragePathInternals.segmentProblem(segment) !== null)) {
     return null
   }
 

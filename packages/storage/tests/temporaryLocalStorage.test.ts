@@ -148,3 +148,32 @@ describe('private local storage URLs', () => {
     expect(result.headers.get('x-content-type-options')).toBe('nosniff')
   })
 })
+
+describe('private local storage URLs on Windows', () => {
+  it('refuses signed URLs that Windows would resolve to a metadata sidecar, and still serves normal files', async () => {
+    const { root, runtime, disk, response } = await fixture()
+    await writeFile(join(root, 'private', 'report.txt'), 'report')
+    await writeFile(join(root, 'private', 'report.txt$'), '{"owner":"ops"}')
+    for (const alias of ['report.txt$.', 'report.txt$ ']) {
+      await writeFile(join(root, 'private', alias), 'metadata alias')
+    }
+    const urls = Object.fromEntries(['report.txt', 'report.txt$.', 'report.txt$ '].map(path => [
+      path,
+      createTemporaryLocalStorageUrl(disk, path, { ...runtime, appKey, appUrl: 'https://app.test' }, 60),
+    ]))
+
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    if (!descriptor) throw new Error('Missing platform descriptor')
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      expect((await response(urls['report.txt$.'])).status).toBe(404)
+      expect((await response(urls['report.txt$ '])).status).toBe(404)
+      const served = await response(urls['report.txt'])
+      expect(served.status).toBe(200)
+      await expect(served.text()).resolves.toBe('report')
+      expect(() => createTemporaryLocalStorageUrl(disk, 'report.txt$.', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)).toThrow()
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor)
+    }
+  })
+})
