@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { configureSecurityRuntime, csrf, csrfInternals, defineSecurityConfig, resetSecurityRuntime, SecurityCsrfError } from '../src'
+import { flipCiphertextBit } from './support/ciphertext'
 import { memoryCsrfSessions } from './support/csrf-session'
 
 const sessionToken = 'session-token'
@@ -70,7 +71,7 @@ describe('encrypted XSRF-TOKEN cookie', () => {
   it('rejects tampered, plaintext, and foreign-key cookies', async () => {
     configure('csrf-cookie-encryption-key')
     const encrypted = cookieValue(await csrf.cookie(page()))
-    const tampered = `${encrypted.slice(0, -2)}xx`
+    const tampered = flipCiphertextBit(encrypted)
 
     await expect(csrf.verify(post({ cookie: tampered, xsrfHeader: tampered }))).rejects.toBeInstanceOf(SecurityCsrfError)
     await expect(csrf.verify(post({ cookie: tampered, field: tampered }))).rejects.toBeInstanceOf(SecurityCsrfError)

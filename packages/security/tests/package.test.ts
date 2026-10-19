@@ -299,7 +299,10 @@ describe('@holo-js/security package surface', () => {
       now: new Date('2030-04-16T12:04:59.000Z'),
       purpose: 'another-purpose',
     })).toBeNull()
-    expect(verifySignedToken(`${token.slice(0, -1)}x`, {
+    const separator = token.lastIndexOf('.')
+    const tamperedSignature = Buffer.from(token.slice(separator + 1), 'base64url')
+    tamperedSignature[tamperedSignature.length - 1] = tamperedSignature[tamperedSignature.length - 1]! ^ 1
+    expect(verifySignedToken(`${token.slice(0, separator + 1)}${tamperedSignature.toString('base64url')}`, {
       now: new Date('2030-04-16T12:04:59.000Z'),
       purpose: 'panels-export-download',
     })).toBeNull()
@@ -313,7 +316,10 @@ describe('@holo-js/security package surface', () => {
     })).toBeNull()
     const base64UrlAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
     const signatureLastCharacterIndex = base64UrlAlphabet.indexOf(token.at(-1)!)
-    const nonCanonicalToken = `${token.slice(0, -1)}${base64UrlAlphabet[signatureLastCharacterIndex + 1]}`
+    const nonCanonicalToken = `${token.slice(0, -1)}${base64UrlAlphabet[signatureLastCharacterIndex ^ 1]}`
+    expect(nonCanonicalToken).not.toBe(token)
+    expect(Buffer.from(nonCanonicalToken.slice(separator + 1), 'base64url'))
+      .toEqual(Buffer.from(token.slice(separator + 1), 'base64url'))
     expect(verifySignedToken(nonCanonicalToken, {
       now: new Date('2030-04-16T12:04:59.000Z'),
       purpose: 'panels-export-download',
