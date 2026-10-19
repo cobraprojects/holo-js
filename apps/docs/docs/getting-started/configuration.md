@@ -10,7 +10,7 @@ export default defineAppConfig({
   key: env('APP_KEY'),
   url: env('APP_URL', 'http://localhost:3000'),
   timezone: env('APP_TIMEZONE', 'UTC'),
-  debug: env('APP_DEBUG', true),
+  debug: env('APP_DEBUG', false),
 })
 ```
 
@@ -100,7 +100,7 @@ export default defineDatabaseConfig({
 
 - `env('KEY')` returns the value as a string, or `''` if it isn't set.
 - `env('KEY', fallback)` returns the fallback when the value is missing or empty.
-- When the fallback is a number or boolean, the value is converted to that type. `env('DB_PORT', 5432)` returns a number. `env('APP_DEBUG', true)` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`. See [`env()`](#available-functions) for what happens to a value that doesn't convert.
+- When the fallback is a number or boolean, the value is converted to that type. `env('DB_PORT', 5432)` returns a number. `env('APP_DEBUG', false)` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`. See [`env()`](#available-functions) for what happens to a value that doesn't convert.
 
 Use `env()` in `config/` files, and read config values everywhere else. That keeps every setting in one place.
 

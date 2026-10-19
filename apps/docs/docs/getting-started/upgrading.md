@@ -57,7 +57,11 @@ Errors Holo catches in background work, such as failing queue hooks, background 
 
 ### Unexpected SvelteKit errors
 
-Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Set `APP_DEBUG=false` in production, and export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).
+Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).
+
+### Debug defaults to false
+
+`debug` in `config/app.ts` now defaults to `false` when `APP_DEBUG` is unset, as in Laravel. Before, it defaulted to `true`, so apps without `APP_DEBUG` showed detailed errors. Set `APP_DEBUG=true` in your local `.env` file to keep detailed errors during development. Apps that set `APP_DEBUG` already, including the scaffold's `.env`, keep their value. `useHoloDebug()` in Nuxt and the SvelteKit error responses follow the same setting. See [Configuration](/reference/config#app-ts).
 
 ### Broadcast subscription errors and channel authorization
 

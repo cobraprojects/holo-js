@@ -58,7 +58,7 @@ Used in `config/app.ts`. See [app.ts](/reference/config#app-ts).
 | `APP_URL` | `http://localhost:3000` (`5173` for SvelteKit) | Public URL of the app. Also used for the broadcast worker's allowed origins and auth endpoint. |
 | `APP_TIMEZONE` | `UTC` | App timezone. |
 | `APP_ENV` | `production` | `development`, `production`, or `test`. Sets `app.env` and decides whether `holo seed` needs `--force`. New projects set it to `development` in `.env`. |
-| `APP_DEBUG` | `true` | Show detailed errors. |
+| `APP_DEBUG` | `false` | Show detailed errors. Set `APP_DEBUG=true` in local `.env` files. |
 
 ## Database
 

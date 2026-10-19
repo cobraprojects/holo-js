@@ -1465,6 +1465,25 @@ describe('@holo-js/config', () => {
     })
   })
 
+  it('defaults app debug to false when APP_DEBUG is unset', async () => {
+    const root = await createProject()
+
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  debug: env<boolean>('APP_DEBUG', false),
+})
+`, 'utf8')
+
+    const loaded = await loadConfigDirectory(root, {
+      processEnv: {},
+    })
+
+    expect(loaded.app.debug).toBe(false)
+    expect(normalizeAppConfig({}).debug).toBe(false)
+  })
+
   it('normalizes string debug flags in app config', () => {
     expect(normalizeAppConfig({
       debug: 'off' as never,

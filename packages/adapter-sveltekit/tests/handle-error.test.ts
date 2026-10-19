@@ -10,7 +10,7 @@ const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/sr
 const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
 const tempDirs: string[] = []
 
-async function createProject(debug: boolean): Promise<string> {
+async function createProject(debug?: boolean): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-sveltekit-errors-'))
   tempDirs.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
@@ -19,8 +19,7 @@ import { defineAppConfig } from ${configEntry}
 
 export default defineAppConfig({
   name: 'SvelteKit App',
-  env: 'development',
-  debug: ${debug},
+  env: 'development',${debug === undefined ? '' : `\n  debug: ${debug},`}
 })
 `, 'utf8')
   await writeFile(join(root, 'config/database.ts'), `
@@ -100,6 +99,17 @@ describe('SvelteKit unhandled errors', () => {
 
     expect(response).toEqual({ message: 'Not Found' })
     expect(logged).not.toHaveBeenCalled()
+  })
+
+  it('returns SvelteKit\'s generic message for a project that never sets debug', async () => {
+    const root = await createProject()
+    await initializeSvelteKitHoloProject({ projectRoot: root, processEnv: { ...process.env } })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await handleUnexpectedError()
+
+    expect(response).toEqual({ message: 'Internal Error' })
+    expect(JSON.stringify(response)).not.toContain('hunter2')
   })
 
   it('returns the error message when the app enables debug', async () => {

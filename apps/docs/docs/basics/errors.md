@@ -163,7 +163,7 @@ In Next.js and SvelteKit API routes, use `first()` or `find()` and return a `404
 
 In SvelteKit, an unexpected error is logged through the [error reporter](#reporting-errors), and the response carries SvelteKit's generic message, `Internal Error`, not the error's message.
 
-The error's own message is returned only while `debug` is `true` in `config/app.ts`, which is for development. `debug` defaults to `true`, so set `APP_DEBUG=false` in production.
+The error's own message is returned only while `debug` is `true` in `config/app.ts`. `debug` defaults to `false`, so set `APP_DEBUG=true` in your local `.env` file for development.
 
 To choose the response yourself, export `handleError` from `src/hooks.server.ts`.
 
