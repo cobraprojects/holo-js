@@ -42,6 +42,7 @@ type QueueRedisInlineClusterNodes = NonNullable<QueueRedisInlineConfig['clusters
 export const DEFAULT_QUEUE_CONNECTION = 'sync'
 export const DEFAULT_QUEUE_NAME = 'default'
 export const DEFAULT_QUEUE_RETRY_AFTER = 90
+const MAX_REDIS_QUEUE_RETRY_AFTER = Math.floor((2 ** 31 - 1) / 1000)
 export const DEFAULT_QUEUE_BLOCK_FOR = 5
 export const DEFAULT_QUEUE_SLEEP = 1
 export const DEFAULT_FAILED_JOBS_CONNECTION = 'default'
@@ -71,7 +72,7 @@ function parseInteger(
   value: number | string | undefined,
   fallback: number,
   label: string,
-  options: { minimum?: number } = {},
+  options: { minimum?: number, maximum?: number } = {},
 ): number {
   if (typeof value === 'undefined') {
     return fallback
@@ -95,6 +96,10 @@ function parseInteger(
 
   if (typeof options.minimum === 'number' && integer < options.minimum) {
     throw new Error(`[Holo Queue] ${label} must be greater than or equal to ${options.minimum}.`)
+  }
+
+  if (typeof options.maximum === 'number' && integer > options.maximum) {
+    throw new Error(`[Holo Queue] ${label} must be less than or equal to ${options.maximum}.`)
   }
 
   return integer
@@ -266,7 +271,8 @@ function normalizeRedisConnection(
     connection: resolvedRedisConnection?.name ?? connectionName ?? name,
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
-      minimum: 0,
+      minimum: 1,
+      maximum: MAX_REDIS_QUEUE_RETRY_AFTER,
     }),
     blockFor: parseInteger(config.blockFor, DEFAULT_QUEUE_BLOCK_FOR, `queue connection "${name}" blockFor`, {
       minimum: 0,
@@ -284,7 +290,7 @@ function normalizeDatabaseConnection(
     driver: 'database',
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
-      minimum: 0,
+      minimum: 1,
     }),
     sleep: parseInteger(config.sleep, DEFAULT_QUEUE_SLEEP, `queue connection "${name}" sleep`, {
       minimum: 0,
