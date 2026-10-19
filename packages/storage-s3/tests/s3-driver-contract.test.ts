@@ -608,8 +608,8 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports/one.txt',
-      'reports/two.txt',
+      'reports:one.txt',
+      'reports:two.txt',
     ])
 
     const firstRequest = new URL((fetchMock.mock.calls[0]?.[0] as Request).url)
@@ -642,7 +642,7 @@ describe('custom s3 storage driver', () => {
       limit: 2,
     })).resolves.toEqual({
       nextCursor: 'token&2',
-      paths: ['reports/one.txt', 'reports/two.txt'],
+      paths: ['reports:one.txt', 'reports:two.txt'],
     })
     const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url)
     expect(request.searchParams.get('prefix')).toBe('reports/')
@@ -669,8 +669,8 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports:')).resolves.toEqual([
-      'reports/one.txt',
-      'reports/two.txt',
+      'reports:one.txt',
+      'reports:two.txt',
     ])
 
     const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url)
@@ -727,8 +727,8 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports/a&b.txt',
-      'reports/less<more>.txt',
+      'reports:a%26b.txt',
+      'reports:less%3Cmore%3E.txt',
     ])
 
     await driver.clear('reports')
@@ -755,7 +755,7 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports/keep&unknown;.txt',
+      'reports:keep%26unknown%3B.txt',
     ])
   })
 
@@ -778,8 +778,8 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports/"quoted".txt',
-      'reports/it\'s.txt',
+      'reports:%22quoted%22.txt',
+      'reports:it\'s.txt',
     ])
   })
 
@@ -802,8 +802,8 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports/"decimal".txt',
-      'reports/hex\'s.txt',
+      'reports:%22decimal%22.txt',
+      'reports:hex\'s.txt',
     ])
   })
 
@@ -826,7 +826,7 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports/valid.txt',
+      'reports:valid.txt',
     ])
   })
 
