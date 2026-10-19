@@ -172,10 +172,10 @@ async function failReservedJob(
   options: Pick<QueueWorkerRunOptions, 'onJobFailed'>,
   failure: { readonly error: Error, readonly runJobFailedHook: boolean },
 ): Promise<QueueWorkerProcessingOutcome> {
-  const { error } = failure
+  const { error, runJobFailedHook } = failure
   await queueRuntimeInternals.getQueueRuntimeState().failedJobStore?.persistFailedJob(reserved, error)
   await driver.delete(reserved)
-  if (failure.runJobFailedHook) {
+  if (runJobFailedHook) {
     await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(reserved.envelope, error, { maxAttempts: event.maxAttempts })
   }
 

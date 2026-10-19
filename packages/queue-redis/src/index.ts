@@ -291,14 +291,19 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     return this.connection.retryAfter * 1000
   }
 
+  private reportFailure(action: string, operation: string, error: unknown): void {
+    reportError(wrapRedisError(this.name, action, error), { capability: 'queue', operation })
+  }
+
   private renewReservation(job: BullJobInstance, token: string): NodeJS.Timeout {
     const lockDuration = this.getLockDuration()
     const renewal = setInterval(() => {
-      job.extendLock(token, lockDuration).catch((error: unknown) => {
-        reportError(wrapRedisError(this.name, 'renew job reservation', error), {
-          capability: 'queue',
-          operation: 'redis.renewReservation',
-        })
+      job.extendLock(token, lockDuration).then((extended) => {
+        if (extended === 0) {
+          clearInterval(renewal)
+        }
+      }, (error: unknown) => {
+        this.reportFailure('renew job reservation', 'redis.renewReservation', error)
       })
     }, lockDuration / 2)
     renewal.unref()
@@ -360,10 +365,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     }
 
     worker.on('error', (error: unknown) => {
-      reportError(wrapRedisError(this.name, 'recover abandoned reservations', error), {
-        capability: 'queue',
-        operation: 'redis.recoverAbandonedReservations',
-      })
+      this.reportFailure('recover abandoned reservations', 'redis.recoverAbandonedReservations', error)
     })
 
     const ready = worker.waitUntilReady()

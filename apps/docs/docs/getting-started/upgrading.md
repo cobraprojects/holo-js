@@ -22,7 +22,7 @@ Errors Holo catches in background work, such as failing queue hooks, background 
 
 ### Queue jobs interrupted by a stopped worker
 
-Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up after the connection's `retryAfter` seconds; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.
+Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up once at least the connection's `retryAfter` seconds have passed; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.
 
 An interrupted run counts as an attempt on both the `redis` and `database` drivers. When a recovered job has no `tries` left, the worker fails it into the [failed jobs table](/queue/failed-jobs) and calls its `onFailed` hook, instead of running it again. Raise `tries` on jobs that should survive a worker crash on their last attempt.
 

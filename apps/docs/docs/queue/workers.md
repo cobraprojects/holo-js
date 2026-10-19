@@ -115,7 +115,7 @@ Run more copies of the service to process more jobs in parallel. See [Deploying 
 
 ## When a worker stops unexpectedly
 
-If a worker crashes, is killed, or loses its connection while running a job, the job isn't lost. Once the connection's `retryAfter` seconds pass, another worker picks it up and runs it again. You don't need to do anything.
+If a worker crashes, is killed, or loses its connection while running a job, the job isn't lost. After at least the connection's `retryAfter` seconds, another worker picks it up and runs it again. You don't need to do anything.
 
 The interrupted run counts as one of the job's `tries`. When a picked-up job has already used all of its tries, the worker doesn't run it again. It fails the job with the error `Queue job "<name>" has been attempted too many times.`, calls the job's `onFailed` hook, and saves it to the [failed jobs table](/queue/failed-jobs).
 

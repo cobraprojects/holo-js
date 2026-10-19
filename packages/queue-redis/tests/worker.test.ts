@@ -17,7 +17,7 @@ import { createQueueDbRuntimeOptions } from '../../queue-db/src'
 import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
 import { redisQueueDriverFactory } from '../src'
 
-async function openRedisWorker() {
+async function openRedisQueue() {
   const service = await startRedisService()
   const port = service.ports[0]
   if (port === undefined) throw new Error('Expected a Redis port')
@@ -44,11 +44,11 @@ async function openRedisWorker() {
     onTestFinished(() => driver.close())
     return driver
   }
-  const job = (name: string, options: Partial<QueueJobEnvelope<{ ok: boolean }>> = {}): QueueJobEnvelope<{ ok: boolean }> => ({
+  const envelopeFor = (name: string, options: Partial<QueueJobEnvelope<{ ok: boolean }>> = {}): QueueJobEnvelope<{ ok: boolean }> => ({
     id: randomUUID(), name, connection: 'redis', queue, payload: { ok: true },
     attempts: 0, maxAttempts: 3, createdAt: Date.now(), ...options,
   })
-  return { openDriver, job }
+  return { openDriver, envelopeFor }
 }
 
 async function reserveEventually(driver: QueueAsyncDriver): Promise<QueueReservedJob> {
@@ -75,11 +75,11 @@ afterEach(() => {
 
 describe('@holo-js/queue-redis abandoned reservations', () => {
   it('redelivers a job abandoned by a stopped worker to a replacement worker', async () => {
-    const { openDriver, job } = await openRedisWorker()
+    const { openDriver, envelopeFor } = await openRedisQueue()
     const attempts: number[] = []
     registerQueueJob({ handle: (_payload, context) => { attempts.push(context.attempt) } }, { name: 'abandoned' })
     const crashed = openDriver()
-    const envelope = job('abandoned')
+    const envelope = envelopeFor('abandoned')
     await crashed.dispatch(envelope)
     expect((await abandon(crashed, driver => driver.reserve({}))).envelope.id).toBe(envelope.id)
     expect(await runQueueWorker({ sleep: 0, maxJobs: 1, maxTime: 10 })).toMatchObject({ processed: 1, failed: 0, stoppedBecause: 'max-jobs' })
@@ -87,13 +87,13 @@ describe('@holo-js/queue-redis abandoned reservations', () => {
     expect(await openDriver().reserve({})).toBeNull()
   }, 30_000)
 
-  it('keeps the reservation of a job running longer than its initial lease', async () => {
-    const { openDriver, job } = await openRedisWorker()
+  it('keeps the reservation of a job running longer than retryAfter', async () => {
+    const { openDriver, envelopeFor } = await openRedisQueue()
     let running = true
     let started: () => void = () => {}
     const handling = new Promise<void>(resolve => { started = resolve })
     registerQueueJob({ async handle() { started(); await setTimeout(3_000) } }, { name: 'long-running' })
-    await openDriver().dispatch(job('long-running'))
+    await openDriver().dispatch(envelopeFor('long-running'))
     const rival = openDriver()
     const stolen: string[] = []
     const watch = handling.then(async () => {
@@ -115,13 +115,13 @@ describe('@holo-js/queue-redis abandoned reservations', () => {
   }, 30_000)
 
   it('fails a repeatedly abandoned job terminally into failed-job storage once it reaches its tries', async () => {
-    const { openDriver, job } = await openRedisWorker()
+    const { openDriver, envelopeFor } = await openRedisQueue()
     const events: string[] = []
     registerQueueJob({
       handle: () => { events.push('handle') },
       onFailed: (_payload, error) => { events.push(error.message) },
     }, { name: 'exhausted' })
-    const envelope = job('exhausted', { maxAttempts: 2 })
+    const envelope = envelopeFor('exhausted', { maxAttempts: 2 })
     const first = openDriver()
     await first.dispatch(envelope)
     await abandon(first, driver => driver.reserve({}))
