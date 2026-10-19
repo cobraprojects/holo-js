@@ -17,6 +17,7 @@ export type LoadedConfigWithCache = Awaited<ReturnType<typeof loadConfigDirector
   readonly cache: {
     readonly drivers: Readonly<Record<string, {
       readonly driver: string
+      readonly connection?: string
     }>>
   }
   readonly redis: {

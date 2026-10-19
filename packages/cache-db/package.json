@@ -34,6 +34,8 @@
   "devDependencies": {
     "@holo-js/cache": "catalog:",
     "@holo-js/db": "catalog:",
+    "@holo-js/db-mysql": "catalog:",
+    "@holo-js/db-postgres": "catalog:",
     "@holo-js/db-sqlite": "catalog:",
     "@holo-js/kernel": "catalog:",
     "@types/node": "catalog:",

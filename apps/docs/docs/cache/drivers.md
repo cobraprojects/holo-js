@@ -54,6 +54,8 @@ file: {
 
 Only processes that can read the same folder share entries and [locks](/cache/locks). Don't rely on it across servers unless they share a filesystem.
 
+`flush()` deletes every entry and lock the store has written under its folder. Give each app its own `path`.
+
 ## Memory
 
 Keeps entries in the memory of the current process. Everything is lost on restart, and each process (and each server) has its own copy.
@@ -95,6 +97,14 @@ export default defineRedisConfig({
       password: env('REDIS_PASSWORD'),
       db: env('REDIS_DB', 0),
     },
+    cache: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      username: env('REDIS_USERNAME'),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_CACHE_DB', 1),
+    },
   },
 })
 ```
@@ -102,19 +112,21 @@ export default defineRedisConfig({
 ```ts [config/cache.ts]
 redis: {
   driver: 'redis',
-  connection: 'default',
+  connection: 'cache',
 }
 ```
 
+The scaffold gives the cache its own `cache` connection on Redis database `1`, so queues and sessions on `default` are never touched by a flush. If `config/redis.ts` already exists without a `cache` connection, `npx holo install cache --driver redis` stops before it writes anything and prints the connection to add.
+
 | Option | Default | Description |
 | --- | --- | --- |
-| `connection` | the `default` connection in `config/redis.ts` | Which Redis connection to use. |
+| `connection` | the `default` connection in `config/redis.ts` | Which Redis connection to use. The scaffold uses `cache`. |
 | `prefix` | top-level `prefix` | Key prefix for this store. |
 
 If the connection name isn't in `config/redis.ts`, Holo throws an error listing the connections it found.
 
 ::: warning
-`cache.flush()` and `npx holo cache:clear` delete every key that starts with the store's prefix. With an empty prefix, that's **every key in the Redis database**, including queue or session data stored there. Set a prefix, or give the cache its own Redis `db`.
+`cache.flush()` and `npx holo cache:clear` run `FLUSHDB` on the store's Redis database. That deletes every key in the database, whatever its prefix, including queue or session data stored there. Point the cache only at a database that holds nothing else. Redis Cluster has no numbered databases, so `flush()` clears every primary node; give a cluster to the cache alone.
 :::
 
 ## Database
@@ -147,6 +159,8 @@ database: {
 
 The store reuses a connection from `config/database.ts`, so you don't repeat credentials here.
 
+`flush()` deletes every row in the entries table and leaves locks alone, so a lock held while the cache is flushed still holds. Expired locks are removed when someone tries to take the same lock again, and by a lottery on about 2% of lock attempts, so the lock table doesn't grow without bound.
+
 `npx holo cache:table` reads `config/cache.ts` and writes one migration in `server/db/migrations` for every `database` store, using its `table` and `lockTable` names.
 
 ## Key prefixes
@@ -173,6 +187,8 @@ export default defineCacheConfig({
 ```
 
 Here the `redis` store uses `blog:cache:` and the `memory` store uses `blog:`. Use prefixes to keep apps or environments apart when they share Redis or a database.
+
+A prefix only changes key names. Give each app its own store, Redis database, or tables, because `flush()` clears the whole store.
 
 ## Multiple stores
 
