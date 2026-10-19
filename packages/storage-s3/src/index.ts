@@ -4,9 +4,15 @@ import type { StorageBackend } from '@holo-js/storage/runtime'
 type DriverValue = string | Uint8Array | ArrayBuffer
 const storedValueMarker = '__holo_storage_s3_value_v1'
 const MINIMUM_MULTIPART_PART_BYTES = 5 * 1024 * 1024
-const MAXIMUM_MULTIPART_PART_BYTES = 512 * 1024 * 1024
+const MAXIMUM_MULTIPART_PART_BYTES = 64 * 1024 * 1024
 const MULTIPART_PARTS_PER_SIZE = 10
 const MAXIMUM_MULTIPART_PARTS = 10_000
+const REQUEST_TIMEOUT_MS = 30_000
+const MINIMUM_UPLOAD_BYTES_PER_SECOND = 128 * 1024
+const RESPONSE_IDLE_TIMEOUT_MS = 30_000
+const CLEAR_PAGE_KEYS = 1000
+const CLEAR_CONCURRENCY = 8
+const NULL_BODY_STATUSES = new Set([204, 205, 304])
 
 export interface S3DriverOptions {
   accessKeyId?: string
@@ -47,17 +53,40 @@ function normalizeKey(key = ''): string {
   return key.replace(/[:/\\]/g, '/').replace(/^[:/\\]|[:/\\]$/g, '')
 }
 
+function decodeKeySegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
+function objectKeySegments(key = ''): string[] {
+  return normalizeKey(key)
+    .split('/')
+    .filter(Boolean)
+    .map(decodeKeySegment)
+}
+
 function normalizeListPrefix(key = ''): string {
   if (!key) {
     return ''
   }
 
-  const normalized = normalizeKey(key)
+  const normalized = objectKeySegments(key).join('/')
   if (!normalized) {
     return ''
   }
 
   return /[:/\\]\s*$/.test(key) ? `${normalized}/` : normalized
+}
+
+function toStorageKey(objectKey: string): string {
+  return objectKey
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join(':')
 }
 
 function encodeRfc3986ExtraCharacters(value: string): string {
@@ -71,17 +100,14 @@ function encodeRfc3986(value: string): string {
 }
 
 function encodeObjectKey(key = ''): string {
-  const normalized = normalizeKey(key)
-  if (!normalized) {
-    return ''
-  }
-
-  return normalized
-    .split('/')
-    .filter(Boolean)
+  return objectKeySegments(key)
     .map((segment) => {
       if (segment === '.' || segment === '..') {
         throw createDriverError('S3 object keys cannot contain period-only path segments.')
+      }
+
+      if (/[/\\]/u.test(segment)) {
+        throw createDriverError('S3 object key segments cannot contain path separators.')
       }
 
       return encodeRfc3986(segment)
@@ -287,7 +313,7 @@ function parseListObjects(xml: string): string[] {
 
   return contents.map((content) => {
     const key = content.match(/<Key>([\s\S]+?)<\/Key>/)?.[1]
-    return key ? decodeXmlEntity(key) : undefined
+    return key ? toStorageKey(decodeXmlEntity(key)) : undefined
   }).filter((value): value is string => Boolean(value))
 }
 
@@ -354,6 +380,62 @@ function resolveDriverOptions(options: S3DriverOptions): ResolvedS3DriverOptions
   }
 }
 
+function requestTimeoutMs(body?: DriverValue): number {
+  const bytes = toBodyBytes(body)?.byteLength ?? 0
+  return REQUEST_TIMEOUT_MS + Math.ceil(bytes / MINIMUM_UPLOAD_BYTES_PER_SECOND) * 1000
+}
+
+async function withTimeout<TResult>(
+  operation: Promise<TResult>,
+  timeoutMs: number,
+  controller: AbortController,
+): Promise<TResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = createDriverError('Request timed out.')
+      controller.abort(error)
+      reject(error)
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([operation, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function withIdleTimeout(response: Response, controller: AbortController): Response {
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) return response
+  const reader = response.body.getReader()
+  const body = new ReadableStream<Uint8Array>({
+    async pull(streamController) {
+      const result = await withTimeout(reader.read(), RESPONSE_IDLE_TIMEOUT_MS, controller)
+      if (result.done) streamController.close()
+      else streamController.enqueue(result.value)
+    },
+    async cancel(reason) {
+      await reader.cancel(reason)
+    },
+  }, { highWaterMark: 0 })
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+}
+
+async function sendSignedRequest(
+  options: ResolvedS3DriverOptions,
+  method: string,
+  url: URL,
+  body?: DriverValue,
+  headers?: Headers | Readonly<Record<string, string>>,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const request = createSignedRequest(options, method, url, body, headers)
+  const controller = new AbortController()
+  const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal
+  const response = await withTimeout(fetch(request, { signal: requestSignal }), requestTimeoutMs(body), controller)
+  return withIdleTimeout(response, controller)
+}
+
 async function s3Fetch(
   options: ResolvedS3DriverOptions,
   method: string,
@@ -362,8 +444,7 @@ async function s3Fetch(
   headers?: Headers | Readonly<Record<string, string>>,
   signal?: AbortSignal,
 ): Promise<Response | null> {
-  const request = createSignedRequest(options, method, url, body, headers)
-  const response = await fetch(request, { signal })
+  const response = await sendSignedRequest(options, method, url, body, headers, signal)
 
   if (response.status === 404) {
     return null
@@ -445,14 +526,13 @@ async function conditionallyCompleteMultipartUpload(
   parts: readonly string[],
   overwrite: boolean,
 ): Promise<void> {
-  const request = createSignedRequest(
+  const response = await sendSignedRequest(
     options,
     'POST',
     multipartUrl(options, key, uploadId),
     completeMultipartBody(parts),
     overwrite ? undefined : { 'if-none-match': '*' },
   )
-  const response = await fetch(request)
   if (response.status === 409 || response.status === 412) throw destinationExistsError()
   if (!response.ok) throw createDriverError('Multipart upload completion failed.')
   const responseBody = await response.text()
@@ -466,16 +546,32 @@ async function conditionallyPutEmptyObject(
   key: string,
   overwrite: boolean,
 ): Promise<void> {
-  const request = createSignedRequest(
+  const response = await sendSignedRequest(
     options,
     'PUT',
     resolveObjectUrl(options, key),
     new Uint8Array(),
     overwrite ? undefined : { 'if-none-match': '*' },
   )
-  const response = await fetch(request)
+  await response.body?.cancel()
   if (response.status === 409 || response.status === 412) throw destinationExistsError()
   if (!response.ok) throw createDriverError('Stream upload failed.')
+}
+
+async function forEachConcurrently<TItem>(
+  items: readonly TItem[],
+  concurrency: number,
+  task: (item: TItem) => Promise<void>,
+): Promise<void> {
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const item = items[next]!
+      next += 1
+      await task(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
 }
 
 async function withMetadataFailure<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
@@ -548,7 +644,7 @@ export default function createS3Driver(input: S3DriverOptions) {
     async getItemStat(key: string, request: { readonly sampleBytes: number }): Promise<{ readonly size: number, readonly sample: Uint8Array } | null> {
       const options = getOptions()
       const url = resolveObjectUrl(options, key)
-      const response = await withMetadataFailure(() => fetch(createSignedRequest(options, 'GET', url, undefined, { range: `bytes=0-${request.sampleBytes - 1}` })))
+      const response = await withMetadataFailure(() => sendSignedRequest(options, 'GET', url, undefined, { range: `bytes=0-${request.sampleBytes - 1}` }))
       if (response.status === 404 || response.status === 416 || !response.ok) await response.body?.cancel()
       if (response.status === 404) return null
       if (response.status === 416) return await readEmptyObjectStat(options, url)
@@ -611,30 +707,27 @@ export default function createS3Driver(input: S3DriverOptions) {
         if (!start) throw createDriverError('Multipart upload initialization failed.')
         uploadId = parseUploadId(await start.text())
         const etags: string[] = []
-        let buffered: Uint8Array[] = []
+        let part: Uint8Array | undefined
         let bufferedBytes = 0
-        let targetPartBytes = multipartPartBytes(1)
 
         const flush = async (): Promise<void> => {
-          if (bufferedBytes === 0 || !uploadId) return
+          if (!part || bufferedBytes === 0 || !uploadId) return
           const partNumber = etags.length + 1
           if (partNumber > MAXIMUM_MULTIPART_PARTS) throw createDriverError('Multipart upload exceeds the S3 part limit.')
-          const part = concatenateChunks(buffered, bufferedBytes)
-          etags.push(await uploadMultipartPart(options, key, uploadId, partNumber, part))
-          buffered = []
+          etags.push(await uploadMultipartPart(options, key, uploadId, partNumber, part.subarray(0, bufferedBytes)))
+          part = undefined
           bufferedBytes = 0
-          targetPartBytes = multipartPartBytes(partNumber + 1)
         }
 
         for await (const sourceChunk of source) {
           let offset = 0
           while (offset < sourceChunk.byteLength) {
-            const available = targetPartBytes - bufferedBytes
-            const nextOffset = Math.min(offset + available, sourceChunk.byteLength)
-            buffered.push(new Uint8Array(sourceChunk.subarray(offset, nextOffset)))
+            part ??= new Uint8Array(multipartPartBytes(etags.length + 1))
+            const nextOffset = Math.min(offset + part.byteLength - bufferedBytes, sourceChunk.byteLength)
+            part.set(sourceChunk.subarray(offset, nextOffset), bufferedBytes)
             bufferedBytes += nextOffset - offset
             offset = nextOffset
-            if (bufferedBytes === targetPartBytes) await flush()
+            if (bufferedBytes === part.byteLength) await flush()
           }
         }
 
@@ -735,8 +828,13 @@ export default function createS3Driver(input: S3DriverOptions) {
       await s3Fetch(options, 'DELETE', resolveObjectUrl(options, key))
     },
     async clear(base?: string) {
-      const keys = await this.getKeys(base)
-      await Promise.all(keys.map((key: string) => this.removeItem(key)))
+      let cursor: string | null = null
+      do {
+        const page: { readonly nextCursor: string | null, readonly paths: string[] } = await this.getKeysPage(base, { cursor, limit: CLEAR_PAGE_KEYS })
+        for (const key of page.paths) encodeObjectKey(key)
+        await forEachConcurrently(page.paths, CLEAR_CONCURRENCY, key => this.removeItem(key))
+        cursor = page.nextCursor
+      } while (cursor)
     },
   }
 

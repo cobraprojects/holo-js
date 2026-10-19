@@ -311,9 +311,8 @@ function joinUrl(base: string, path: string): string {
 }
 
 function joinFilePath(base: string, path: string): string {
-  assertNoTraversal(path)
   const normalizedBase = base.replace(/\/+$/, '')
-  const normalizedPath = normalizeRelativePath(path)
+  const normalizedPath = normalizeKey(path).replaceAll(':', '/')
 
   if (!normalizedPath) {
     return normalizedBase

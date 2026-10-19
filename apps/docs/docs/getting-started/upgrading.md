@@ -20,6 +20,24 @@ Use the existing `withoutGlobalScope()` / `withoutGlobalScopes()` and `withTrash
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### S3 file names with special characters
+
+S3 disks now store files under their exact names. Before 0.4.0, a name with characters other than letters, digits, and `-_.!~*'()` was stored under its URL-encoded form: `reports/Q1 café.pdf` became the object `reports/Q1%20caf%C3%A9.pdf`, and its `url()` returned access denied or not found. After upgrading, Holo looks for `reports/Q1 café.pdf`, so rename those objects before you deploy. With the AWS CLI:
+
+```bash
+bucket=my-app-assets
+aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%')].Key" --output text \
+  | tr '\t' '\n' \
+  | while IFS= read -r key; do
+      [ -n "$key" ] && [ "$key" != None ] || continue
+      aws s3 mv "s3://$bucket/$key" "s3://$bucket/$(node -p 'decodeURIComponent(process.argv[1])' "$key")"
+    done
+```
+
+Files on local disks keep their names. For those, `path()` now returns the file Holo actually wrote, such as `<root>/reports/Q1%20caf%C3%A9.pdf`. If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys with URL-encoded names, the same as local disks.
+
+S3 requests now time out, and `writeStream()` uploads parts of at most 64 MB. See [S3 timeouts](/storage/s3#timeouts).
+
 ### Node.js 22.14 or newer
 
 Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.
