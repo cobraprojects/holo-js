@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSessionDriverInternals } from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenameSources: new Set(), renameAttempts: new Map() }))
+const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), renameAttempts: new Map() }))
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof FsPromises>()
