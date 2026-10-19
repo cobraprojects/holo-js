@@ -121,7 +121,7 @@ It listens on `worker.host` and `worker.port` from `config/broadcast.ts` (defaul
 APP_ENV=production npx holo config:cache
 ```
 
-This evaluates `config/*.ts` with your env values and writes the results, secrets included, to `.holo-js/generated/config-cache.json`. Holo reads that file in production instead of loading each config file or `.env`. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, still load at startup, so their env values come from the runtime environment. Run it on every deploy, after your environment variables are in place. Remove it with `npx holo config:clear`. Don't commit the cache file.
+This evaluates `config/*.ts` with your env values and writes the results, secrets included, to `.holo-js/generated/config-cache.json`. Holo still reads `.env` at startup to choose the environment. `APP_ENV` picks which cache is used, and in production Holo reads that file instead of loading each config file. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, still load at startup, so their env values come from the runtime environment. Run it on every deploy, after your environment variables are in place. Remove it with `npx holo config:clear`. Don't commit the cache file.
 
 ## Environment variables
 

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -2126,6 +2126,29 @@ export default defineConfig({
 
     await expect(clearConfigCache(root)).resolves.toBe(true)
     await expect(clearConfigCache(root)).resolves.toBe(false)
+  })
+
+  it.runIf(process.platform !== 'win32')('keeps the config cache readable by its owner only, including after an unchanged rewrite', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/services.ts'), `
+import { defineConfig } from ${packageEntry}
+
+export default defineConfig({
+  mailgun: {
+    secret: 'stable-secret',
+  },
+})
+`, 'utf8')
+
+    const cachePath = await writeConfigCache(root, { envName: 'development', processEnv: {} })
+    expect((await stat(cachePath)).mode & 0o777).toBe(0o600)
+
+    await writeConfigCache(root, { envName: 'development', processEnv: {} })
+    expect((await stat(cachePath)).mode & 0o777).toBe(0o600)
+
+    await chmod(cachePath, 0o644)
+    await writeConfigCache(root, { envName: 'development', processEnv: {} })
+    expect((await stat(cachePath)).mode & 0o777).toBe(0o600)
   })
 
   it('does not rewrite the config cache when the contents are unchanged', async () => {

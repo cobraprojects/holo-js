@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createJiti } from 'jiti'
@@ -93,14 +93,18 @@ async function importConfigModule(filePath: string): Promise<unknown> {
   return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${configImportNonce}`)
 }
 
-async function writeFileIfChanged(filePath: string, contents: string): Promise<void> {
+const CONFIG_CACHE_FILE_MODE = 0o600
+
+async function writeConfigCacheFile(filePath: string, contents: string): Promise<void> {
   const existing = await readFile(filePath, 'utf8').catch(() => undefined)
   if (existing === contents) {
+    await chmod(filePath, CONFIG_CACHE_FILE_MODE)
     return
   }
 
   await mkdir(dirname(filePath), { recursive: true })
-  await writeFile(filePath, contents, 'utf8')
+  await writeFile(filePath, contents, { encoding: 'utf8', mode: CONFIG_CACHE_FILE_MODE })
+  await chmod(filePath, CONFIG_CACHE_FILE_MODE)
 }
 
 function getConfigExtensionPriority(fileName: string): number {
@@ -346,7 +350,7 @@ export async function writeConfigCache(
       .getRegisteredNames()
       .filter(name => Object.hasOwn(rawConfig, name)),
   } satisfies ConfigCachePayload, null, 2)}\n`
-  await writeFileIfChanged(cachePath, contents)
+  await writeConfigCacheFile(cachePath, contents)
 
   return cachePath
 }

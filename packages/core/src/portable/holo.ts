@@ -749,6 +749,10 @@ function createCoreBroadcastPublisher(
       throw new Error(`[@holo-js/core] Broadcast connection "${input.connection}" cannot be published automatically.`)
     }
 
+    const missingCredentials = (['appId', 'key', 'secret'] as const).filter(field => !String(connection[field] ?? '').trim())
+    if (missingCredentials.length > 0) {
+      throw new Error(`[@holo-js/core] Broadcast connection "${input.connection}" is missing ${missingCredentials.join(', ')} and needs them to publish events. Set BROADCAST_APP_ID, BROADCAST_APP_KEY, and BROADCAST_APP_SECRET in .env, or run "holo install broadcast".`)
+    }
     const options = connection.options
     /* v8 ignore next -- tests only exercise http scheme */
     const protocol = options.scheme === 'http' ? 'http:' : 'https:'

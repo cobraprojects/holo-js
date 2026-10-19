@@ -49,7 +49,7 @@ export default defineBroadcastConfig({
 
 The `clientOptions.authEndpoint` block is only added when [auth](/auth/) is installed.
 
-`holo new` writes a generated app ID, key, and secret into `.env`. Existing apps get them from `holo install broadcast`. Holo has no built-in defaults for these values, so the connection fails to load until they're set.
+`holo new` writes a generated app ID, key, and secret into `.env`. Existing apps get them from `holo install broadcast`. Holo has no built-in defaults for these values. Your config still loads without them, but the worker, publishing, and channel authorization fail with an error that names the variables until they're set.
 
 ::: danger
 `BROADCAST_APP_SECRET` signs channel authorizations and publish requests. Never expose it to the browser, and don't share it between environments.

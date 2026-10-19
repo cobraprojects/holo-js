@@ -144,7 +144,7 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 ### Generated broadcast credentials and strict env values
 
-Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. A broadcast connection without them fails to load. `holo new` writes generated values into `.env`, and existing apps get them the same way:
+Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. Without them, your config still loads and `holo prepare` still runs. The broadcast worker, publishing, and channel authorization fail with an error that names the variables. `holo new` writes generated values into `.env`, and existing apps get them the same way:
 
 ```bash
 npx holo install broadcast

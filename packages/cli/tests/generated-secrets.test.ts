@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installBroadcastIntoProject } from '../src/project/scaffold'
-import { scaffoldProject } from '../src/project/scaffold/framework'
+import { renderScaffoldPackageJson, scaffoldProject } from '../src/project/scaffold/framework'
 
 const roots: string[] = []
 
@@ -90,6 +90,21 @@ describe('generated application secrets', () => {
     expect(readEnvValue(env, 'BROADCAST_APP_ID')).toMatch(/^[a-f0-9]{16}$/)
     expect(readEnvValue(env, 'BROADCAST_APP_KEY')).toMatch(/^[a-f0-9]{32}$/)
     expect(readEnvValue(env, 'BROADCAST_APP_SECRET')).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  it('backfills broadcast credentials in the scaffolded prepare script only for broadcast projects', () => {
+    const base = {
+      projectName: 'Secrets App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+    } as const
+    const withBroadcast = JSON.parse(renderScaffoldPackageJson({ ...base, optionalPackages: ['broadcast'] })) as { scripts: Record<string, string> }
+    const withoutBroadcast = JSON.parse(renderScaffoldPackageJson({ ...base, optionalPackages: [] })) as { scripts: Record<string, string> }
+
+    expect(withBroadcast.scripts.prepare).toBe('holo key:generate && holo install broadcast && holo prepare')
+    expect(withoutBroadcast.scripts.prepare).toBe('holo key:generate && holo prepare')
   })
 
   it('keeps the config cache out of version control', async () => {

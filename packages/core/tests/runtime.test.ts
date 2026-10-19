@@ -2423,6 +2423,36 @@ export default defineSessionConfig({
     await expect(fileStore.read(record.id)).resolves.toBeNull()
   })
 
+  it('fails publishing through a holo connection without credentials and names the missing variables', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
+
+export default defineBroadcastConfig({
+  default: 'main',
+  connections: {
+    main: {
+      driver: 'holo',
+      options: {
+        host: '127.0.0.1',
+        port: 8080,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`)
+    const runtime = await initializeHolo(root)
+    try {
+      await expect(broadcastRaw({ event: 'invoice.paid', channels: ['invoices'], payload: { invoiceId: 'unsigned' } }))
+        .rejects.toThrow(/BROADCAST_APP_ID.*BROADCAST_APP_KEY.*BROADCAST_APP_SECRET/)
+    } finally {
+      await runtime.shutdown()
+    }
+  })
+
   it('publishes through real workers, replaces stale generated bindings, and reports a closed native connection', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

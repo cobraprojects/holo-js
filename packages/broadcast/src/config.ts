@@ -218,6 +218,27 @@ function normalizeOptionalBroadcastString(
   return normalized
 }
 
+function normalizeBroadcastCredential(value: string | number | undefined): string {
+  return typeof value === 'undefined' ? '' : String(value).trim()
+}
+
+const BROADCAST_CREDENTIALS_HINT = 'Set BROADCAST_APP_ID, BROADCAST_APP_KEY, and BROADCAST_APP_SECRET in .env, or run "holo install broadcast".'
+
+export function requireBroadcastCredentials<TCredentials extends { readonly appId?: string | number, readonly key?: string, readonly secret?: string }>(
+  credentials: TCredentials,
+  purpose: string,
+  connection?: string,
+): { readonly [TField in keyof TCredentials]-?: NonNullable<TCredentials[TField]> } {
+  const missing = (Object.keys(credentials) as Array<keyof TCredentials & string>)
+    .filter(field => !String(credentials[field] ?? '').trim())
+  if (missing.length > 0) {
+    const subject = typeof connection === 'string' ? `Broadcast connection "${connection}"` : 'Broadcast'
+    throw new Error(`[@holo-js/broadcast] ${subject} is missing ${missing.join(', ')} and needs ${missing.length === 1 ? 'it' : 'them'} to ${purpose}. ${BROADCAST_CREDENTIALS_HINT}`)
+  }
+
+  return credentials as { readonly [TField in keyof TCredentials]-?: NonNullable<TCredentials[TField]> }
+}
+
 function normalizeBroadcastPort(
   value: string | number | undefined,
   fallback: number,
@@ -358,12 +379,9 @@ function normalizeBroadcastConnection(
     return Object.freeze({
       name: normalizedName,
       driver: 'holo' as const,
-      key: normalizeOptionalBroadcastString((connection as { key?: string }).key, `Broadcast connection "${name}" key`)
-        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a key.`) })(),
-      secret: normalizeOptionalBroadcastString((connection as { secret?: string }).secret, `Broadcast connection "${name}" secret`)
-        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a secret.`) })(),
-      appId: normalizeOptionalBroadcastString((connection as { appId?: string | number }).appId, `Broadcast connection "${name}" appId`)
-        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define an appId.`) })(),
+      key: normalizeBroadcastCredential((connection as { key?: string }).key),
+      secret: normalizeBroadcastCredential((connection as { secret?: string }).secret),
+      appId: normalizeBroadcastCredential((connection as { appId?: string | number }).appId),
       options: normalizeBroadcastConnectionOptions(connection.options, DEFAULT_BROADCAST_HOST, `Broadcast connection "${name}" options`),
       clientOptions,
     })
@@ -375,12 +393,9 @@ function normalizeBroadcastConnection(
     return Object.freeze({
       name: normalizedName,
       driver: 'pusher' as const,
-      key: normalizeOptionalBroadcastString((connection as { key?: string }).key, `Broadcast connection "${name}" key`)
-        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a key.`) })(),
-      secret: normalizeOptionalBroadcastString((connection as { secret?: string }).secret, `Broadcast connection "${name}" secret`)
-        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a secret.`) })(),
-      appId: normalizeOptionalBroadcastString((connection as { appId?: string | number }).appId, `Broadcast connection "${name}" appId`)
-        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define an appId.`) })(),
+      key: normalizeBroadcastCredential((connection as { key?: string }).key),
+      secret: normalizeBroadcastCredential((connection as { secret?: string }).secret),
+      appId: normalizeBroadcastCredential((connection as { appId?: string | number }).appId),
       options: normalizeBroadcastConnectionOptions(
         {
           ...connection.options,
