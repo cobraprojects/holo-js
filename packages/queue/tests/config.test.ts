@@ -583,6 +583,26 @@ describe('@holo-js/queue config', () => {
       },
     }, sharedRedisConfig)).toThrow('queue connection "redis" retryAfter must be greater than or equal to 1.')
 
+    expect(normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+          retryAfter: 2_147_483,
+        },
+      },
+    }, sharedRedisConfig).connections.redis).toMatchObject({ retryAfter: 2_147_483 })
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+          retryAfter: 2_147_484,
+        },
+      },
+    }, sharedRedisConfig)).toThrow('queue connection "redis" retryAfter must be less than or equal to 2147483.')
+
     expect(() => normalizeQueueConfig({
       connections: {
         redis: {
