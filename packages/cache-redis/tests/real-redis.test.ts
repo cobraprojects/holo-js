@@ -25,7 +25,6 @@ describe('@holo-js/cache-redis real redis integration', () => {
         ['redis', createRedisCacheDriver({
           name: 'redis',
           connectionName: 'cache',
-          prefix,
           redis: {
             host: '127.0.0.1',
             port: 6379,

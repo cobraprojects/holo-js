@@ -18,7 +18,6 @@ import {
 export type RedisCacheDriverOptions = {
   readonly name: string
   readonly connectionName: string
-  readonly prefix: string
   readonly redis: NormalizedHoloRedisConnectionConfig
 }
 

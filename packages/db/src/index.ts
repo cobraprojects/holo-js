@@ -34,6 +34,7 @@ export {
   resetDatabaseQueryCacheBridge,
   queryCacheInternals,
 } from './cache'
+export { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 export {
   DatabaseError,
   ConfigurationError,

@@ -5,7 +5,7 @@ export default defineAppConfig({
   key: env('APP_KEY'),
   url: env('APP_URL', 'http://localhost:5173'),
   env: env('APP_ENV', 'production'),
-  debug: env('APP_DEBUG', true),
+  debug: env('APP_DEBUG', false),
   paths: {
     models: 'server/models',
     migrations: 'server/db/migrations',

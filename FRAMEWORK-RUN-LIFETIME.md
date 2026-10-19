@@ -8,7 +8,7 @@ The GitHub issue is the implementation spec. Implementation has not begun.
 
 Deepen framework run lifetime ownership for `holo dev` and `holo start`.
 Preserve their existing exported interfaces and framework runner behavior.
-Build and queue workers remain outside this change.
+Build workers remain outside this change. `queue:listen` reuses this ownership under #130.
 
 ## Ownership
 

@@ -129,7 +129,6 @@ export function resolveConfiguredDriver(
       return cacheResolvedDriver(facade, driverName, createFileCacheDriver({
         name: fileConfig.name,
         path: fileConfig.path,
-        prefix: fileConfig.prefix,
       }))
     }
     case 'memory': {
@@ -148,7 +147,6 @@ export function resolveConfiguredDriver(
       return cacheResolvedDriver(facade, driverName, createRedisCacheDriver({
         name: redisConfig.name,
         connectionName: connection.name,
-        prefix: redisConfig.prefix,
         redis: connection,
       }))
     }
@@ -163,7 +161,6 @@ export function resolveConfiguredDriver(
         connectionName: databaseConfig.connection,
         table: databaseConfig.table,
         lockTable: databaseConfig.lockTable,
-        prefix: databaseConfig.prefix,
         connection,
       }))
     }

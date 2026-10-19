@@ -51,9 +51,27 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+### Lifecycle, factories, and seeders
+
+Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.
+
+`save()` on a model with no changes now fires `saving` and `saved`, as in Laravel, and writes nothing. Clean saves no longer write `updated_at` or fire `updating` and `updated`; before, a timestamped model's clean save did both. An `updating` handler that reverts every change fires `saved` without an `UPDATE`. After a save, `wasChanged()` and `getChanges()` report what the save wrote, so edits a `saved` handler makes don't appear there. A save that creates a record reports no changes, as in Laravel. Lifecycle handlers now receive the model you called `save()` on rather than a copy, and after `save()` returns the model is clean even when a `saved` handler changed an attribute: that change is not written. If your `saving` or `saved` handler assumed a clean save runs no code, guard it on `isDirty()`.
+
+Models loaded with `withCount()` or `withExists()` save without error, and their computed values are never written. Changes made in place to JSON and date attributes, such as pushing onto a JSON array, are detected and saved.
+
+Factories and `holo seed` now run without mass-assignment guards, as in Laravel. Remove `unguarded()` wrappers around factories and seeders; code outside them still follows the guards.
+
 ### Error reporting
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
+
+### Unexpected SvelteKit errors
+
+Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).
+
+### Debug defaults to false
+
+`debug` in `config/app.ts` now defaults to `false` when `APP_DEBUG` is unset, as in Laravel. Before, it defaulted to `true`, so apps without `APP_DEBUG` showed the messages of unexpected errors in SvelteKit responses. Set `APP_DEBUG=true` in your local `.env` file to keep those messages during development. Apps that set `APP_DEBUG` already, including the scaffold's `.env`, keep their value. SvelteKit error responses and Nuxt's `useHoloDebug()` follow the same setting. Next.js doesn't read it. See [Configuration](/reference/config#app-ts).
 
 ### Broadcast subscription errors and channel authorization
 
@@ -78,6 +96,12 @@ An interrupted run counts as an attempt on both the `redis` and `database` drive
 A `redis` or `database` connection's `retryAfter` must now be at least `1`. Before, `0` was accepted; now the config fails to load with `retryAfter must be greater than or equal to 1.` If you set it to `0`, remove it to use the default `90`, or set another whole number of seconds.
 
 A job whose name isn't registered now fails into the failed jobs table and the worker keeps going. Before, the worker stopped with an error and left the job reserved. If you rename or delete jobs, drain their queued jobs first or retry them later with `npx holo queue:retry`. See [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly).
+
+### queue:listen waits for its worker
+
+`queue:listen` now passes `Ctrl+C`, `SIGINT`, and `SIGTERM` to its worker and exits only after the worker has closed, so stopping `queue:listen` no longer leaves a worker running. A change that restarts the worker waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error instead of starting a replacement. Before, it started one.
+
+If you run `queue:listen` under a process manager, check that it stops when the manager sends `SIGTERM`. Your code doesn't change. See [Develop with queue:listen](/queue/workers#develop-with-queue-listen).
 
 ### Sensitive input in validation failures
 
@@ -303,6 +327,32 @@ For a separate frontend using `useForm({ csrf: { endpoint } })`, your token endp
 Social sign-in no longer signs in as an existing user whose email isn't verified. When a provider's verified email matches such a user, `callback()` from `@holo-js/auth-social` throws `SocialAuthConflictError`. Catch it in your callback routes and ask the user to sign in with their password and verify their email; their next social sign-in links the accounts. See [Link an existing account](/auth/social-login#link-an-existing-account).
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
+
+### Cache flushes clear the whole store
+
+`cache.flush()` and `npx holo cache:clear` now delete everything in the store, as Laravel does, and a key `prefix` no longer limits them. A Redis store flushes its whole Redis database, a `database` store empties its cache table, and a `file` store empties its folder. If your Redis cache shares a database with queues or sessions, move it to its own database before you flush, or the flush deletes that data too.
+
+Add a `cache` connection to `config/redis.ts` on a database that holds nothing else, and point the Redis store at it. The scaffold uses database `1`:
+
+```ts [config/redis.ts]
+cache: {
+  url: env('REDIS_URL') || undefined,
+  host: env('REDIS_HOST', '127.0.0.1'),
+  port: env('REDIS_PORT', 6379),
+  username: env('REDIS_USERNAME'),
+  password: env('REDIS_PASSWORD'),
+  db: env('REDIS_CACHE_DB', 1),
+},
+```
+
+```ts [config/cache.ts]
+redis: {
+  driver: 'redis',
+  connection: 'cache',
+}
+```
+
+Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
 
 ## Earlier 0.3.x releases
 

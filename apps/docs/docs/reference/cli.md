@@ -595,6 +595,8 @@ Accepts the same flags as `queue:work` except `--once` and `--stop-when-empty`.
 npx holo queue:listen --connection redis --queue media
 ```
 
+`Ctrl+C`, `SIGINT`, and `SIGTERM` stop the worker after its current job and then stop `queue:listen`. A restart waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error and doesn't start a replacement. On Windows the worker's process tree is ended at once, so a job in progress is interrupted and retried later.
+
 ### queue:restart
 
 Tell every running worker to stop after its current job. Your process manager (systemd, PM2, Docker, and so on) then starts fresh workers with your new code. `queue:listen` restarts its worker automatically.
@@ -680,7 +682,7 @@ npx holo queue:failed-table
 
 ### cache:clear
 
-Remove every item from a [cache](/cache/) store.
+Remove every item from a [cache](/cache/) store, whatever its key prefix. For a Redis store this runs `FLUSHDB` on its database; see [Cache drivers](/cache/drivers#redis) before pointing a store at shared data.
 
 ```bash
 npx holo cache:clear [--driver <name>]

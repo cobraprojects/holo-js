@@ -1,2 +1,5 @@
+# The Windows fs loader is loaded by URL through module.register(), so no static import reaches it.
+entry = ["packages/session/tests/support/windows-fs-loader/fs.mjs"]
+
 [resolve]
 conditions = ["@holo-js/source"]

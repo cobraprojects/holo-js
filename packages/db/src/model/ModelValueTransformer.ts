@@ -158,11 +158,18 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return nextValues
   }
 
-  normalizeForStorage(key: string, value: unknown): unknown {
+  applyMutator(key: string, value: unknown): unknown {
     const mutator = this.definition.mutators[key]
-    const mutated = mutator ? mutator(value) : value
+    return mutator ? mutator(value) : value
+  }
+
+  normalizeForStorage(key: string, value: unknown): unknown {
+    return this.castForStorage(key, this.applyMutator(key, value))
+  }
+
+  castForStorage(key: string, value: unknown): unknown {
     const cast = this.definition.casts[key]
-    const casted = this.isNativeJsonCast(key, cast) ? mutated : this.applyCastSet(cast, mutated)
+    const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
   }
 
