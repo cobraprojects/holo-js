@@ -125,10 +125,11 @@ describe('@holo-js/config', () => {
     expect(resolveEnvironmentFileOrder('test')).toEqual(['.env', '.env.test'])
   })
 
-  it('normalizes invalid app environment values', () => {
+  it('normalizes app environment values', () => {
     expect(normalizeAppEnv('test', 'development')).toBe('test')
-    expect(normalizeAppEnv('staging', 'development')).toBe('development')
-    expect(normalizeAppEnv('staging')).toBe('production')
+    expect(normalizeAppEnv(undefined, 'development')).toBe('development')
+    expect(normalizeAppEnv(undefined)).toBe('production')
+    expect(() => normalizeAppEnv('staging')).toThrow('Invalid application environment "staging".')
   })
 
   it('rejects malformed cache, redis, and queue defaults with precise validation errors', () => {

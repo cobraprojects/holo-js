@@ -8,5 +8,7 @@ Recorded departures:
 - Path segments that reach object prototypes are rejected, because PHP arrays have no prototype chain.
 - Request, subscription, and capability state must be isolated per request or subscription, because a Node process outlives requests while PHP shares nothing between them.
 - A malformed typed environment value fails instead of returning the raw string, because a typed fallback cannot represent Laravel's string result.
+- `APP_ENV` must be `development`, `production`, or `test`, and any other value fails, because Holo's environment is a typed value that selects a fixed env-file order and production safeguards; an unknown name would otherwise fall back silently.
+- `APP_ENV` in `.env` also selects the environment's env files, loaded on top of `.env`, because Node has no process-wide `putenv` step before the framework boots, so `.env` is the only file an operator can rely on to name the environment for every Holo entry point.
 - Holo encrypts only the cookies it owns (session, remember, and `XSRF-TOKEN`), because it cannot intercept cookies written through each framework's native cookie interfaces as Laravel's `EncryptCookies` does.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.

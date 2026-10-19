@@ -102,7 +102,7 @@ export async function loadEnvironment(
   const processEnv = options.processEnv ?? process.env
   const baseValues = await readEnvFile(join(cwd, '.env'))
   const envName = resolveAppEnvironment({
-    APP_ENV: options.envName || processEnv.APP_ENV || baseValues?.APP_ENV,
+    APP_ENV: options.envName ?? processEnv.APP_ENV ?? baseValues?.APP_ENV,
   })
   const loadedFiles: string[] = []
   const warnings: string[] = []
@@ -136,9 +136,7 @@ export async function loadEnvironment(
     }
   }
 
-  if (options.envName) {
-    values.APP_ENV = envName
-  }
+  values.APP_ENV = envName
 
   return {
     name: envName,

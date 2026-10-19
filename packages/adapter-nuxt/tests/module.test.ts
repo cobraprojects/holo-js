@@ -189,7 +189,7 @@ export default defineDatabaseConfig({
 
     expect((nuxt.options.runtimeConfig.holo as Record<string, unknown>)).toMatchObject({
       appUrl: 'http://localhost:3000',
-      appEnv: 'development',
+      appEnv: 'production',
       appDebug: true,
     })
     expect(nuxt.options.runtimeConfig.db).toEqual({

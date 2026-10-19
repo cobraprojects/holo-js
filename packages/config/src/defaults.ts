@@ -34,7 +34,7 @@ export function normalizeAppEnv(value: string | undefined, fallback: HoloAppEnv 
     return value
   }
 
-  return fallback
+  throw new Error(`Invalid application environment "${value}". Use development, production, or test.`)
 }
 
 export function normalizeAppConfig(

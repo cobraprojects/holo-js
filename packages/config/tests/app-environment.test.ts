@@ -99,6 +99,39 @@ describe('application environment', () => {
     expect(environment.values.APP_NAME).toBe('Test')
   })
 
+  it('keeps APP_ENV equal to the resolved environment when a later env file sets it', async () => {
+    const root = await createProject({
+      '.env': 'APP_ENV=development\n',
+      '.env.local': 'APP_ENV=test\n',
+    })
+
+    const environment = await loadEnvironment({ cwd: root, processEnv: {} })
+
+    expect(environment.name).toBe('development')
+    expect(environment.values.APP_ENV).toBe('development')
+  })
+
+  it('lets an empty shell APP_ENV override .env', async () => {
+    const root = await createProject({ '.env': 'APP_ENV=development\n' })
+
+    const environment = await loadEnvironment({ cwd: root, processEnv: { APP_ENV: '' } })
+
+    expect(environment.name).toBe('production')
+  })
+
+  it('rejects an unknown app.env in config', async () => {
+    const root = await createProject({ '.env': 'APP_ENV=development\n' })
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({ env: 'staging' as 'production' })
+`, 'utf8')
+
+    await expect(loadConfigDirectory(root, { processEnv: {} })).rejects.toThrow(
+      'Invalid application environment "staging". Use development, production, or test.',
+    )
+  })
+
   it('rejects an unknown APP_ENV in .env', async () => {
     const root = await createProject({ '.env': 'APP_ENV=local\n' })
 

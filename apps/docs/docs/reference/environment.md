@@ -44,7 +44,7 @@ These are read by Holo directly, not through config files.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `APP_ENV` | `production` | Picks the environment and which `.env` files load. See [Env files and loading order](#env-files-and-loading-order). |
-| `NODE_ENV` | none | Not used to pick the environment. `holo start` sets it to `production` for the framework server. |
+| `NODE_ENV` | none | Not used to pick the environment. `holo start` sets it to `production` for the framework server. When it is `production`, the running app reads the [config cache](/reference/cli#config-cache) if one exists. |
 | `PORT` | framework default | Port for `holo dev` and `holo start` when you don't pass `--port`. Must be a whole number up to 65535. |
 
 ## App

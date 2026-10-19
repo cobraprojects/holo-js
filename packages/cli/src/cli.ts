@@ -383,6 +383,10 @@ async function cleanupDirectorySnapshot(snapshot: DirectorySnapshot): Promise<vo
   }
 }
 
+async function resolveApplicationEnvironment(projectRoot: string): Promise<string> {
+  return (await loadEnvironment({ cwd: projectRoot, processEnv: process.env })).name
+}
+
 export function createInternalCommands(
   context: InternalCommandContext,
   runtimeExecutor?: RuntimeExecutor,
@@ -2045,7 +2049,7 @@ export function createInternalCommands(
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
             force: commandContext.flags.force === true,
-            environment: (await loadEnvironment({ cwd: context.projectRoot, processEnv: process.env })).name,
+            environment: await resolveApplicationEnvironment(context.projectRoot),
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No seeders were executed.')
@@ -2110,7 +2114,7 @@ export function createInternalCommands(
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
             force: commandContext.flags.force === true,
-            environment: (await loadEnvironment({ cwd: context.projectRoot, processEnv: process.env })).name,
+            environment: await resolveApplicationEnvironment(context.projectRoot),
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No seeders were executed.')
