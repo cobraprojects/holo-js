@@ -43,6 +43,11 @@ export interface SessionStoreTakeResult {
   readonly value?: unknown
 }
 
+export interface SessionStoreSetDataResult {
+  readonly found: boolean
+  readonly value?: unknown
+}
+
 export interface CookieSerializeOptions {
   readonly path?: string
   readonly domain?: string
@@ -61,6 +66,8 @@ export interface SessionStore {
   rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
+  setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>
+  sweepExpired?(now: Date): Promise<number>
 }
 
 export interface SessionRuntimeBindings {
@@ -78,6 +85,7 @@ export interface SessionRuntimeFacade {
   touch(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null>
   flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>
   take<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined>
+  setDataIfAbsent(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<SessionStoreSetDataResult>
   cookie(name: string, value: string, options?: CookieSerializeOptions): string
   sessionCookie(value: string, options?: CookieSerializeOptions): string
   rememberMeCookie(value: string, options?: CookieSerializeOptions): string

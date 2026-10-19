@@ -64,7 +64,10 @@ import {
   rateLimit,
   getSecurityRuntimeBindings,
   resetSecurityRuntime,
+  csrf,
+  SecurityCsrfError,
 } from '@holo-js/security'
+import { csrfProtection as svelteKitCsrfProtection } from '@holo-js/security/sveltekit/server'
 import type * as PortableHoloModule from '../src/portable/holo'
 import { createHoloAdapterProject, createHoloFrameworkAdapter, initializeHoloAdapterProject } from '../src'
 import {
@@ -2304,6 +2307,75 @@ export default defineSecurityConfig({
     expect(secondBindings?.config.rateLimit.driver).toBe('memory')
     expect(secondBindings?.rateLimitStore).toBeDefined()
     expect(secondBindings?.rateLimitStore).not.toBe(firstStore)
+  })
+
+  it('stores the CSRF token in the session and starts a session for new browsers', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false, processEnv: process.env }))
+    const visit = async (request: Request) => await svelteKitCsrfProtection()({
+      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
+      resolve: () => new Response('page'),
+    })
+
+    const firstVisit = new Request('https://runtime.test/form')
+    const firstResponse = await visit(firstVisit)
+    const sessionCookie = firstResponse.headers.getSetCookie().find(cookie => cookie.startsWith('holo_session='))
+    expect(sessionCookie).toContain('HttpOnly')
+    const cookieHeader = sessionCookie!.split(';', 1)[0]!
+    const sessionId = getSessionRuntime().decryptCookie('holo_session', decodeURIComponent(cookieHeader.slice('holo_session='.length)))
+    const token = await csrf.token(firstVisit)
+    expect((await getSessionRuntime().read(sessionId!))?.data._token).toBe(token)
+
+    const secondResponse = await visit(new Request('https://runtime.test/form', { headers: { cookie: cookieHeader } }))
+    expect(secondResponse.headers.getSetCookie().some(cookie => cookie.startsWith('holo_session='))).toBe(false)
+    await expect(csrf.verify(new Request('https://runtime.test/form', {
+      method: 'POST',
+      headers: { cookie: cookieHeader, 'X-CSRF-TOKEN': token },
+    }))).resolves.toBeUndefined()
+    await expect(csrf.verify(new Request('https://runtime.test/form', {
+      method: 'POST',
+      headers: { 'X-CSRF-TOKEN': token },
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
+  })
+
+  it('keeps existing session data and remembered sessions when storing the CSRF token', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+
+export default defineSessionConfig({
+  driver: 'file',
+  stores: { file: { driver: 'file', path: './storage/framework/sessions' } },
+})
+`, 'utf8')
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false, processEnv: process.env }))
+    const sessions = getSessionRuntime()
+    const existing = await sessions.create({ data: { 'auth.web': 'user-1' } })
+    const sessionCookie = sessions.sessionCookie(existing.id).split(';', 1)[0]!
+    const request = new Request('https://runtime.test/form', { headers: { cookie: sessionCookie } })
+
+    const response = await svelteKitCsrfProtection()({
+      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
+      resolve: () => new Response('page'),
+    })
+
+    expect(response.headers.getSetCookie().some(cookie => cookie.startsWith('holo_session='))).toBe(false)
+    expect((await sessions.read(existing.id))?.data).toEqual({ 'auth.web': 'user-1', _token: await csrf.token(request) })
+
+    const remembered = await sessions.create({ data: { 'auth.web': 'user-2' } })
+    const rememberCookie = sessions.rememberMeCookie(remembered.id).split(';', 1)[0]!
+    const rememberedRequest = new Request('https://runtime.test/form', { headers: { cookie: rememberCookie } })
+    const rememberedResponse = await svelteKitCsrfProtection()({
+      event: { url: new URL(rememberedRequest.url), request: rememberedRequest, cookies: { get: () => undefined, set: () => undefined } },
+      resolve: () => new Response('page'),
+    })
+
+    expect(rememberedResponse.headers.getSetCookie().some(cookie => cookie.startsWith('holo_session='))).toBe(true)
+    expect((await sessions.read(remembered.id))?.data._token).toBeUndefined()
   })
 
   it('clears security runtime bindings when the security config file is removed', async () => {

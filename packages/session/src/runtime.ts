@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { decryptCookieValue, encryptCookieValue } from '@holo-js/kernel'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type {
   CookieSerializeOptions,
   CreateSessionInput,
@@ -9,6 +10,7 @@ import type {
   SessionRuntimeBindings,
   SessionRuntimeFacade,
   SessionStore,
+  SessionStoreSetDataResult,
   TouchSessionOptions,
 } from './contracts'
 
@@ -303,7 +305,22 @@ export async function createSession(input: CreateSessionInput = {}): Promise<Ses
   })
 
   await store.write(record)
+  await collectExpiredSessions(store)
   return record
+}
+
+const SESSION_LOTTERY_HITS = 2
+const SESSION_LOTTERY_ODDS = 100
+let sessionLotteryRandom: () => number = Math.random
+
+async function collectExpiredSessions(store: SessionStore): Promise<void> {
+  if (!store.sweepExpired || sessionLotteryRandom() * SESSION_LOTTERY_ODDS >= SESSION_LOTTERY_HITS) return
+
+  try {
+    await store.sweepExpired(now())
+  } catch (error) {
+    reportError(error, { capability: 'session', operation: 'collectExpired' })
+  }
 }
 
 export async function writeSession(record: SessionRecord): Promise<SessionRecord> {
@@ -318,6 +335,7 @@ export async function writeSession(record: SessionRecord): Promise<SessionRecord
   })
 
   await store.write(nextRecord)
+  await collectExpiredSessions(store)
   return nextRecord
 }
 
@@ -340,10 +358,17 @@ export async function touchSession(sessionId: string, options?: TouchSessionOpti
     expiresAt: idleExpiry.getTime() < absoluteExpiry.getTime() ? idleExpiry : absoluteExpiry,
   })
   await store.write(touched)
+  await collectExpiredSessions(store)
   return touched
 }
 
 export async function rotateSession(sessionId: string, options: RotateSessionOptions = {}): Promise<SessionRecord> {
+  const rotated = await rotateSessionRecord(sessionId, options)
+  await collectExpiredSessions(getStore(rotated.store).store)
+  return rotated
+}
+
+async function rotateSessionRecord(sessionId: string, options: RotateSessionOptions): Promise<SessionRecord> {
   const located = await locateRecord(sessionId)
   if (!located) {
     throw new Error(`[@holo-js/session] Session "${sessionId}" was not found.`)
@@ -399,6 +424,20 @@ export async function flashSession(sessionId: string, key: string, value: unknow
   const { name, store } = getStore(options?.store)
   if (!store.flash) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic flash operations.`)
   await store.flash(sessionId, normalizeFlashKey(key), normalizeFlashValue(value))
+  await collectExpiredSessions(store)
+}
+
+async function setSessionDataIfAbsent(
+  sessionId: string,
+  key: string,
+  value: unknown,
+  options?: ReadSessionOptions,
+): Promise<SessionStoreSetDataResult> {
+  const { name, store } = getStore(options?.store)
+  if (!store.setDataIfAbsent) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic data writes.`)
+  const result = await store.setDataIfAbsent(sessionId, key, value)
+  if (result.found) await collectExpiredSessions(store)
+  return result
 }
 
 export async function takeSession<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined> {
@@ -406,6 +445,7 @@ export async function takeSession<TValue = unknown>(sessionId: string, key: stri
   if (!store.take) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic flash operations.`)
   const result = await store.take(sessionId, normalizeFlashKey(key))
   if (!result.found) return undefined
+  await collectExpiredSessions(store)
   return normalizeFlashValue(result.value) as TValue
 }
 
@@ -464,6 +504,7 @@ export function getSessionRuntime(): SessionRuntimeFacade {
     touch: touchSession,
     flash: flashSession,
     take: takeSession,
+    setDataIfAbsent: setSessionDataIfAbsent,
     cookie,
     sessionCookie,
     rememberMeCookie,
@@ -476,6 +517,9 @@ export function resetSessionRuntime(): void {
 }
 
 export const sessionRuntimeInternals = {
+  setSessionLotteryRandom(random: (() => number) | undefined): void {
+    sessionLotteryRandom = random ?? Math.random
+  },
   createSessionId,
   getSessionRuntimeBindings,
   isExpired,

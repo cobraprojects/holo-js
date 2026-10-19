@@ -43,6 +43,7 @@ export type {
   SessionRuntimeBindings,
   SessionRuntimeFacade,
   SessionStore,
+  SessionStoreSetDataResult,
   SessionStoreTakeResult,
   TouchSessionOptions,
 } from './contracts'

@@ -720,8 +720,11 @@ async function assertAuthSecurity(journey) {
   const page = await fetch(origin)
   const tokenCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN='))
   assert.ok(tokenCookie, 'Generated app must issue its CSRF cookie on GET')
-  const cookie = tokenCookie.split(';')[0]
-  const token = decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
+  const guestSessionCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('holo_session='))
+  assert.ok(guestSessionCookie, 'Generated app must start a session that stores the CSRF token on GET')
+  const xsrfCookie = tokenCookie.split(';')[0]
+  const cookie = `${xsrfCookie}; ${guestSessionCookie.split(';')[0]}`
+  const token = decodeURIComponent(xsrfCookie.slice('XSRF-TOKEN='.length))
   const credentials = { email: 'csrf-journey@example.com', password: 'csrf-journey-password' }
   const headers = { Cookie: cookie, Origin: origin, 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }
   const registration = await fetch(route('register'), { method: 'POST', headers })
@@ -729,6 +732,11 @@ async function assertAuthSecurity(journey) {
 
   const missingCookie = await fetch(route('login'), { method: 'POST', headers: { Origin: origin } })
   assert.equal(missingCookie.status, 419, 'Login without a CSRF cookie must be rejected')
+  const plantedToken = await fetch(route('login'), {
+    method: 'POST',
+    headers: { Cookie: xsrfCookie, Origin: origin, 'X-CSRF-TOKEN': token },
+  })
+  assert.equal(plantedToken.status, 419, 'A token without its session must be rejected')
   const missingToken = await fetch(route('login'), {
     method: 'POST',
     headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' },
@@ -749,7 +757,7 @@ async function assertAuthSecurity(journey) {
   const sessionCookie = login.headers.getSetCookie().find(cookie => cookie.startsWith('holo_session='))
   assert.ok(sessionCookie, 'Login must issue its session cookie')
   const currentUser = await fetch(`${origin}/api/auth/user`, {
-    headers: { Cookie: `${cookie}; ${sessionCookie.split(';')[0]}` },
+    headers: { Cookie: `${xsrfCookie}; ${sessionCookie.split(';')[0]}` },
   })
   assert.equal(currentUser.status, 200, await currentUser.clone().text())
   const session = await currentUser.json()
@@ -758,10 +766,10 @@ async function assertAuthSecurity(journey) {
   assert.match(sessionCookie, /HttpOnly/i)
   assert.match(sessionCookie, /SameSite=Lax/i)
   const tamperedSession = await fetch(`${origin}/api/auth/user`, {
-    headers: { Cookie: `${cookie}; ${sessionCookie.split(';')[0]}tampered` },
+    headers: { Cookie: `${xsrfCookie}; ${sessionCookie.split(';')[0]}tampered` },
   })
   assert.equal((await tamperedSession.json()).authenticated, false, 'A tampered session cookie must not authenticate')
-  const authenticatedHeaders = { ...headers, Cookie: `${cookie}; ${sessionCookie.split(';')[0]}` }
+  const authenticatedHeaders = { ...headers, Cookie: `${xsrfCookie}; ${sessionCookie.split(';')[0]}` }
   const relogin = await fetch(route('login'), { method: 'POST', headers: authenticatedHeaders, body: JSON.stringify(credentials) })
   assert.equal(relogin.status, 200)
   const rotatedCookie = relogin.headers.getSetCookie().find(value => value.startsWith('holo_session='))
@@ -770,11 +778,11 @@ async function assertAuthSecurity(journey) {
   const oldSession = await fetch(`${origin}/api/auth/user`, { headers: authenticatedHeaders })
   assert.equal((await oldSession.json()).authenticated, false, 'Rotated session must not be reusable')
   const logout = await fetch(route('logout'), {
-    method: 'POST', headers: { ...headers, Cookie: `${cookie}; ${rotatedCookie.split(';')[0]}` },
+    method: 'POST', headers: { ...headers, Cookie: `${xsrfCookie}; ${rotatedCookie.split(';')[0]}` },
   })
   assert.equal(logout.status, 200)
   const revoked = await fetch(`${origin}/api/auth/user`, {
-    headers: { Cookie: `${cookie}; ${rotatedCookie.split(';')[0]}` },
+    headers: { Cookie: `${xsrfCookie}; ${rotatedCookie.split(';')[0]}` },
   })
   assert.equal((await revoked.json()).authenticated, false, 'Logout must revoke the stored session')
   const allowedOrigin = 'http://localhost:3000'
