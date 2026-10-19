@@ -9,6 +9,8 @@ Recorded departures:
 - Request, subscription, and capability state must be isolated per request or subscription, because a Node process outlives requests while PHP shares nothing between them.
 - A malformed typed environment value fails instead of returning the raw string, because a typed fallback cannot represent Laravel's string result.
 - Holo encrypts only the cookies it owns (session, remember, and `XSRF-TOKEN`), because it cannot intercept cookies written through each framework's native cookie interfaces as Laravel's `EncryptCookies` does.
+- Password and sensitive fields are stripped from validation failures at every depth, including arrays, because Holo echoes submitted values in 422 response bodies and exception payloads, while Laravel flashes input only into the server-side session.
+- The Nuxt form-failure cookie carries errors but no submitted values, because it is a client-readable cookie rather than Laravel's server-side session.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.
 - With `trustedProxies: '*'`, forwarded headers are trusted when the framework does not expose the connection address, and with a list of proxies they are ignored, because Next.js gives Holo no equivalent of PHP's always-present `REMOTE_ADDR`.
 - A malformed trusted `X-Forwarded-Port` or `X-Forwarded-Prefix` is answered with `400 Bad Request`, as a malformed forwarded host is in Laravel, because a URL object cannot hold the non-numeric port PHP casts to an integer, and Holo places the prefix in the public request path, where a prefix such as `//host` would read as another origin.

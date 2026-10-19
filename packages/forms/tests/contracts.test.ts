@@ -106,9 +106,37 @@ describe('@holo-js/forms contracts', () => {
       expect(exception.errors.first('password')).toBe('This field is required.')
       expect(exception.values).toEqual({
         email: 'bad',
-        password: '',
       })
     }
+  })
+
+  it('strips passwords and sensitive fields inside arrays from failures and thrown exceptions', async () => {
+    const team = schema({
+      name: field.string().required().min(5),
+      members: field.array({
+        email: field.string(),
+        password: field.string(),
+        ssn: field.string().sensitive(),
+        keys: field.array({ label: field.string(), secret: field.string().sensitive() }),
+      }),
+    })
+    const input = {
+      name: 'abc',
+      members: [{ email: 'ava@example.com', password: 'member-password', ssn: 'member-ssn', keys: [{ label: 'deploy', secret: 'key-secret' }] }],
+    }
+    const expected = { name: 'abc', members: [{ email: 'ava@example.com', keys: [{ label: 'deploy' }] }] }
+
+    const failure = await safeParse(input, team)
+    if (failure.valid) {
+      throw new Error('Expected form submission failure.')
+    }
+
+    expect(failure.fail().values).toEqual(expected)
+    expect(failure.serialize().values).toEqual(expected)
+    const thrown = await validate(input, team).catch((error: unknown) => error)
+    expect(thrown).toBeInstanceOf(ValidationException)
+    expect((thrown as ValidationException).toJSON().values).toEqual(expected)
+    expect((thrown as ValidationException).values).toEqual(expected)
   })
 
   it('creates successful and failed submission payload contracts', () => {

@@ -1,6 +1,6 @@
 # CSRF Protection
 
-Cross-site request forgery (CSRF) protection stops other websites from submitting forms or requests to your app using your visitors' cookies. Holo issues a signed token in a cookie, and every unsafe request must send the same token back in a form field or header.
+Cross-site request forgery (CSRF) protection stops other websites from submitting forms or requests to your app using your visitors' cookies. Holo puts a token in an encrypted cookie, and every unsafe request must send that token back in a form field or header.
 
 ## Quick start
 
@@ -33,11 +33,13 @@ The middleware checks the token before your action runs. If it's missing or does
 
 ## How it works
 
-1. On a `GET` or `HEAD` request, the middleware sets a readable `XSRF-TOKEN` cookie containing a signed token.
-2. On `POST`, `PUT`, `PATCH`, and `DELETE`, the request must include the same token, either:
+1. On a `GET` or `HEAD` request, the middleware sets a readable `XSRF-TOKEN` cookie. Its value is the token encrypted with your app key.
+2. On `POST`, `PUT`, `PATCH`, and `DELETE`, the request must include the token, either:
    - in the `X-CSRF-TOKEN` header, or
    - in the `_token` form field.
-3. The cookie's signature must be valid, and the submitted token must match the cookie exactly.
+3. Holo decrypts the cookie and compares it with the submitted token. You can send the plain token from `csrf.token()` or `csrf.input()`, or the cookie value exactly as the browser stores it.
+
+A cookie that was changed, or encrypted with a different app key, is rejected.
 
 `GET`, `HEAD`, and `OPTIONS` requests are never checked.
 
@@ -202,7 +204,7 @@ export const POST: RequestHandler = async ({ request }) => {
 | `enabled` | `false` (the generated config sets `true`) | Turns CSRF checks on. You can also write `csrf: true`. |
 | `field` | `'_token'` | Form field name for the token. |
 | `header` | `'X-CSRF-TOKEN'` | Header name for the token. |
-| `cookie` | `'XSRF-TOKEN'` | Cookie that holds the signed token. |
+| `cookie` | `'XSRF-TOKEN'` | Cookie that holds the encrypted token. |
 | `except` | `[]` | Path patterns that skip verification. |
 
 The token cookie is set with `Path=/`, `SameSite=Lax`, is readable by JavaScript (so clients can send it back), and is marked `Secure` on HTTPS requests. Behind a proxy that terminates TLS, see [trusted proxies](/basics/security/cors-and-proxies#trusted-proxies) so Holo detects HTTPS.

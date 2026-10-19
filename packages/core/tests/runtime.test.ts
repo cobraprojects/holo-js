@@ -81,7 +81,7 @@ import {
   resolveGeneratedProjectRegistryPath,
   holoRuntimeInternals,
 } from '../src/portable'
-import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig } from '@holo-js/session'
+import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader } from '@holo-js/session'
 import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig } from '@holo-js/auth'
 import { useStorage } from '@holo-js/storage/runtime'
 import * as sessionModule from '@holo-js/session'
@@ -135,6 +135,15 @@ async function createNotificationTable(): Promise<void> {
     })
 
 }
+
+function holoCookieValue(setCookie: string): string {
+  return Object.values(parseCookieHeader(setCookie.split(';', 1)[0]))[0] ?? ''
+}
+
+function sessionCookieValue(sessionId: string | undefined): string {
+  return holoCookieValue(getSessionRuntime().sessionCookie(sessionId ?? ''))
+}
+
 
 async function writeBaseConfig(root: string, databaseUrl = ':memory:'): Promise<void> {
   await writeFile(join(root, 'config/app.ts'), `
@@ -2545,7 +2554,7 @@ export default defineSessionConfig({
     const userId = registered.id
     if (userId === undefined) throw new Error('Registration did not return its generated user id')
     const established = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(userId))
-    await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? established.sessionId : undefined }, async () => {
+    await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(established.sessionId) : undefined }, async () => {
       expect(await auth.id()).toBe(registered.id)
       expect(await defaultRateLimitKey(new Request('https://runtime.test/requests'))).toBe('user:1')
     })
@@ -2787,6 +2796,7 @@ export default defineSessionConfig({ driver: 'redis', stores: { redis: { driver:
     await expect(getSessionRuntime().read(ownedSession.id)).resolves.toMatchObject({ data: { owner: 'framework' } })
     expect(await connections()).toBe(baseline + 1)
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: normalizeSessionConfig(),
       stores: { file: createFileSessionStore(join(root, 'external-sessions')) },
     })
@@ -2988,6 +2998,7 @@ export default defineRedisConfig({ default: 'default', connections: { default: {
     await writeBaseConfig(root)
     const externalStore = createFileSessionStore(join(root, 'external-sessions'))
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: normalizeSessionConfig(),
       stores: { file: externalStore },
     })

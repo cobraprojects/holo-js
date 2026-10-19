@@ -811,6 +811,7 @@ export async function validate<TShape extends SchemaInputShape>(
       bag: options.bag,
     }),
     result.values,
+    schemaDefinition,
   )
 
   validationInternals.setValidationExceptionStatus(exception, failure.status)

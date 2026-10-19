@@ -118,6 +118,7 @@ async function configureRuntime(options: {
 } = {}) {
   const { store: sessionStore, path: sessionPath } = createSessionStore()
   configureSessionRuntime({
+    appKey: 'holo-test-app-key',
     config: {
       driver: 'file',
       stores: {
@@ -1612,6 +1613,7 @@ describe('@holo-js/auth-workos', () => {
     const identityStore = persistence.identityStore
 
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: {
         driver: 'file',
         stores: {

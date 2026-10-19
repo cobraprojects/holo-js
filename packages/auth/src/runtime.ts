@@ -340,6 +340,12 @@ async function reserveSharedPasswordResetThrottle(
   }
 }
 
+async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: string): Promise<string | undefined> {
+  const { name } = parseSetCookieDefinition(emptySetCookie)!
+  const value = await resolveRequestCookie(bindings, name)
+  return value ? bindings.session.decryptCookie(name, value) : undefined
+}
+
 async function hydrateGuardContextFromRequest(guardName: string): Promise<void> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
@@ -356,16 +362,14 @@ async function hydrateGuardContextFromRequest(guardName: string): Promise<void> 
   }
 
   if (!bindings.context.getSessionId(guardName)) {
-    const sessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))!
-    const sessionId = await resolveRequestCookie(bindings, sessionCookie.name)
+    const sessionId = await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
     if (sessionId) {
       bindings.context.setSessionId(guardName, sessionId)
     }
   }
 
   if (!bindings.context.getRememberToken?.(guardName)) {
-    const rememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))!
-    const rememberToken = await resolveRequestCookie(bindings, rememberCookie.name)
+    const rememberToken = await resolveHoloCookie(bindings, bindings.session.rememberMeCookie(''))
     if (rememberToken) {
       bindings.context.setRememberToken?.(guardName, rememberToken)
       if (!bindings.context.getSessionId(guardName)) {
