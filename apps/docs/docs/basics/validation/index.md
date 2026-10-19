@@ -126,7 +126,8 @@ Holo limits form bodies and query strings, so a small request can't make validat
 
 - A request can send at most 1,000 fields, the same default as PHP's `max_input_vars`. Uploaded files don't count toward this limit.
 - A list index must be lower than the number of different indexes sent for that list. `tags[1]` with `tags[0]` works, but `tags[5]` on its own fails.
-- Names that use `__proto__`, `constructor`, or `prototype` fail. So does a name sent both as an object and as a list or single value, such as `tags[name]` together with `tags[0]` or `tags=x`, in any order.
+- Names that use `__proto__`, `constructor`, or `prototype` fail.
+- A name must keep one shape. `tags[name]` can't be combined with `tags[]`, `tags[0]`, or `tags=x`, and numbered indexes (`tags[0]`) can't be combined with `tags[]` or repeated names, because the order of the fields would change the result. Repeated names and `tags[]` can be mixed, such as `tags=a&tags[]=b`, which gives `['a', 'b']`.
 
 These requests don't throw. They fail validation with one of these errors on `_root`, so `validate()` responds with a [422](/basics/validation/errors#the-422-response):
 
@@ -134,7 +135,7 @@ These requests don't throw. They fail validation with one of these errors on `_r
 |---|---|
 | More than 1,000 fields | The request contains too many input variables. |
 | List index too high | The request contains an invalid list index. |
-| Blocked or mixed name | The request contains an invalid field name. |
+| Blocked or mixed name, or a name used with two shapes | The request contains an invalid field name. |
 
 JSON bodies and plain objects are not counted toward the field limit. Use `max()` on array fields to limit lists in JSON.
 

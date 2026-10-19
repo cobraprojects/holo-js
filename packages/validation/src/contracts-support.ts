@@ -300,20 +300,69 @@ function parsePathTokens(path: string): readonly (string | number | '')[] {
   return tokens
 }
 
-function createContainer(next: string | number | '' | undefined): Record<string, unknown> | unknown[] {
-  return typeof next === 'number' || next === '' ? [] : createObjectContainer()
+type SlotKind = 'value' | 'appended' | 'indexed' | 'object'
+
+const slotKinds = new WeakMap<object, Map<string, SlotKind>>()
+
+function slotKindFor(next: string | number | '' | undefined): SlotKind {
+  if (next === undefined) return 'value'
+  if (typeof next === 'number') return 'indexed'
+  return next === '' ? 'appended' : 'object'
 }
 
-function isObjectContainer(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === null
-}
-
-function nestedContainer(existing: unknown, next: string | number | '' | undefined): Record<string, unknown> | unknown[] | undefined {
-  if (Array.isArray(existing) || isObjectContainer(existing)) return undefined
-  if (existing !== undefined && typeof next === 'string' && next !== '') {
-    throw new MalformedInputError(INVALID_FIELD_NAME)
+function joinSlotKinds(established: SlotKind, requested: SlotKind, replaceValues: boolean): SlotKind {
+  if (established === requested) {
+    return established === 'value' && !replaceValues ? 'appended' : established
   }
-  return createContainer(next)
+
+  if ((established === 'value' && requested === 'appended') || (established === 'appended' && requested === 'value')) {
+    return 'appended'
+  }
+
+  throw new MalformedInputError(INVALID_FIELD_NAME)
+}
+
+function claimSlot(container: object, key: string, requested: SlotKind, replaceValues: boolean): SlotKind {
+  const kinds = slotKinds.get(container) ?? new Map<string, SlotKind>()
+  slotKinds.set(container, kinds)
+  const established = kinds.get(key)
+  const resolved = established === undefined ? requested : joinSlotKinds(established, requested, replaceValues)
+  kinds.set(key, resolved)
+  return resolved
+}
+
+type Container = Record<string, unknown> | unknown[]
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readSlot(container: Container, key: string | number): unknown {
+  return Array.isArray(container) ? container[Number(key)] : container[String(key)]
+}
+
+function writeSlot(container: Container, key: string | number, value: unknown): void {
+  if (Array.isArray(container)) {
+    container[Number(key)] = value
+    return
+  }
+  container[String(key)] = value
+}
+
+function appendedList(container: Container, key: string | number, existing: unknown): unknown[] {
+  if (Array.isArray(existing)) return existing
+  const list = existing === undefined ? [] : [existing]
+  if (existing !== undefined) repeatedFormValues.add(list)
+  writeSlot(container, key, list)
+  return list
+}
+
+function openContainer(container: Container, key: string | number, kind: SlotKind, existing: unknown): Container {
+  if (kind === 'appended') return appendedList(container, key, existing)
+  if (Array.isArray(existing) || isRecord(existing)) return existing
+  const created: Container = kind === 'object' ? createObjectContainer() : []
+  writeSlot(container, key, created)
+  return created
 }
 
 function recordArrayIndex(indexes: ArrayIndexes, array: unknown[], index: number): void {
@@ -334,73 +383,59 @@ export function assignNestedValue(
     return
   }
 
-  let cursor: Record<string, unknown> | unknown[] = target
+  let cursor: Container = target
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]
     const next = tokens[index + 1]
     const last = index === tokens.length - 1
+    const requested = slotKindFor(next)
 
+    if (Array.isArray(cursor) && token === '') {
+      if (last) {
+        cursor.push(value)
+        return
+      }
+
+      const element: Container = requested === 'object' ? createObjectContainer() : []
+      cursor.push(element)
+      cursor = element
+      continue
+    }
+
+    let key: string | number
     if (Array.isArray(cursor)) {
-      if (typeof token === 'number' && token >= indexLimit) {
-        throw new MalformedInputError(INVALID_LIST_INDEX)
-      }
-      recordArrayIndex(indexes, cursor, typeof token === 'number' ? token : cursor.length)
-      if (token === '') {
-        if (last) {
-          cursor.push(value)
-          return
-        }
-
-        const container = createContainer(next)
-        cursor.push(container)
-        cursor = container
-        continue
-      }
-
       if (typeof token !== 'number') {
         throw new MalformedInputError(INVALID_FIELD_NAME)
       }
 
-      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-      if (last) {
-        if (isObjectContainer(existing)) throw new MalformedInputError(INVALID_FIELD_NAME)
-        cursor[token] = value
-        return
+      if (token >= indexLimit) {
+        throw new MalformedInputError(INVALID_LIST_INDEX)
       }
 
-      cursor[token] = nestedContainer(existing, next) ?? existing
-      cursor = cursor[token] as Record<string, unknown> | unknown[]
-      continue
+      recordArrayIndex(indexes, cursor, token)
+      key = token
+    } else {
+      if (typeof token !== 'string') {
+        throw new MalformedInputError(INVALID_FIELD_NAME)
+      }
+
+      key = token
     }
 
-    if (typeof token !== 'string') {
-      throw new MalformedInputError(INVALID_FIELD_NAME)
-    }
+    const kind = claimSlot(cursor, String(key), requested, Array.isArray(cursor))
+    const existing = hasOwnContainerValue(cursor, key) ? readSlot(cursor, key) : undefined
 
     if (last) {
-      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-      if (typeof existing === 'undefined') {
-        cursor[token] = value
-      } else if (isObjectContainer(existing)) {
-        throw new MalformedInputError(INVALID_FIELD_NAME)
-      } else if (Array.isArray(existing)) {
-        recordArrayIndex(indexes, existing, existing.length)
-        existing.push(value)
+      if (kind === 'value') {
+        writeSlot(cursor, key, value)
       } else {
-        const values = [existing, value]
-        recordArrayIndex(indexes, values, 0)
-        recordArrayIndex(indexes, values, 1)
-        repeatedFormValues.add(values)
-        cursor[token] = values
+        appendedList(cursor, key, existing).push(value)
       }
       return
     }
 
-    const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-    cursor[token] = nestedContainer(existing, next) ?? existing
-    cursor = cursor[token] as Record<string, unknown> | unknown[]
-  /* v8 ignore next 2 */
+    cursor = openContainer(cursor, key, kind, existing)
   }
 }
 

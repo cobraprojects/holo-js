@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ValidationException, field, safeParse, schema, validate, type ValidationSchema } from '../src'
+import { ValidationException, field, safeParse, schema, validate, validationInternals, type ValidationSchema } from '../src'
 
 const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
@@ -158,28 +158,58 @@ describe('Validation input bounds', () => {
     if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })
   })
 
-  it('rejects a name used both as an object and as a list or value, in any order', async () => {
+  it('gives every order of colliding names the same outcome', async () => {
+    const forms: readonly ((value: string) => string)[] = [
+      value => `x=${value}`,
+      value => `x[]=${value}`,
+      value => `x[0]=${value}`,
+      value => `x[k]=${value}`,
+      value => `x[k][]=${value}`,
+      value => `x[0][k]=${value}`,
+    ]
     const permutations = <T>(items: readonly T[]): T[][] => items.length <= 1
       ? [[...items]]
       : items.flatMap((item, index) => permutations([...items.slice(0, index), ...items.slice(index + 1)]).map(rest => [item, ...rest]))
-    const keyed = (name: string) => `${name}[name]=a`
-    const scalar = (name: string) => `${name}=x`
-    const indexed = (name: string) => `${name}[0]=b`
-    const queries = ['tags', 'rows[0]'].flatMap(name => [
-      ...permutations([keyed(name), scalar(name), indexed(name)]),
-      ...permutations([keyed(name), scalar(name)]),
-      ...permutations([keyed(name), indexed(name)]),
-    ].map(parts => parts.join('&')))
-
-    for (const query of queries) {
-      const result = await safeParse(new URLSearchParams(query), schema({ name: field.string().optional() }))
-      expect(result.valid ? [] : result.errors.get('_root'), query).toEqual(['The request contains an invalid field name.'])
+    const canonical = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(canonical).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, canonical(entry)]))
+      }
+      return value
+    }
+    const outcome = (parts: readonly string[]) => {
+      try {
+        return { value: canonical(validationInternals.normalizeFormData(new URLSearchParams(parts.join('&')))) }
+      } catch (error) {
+        return { invalid: error instanceof Error ? error.message : String(error) }
+      }
     }
 
-    const upload = new FormData()
-    upload.append('avatar', new File(['image'], 'avatar.png'))
-    upload.append('avatar[name]', 'a')
-    expect(await rootErrors(upload)).toEqual(['The request contains an invalid field name.'])
+    expect(outcome(['tags[name]=a', 'tags[]=b'])).toEqual({ invalid: 'The request contains an invalid field name.' })
+    expect(outcome(['tags[]=b', 'tags[name]=a'])).toEqual({ invalid: 'The request contains an invalid field name.' })
+    expect(outcome(['tags=a', 'tags[]=b'])).toEqual({ value: { tags: ['a', 'b'] } })
+    expect(outcome(['tags[]=b', 'tags=a'])).toEqual({ value: { tags: ['a', 'b'] } })
+    expect(outcome(['tags[0]=a', 'tags[]=b'])).toEqual({ invalid: 'The request contains an invalid field name.' })
+    expect(outcome(['tags[]=b', 'tags[0]=a'])).toEqual({ invalid: 'The request contains an invalid field name.' })
+    expect(outcome(['tags=a', 'tags[0]=b'])).toEqual({ invalid: 'The request contains an invalid field name.' })
+    expect(outcome(['tags[0]=b', 'tags=a'])).toEqual({ invalid: 'The request contains an invalid field name.' })
+
+    const sequences: number[][] = []
+    for (const first of forms.keys()) {
+      for (const second of forms.keys()) {
+        sequences.push([first, second])
+        for (const third of forms.keys()) sequences.push([first, second, third])
+      }
+    }
+
+    for (const sequence of sequences) {
+      const items = sequence.map((form, position) => forms[form]!(`v${position}`))
+      const label = items.join(' & ')
+      const results = permutations(items).map(outcome)
+      expect(new Set(results.map(result => 'invalid' in result)).size, label).toBe(1)
+      const overwritesIndex = sequence.filter(form => form === 2).length > 1
+      if (!overwritesIndex) expect(new Set(results.map(result => JSON.stringify(result))).size, label).toBe(1)
+    }
   })
 
   it('reports prototype and mixed index/key paths as validation failures', async () => {
