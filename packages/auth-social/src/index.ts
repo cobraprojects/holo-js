@@ -675,7 +675,7 @@ export async function redirect(provider: string, input: SocialRequestInput): Pro
   const headers = new Headers({
     location: authorizationUrl,
   })
-  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request, new URL(authorizationUrl).searchParams.get('response_mode') === 'form_post'))
+  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request, new URL(authorizationUrl, request.url).searchParams.get('response_mode') === 'form_post'))
 
   return new Response(null, {
     status: 302,

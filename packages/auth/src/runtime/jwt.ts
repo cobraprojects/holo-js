@@ -77,7 +77,7 @@ type AuthRuntimeJwksCacheEntry = {
   failed: boolean
 }
 
-export type AuthRuntimeJwksCache = Map<string, AuthRuntimeJwksCacheEntry>
+type AuthRuntimeJwksCache = Map<string, AuthRuntimeJwksCacheEntry>
 
 function findJwk(keys: readonly AuthRuntimeJwkKey[], kid: string | undefined): AuthRuntimeJwkKey | undefined {
   return kid
