@@ -62,8 +62,6 @@ import {
   renderNotificationsConfig,
   renderProjectSecurityConfig,
   renderQueueConfig,
-  REDIS_CONFIG_ENV_IMPORT,
-  renderRedisCacheConnectionLines,
   renderRedisConfig,
   renderSecurityConfig,
   renderSessionConfig,
@@ -72,6 +70,10 @@ import {
   resolveConfigModuleFormat,
   syncBroadcastAuthSupportAfterAuthInstall,
 } from './scaffold/config-renderers'
+import {
+  assertRedisCacheConnectionsAvailable,
+  resolveRequiredRedisConnections,
+} from './scaffold/redis-cache-connections'
 import {
   detectProjectFrameworkDescriptor,
   detectProjectFrameworkFromPackageJson,
@@ -825,23 +827,15 @@ export async function installCacheIntoProject(
     )
   }
 
-  const existingRedisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)
-  if (
-    driver === 'redis'
-    && !cacheConfigPath
-    && existingRedisConfigPath
-    && !('cache' in loadedConfig.redis.connections)
-  ) {
-    const existingRedisConfigSource = (await readTextFile(existingRedisConfigPath)) ?? ''
-    const importsEnv = /import\s*\{[^}]*\benv\b[^}]*\}\s*from\s*['"]@holo-js\/config['"]/.test(existingRedisConfigSource)
-    throw new Error(
-      `config/redis.ts does not define a "cache" connection, and the Redis cache store needs one so that cache flushes `
-      + `stay on their own Redis database. Add this connection to the connections object in config/redis.ts:\n\n`
-      + `${renderRedisCacheConnectionLines().join('\n')}\n\n`
-      + `REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.\n\n`
-      + (importsEnv ? '' : `The connection uses env(), so also add this import at the top of config/redis.ts:\n\n${REDIS_CONFIG_ENV_IMPORT}\n\n`)
-      + `Then rerun "holo install cache --driver redis".`,
-    )
+  if (driver === 'redis') {
+    const redisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)
+    const redisConfigSource = redisConfigPath ? await readTextFile(redisConfigPath) : undefined
+    assertRedisCacheConnectionsAvailable({
+      redisConfig: redisConfigPath && redisConfigSource !== undefined
+        ? { path: redisConfigPath, source: redisConfigSource, connections: Object.keys(loadedConfig.redis.connections) }
+        : undefined,
+      requiredConnections: resolveRequiredRedisConnections(loadedCacheConfig?.drivers),
+    })
   }
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
