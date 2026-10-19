@@ -302,6 +302,14 @@ async function processReservedJob(
   return outcome
 }
 
+function abandonReservation(driver: QueueAsyncDriver, reserved: QueueReservedJob): void {
+  try {
+    driver.abandon?.(reserved)
+  } catch (error) {
+    reportError(error, { capability: 'queue', operation: 'worker.abandonReservation' })
+  }
+}
+
 function resolveWorkerStopReason(
   options: QueueWorkerOptions,
   state: {
@@ -407,6 +415,10 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
     }
 
     const outcome = await processReservedJob(driver, reserved as QueueReservedJob<QueueJsonValue>, options)
+      .catch((error: unknown) => {
+        abandonReservation(driver, reserved)
+        throw error
+      })
     if (outcome.kind === 'processed') {
       processed += 1
     } else if (outcome.kind === 'released') {

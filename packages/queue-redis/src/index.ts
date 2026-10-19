@@ -577,6 +577,16 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     })
   }
 
+  abandon(job: QueueReservedJob): void {
+    const reservation = this.reservations.get(job.reservationId)
+    if (!reservation) {
+      return
+    }
+
+    clearInterval(reservation.renewal)
+    this.reservations.delete(job.reservationId)
+  }
+
   async clear(input?: { readonly queueNames?: readonly string[] }): Promise<number> {
     try {
       const queueNames = this.normalizeQueueNames(input?.queueNames)

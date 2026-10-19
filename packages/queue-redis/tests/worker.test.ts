@@ -48,7 +48,7 @@ async function openRedisQueue() {
     id: randomUUID(), name, connection: 'redis', queue, payload: { ok: true },
     attempts: 0, maxAttempts: 3, createdAt: Date.now(), ...options,
   })
-  return { openDriver, envelopeFor }
+  return { openDriver, envelopeFor, harness }
 }
 
 async function reserveEventually(driver: QueueAsyncDriver): Promise<QueueReservedJob> {
@@ -112,6 +112,18 @@ describe('@holo-js/queue-redis abandoned reservations', () => {
     }
     expect(stolen).toEqual([])
     expect(await rival.reserve({})).toBeNull()
+  }, 30_000)
+
+  it('abandons the reservation when failed-job persistence rejects so another worker recovers it', async () => {
+    const { openDriver, envelopeFor, harness } = await openRedisQueue()
+    registerQueueJob({ async handle(_payload, context) { await context.fail(new Error('terminal failure')) } }, { name: 'unpersisted' })
+    const envelope = envelopeFor('unpersisted')
+    await openDriver().dispatch(envelope)
+    await harness.connection.getAdapter().execute("CREATE TRIGGER reject_failed_jobs BEFORE INSERT ON failed_jobs BEGIN SELECT RAISE(ABORT, 'persist unavailable'); END")
+    await expect(runQueueWorker({ once: true })).rejects.toThrow('persist unavailable')
+    const recovered = await reserveEventually(openDriver())
+    expect(recovered.envelope).toMatchObject({ id: envelope.id, attempts: 1 })
+    expect(await listFailedQueueJobs()).toEqual([])
   }, 30_000)
 
   it('fails a repeatedly abandoned job terminally into failed-job storage once it reaches its tries', async () => {
