@@ -159,40 +159,88 @@ describe('@holo-js/queue after-commit dispatch', () => {
     expect(completed).toEqual([awaited])
   })
 
-  // Known gap: the awaited result must return the caller's job ID before commit, but a driver that assigns its own ID
-  // only reports it at commit. Fixing this changes QueueDispatchResult.jobId, so this stays a failing expectation until then.
-  it.fails('reports the job id a driver assigns to the awaited result and onComplete', async () => {
-    await openHarness()
-    const driver: QueueDriver = {
-      name: 'assigns-ids',
-      driver: 'assigns-ids',
-      mode: 'sync',
-      async dispatch() {
-        return { jobId: 'assigned-by-driver', synchronous: true }
-      },
-      async clear() {
-        return 0
-      },
-      async close() {},
-    }
-    configureQueueRuntime({
-      config: {
-        default: 'assigns',
-        failed: false,
-        connections: {
-          assigns: { driver: 'assigns-ids', queue: 'default', afterCommit: true },
-        },
-      },
-      driverFactories: [{ driver: 'assigns-ids', create: () => driver }],
-    })
+  it('reports the same job ID to the awaited result and onComplete on the database driver', async () => {
+    const harness = await openHarness()
     const completed: QueueDispatchResult[] = []
 
     const awaited = await DB.transaction(async () => dispatch('receipt-sent', {})
+      .afterCommit()
       .onComplete(result => {
         completed.push(result)
       })
       .dispatch())
 
     expect(completed).toEqual([awaited])
+    expect((await harness.readJobRows()).map(row => row.id)).toEqual([awaited.jobId])
+  })
+
+  it('rejects afterCommit on a driver that does not accept a caller-supplied job ID, naming the connection', async () => {
+    const harness = await openHarness()
+    configureCustomDriverRuntime(ownIdDriver(), { afterCommit: false })
+
+    await expect(DB.transaction(async () => dispatch('receipt-sent', {}).afterCommit().dispatch())).rejects.toThrow(
+      'Queue connection "custom" uses driver "assigns-ids", which does not accept a caller-supplied job ID, so afterCommit needs a driver that accepts the job ID.',
+    )
+    expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it('rejects a connection afterCommit default on such a driver at dispatch, even outside a transaction', async () => {
+    await openHarness()
+    configureCustomDriverRuntime(ownIdDriver(), { afterCommit: true })
+
+    await expect(dispatch('receipt-sent', {}).dispatch()).rejects.toThrow(
+      'Queue connection "custom" uses driver "assigns-ids", which does not accept a caller-supplied job ID',
+    )
+  })
+
+  it('fails an afterCommit dispatch whose driver returns a job ID other than the one it accepted', async () => {
+    await openHarness()
+    configureCustomDriverRuntime(ownIdDriver({ acceptsJobId: true, returnedJobId: 'elsewhere' }), { afterCommit: false })
+    const completed: QueueDispatchResult[] = []
+    const failures: unknown[] = []
+
+    await DB.transaction(async () => dispatch('receipt-sent', {})
+      .afterCommit()
+      .onComplete(result => {
+        completed.push(result)
+      })
+      .onFailed(error => {
+        failures.push(error)
+      })
+      .dispatch())
+
+    expect(completed).toEqual([])
+    expect(failures).toEqual([expect.objectContaining({
+      message: expect.stringContaining('returned job ID "elsewhere"'),
+    })])
   })
 })
+
+function configureCustomDriverRuntime(driver: QueueDriver, connection: { readonly afterCommit: boolean }): void {
+  configureQueueRuntime({
+    config: {
+      default: 'custom',
+      failed: false,
+      connections: {
+        custom: { driver: 'assigns-ids', queue: 'default', afterCommit: connection.afterCommit },
+      },
+    },
+    driverFactories: [{ driver: 'assigns-ids', create: () => driver }],
+  })
+}
+
+function ownIdDriver(options: { readonly acceptsJobId?: boolean, readonly returnedJobId?: string } = {}): QueueDriver {
+  return {
+    name: 'custom',
+    driver: 'assigns-ids',
+    mode: 'sync',
+    ...(typeof options.acceptsJobId === 'undefined' ? {} : { acceptsJobId: options.acceptsJobId }),
+    async dispatch() {
+      return { jobId: options.returnedJobId ?? 'assigned-by-driver', synchronous: true }
+    },
+    async clear() {
+      return 0
+    },
+    async close() {},
+  }
+}

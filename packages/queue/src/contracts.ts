@@ -441,6 +441,11 @@ export interface QueueDriverBase {
   readonly name: string
   readonly driver: NormalizedQueueConnectionConfig['driver']
   readonly mode: 'sync' | 'async'
+  /**
+   * `true` when `dispatch()` stores the envelope under its `id` and returns that `id`.
+   * `afterCommit` requires it, because the awaited result is returned before commit.
+   */
+  readonly acceptsJobId?: boolean
   dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(job: QueueJobEnvelope<TPayload>): Promise<QueueDriverDispatchResult<TResult>>
   clear(input?: QueueClearInput): Promise<number>
   close(): Promise<void>

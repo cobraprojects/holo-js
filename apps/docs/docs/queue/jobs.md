@@ -504,7 +504,7 @@ await DB.transaction(async () => {
 })
 ```
 
-The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. If queuing fails at commit, `onFailed` runs with the error, and Holo reports the error. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
+The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. The connection's driver must accept a caller-supplied job ID. Otherwise `.afterCommit()` throws at dispatch, naming the connection. If queuing fails at commit, `onFailed` runs with the error, and Holo reports the error. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
 
 ### `.onComplete(callback)` {#oncomplete-callback}
 

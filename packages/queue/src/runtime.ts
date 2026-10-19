@@ -572,15 +572,29 @@ async function dispatchRecord(
   try {
     const driver = resolveConnectionDriver(envelope.connection)
     const connection = resolveConnectionConfig(getQueueRuntimeState().config, envelope.connection)
-    const transaction = (options.afterCommit ?? connection.afterCommit)
-      ? await resolveOpenDatabaseTransaction()
-      : undefined
+    const afterCommit = options.afterCommit ?? connection.afterCommit
+    // The awaited result is returned before commit, so it can only carry the caller's job ID if the driver stores that ID.
+    if (afterCommit && driver.acceptsJobId !== true) {
+      throw new Error(
+        `[Holo Queue] Queue connection "${envelope.connection}" uses driver "${driver.driver}", `
+        + 'which does not accept a caller-supplied job ID, so afterCommit needs a driver that accepts the job ID.',
+      )
+    }
+
+    const transaction = afterCommit ? await resolveOpenDatabaseTransaction() : undefined
 
     if (transaction) {
       // Completion and failure hooks run at commit time, so they reflect what was actually enqueued.
       transaction.afterCommit(async () => {
         try {
           const result = await dispatchThroughDriver(driver, envelope)
+          if (result.jobId !== envelope.id) {
+            throw new Error(
+              `[Holo Queue] Queue connection "${envelope.connection}" driver "${driver.driver}" returned job ID "${result.jobId}" `
+              + `for job "${envelope.id}", but it declares that it accepts the job ID.`,
+            )
+          }
+
           await handlers.completed(toDispatchResult(envelope, result))
         } catch (error) {
           reportError(error, { capability: 'queue', operation: 'dispatch.afterCommit' })
