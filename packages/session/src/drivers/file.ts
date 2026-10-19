@@ -7,6 +7,8 @@ import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
 
 const RECORD_LOCK_STALE_MS = 10_000
+const RECORD_LOCK_ACQUIRE_STALL_MS = 5_000
+const RECORD_LOCK_ACQUIRE_MAX_MS = 30_000
 const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
@@ -17,6 +19,7 @@ type RecordLockOwner = {
   readonly host: string
   readonly pid: number
   readonly processToken?: string
+  readonly released?: boolean
   readonly token: string
 }
 
@@ -98,10 +101,12 @@ function parseRecordLockOwner(value: unknown): RecordLockOwner | undefined {
   const processToken = 'processToken' in value && typeof value.processToken === 'string' && value.processToken
     ? value.processToken
     : undefined
+  const released = 'released' in value && value.released === true
   return Object.freeze({
     host: value.host,
     pid: value.pid as number,
     ...(processToken ? { processToken } : {}),
+    ...(released ? { released } : {}),
     token: value.token,
   })
 }
@@ -192,11 +197,11 @@ async function reclaimStaleLock(lockPath: string, expected: RecordLockIdentity):
   return removed
 }
 
-async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdentity | undefined> {
-  const identity = await readRecordLockIdentity(lockPath)
+async function reclaimableRecordLock(lockPath: string, identity: RecordLockIdentity | undefined): Promise<RecordLockIdentity | undefined> {
   if (!identity) return undefined
   if (!identity.fileName) return identity
   const owner = identity.owner
+  if (owner?.released) return identity
   if (owner?.host === hostname()) {
     if (owner.pid === process.pid) {
       if (owner.processToken === PROCESS_INSTANCE_TOKEN) {
@@ -211,9 +216,25 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
   return stale ? identity : undefined
 }
 
-async function releaseRecordLock(recordPath: string, lockPath: string, ownerFileName: string, ownerToken: string): Promise<void> {
-  if (await removeRecordLock(lockPath, ownerFileName, BUSY_FILE_RETRY_MS)) return
-  releasedRecordLockTokens.add(ownerToken)
+async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner): Promise<void> {
+  const leasePath = join(lockPath, recordLockOwnerFileName(owner))
+  const contents = `${JSON.stringify({ ...owner, released: true })}\n`
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  for (;;) {
+    try {
+      await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
+      return
+    } catch (error) {
+      if (!isBusyFileError(error) || Date.now() >= deadline) return
+      await sleep(5)
+    }
+  }
+}
+
+async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
+  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+  releasedRecordLockTokens.add(owner.token)
+  await markRecordLockReleased(lockPath, owner)
   reportError(
     new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; a later operation in this process will reclaim it.`),
     { capability: 'session', operation: 'file.releaseLock' },
@@ -221,7 +242,11 @@ async function releaseRecordLock(recordPath: string, lockPath: string, ownerFile
 }
 
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
-  const release = await acquireRecordLockBefore(recordPath, makeDirectory, Date.now() + 5_000)
+  const started = Date.now()
+  const release = await acquireRecordLockBefore(recordPath, makeDirectory, {
+    deadline: started + RECORD_LOCK_ACQUIRE_STALL_MS,
+    hardDeadline: started + RECORD_LOCK_ACQUIRE_MAX_MS,
+  })
   if (!release) throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
   return release
 }
@@ -229,8 +254,10 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
 async function acquireRecordLockBefore(
   recordPath: string,
   makeDirectory: MakeDirectory,
-  deadline: number | undefined,
+  wait: { readonly deadline: number, readonly hardDeadline: number } | undefined,
 ): Promise<(() => Promise<void>) | undefined> {
+  let deadline = wait?.deadline ?? 0
+  let observedOwner: string | undefined
   const lockPath = `${recordPath}.lock`
   const owner = Object.freeze({ host: hostname(), pid: process.pid, processToken: PROCESS_INSTANCE_TOKEN, token: randomUUID() })
   const pendingPath = `${lockPath}.${owner.token}.pending`
@@ -256,14 +283,19 @@ async function acquireRecordLockBefore(
           || (busy && await pathExists(lockPath))
         if (!contended && !busy) throw error
         if (contended) {
-          const reclaimable = await reclaimableRecordLock(lockPath)
+          const identity = await readRecordLockIdentity(lockPath)
+          if (wait && identity?.owner && identity.owner.token !== observedOwner) {
+            observedOwner = identity.owner.token
+            deadline = Math.min(Date.now() + RECORD_LOCK_ACQUIRE_STALL_MS, wait.hardDeadline)
+          }
+          const reclaimable = await reclaimableRecordLock(lockPath, identity)
           if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
         }
-        if (deadline === undefined) {
+        if (wait === undefined) {
           await rm(pendingPath, { recursive: true, force: true })
           return undefined
         }
-        if (Date.now() >= deadline) {
+        if (wait && Date.now() >= deadline) {
           if (!contended) throw error
           throw new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`)
         }
@@ -278,10 +310,10 @@ async function acquireRecordLockBefore(
     heartbeat.unref()
     return async () => {
       clearInterval(heartbeat)
-      await releaseRecordLock(recordPath, lockPath, ownerFileName, owner.token)
+      await releaseRecordLock(recordPath, lockPath, owner)
     }
   } catch (error) {
-    if (acquired) await releaseRecordLock(recordPath, lockPath, ownerFileName, owner.token)
+    if (acquired) await releaseRecordLock(recordPath, lockPath, owner)
     else await rm(pendingPath, { recursive: true, force: true })
     throw error
   }

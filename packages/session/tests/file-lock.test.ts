@@ -1,6 +1,6 @@
 import { execFileSync, fork, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
@@ -58,6 +58,14 @@ async function writeStaleOwner(lockPath: string, owner: { host: string; pid: num
   await utimes(join(lockPath, `owner.${owner.token}.json`), stale, stale)
 }
 
+async function markLeaseReleasedWithoutRemoval(lockPath: string): Promise<void> {
+  const ownerFileName = (await readdir(lockPath)).find(name => name.startsWith('owner.') && name.endsWith('.json'))
+  if (!ownerFileName) throw new Error('Expected a live owner lease')
+  const leasePath = join(lockPath, ownerFileName)
+  const owner = JSON.parse(await readFile(leasePath, 'utf8')) as Record<string, unknown>
+  await writeFile(leasePath, JSON.stringify({ ...owner, released: true }))
+}
+
 describe('file session locking with real processes', () => {
   beforeAll(async () => {
     packageBuildRoot = await mkdtemp(resolve(import.meta.dirname, '../.tmp-file-session-build-'))
@@ -90,6 +98,16 @@ describe('file session locking with real processes', () => {
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
   })
+
+  it('reclaims a lease its live owner released without being able to remove it', async () => {
+    const { root, store, record, lockPath } = await createSession()
+    const owner = await startWorker('hold', root, record.id, lockPath)
+    await markLeaseReleasedWithoutRemoval(lockPath)
+    await store.flash(record.id, 'notice', 'Saved')
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
+    await stopWorker(owner)
+  }, 15_000)
 
   it('times out on a live native lock and writes successfully after release', async () => {
     const { root, store, record, lockPath } = await createSession()
