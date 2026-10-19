@@ -211,7 +211,7 @@ Before upgrading, check every deploy script, CI job, and cron entry that runs th
 
 ### Migration runs can be isolated
 
-`npx holo migrate --isolated` takes a database lock, so replicas that migrate at deploy time don't apply the same migrations. A replica that finds the lock held skips the migrations and exits successfully. Holo creates a `_holo_migration_locks` table the first time an isolated run starts. Plain `migrate` doesn't use the lock. Use `--isolated` in your deploy step if more than one replica runs it.
+`npx holo migrate --isolated` takes a database lock, so replicas that migrate at deploy time don't apply the same migrations. A replica that finds the lock held skips the migrations and exits successfully. Holo creates a `_holo_migration_locks` table the first time an isolated run starts. The lock expires an hour after it was last renewed, and a single migration that runs longer than an hour can let another runner in. Plain `migrate` doesn't use the lock. Use `--isolated` in your deploy step if more than one replica runs it.
 ### Generated broadcast credentials and strict env values
 
 Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. Without them, your config still loads and `holo prepare` still runs. The broadcast worker, publishing, and channel authorization fail with an error that names the variables. `holo new` writes generated values into `.env`, and existing apps get them the same way:

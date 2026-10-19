@@ -122,7 +122,7 @@ describe('isolated migration runs', () => {
         await schema.createTable('first_records', table => {
           table.id()
         })
-        vi.setSystemTime(new Date('2026-10-19T10:14:00Z'))
+        vi.setSystemTime(new Date('2026-10-19T10:50:00Z'))
       },
     })
     const second = defineMigration({
@@ -135,12 +135,26 @@ describe('isolated migration runs', () => {
     const run = createMigrationService(connect(), [first, second]).migrateIsolated()
     await started.promise
 
-    vi.setSystemTime(new Date('2026-10-19T10:20:00Z'))
+    vi.setSystemTime(new Date('2026-10-19T11:30:00Z'))
 
     await expect(createMigrationService(connect(), [first]).migrateIsolated())
       .resolves.toEqual({ kind: 'skipped' })
     release.open()
     await expect(run).resolves.toMatchObject({ kind: 'ran' })
+  })
+
+  it('lets two concurrent first runs on a fresh database both finish, applying each migration once', async () => {
+    const migration = tableMigration('2026_01_01_000001_first', 'first_records')
+    const runners = [
+      createMigrationService(connect(), [migration]),
+      createMigrationService(connect(), [migration]),
+    ]
+
+    const results = await Promise.all(runners.map(runner => runner.migrateIsolated()))
+
+    const executed = results.flatMap(result => result.kind === 'ran' ? result.executed : [])
+    expect(executed.map(migration => migration.name)).toEqual([migration.name])
+    expect(results.map(result => result.kind).sort()).toEqual(['ran', expect.stringMatching(/^(ran|skipped)$/)])
   })
 
   it('keeps the plain migrate API returning executed migrations', async () => {

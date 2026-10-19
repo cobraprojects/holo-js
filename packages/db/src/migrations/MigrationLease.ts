@@ -3,7 +3,7 @@ import { DatabaseError, HydrationError } from '../core/errors'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
-import { createSchemaService } from '../schema/SchemaService'
+import { ensureMigrationTable } from './ensureMigrationTable'
 import type { DatabaseContext } from '../core/DatabaseContext'
 
 const migrationLocksTable = defineTable('_holo_migration_locks', {
@@ -14,7 +14,7 @@ const migrationLocksTable = defineTable('_holo_migration_locks', {
 })
 
 const migrationLockName = 'migrations'
-const migrationLockLifetimeMs = 15 * 60 * 1000
+const migrationLockLifetimeMs = 60 * 60 * 1000
 
 type MigrationLockRecord = {
   id: number
@@ -120,12 +120,7 @@ export class MigrationLease {
   }
 
   private async ensureTable(): Promise<void> {
-    const schema = createSchemaService(this.connection)
-    if (await schema.hasTable(migrationLocksTable.tableName)) {
-      return
-    }
-
-    await schema.createTable(migrationLocksTable.tableName, (table) => {
+    await ensureMigrationTable(this.connection, migrationLocksTable.tableName, (table) => {
       table.id()
       table.string('name').unique()
       table.string('owner')

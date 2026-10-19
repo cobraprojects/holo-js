@@ -4,6 +4,7 @@ import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
 import { assertMigrationName, defineMigration } from './defineMigration'
+import { ensureMigrationTable } from './ensureMigrationTable'
 import { MigrationLease } from './MigrationLease'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -270,12 +271,7 @@ export class MigrationService {
   }
 
   private async ensureTrackingTable(): Promise<void> {
-    const schema = createSchemaService(this.connection)
-    if (await schema.hasTable(migrationsTable.tableName)) {
-      return
-    }
-
-    await schema.createTable(migrationsTable.tableName, (table) => {
+    await ensureMigrationTable(this.connection, migrationsTable.tableName, (table) => {
       table.id()
       table.string('name').unique()
       table.integer('batch')

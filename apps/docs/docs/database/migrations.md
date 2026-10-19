@@ -162,7 +162,7 @@ When several replicas run `migrate` at the same time, add `--isolated`:
 npx holo migrate --isolated
 ```
 
-The first run takes a database lock and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is held in a `_holo_migration_locks` table and expires after 15 minutes if a runner stops without releasing it. The run renews the lock before each migration, so a run of many migrations keeps it. A single migration that runs longer than 15 minutes can lose the lock, so split very long data backfills into their own runs.
+The first run takes a database lock and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is held in a `_holo_migration_locks` table and expires an hour after it was last renewed, so a runner that stops without releasing it doesn't block later deploys for longer than that. The run renews the lock before each migration. A single migration that runs longer than an hour can let another runner in, which can apply that migration again. Split very long data backfills into shorter runs, and don't start a second `migrate --isolated` while one is still working on a long migration.
 
 ### Rolling back
 

@@ -11,7 +11,7 @@
 
 ### Added
 
-- Add `holo migrate --isolated`, which takes a database lock so concurrent runners, such as deploy replicas, don't apply the same migrations. A run that finds the lock held skips the migrations and exits successfully. The lock lives in `_holo_migration_locks`, expires after 15 minutes if a runner stops, and is renewed before each migration. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
+- Add `holo migrate --isolated`, which takes a database lock so concurrent runners, such as deploy replicas, don't apply the same migrations. A run that finds the lock held skips the migrations and exits successfully. The lock lives in `_holo_migration_locks`, expires an hour after it was last renewed if a runner stops, and is renewed before each migration. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
 - Add `--force` to `holo migrate:rollback`.
 - Add `.afterCommit()` to queue dispatches and `afterCommit` to queue connections (default `false`), so a job dispatched inside a database transaction is queued only after it commits.
 - Add `failOnTimeout` to `defineJob`, so a timed-out run fails the job immediately instead of retrying it.
