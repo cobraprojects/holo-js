@@ -1,3 +1,4 @@
+import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
 import { initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
@@ -294,6 +295,7 @@ class EntityBase<
       this.#visibleOverrides.delete(key)
     }
 
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -303,6 +305,7 @@ class EntityBase<
       this.#hiddenOverrides.delete(key)
     }
 
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -310,6 +313,7 @@ class EntityBase<
     this.#hiddenOverrides = new Set(keys)
     this.#visibleOverrides.clear()
     this.#visibleOnly = null
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -317,22 +321,26 @@ class EntityBase<
     this.#visibleOnly = [...keys]
     this.#hiddenOverrides.clear()
     this.#visibleOverrides = new Set(keys)
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 
   append(...keys: readonly string[]): this {
     const next = this.#appendedOverrides ?? []
     this.#appendedOverrides = [...new Set([...next, ...keys])]
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 
   setAppends(keys: readonly string[]): this {
     this.#appendedOverrides = [...keys]
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 
   withoutAppends(): this {
     this.#appendedOverrides = []
+    markDatabaseQueryObservationsSerialized()
     return this
   }
 

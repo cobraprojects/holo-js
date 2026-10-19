@@ -678,6 +678,33 @@ export function disableDatabaseQueryObservationPatching(
   }
 }
 
+export function markDatabaseQueryObservationsSerialized(): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return
+  }
+
+  for (let index = 0; index < state.queries.length; index += 1) {
+    const query = state.queries[index]
+    if (
+      !query
+      || query.serialized
+      || query.aggregate
+      || query.groupedAggregate
+      || query.scalarColumn
+      || query.scalarListColumn
+    ) {
+      continue
+    }
+
+    state.queries[index] = Object.freeze({
+      ...query,
+      patchable: false,
+      serialized: true,
+    })
+  }
+}
+
 export function rebindDatabaseQueryObservationAggregate(
   source: unknown,
   result: unknown,

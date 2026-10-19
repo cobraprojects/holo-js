@@ -1,6 +1,6 @@
 import { belongsTo, column, defineGeneratedTable, defineModel } from '@holo-js/db'
 import { describe, expect, it } from 'vitest'
-import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
+import { defineRealtimeMutation, defineRealtimeQuery, type RealtimeSubscribeOptions } from '../src'
 import { executeRealtimeMutation, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
@@ -39,11 +39,12 @@ describe('realtime hidden root foreign keys', () => {
     }
     const snapshots: unknown[] = []
     const patches: unknown[] = []
-    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
       onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
+      onPatch: (patch: unknown) => { patches.push(patch) },
       onError: error => { throw error },
-    })
+    }
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
@@ -75,10 +76,11 @@ describe('realtime hidden root foreign keys', () => {
       return db.model(Post).query().with({ author: query => query.where('id', 'in', [1, 2]) }).orderBy('id').getJson()
     }
     const snapshots: unknown[] = []
-    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
       onData: snapshot => { snapshots.push(snapshot.data) },
       onError: error => { throw error },
-    })
+    }
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
@@ -111,11 +113,12 @@ describe('realtime hidden root foreign keys', () => {
     }
     const snapshots: unknown[] = []
     const patches: unknown[] = []
-    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
       onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
+      onPatch: (patch: unknown) => { patches.push(patch) },
       onError: error => { throw error },
-    })
+    }
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
@@ -149,11 +152,12 @@ describe('realtime hidden root foreign keys', () => {
     }
     const snapshots: unknown[] = []
     const patches: unknown[] = []
-    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
       onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: patch => { patches.push(patch) },
+      onPatch: (patch: unknown) => { patches.push(patch) },
       onError: error => { throw error },
-    })
+    }
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
 
     await executeRealtimeMutation(defineRealtimeMutation({
       access: 'public',
