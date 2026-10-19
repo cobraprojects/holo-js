@@ -91,8 +91,11 @@ export async function assertExampleAppHostedAuthBehavior(projectRoot, DB, servic
   const load = async name => import(pathToFileURL(require.resolve(name)).href)
   const { authRuntimeInternals } = await load('@holo-js/auth')
   const { getSessionRuntime } = await load('@holo-js/session')
-  const context = authRuntimeInternals.getRuntimeBindings().context
+  const runtimeBindings = authRuntimeInternals.getRuntimeBindings()
+  const context = runtimeBindings.context
   assert.equal(typeof context.run, 'function', 'native app must install an isolated auth request context')
+  authRuntimeInternals.configureRuntime({ ...runtimeBindings, context: { ...context, canAppendResponseCookie: () => true, appendResponseCookie: () => undefined } })
+  try {
   for (const provider of ['workos', 'clerk']) {
     const hosted = await load(`@holo-js/auth-${provider}`)
     const id = `${provider}_${randomUUID()}`
@@ -155,5 +158,8 @@ export async function assertExampleAppHostedAuthBehavior(projectRoot, DB, servic
       await DB.table('auth_identities').where('provider_user_id', id).delete()
       await DB.table('users').where('email', email).delete()
     }
+  }
+  } finally {
+    authRuntimeInternals.configureRuntime(runtimeBindings)
   }
 }
