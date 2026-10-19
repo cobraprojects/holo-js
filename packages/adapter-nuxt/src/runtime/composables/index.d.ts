@@ -1,5 +1,4 @@
 import type { HoloAdapterProjectAccessors } from '@holo-js/core'
-import type { RuntimeDatabaseConfig } from '@holo-js/db'
 
 export interface HoloRuntimeConnection {
   driver?: 'sqlite' | 'postgres' | 'mysql'
@@ -29,12 +28,9 @@ export interface HoloRuntimeDefaultConnection extends HoloRuntimeConnection {
 export declare const holo: HoloAdapterProjectAccessors
 export declare function configureHoloRuntimeConfig(config: {
   holo: {
-    appEnv: 'production' | 'development' | 'test'
-    appDebug: boolean
     appUrl?: string
     projectRoot?: string
   }
-  db?: RuntimeDatabaseConfig
 }): void
 export declare function resetHoloRuntimeConfig(): void
 export type NuxtAuthRequestEvent = {

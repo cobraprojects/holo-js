@@ -26,7 +26,6 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
   requestUrlInternals.provideConnectionAddress(() => connectionAddress(useEvent().node.req.socket))
 
   const project = initializeHoloAdapterProject(config.holo.projectRoot?.trim() || process.cwd(), {
-    envName: config.holo.appEnv,
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
     authRequest: createNuxtAuthRequestAccessors(),

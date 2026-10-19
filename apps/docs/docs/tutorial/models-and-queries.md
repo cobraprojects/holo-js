@@ -25,7 +25,7 @@ export default defineModel('categories', {
 ```
 
 - `defineModel('categories', ...)` ties the model to the `categories` table. Holo reads the columns from your migrations, so `category.name` and `category.slug` are typed without extra work.
-- `fillable` lists the columns you can set with `create()` and `update()`. Other columns are ignored, which protects you from users setting fields they shouldn't.
+- `fillable` lists the columns you can set with `create()` and `update()`. Passing any other column throws an error, which protects you from users setting fields they shouldn't.
 - `hasMany('Post', ...)` says a category has many posts, linked by `posts.category_id`.
 
 ## Step 2: Fill in the Tag model

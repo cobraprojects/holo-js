@@ -198,17 +198,34 @@ describe('auth runtime utilities', () => {
     const cache = new Map()
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [{ kid: 'one' }] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [{ kid: 'two' }] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [{ kid: 'retry' }] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    const fetchOptions = { cache, requestUrl: 'https://keys.test/jwks', errorMessage: 'JWKS failed' }
-    await expect(authJwtInternals.fetchCachedJwks('key', fetchOptions)).resolves.toEqual([{ kid: 'one' }])
-    await expect(authJwtInternals.fetchCachedJwks('key', fetchOptions)).resolves.toEqual([{ kid: 'one' }])
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    await expect(authJwtInternals.fetchCachedJwks('key', { ...fetchOptions, refresh: true })).resolves.toEqual([])
-    await expect(authJwtInternals.fetchCachedJwks('failure', fetchOptions)).rejects.toThrow('JWKS failed')
-    await expect(authJwtInternals.fetchCachedJwks('failure', fetchOptions)).resolves.toEqual([{ kid: 'retry' }])
+    const jwksOptions = { requestUrl: 'https://keys.test/jwks', errorMessage: 'JWKS failed' }
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'key', { ...jwksOptions, kid: 'one' })).resolves.toEqual({ kid: 'one' })
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'key', { ...jwksOptions, kid: 'one' })).resolves.toEqual({ kid: 'one' })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'key', { ...jwksOptions, kid: 'two' })).resolves.toBeUndefined()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      vi.setSystemTime(Date.now() + 61_000)
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'key', { ...jwksOptions, kid: 'two' })).resolves.toEqual({ kid: 'two' })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'failure', { ...jwksOptions, kid: 'retry' })).rejects.toThrow('JWKS failed')
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'failure', { ...jwksOptions, kid: 'retry' })).rejects.toThrow('JWKS failed')
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+
+      vi.setSystemTime(Date.now() + 61_000)
+      await expect(authJwtInternals.resolveCachedJwk(cache, 'failure', { ...jwksOptions, kid: 'retry' })).resolves.toEqual({ kid: 'retry' })
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('recognizes response interrupts and delegates request response access', async () => {

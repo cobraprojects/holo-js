@@ -21,7 +21,7 @@ describe.each(['sqlite', 'postgres', 'mysql'] as const)('%s model JSON values', 
     })
     const Article = defineModel(articles, {
       timestamps: false,
-      guarded: [],
+      fillable: ['id', 'name', 'active', 'settings'],
       ...(explicitCast ? { casts: { settings: 'json' as const } } : {}),
     })
 

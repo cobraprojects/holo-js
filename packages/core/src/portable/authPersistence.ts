@@ -527,7 +527,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
     }
 
     type AuthModelRepository = {
-      saveEntity?(entity: unknown, internalColumns?: ReadonlySet<string>): Promise<Record<string, unknown>>
+      saveEntity?(entity: unknown): Promise<Record<string, unknown>>
       delete?(id: unknown): Promise<void>
     }
 
@@ -662,7 +662,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         && typeof (entity as AuthModelEntity).forceFill === 'function'
       ) {
         ;(entity as AuthModelEntity).forceFill!(values)
-        return repository.saveEntity(entity, new Set(Object.keys(values)))
+        return repository.saveEntity(entity)
       }
 
       return null
@@ -742,7 +742,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         if (repository) {
           const existing = await repository.findOrFail(id)
           existing.forceFill(values)
-          return markProviderUser(await repository.saveEntity(existing, new Set(Object.keys(values))), providerName)
+          return markProviderUser(await repository.saveEntity(existing), providerName)
         }
 
         const existing = typeof model.find === 'function' ? await model.find(id) : null
