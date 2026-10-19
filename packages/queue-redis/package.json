@@ -27,6 +27,7 @@
     "@holo-js/queue": "catalog:"
   },
   "dependencies": {
+    "@holo-js/kernel": "catalog:",
     "bullmq": "catalog:",
     "ioredis": "catalog:",
     "tslib": "catalog:"
