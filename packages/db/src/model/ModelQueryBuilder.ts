@@ -2079,12 +2079,8 @@ export class ModelQueryBuilder<
   }
 
   private rowsNeedSerialization(): boolean {
-    return Object.keys(this.repository.definition.accessors).length > 0
-      || Object.keys(this.repository.definition.casts).length > 0
+    return modelNeedsSerialization(this.repository.definition)
       || Object.keys(this.queryCasts).length > 0
-      || this.repository.definition.appended.length > 0
-      || this.repository.definition.hidden.length > 0
-      || this.repository.definition.visible.length > 0
   }
 
 }

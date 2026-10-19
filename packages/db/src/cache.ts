@@ -328,6 +328,7 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
+  serializationOverridden: boolean
 }
 
 const DATABASE_DEPENDENCY_PREFIX = 'db:'
@@ -421,6 +422,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
+    serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
 
@@ -470,7 +472,15 @@ export function recordDatabaseQueryObservation(observation: DatabaseQueryObserva
     return
   }
 
-  state.queries.push(observation)
+  state.queries.push(state.serializationOverridden ? serializedQueryObservation(observation) : observation)
+}
+
+function serializedQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  return Object.freeze({
+    ...observation,
+    patchable: false,
+    serialized: true,
+  })
 }
 
 export function readDatabaseQueryObservationCount(): number {
@@ -684,24 +694,14 @@ export function markDatabaseQueryObservationsSerialized(): void {
     return
   }
 
+  state.serializationOverridden = true
   for (let index = 0; index < state.queries.length; index += 1) {
     const query = state.queries[index]
-    if (
-      !query
-      || query.serialized
-      || query.aggregate
-      || query.groupedAggregate
-      || query.scalarColumn
-      || query.scalarListColumn
-    ) {
+    if (!query || query.serialized) {
       continue
     }
 
-    state.queries[index] = Object.freeze({
-      ...query,
-      patchable: false,
-      serialized: true,
-    })
+    state.queries[index] = serializedQueryObservation(query)
   }
 }
 
