@@ -43,11 +43,11 @@ export class SeederService {
   }
 
   async seed(options: SeedOptions = {}): Promise<SeederDefinition[]> {
-    return withoutModelGuards(() => this.runSeeders(this.selectSeeders(options.only), {
+    return this.runSeeders(this.selectSeeders(options.only), {
       quietly: options.quietly === true,
       force: options.force === true,
       environment: options.environment,
-    }))
+    })
   }
 
   private selectSeeders(only?: readonly string[]): readonly SeederDefinition[] {
@@ -85,7 +85,7 @@ export class SeederService {
           const run = () => connectionAsyncContext.run({
             connectionName: tx.getConnectionName(),
             connection: tx,
-          }, () => Promise.resolve(seeder.run(context)))
+          }, () => withoutModelGuards(() => Promise.resolve(seeder.run(context))))
 
           if (options.quietly) {
             await withoutModelEvents(run)

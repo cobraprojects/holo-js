@@ -267,6 +267,31 @@ describe('model lifecycle persistence', () => {
     expect(document.isDirty()).toBe(false)
   })
 
+  it('keeps mass-assignment guards on seeder logger callbacks', async () => {
+    const Ledger = defineModelFromTable(ledgers)
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({
+      adapter,
+      dialect: createDialect('sqlite'),
+      logger: {
+        onSeederStart: () => Ledger.create({ code: 'logged', name: 'Logged' }).then(() => undefined),
+      },
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createTestTable(db, ledgers)
+
+    const seeders = createSeederService(db, [defineSeeder({
+      name: 'GuardedLoggerSeeder',
+      async run() {
+        await Ledger.create({ code: 'seeded', name: 'Seeded' })
+      },
+    })])
+
+    await expect(seeders.seed()).rejects.toThrow('Column "code" is not writable on model "Ledger".')
+    expect(await db.table('ledgers').get()).toEqual([])
+  })
+
   it('runs seeders without mass-assignment guards', async () => {
     const db = await openDatabase()
     await createTestTable(db, ledgers)
