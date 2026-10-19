@@ -193,7 +193,8 @@
     "test:libraries": "node tests/native-library-suite.mjs",
     "check": "bun run typecheck && bun run lint && bun run test:ci",
     "audit:runtime": "node scripts/audit-runtime-dependencies.mjs",
-    "check:dead-code": "fallow dead-code --format json --quiet --baseline fallow-baseline.json"
+    "check:dead-code": "fallow dead-code --format json --quiet --baseline fallow-baseline.json",
+    "measure:validation-form-memory": "node --import tsx scripts/measure-validation-form-memory.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
