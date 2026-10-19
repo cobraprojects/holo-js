@@ -142,7 +142,7 @@ describe('session-stored CSRF token', () => {
     sessions.tokens.set('browser-a', 'session-token-a')
     configure(sessions)
     const encrypted = xsrfCookieOf(await csrf.cookie(post('browser-a')))
-    const tampered = `${encrypted.slice(0, -2)}xx`
+    const tampered = `${encrypted.slice(0, -2)}${encrypted.endsWith('xx') ? 'yy' : 'xx'}`
 
     await expect(csrf.verify(post('browser-a', { field: tampered }))).rejects.toBeInstanceOf(SecurityCsrfError)
     await expect(csrf.verify(post('browser-a', { csrfHeader: tampered }))).rejects.toBeInstanceOf(SecurityCsrfError)
