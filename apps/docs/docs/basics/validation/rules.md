@@ -105,6 +105,8 @@ export const gallery = schema({
 
 Errors for items use their index, such as `tags.0` or `images.2.title`.
 
+Holo checks `max()` and `size()` before it validates any item. A list with more items than the limit fails with the size error, and its items aren't checked.
+
 ## Presence rules
 
 ### `required(message?)`
@@ -391,6 +393,8 @@ npm install sharp
 
 Without it, server-side validation fails with an error asking you to install it. In the browser, `image()` checks the file's contents quickly and leaves the full decode to the server.
 
+Add `maxSize()` to image fields. Holo checks the size first: a file larger than its `max()`, `maxSize()`, or `size()` limit is never decoded and fails with the size error.
+
 ### `imageAspectRatio(ratios, message?)`
 
 Require an image with a particular width-to-height ratio. Pass one `'width:height'` string or a nonempty array of allowed ratios:
@@ -475,6 +479,8 @@ field.string().required().email().customAsync(async (email) => {
 ```
 
 Custom rules only run when the value is present and has the right type.
+
+If your function throws, Holo doesn't turn the error into a validation message. The error reaches your framework's error handling like any other server error, so a failed database query responds with a 500 instead of a 422.
 
 ## Next steps
 

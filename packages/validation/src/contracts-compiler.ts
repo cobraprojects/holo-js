@@ -37,6 +37,22 @@ function makeCompiledArrayItemSchema(plan: SchemaPlan, parent: ExecutionNode): C
   }
 }
 
+function makeListLimitSchema(definition: FieldDefinition): CompiledSchema | undefined {
+  let limit: FieldRule | undefined
+  for (const rule of definition.rules) {
+    if ((rule.name === 'max' || rule.name === 'size') && typeof rule.args[0] === 'number'
+      && (!limit || rule.args[0] < (limit.args[0] as number))) {
+      limit = rule
+    }
+  }
+  if (!limit) return undefined
+  const value = limit.args[0] as number
+  return v.pipeAsync(
+    v.unknown(),
+    asPipeItem(limit.name === 'max' ? maxAction(definition, value, limit.message) : exactSizeAction(definition, value, limit.message)),
+  )
+}
+
 function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
   switch (definition.kind) {
     case 'string':
@@ -52,10 +68,13 @@ function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: ob
     case 'array': {
       if (!executionFor) throw new Error('Validation array execution is missing.')
       if (!itemPlan) throw new Error('Validation array item plan is missing.')
+      const listLimit = makeListLimitSchema(definition)
       return {
         ...v.unknown(),
         async: true,
         async '~run'(dataset, config) {
+          const limited = listLimit && Array.isArray(dataset.value) ? await listLimit['~run'](dataset, config) : undefined
+          if (limited?.issues) return Object.assign(limited, { typed: false as const })
           const node = executionFor(dataset).node
           const item = makeCompiledArrayItemSchema(itemPlan, node)
           const compiledItem = itemPlan.hasCustomRules ? createOrderedSchemaFactory()(item) : item

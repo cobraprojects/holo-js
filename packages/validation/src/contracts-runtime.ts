@@ -20,6 +20,7 @@ import {
   createErrorBag,
   isPlainObject,
   issuesToFlat,
+  MalformedInputError,
   normalizeFormData,
   normalizeRequestInput,
   parseByteSize,
@@ -345,39 +346,36 @@ export async function validateInternal<TSchema extends ValidationSchema>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
 ): Promise<ValidationResult<InferValidationSchemaData<TSchema>>> {
-  const normalized = await normalizeInput(input)
-
+  let normalized: Awaited<ReturnType<typeof normalizeInput>>
   try {
-    const coerced = coerceShapeInput(schemaDefinition.fields, normalized.value)
-    const result = await schemaDefinition['~standard'].validate(normalized.value)
-
-    if (result.issues) {
-      const flat = issuesToFlat(result.issues)
-      return {
-        valid: false,
-        submitted: true,
-        values: coerced as Partial<InferValidationSchemaData<TSchema>>,
-        errors: createErrorBag<InferValidationSchemaData<TSchema>>(flat),
-      }
-    }
-
-    return {
-      valid: true,
-      submitted: true,
-      data: result.value as InferValidationSchemaData<TSchema>,
-      values: result.value as InferValidationSchemaData<TSchema>,
-      errors: createErrorBag<InferValidationSchemaData<TSchema>>(),
-    }
+    normalized = await normalizeInput(input)
   } catch (error) {
-    const issues: Record<string, string[]> = {
-      _root: [error instanceof Error ? error.message : 'Validation failed.'],
-    }
-
+    if (!(error instanceof MalformedInputError)) throw error
     return {
       valid: false,
       submitted: true,
-      values: normalized.value as Partial<InferValidationSchemaData<TSchema>>,
-      errors: createErrorBag<InferValidationSchemaData<TSchema>>(issues),
+      values: {},
+      errors: createErrorBag<InferValidationSchemaData<TSchema>>({ _root: [error.message] }),
     }
+  }
+
+  const coerced = coerceShapeInput(schemaDefinition.fields, normalized.value)
+  const result = await schemaDefinition['~standard'].validate(normalized.value)
+
+  if (result.issues) {
+    return {
+      valid: false,
+      submitted: true,
+      values: coerced as Partial<InferValidationSchemaData<TSchema>>,
+      errors: createErrorBag<InferValidationSchemaData<TSchema>>(issuesToFlat(result.issues)),
+    }
+  }
+
+  return {
+    valid: true,
+    submitted: true,
+    data: result.value as InferValidationSchemaData<TSchema>,
+    values: result.value as InferValidationSchemaData<TSchema>,
+    errors: createErrorBag<InferValidationSchemaData<TSchema>>(),
   }
 }

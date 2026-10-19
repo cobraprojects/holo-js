@@ -1,0 +1,130 @@
+import { describe, expect, it } from 'vitest'
+import { ValidationException, field, safeParse, schema, validate } from '../src'
+
+const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+
+function formWith(entries: readonly (readonly [string, string])[]): FormData {
+  const formData = new FormData()
+  for (const [key, value] of entries) formData.append(key, value)
+  return formData
+}
+
+function variables(count: number): (readonly [string, string])[] {
+  return Array.from({ length: count }, (_, index) => [`extra${index}`, 'x'] as const)
+}
+
+async function rootErrors(input: FormData | URLSearchParams | Request, definition = schema({ name: field.string().optional() })) {
+  const result = await safeParse(input, definition)
+  expect(result.valid).toBe(false)
+  return result.valid ? [] : result.errors.get('_root')
+}
+
+describe('Validation input bounds', () => {
+  it('limits a request to 1,000 input variables', async () => {
+    const definition = schema({ name: field.string().required() })
+
+    expect((await safeParse(formWith([['name', 'Ava'], ...variables(999)]), definition)).valid).toBe(true)
+
+    const tooMany = [['name', 'Ava'] as const, ...variables(1_000)]
+    expect(await rootErrors(formWith(tooMany), definition)).toEqual(['The request contains too many input variables.'])
+    expect(await rootErrors(new URLSearchParams(tooMany.map(([key, value]) => [key, value])), definition))
+      .toEqual(['The request contains too many input variables.'])
+    expect(await rootErrors(new Request(`https://example.com/?${new URLSearchParams(tooMany.map(([key, value]) => [key, value]))}`), definition))
+      .toEqual(['The request contains too many input variables.'])
+    expect(await rootErrors(new Request('https://example.com/', { method: 'POST', body: formWith(tooMany) }), definition))
+      .toEqual(['The request contains too many input variables.'])
+  })
+
+  it('requires every array index to be lower than the entries submitted for that array', async () => {
+    const definition = schema({
+      tags: field.array(field.string()).optional(),
+      rows: field.array({ name: field.string().optional() }).optional(),
+    })
+
+    const ordered = await safeParse(formWith([['tags[1]', 'b'], ['tags[0]', 'a']]), definition)
+    expect(ordered.valid).toBe(true)
+    if (ordered.valid) expect(ordered.data.tags).toEqual(['a', 'b'])
+
+    expect(await rootErrors(formWith([['tags[999999999]', 'x']]), definition))
+      .toEqual(['The request contains an invalid list index.'])
+    expect(await rootErrors(formWith([['tags[0]', 'a'], ['tags[2]', 'c']]), definition))
+      .toEqual(['The request contains an invalid list index.'])
+    expect(await rootErrors(new URLSearchParams('rows[0][name]=a&rows[5][name]=b'), definition))
+      .toEqual(['The request contains an invalid list index.'])
+  })
+
+  it('enforces declared list maximums before validating items', async () => {
+    const checked: string[] = []
+    const definition = schema({
+      tags: field.array(field.string().custom((value) => {
+        checked.push(value)
+        return true
+      })).max(2),
+      codes: field.array(field.string().custom((value) => {
+        checked.push(value)
+        return true
+      })).size(1),
+    })
+
+    const result = await safeParse({ tags: ['a', 'b', 'c'], codes: ['x', 'y'] }, definition)
+
+    expect(checked).toEqual([])
+    expect(result.valid).toBe(false)
+    if (!result.valid) {
+      expect(result.errors.get('tags')).toEqual(['This field must contain 2 items or fewer.'])
+      expect(result.errors.get('codes')).toEqual(['This field must contain exactly 1 item.'])
+    }
+  })
+
+  it('validates malformed JSON as empty input', async () => {
+    const definition = schema({ name: field.string().required() })
+    const request = new Request('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"name":',
+    })
+
+    const result = await safeParse(request, definition)
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })
+  })
+
+  it('reports prototype and mixed index/key paths as validation failures', async () => {
+    expect(await rootErrors(formWith([['__proto__.polluted', 'yes']]))).toEqual(['The request contains an invalid field name.'])
+    expect(await rootErrors(new URLSearchParams('constructor[prototype][polluted]=yes'))).toEqual(['The request contains an invalid field name.'])
+    expect(await rootErrors(formWith([['tags[0]', 'a'], ['tags[name]', 'b']]))).toEqual(['The request contains an invalid field name.'])
+    expect(await rootErrors(formWith([['tags[name]', 'a'], ['tags[0]', 'b']]))).toEqual(['The request contains an invalid field name.'])
+    expect(Object.prototype).not.toHaveProperty('polluted')
+
+    await expect(validate(formWith([['__proto__.polluted', 'yes']]), schema({ name: field.string().optional() })))
+      .rejects.toBeInstanceOf(ValidationException)
+  })
+
+  it('surfaces exceptions thrown by custom rules instead of reporting them as validation messages', async () => {
+    const failure = new Error('database unavailable')
+    const sync = schema({ name: field.string().custom(() => { throw failure }) })
+    const async = schema({ name: field.string().customAsync(async () => { throw failure }) })
+
+    await expect(safeParse({ name: 'Ava' }, sync)).rejects.toBe(failure)
+    await expect(safeParse({ name: 'Ava' }, async)).rejects.toBe(failure)
+    await expect(validate({ name: 'Ava' }, async)).rejects.toBe(failure)
+  })
+
+  it('checks file size before decoding an image', async () => {
+    let fullReads = 0
+    class TrackedFile extends File {
+      override arrayBuffer(): Promise<ArrayBuffer> {
+        fullReads += 1
+        return super.arrayBuffer()
+      }
+    }
+    const avatar = new TrackedFile([pngPixel, new Uint8Array(4096)], 'avatar.png', { type: 'image/png' })
+
+    const result = await safeParse({ avatar }, schema({ avatar: field.file().required().image().maxSize('1kb') }))
+
+    expect(fullReads).toBe(0)
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.get('avatar')).toEqual(['The selected file must be 1 KB or smaller.'])
+  })
+})
