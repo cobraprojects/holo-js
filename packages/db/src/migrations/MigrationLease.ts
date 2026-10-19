@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { DatabaseError, HydrationError } from '../core/errors'
+import { isUniqueConstraintError } from '../model/constraintErrors'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
@@ -55,7 +56,7 @@ export class MigrationLease {
       this.owner = owner
       return true
     } catch (error) {
-      if (await this.read()) {
+      if (isUniqueConstraintError(error) || await this.read()) {
         return false
       }
 
