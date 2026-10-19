@@ -361,7 +361,7 @@ export async function syncManagedDriverDependencies(
     }
   }
 
-  if (authConfigured || sessionConfigured) {
+  if (authConfigured || sessionConfigured || (securityConfigured && loaded.security?.csrf?.enabled)) {
     requiredPackages.add('@holo-js/session')
   }
 
@@ -671,7 +671,9 @@ async function upsertMediaPackageDependency(projectRoot: string): Promise<boolea
 }
 
 async function upsertSecurityPackageDependency(projectRoot: string): Promise<boolean> {
-  return await upsertManagedPackageDependency(projectRoot, '@holo-js/security')
+  const updatedSecurity = await upsertManagedPackageDependency(projectRoot, '@holo-js/security')
+  const updatedSession = await upsertManagedPackageDependency(projectRoot, '@holo-js/session')
+  return updatedSecurity || updatedSession
 }
 
 async function upsertCachePackageDependencies(

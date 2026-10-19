@@ -442,7 +442,7 @@ CORS headers. Created by `holo install security` or `holo install auth`. See [CO
 | `paths` | `['/api/*']` | Paths that get CORS headers. |
 | `origins` | `[]` | Allowed origins. |
 | `methods` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | Allowed methods. |
-| `headers` | `Content-Type`, `Authorization`, `X-CSRF-TOKEN`, `X-Requested-With` | Allowed request headers. |
+| `headers` | `Content-Type`, `Authorization`, `X-CSRF-TOKEN`, `X-XSRF-TOKEN`, `X-Requested-With` | Allowed request headers. |
 | `credentials` | `false` | Allow cookies on cross-origin requests. |
 | `maxAge` | `7200` | Seconds browsers may cache the preflight response. |
 | `statefulDomains` | `[]` | Frontend domains (`host:port`) that use session cookies. |

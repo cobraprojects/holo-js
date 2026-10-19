@@ -2,10 +2,12 @@ import type { NormalizedHoloSecurityConfig } from './config'
 import type { SecurityClientConfig } from './contracts'
 
 export const SECURITY_CLIENT_CONFIG_COOKIE = 'HOLO-CSRF-CONFIG'
+export const SECURITY_XSRF_HEADER = 'X-XSRF-TOKEN'
 
 const DEFAULT_SECURITY_CLIENT_CONFIG: SecurityClientConfig = Object.freeze({
   csrf: Object.freeze({
     field: '_token',
+    header: 'X-CSRF-TOKEN',
     cookie: 'XSRF-TOKEN',
   }),
 })
@@ -45,11 +47,16 @@ function parseCookieHeader(header: string | null | undefined): Readonly<Record<s
   return Object.freeze(Object.fromEntries(entries))
 }
 
-function isSecurityClientConfig(value: unknown): value is SecurityClientConfig {
+type SerializedSecurityClientConfig = {
+  readonly csrf: Omit<SecurityClientConfig['csrf'], 'header'> & { readonly header?: string }
+}
+
+function isSecurityClientConfig(value: unknown): value is SerializedSecurityClientConfig {
   return !!value
     && typeof value === 'object'
     && !!(value as { readonly csrf?: unknown }).csrf
     && typeof (value as { readonly csrf: { readonly field?: unknown } }).csrf.field === 'string'
+    && ['string', 'undefined'].includes(typeof (value as { readonly csrf: { readonly header?: unknown } }).csrf.header)
     && typeof (value as { readonly csrf: { readonly cookie?: unknown } }).csrf.cookie === 'string'
 }
 
@@ -71,7 +78,7 @@ export function serializeSecurityClientConfig(config: SecurityClientConfig): str
   return JSON.stringify(config)
 }
 
-function parseSecurityClientConfig(raw: string | undefined): SecurityClientConfig | undefined {
+function parseSecurityClientConfig(raw: string | undefined): SerializedSecurityClientConfig | undefined {
   if (!raw) {
     return undefined
   }
@@ -93,8 +100,8 @@ export function readSecurityClientConfigFromCookies(cookieHeader: string | null 
   return parsed ? Object.freeze({
       csrf: Object.freeze({
         field: parsed.csrf.field,
+        header: parsed.csrf.header ?? DEFAULT_SECURITY_CLIENT_CONFIG.csrf.header,
         cookie: parsed.csrf.cookie,
-        ...('header' in parsed.csrf && typeof parsed.csrf.header === 'string' ? { header: parsed.csrf.header } : {}),
       }),
     }) : undefined
 }
@@ -103,9 +110,7 @@ function getCsrfRequestHeaders(cookieHeader: string | undefined): Readonly<Recor
   const cookies = parseCookieHeader(cookieHeader)
   const config = parseSecurityClientConfig(cookies[SECURITY_CLIENT_CONFIG_COOKIE]) ?? DEFAULT_SECURITY_CLIENT_CONFIG
   const token = cookies[config.csrf.cookie]
-  const header = 'header' in config.csrf && typeof config.csrf.header === 'string'
-    ? config.csrf.header : 'X-CSRF-TOKEN'
-  return token ? { [header]: token } : {}
+  return token ? { [SECURITY_XSRF_HEADER]: token } : {}
 }
 
 export const securityClientConfigInternals = {

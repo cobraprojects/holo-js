@@ -8,6 +8,7 @@ import {
 } from '../src'
 import { SECURITY_CLIENT_CONFIG_COOKIE } from '../src/client-config'
 import { csrfProtection } from '../src/sveltekit/server'
+import { memoryCsrfSessions, type MemoryCsrfSessions } from './support/csrf-session'
 
 type CookieWrite = {
   readonly name: string
@@ -20,7 +21,11 @@ type CookieWrite = {
   }
 }
 
-function configureSecurity(except: readonly string[] = [], trustedProxies: readonly string[] | '*' = []): void {
+function configureSecurity(
+  except: readonly string[] = [],
+  trustedProxies: readonly string[] | '*' = [],
+  sessions: MemoryCsrfSessions = memoryCsrfSessions(),
+): MemoryCsrfSessions {
   configureSecurityRuntime({
     config: defineSecurityConfig({
       csrf: {
@@ -30,7 +35,9 @@ function configureSecurity(except: readonly string[] = [], trustedProxies: reado
       trustedProxies,
     }),
     csrfSigningKey: 'test-signing-key',
+    csrfSession: sessions,
   })
+  return sessions
 }
 
 function createEvent(request: Request, cookieValue?: string): {
@@ -101,7 +108,7 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
   })
 
   it('issues the readable csrf cookie on safe requests before page loads render csrf.input()', async () => {
-    configureSecurity()
+    const sessions = configureSecurity()
     const request = new Request('https://app.test/login')
     const { event, writes } = createEvent(request)
     const resolve = vi.fn(() => new Response('ok'))
@@ -111,6 +118,8 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
 
     expect(response.status).toBe(200)
     expect(resolve).toHaveBeenCalledOnce()
+    expect(sessions.tokens.get('guest-1')).toBe(input.value)
+    expect(response.headers.getSetCookie()).toEqual(['browser=guest-1; Path=/; HttpOnly; SameSite=Lax'])
     expect(writes).toEqual([
       {
         name: 'XSRF-TOKEN',
@@ -144,13 +153,13 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
   })
 
   it('preserves current cookies and refreshes only stale client configuration before rendering', async () => {
-    configureSecurity()
-    const token = await csrf.token(new Request('https://app.test/login'))
+    const token = 'session-token'
+    const sessions = configureSecurity([], [], memoryCsrfSessions({ 'browser-a': token }))
     const encryptedToken = csrfInternals.encryptCsrfToken(token)
     const clientConfig = '{"csrf":{"field":"_token","cookie":"XSRF-TOKEN","header":"X-CSRF-TOKEN"}}'
     for (const configuration of [clientConfig, 'stale']) {
       const request = new Request('https://app.test/login', {
-        headers: { cookie: `XSRF-TOKEN=${encryptedToken}` },
+        headers: { cookie: `browser=browser-a; XSRF-TOKEN=${encryptedToken}` },
       })
       const { event, writes } = createEvent(request, encryptedToken)
       const configuredEvent = {
@@ -171,11 +180,13 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
         },
       })
       expect(response.status).toBe(200)
+      expect(response.headers.getSetCookie()).toEqual([])
     }
+    expect(sessions.writes).toEqual([])
   })
 
   it('issues the readable csrf cookie for HEAD requests', async () => {
-    configureSecurity()
+    const sessions = configureSecurity()
     const { event, writes } = createEvent(new Request('https://app.test/login', {
       method: 'HEAD',
     }))
@@ -186,26 +197,36 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
     expect(response.status).toBe(200)
     expect(resolve).toHaveBeenCalledOnce()
     expect(writes).toHaveLength(2)
+    expect(csrfInternals.decryptCsrfToken(writes[0]?.value ?? '')).toBe(sessions.tokens.get('guest-1'))
+    expect(response.headers.getSetCookie()).toEqual(['browser=guest-1; Path=/; HttpOnly; SameSite=Lax'])
   })
 
   it('refreshes invalid csrf cookies on safe requests', async () => {
-    configureSecurity()
-    const { event, writes } = createEvent(new Request('https://app.test/login'), 'existing-token')
-    const resolve = vi.fn(() => new Response('ok'))
+    const sessions = configureSecurity([], [], memoryCsrfSessions({ 'browser-a': 'session-token' }))
+    const foreignCookie = csrfInternals.encryptCsrfToken('other-session-token')
+    for (const existingCookie of ['existing-token', foreignCookie]) {
+      const { event, writes } = createEvent(new Request('https://app.test/login', {
+        headers: { cookie: `browser=browser-a; XSRF-TOKEN=${existingCookie}` },
+      }), existingCookie)
+      const resolve = vi.fn(() => new Response('ok'))
 
-    const response = await csrfProtection()({ event, resolve })
+      const response = await csrfProtection()({ event, resolve })
 
-    expect(response.status).toBe(200)
-    expect(resolve).toHaveBeenCalledOnce()
-    expect(writes).toHaveLength(2)
-    expect(writes[0]?.name).toBe('XSRF-TOKEN')
-    expect(writes[0]?.value).not.toBe('existing-token')
+      expect(response.status).toBe(200)
+      expect(resolve).toHaveBeenCalledOnce()
+      expect(writes).toHaveLength(2)
+      expect(writes[0]?.name).toBe('XSRF-TOKEN')
+      expect(writes[0]?.value).not.toBe(existingCookie)
+      expect(csrfInternals.decryptCsrfToken(writes[0]?.value ?? '')).toBe('session-token')
+    }
+    expect(sessions.writes).toEqual([])
   })
 
   it('rejects unsafe requests with a 419 response before the route action runs', async () => {
-    configureSecurity()
+    configureSecurity([], [], memoryCsrfSessions({ 'browser-a': 'session-token' }))
     const { event } = createEvent(new Request('https://app.test/login', {
       method: 'POST',
+      headers: { cookie: 'browser=browser-a' },
       body: new URLSearchParams({
         email: 'editor@example.com',
       }),
