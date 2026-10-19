@@ -5662,7 +5662,7 @@ registerGeneratedTables(tables)
     await writeProjectFile(projectRoot, 'server/models/Choice.ts', `
 import { defineModel } from '@holo-js/db'
 
-export default defineModel('choices')
+export default defineModel('choices', { fillable: ['label'] })
 `)
     await writeProjectFile(projectRoot, 'server/db/seeders/ChoiceSeeder.ts', `
 import { defineSeeder } from '@holo-js/db'

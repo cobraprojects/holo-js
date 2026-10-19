@@ -33,6 +33,7 @@ export interface AnyModelDefinition {
   readonly fillable: readonly string[]
   readonly hasExplicitFillable?: boolean
   readonly guarded: readonly string[]
+  readonly hasExplicitGuarded?: boolean
   readonly relations: RelationMap
   readonly casts: Record<string, ModelCastDefinition>
   readonly accessors: Record<string, ModelAccessor>
@@ -740,6 +741,7 @@ export interface ModelDefinition<
   readonly fillable: readonly string[]
   readonly hasExplicitFillable?: boolean
   readonly guarded: readonly string[]
+  readonly hasExplicitGuarded?: boolean
   readonly scopes: TScopes
   readonly globalScopes: ModelScopeMap<TTable>
   readonly relations: TRelations
