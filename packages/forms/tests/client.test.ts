@@ -66,7 +66,11 @@ function createSensitiveSchemaFixture(fields: Record<string, unknown>): Sensitiv
 describe('@holo-js/forms client', () => {
   it('bootstraps a native CSRF token before an unsafe HTTP submission', async () => {
     const { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } = await import('../../security/src')
-    configureSecurityRuntime({ config: defineSecurityConfig({ csrf: { enabled: true } }), csrfSigningKey: 'native-form-bootstrap-key' })
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true } }),
+      csrfSigningKey: 'native-form-bootstrap-key',
+      csrfSession: { read: async () => 'session-token', write: async () => [] },
+    })
     onTestFinished(resetSecurityRuntime)
     const token = await csrf.token(new Request('http://localhost/enquiries'))
     const endpoint = await createFormHttpEndpoint(request => request.url === '/csrf'
@@ -82,6 +86,30 @@ describe('@holo-js/forms client', () => {
     expect(endpoint.requests.map(request => [request.method, request.url])).toEqual([['GET', '/csrf'], ['POST', '/enquiries']])
     expect(endpoint.headers[1]?.['x-csrf-token']).toBe(token)
     expect(endpoint.requests[1]?.body).toContain('ava@example.com')
+  })
+
+  it('sends the bootstrapped CSRF token in the configured header', async () => {
+    const browserGlobal = globalThis as typeof globalThis & { document?: { cookie?: string } }
+    const originalDocument = browserGlobal.document
+    browserGlobal.document = {
+      cookie: `HOLO-CSRF-CONFIG=${encodeURIComponent(JSON.stringify({ csrf: { field: '_csrf', header: 'X-App-CSRF', cookie: 'app-xsrf' } }))}`,
+    }
+    onTestFinished(() => {
+      if (originalDocument) browserGlobal.document = originalDocument
+      else delete browserGlobal.document
+    })
+    const endpoint = await createFormHttpEndpoint(request => request.url === '/csrf'
+      ? Response.json({ token: 'plain-session-token' })
+      : Response.json({ ok: true, status: 201, data: { submitted: true } }, { status: 201 }))
+    const client = useForm(schema({ email: field.string().required().email() }), {
+      action: `${endpoint.url}/enquiries`,
+      csrf: { endpoint: `${endpoint.url}/csrf` },
+      initialValues: { email: 'ava@example.com' },
+    })
+
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 201 })
+    expect(endpoint.headers[1]?.['x-app-csrf']).toBe('plain-session-token')
+    expect(endpoint.headers[1]?.['x-csrf-token']).toBeUndefined()
   })
 
   it('preserves a failed HTTP CSRF bootstrap and does not submit the form', async () => {

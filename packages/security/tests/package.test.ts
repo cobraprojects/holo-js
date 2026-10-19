@@ -48,6 +48,7 @@ import security, {
   type SecuritySignedTokenValue,
   verifySignedToken,
 } from '../src'
+import { memoryCsrfSessions } from './support/csrf-session'
 import { runRateLimitDriverContractSuite } from './support/driver-contract'
 
 const tempDirs: string[] = []
@@ -248,6 +249,7 @@ describe('@holo-js/security package surface', () => {
       },
       rateLimitStore: store,
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions(),
     })
 
     const request = new Request('https://app.test/form')
@@ -491,6 +493,14 @@ describe('@holo-js/security cors', () => {
     expect(varied.headers.get('vary')).toBe('Accept-Encoding, Accept-Language, Origin, Access-Control-Request-Method, Access-Control-Request-Headers')
   })
 
+  it('rejects wildcard origins combined with credentials', () => {
+    expect(() => normalizeCorsConfig({ origins: ['*'], credentials: true })).toThrow('[Holo CORS] Wildcard origins cannot be combined with credentials.')
+    expect(() => configureSecurityRuntime({ config: {}, cors: { origins: ['https://app.example.com', '*'], credentials: true } }))
+      .toThrow('[Holo CORS] Wildcard origins cannot be combined with credentials.')
+    expect(normalizeCorsConfig({ origins: ['*'] }).origins).toEqual(['*'])
+    expect(normalizeCorsConfig({ origins: ['https://app.example.com'], credentials: true }).credentials).toBe(true)
+  })
+
   it('does not emit cors headers outside configured paths or origins', () => {
     configureSecurityRuntime({
       config: {},
@@ -533,15 +543,21 @@ describe('@holo-js/security csrf', () => {
           enabled: true,
         },
       }),
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
     })
 
     await expect(csrf.cookie(new Request('https://app.test/register'))).rejects.toThrow('APP_KEY')
-    await expect(csrf.token(new Request('https://app.test/register', { headers: { cookie: 'XSRF-TOKEN=value' } }))).rejects.toThrow(
-      'APP_KEY',
-    )
+    await expect(csrf.verify(new Request('https://app.test/register', {
+      method: 'POST',
+      headers: {
+        cookie: 'browser=browser-a',
+        'X-XSRF-TOKEN': 'value',
+      },
+    }))).rejects.toThrow('APP_KEY')
   })
 
-  it('reuses an existing csrf cookie token and builds field and cookie helpers', async () => {
+  it('reuses the session csrf token and builds field and cookie helpers', async () => {
+    const sessions = memoryCsrfSessions({ 'browser-a': 'session-token' })
     configureSecurityRuntime({
       config: defineSecurityConfig({
         csrf: {
@@ -549,28 +565,30 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: sessions,
     })
-    const encryptedToken = securityExports.csrfInternals.encryptCsrfToken('cookie-token')
+    const staleCookie = securityExports.csrfInternals.encryptCsrfToken('stale-cookie-token')
 
     const request = new Request('https://app.test/register', {
       headers: {
-        cookie: `XSRF-TOKEN=${encryptedToken}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${staleCookie}`,
       },
     })
 
-    await expect(csrf.token(request)).resolves.toBe('cookie-token')
+    await expect(csrf.token(request)).resolves.toBe('session-token')
     await expect(csrf.field(request)).resolves.toEqual({
       name: '_token',
-      value: 'cookie-token',
+      value: 'session-token',
     })
     await expect(csrf.input(request)).resolves.toEqual({
       type: 'hidden',
       name: '_token',
-      value: 'cookie-token',
+      value: 'session-token',
     })
     const reissued = await csrf.cookie(request)
     expect(reissued).toMatch(/^XSRF-TOKEN=[\w-]+; Path=\/; SameSite=Lax; Secure$/)
-    expect(securityExports.csrfInternals.decryptCsrfToken(reissued.split(';', 1)[0]!.slice('XSRF-TOKEN='.length))).toBe('cookie-token')
+    expect(securityExports.csrfInternals.decryptCsrfToken(reissued.split(';', 1)[0]!.slice('XSRF-TOKEN='.length))).toBe('session-token')
+    expect(sessions.writes).toEqual([])
 
     const proxiedRequest = new Request('http://app.test/register', {
       headers: {
@@ -595,7 +613,8 @@ describe('@holo-js/security csrf', () => {
     }))).toBe(false)
   })
 
-  it('generates tokens when no cookie is present', async () => {
+  it('generates request-scoped tokens when the session has none', async () => {
+    const sessions = memoryCsrfSessions()
     configureSecurityRuntime({
       config: defineSecurityConfig({
         csrf: {
@@ -603,6 +622,7 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: sessions,
     })
 
     const request = new Request('http://app.test/register')
@@ -618,9 +638,11 @@ describe('@holo-js/security csrf', () => {
       name: '_token',
       value: token,
     })
-    const issued = await csrf.cookie(request, token)
+    const issued = await csrf.cookie(request)
     expect(issued).toMatch(/^XSRF-TOKEN=[\w-]+; Path=\/; SameSite=Lax$/)
     expect(securityExports.csrfInternals.decryptCsrfToken(issued.split(';', 1)[0]!.slice('XSRF-TOKEN='.length))).toBe(token)
+    expect(sessions.writes).toEqual([])
+    await expect(csrf.token(new Request('http://app.test/register'))).resolves.not.toBe(token)
   })
 
   it('verifies csrf tokens from headers and form fields', async () => {
@@ -631,38 +653,48 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
     })
-    const headerToken = securityExports.csrfInternals.encryptCsrfToken('header-token')
+    const encryptedToken = securityExports.csrfInternals.encryptCsrfToken('session-token')
+    const cookie = `browser=browser-a; XSRF-TOKEN=${encryptedToken}`
 
-    const headerRequest = new Request('https://app.test/login', {
+    for (const headerToken of ['session-token', encryptedToken]) {
+      await expect(csrf.verify(new Request('https://app.test/login', {
+        method: 'POST',
+        headers: {
+          cookie,
+          'X-CSRF-TOKEN': headerToken,
+        },
+      }))).resolves.toBeUndefined()
+    }
+
+    await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${headerToken}`,
-        'X-CSRF-TOKEN': headerToken,
+        cookie,
+        'X-XSRF-TOKEN': encryptedToken,
       },
-    })
-    await expect(csrf.verify(headerRequest)).resolves.toBeUndefined()
+    }))).resolves.toBeUndefined()
 
     const formData = new FormData()
-    const formToken = securityExports.csrfInternals.encryptCsrfToken('form-token')
-    formData.set('_token', formToken)
+    formData.set('_token', 'session-token')
     formData.set('email', 'ava@example.com')
 
     const formRequest = new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${formToken}`,
+        cookie,
       },
       body: formData,
     })
     await expect(csrf.verify(formRequest)).resolves.toBeUndefined()
 
     const fallbackFormData = new FormData()
-    fallbackFormData.set('_token', formToken)
+    fallbackFormData.set('_token', encryptedToken)
     const blankHeaderRequest = new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${formToken}`,
+        cookie,
         'X-CSRF-TOKEN': '   ',
       },
       body: fallbackFormData,
@@ -672,12 +704,12 @@ describe('@holo-js/security csrf', () => {
     const nativeFormRequest = new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${formToken}`,
+        cookie,
         origin: 'https://app.test',
       },
       body: new URLSearchParams({
         email: 'ava@example.com',
-        _token: formToken,
+        _token: 'session-token',
       }),
     })
     await expect(csrf.verify(nativeFormRequest)).resolves.toBeUndefined()
@@ -687,7 +719,7 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${formToken}`,
+        cookie,
       },
       body: fileTokenFormData,
     }))).rejects.toBeInstanceOf(SecurityCsrfError)
@@ -697,12 +729,13 @@ describe('@holo-js/security csrf', () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({ csrf: { enabled: true } }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
     })
-    const signedToken = await csrf.token(new Request('https://app.test/login'))
+    const signedToken = securityExports.csrfInternals.encryptCsrfToken('session-token')
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${signedToken}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${signedToken}`,
         [header]: 'https://app.test',
         'content-type': 'application/json',
       },
@@ -718,12 +751,13 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'same-origin-token' }),
     })
 
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: 'XSRF-TOKEN=expected',
+        cookie: 'browser=browser-a',
         'X-CSRF-TOKEN': 'wrong',
       },
     }))).rejects.toMatchObject({
@@ -735,7 +769,7 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${signedToken}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${signedToken}`,
         'X-CSRF-TOKEN': securityExports.csrfInternals.encryptCsrfToken('wrong-token'),
       },
     }))).rejects.toBeInstanceOf(SecurityCsrfError)
@@ -743,7 +777,7 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${signedToken}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${signedToken}`,
         origin: 'https://evil.test',
       },
       body: new URLSearchParams({
@@ -754,12 +788,20 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${signedToken}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${signedToken}`,
         referer: 'not a url',
       },
       body: new URLSearchParams({
         email: 'ava@example.com',
       }),
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
+
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${signedToken}`,
+        'X-CSRF-TOKEN': 'same-origin-token',
+      },
     }))).rejects.toBeInstanceOf(SecurityCsrfError)
 
     await expect(csrf.verify(new Request('https://app.test/login', {
@@ -775,23 +817,40 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
     })
+    const forgedCookie = securityExports.csrfInternals.encryptCsrfToken('forged-token')
 
-    await expect(csrf.verify(new Request('https://app.test/login', {
-      method: 'POST',
+    for (const cookie of ['XSRF-TOKEN=forged-token', 'browser=browser-a; XSRF-TOKEN=forged-token']) {
+      await expect(csrf.verify(new Request('https://app.test/login', {
+        method: 'POST',
+        headers: {
+          cookie,
+          'X-CSRF-TOKEN': 'forged-token',
+        },
+      }))).rejects.toBeInstanceOf(SecurityCsrfError)
+    }
+
+    for (const cookie of [`XSRF-TOKEN=${forgedCookie}`, `browser=browser-a; XSRF-TOKEN=${forgedCookie}`]) {
+      await expect(csrf.verify(new Request('https://app.test/login', {
+        method: 'POST',
+        headers: {
+          cookie,
+          'X-XSRF-TOKEN': forgedCookie,
+        },
+      }))).rejects.toBeInstanceOf(SecurityCsrfError)
+    }
+
+    await expect(csrf.token(new Request('https://app.test/login', {
       headers: {
-        cookie: 'XSRF-TOKEN=forged-token',
-        'X-CSRF-TOKEN': 'forged-token',
+        cookie: 'browser=browser-a; XSRF-TOKEN=forged-token',
       },
-    }))).rejects.toBeInstanceOf(SecurityCsrfError)
-
-    const token = await csrf.token(new Request('https://app.test/login', {
+    }))).resolves.toBe('session-token')
+    await expect(csrf.token(new Request('https://app.test/login', {
       headers: {
-        cookie: 'XSRF-TOKEN=forged-token',
+        cookie: `XSRF-TOKEN=${forgedCookie}`,
       },
-    }))
-
-    expect(token).not.toBe('forged-token')
+    }))).resolves.not.toBe('forged-token')
   })
 
   it('rejects malformed encrypted tokens and skips invalid cookie fragments', () => {
@@ -825,6 +884,7 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'raw.nonce', 'browser-b': 'body-token' }),
     })
 
     const cookie = await csrf.cookie(new Request('https://app.test/register'), 'raw-nonce')
@@ -840,7 +900,7 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/register', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${dottedValue}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${dottedValue}`,
         'X-CSRF-TOKEN': dottedToken,
       },
     }))).resolves.toBeUndefined()
@@ -849,7 +909,7 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${token}`,
+        cookie: `browser=browser-b; XSRF-TOKEN=${token}`,
         'content-type': 'text/plain',
       },
       body: token,
@@ -890,13 +950,14 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'custom-token' }),
     })
     const customToken = securityExports.csrfInternals.encryptCsrfToken('custom-token')
 
     const request = new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `csrf-token=${customToken}`,
+        cookie: `browser=browser-a; csrf-token=${customToken}`,
         'X-XSRF-TOKEN': customToken,
       },
     })
@@ -906,7 +967,16 @@ describe('@holo-js/security csrf', () => {
       value: 'custom-token',
     })
     await expect(csrf.verify(request)).resolves.toBeUndefined()
-    await expect(csrf.cookie(request)).resolves.toMatch(/^csrf-token=[\w-]+; Path=\/; SameSite=Lax; Secure$/)
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: 'browser=browser-a',
+      },
+      body: new URLSearchParams({ _csrf: 'custom-token' }),
+    }))).resolves.toBeUndefined()
+    const reissued = await csrf.cookie(request)
+    expect(reissued).toMatch(/^csrf-token=[\w-]+; Path=\/; SameSite=Lax; Secure$/)
+    expect(securityExports.csrfInternals.decryptCsrfToken(reissued.split(';', 1)[0]!.slice('csrf-token='.length))).toBe('custom-token')
   })
 
   it('protect uses route-level options against global defaults', async () => {
@@ -917,6 +987,7 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'forced-token' }),
     })
 
     const unprotected = new Request('https://app.test/login', {
@@ -927,11 +998,17 @@ describe('@holo-js/security csrf', () => {
     const forced = new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${securityExports.csrfInternals.encryptCsrfToken('forced-token')}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${securityExports.csrfInternals.encryptCsrfToken('forced-token')}`,
         'X-CSRF-TOKEN': securityExports.csrfInternals.encryptCsrfToken('forced-token'),
       },
     })
     await expect(protect(forced, { csrf: true })).resolves.toBeUndefined()
+    await expect(protect(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: 'browser=browser-a',
+      },
+    }), { csrf: true })).rejects.toBeInstanceOf(SecurityCsrfError)
 
     configureSecurityRuntime({
       config: defineSecurityConfig({
@@ -956,10 +1033,14 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
     })
 
     await expect(protect(new Request('https://app.test/webhooks/stripe', {
       method: 'POST',
+      headers: {
+        cookie: 'browser=browser-a',
+      },
     }), {
       csrf: true,
     })).rejects.toBeInstanceOf(SecurityCsrfError)
@@ -1000,6 +1081,7 @@ describe('@holo-js/security csrf', () => {
         },
       }),
       csrfSigningKey: 'test-signing-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'throttle-token' }),
       rateLimitStore: createMockRateLimitStore(),
     })
     const throttleToken = securityExports.csrfInternals.encryptCsrfToken('throttle-token')
@@ -1007,7 +1089,7 @@ describe('@holo-js/security csrf', () => {
     await expect(protect(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: `XSRF-TOKEN=${throttleToken}`,
+        cookie: `browser=browser-a; XSRF-TOKEN=${throttleToken}`,
         'X-CSRF-TOKEN': throttleToken,
         'x-forwarded-for': '203.0.113.10',
       },

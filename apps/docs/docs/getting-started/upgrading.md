@@ -72,6 +72,20 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### CSRF tokens stored in the session
+
+The CSRF token now lives in the visitor's [session](/basics/session), as in Laravel. The `XSRF-TOKEN` cookie carries that session token encrypted, and a token copied from another browser or planted by a subdomain no longer matches.
+
+- **Tokens reissue after upgrading.** The first unsafe request each browser sends after the upgrade gets `419`, because its session has no token yet. The next page load stores a token in the session and issues a new `XSRF-TOKEN` cookie.
+- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf` without Auth, add `@holo-js/session` to your dependencies. Without a `config/session.ts`, Holo uses the default file session store.
+- **Send the session cookie.** Visitors without a session get one on their first page load. Scripts and tests that post with only the `XSRF-TOKEN` cookie must also send the `holo_session` cookie (or your `session.cookie.name`).
+- **Use `X-XSRF-TOKEN` for the cookie value.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value. The new `X-XSRF-TOKEN` header accepts the cookie value. Your own `fetch` calls can keep sending the cookie value in `X-CSRF-TOKEN`.
+- **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`.
+
+### CORS wildcard origins with credentials
+
+`config/cors.ts` can no longer combine `origins: ['*']` with `credentials: true`. Holo throws at startup instead of echoing every origin with credentials. List your frontend origins in `origins`, or set `credentials: false`. A wildcard origin now always answers `Access-Control-Allow-Origin: *`.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

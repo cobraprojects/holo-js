@@ -44,8 +44,8 @@ function getRequestCookie(request: NextCsrfRequest, name: string): string | unde
 }
 
 async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | undefined> {
-  const cookies = await prepareCsrfCookies(request, name => getRequestCookie(request, name))
-  if (cookies.length === 0) {
+  const { cookies, sessionCookies } = await prepareCsrfCookies(request, name => getRequestCookie(request, name))
+  if (cookies.length === 0 && sessionCookies.length === 0) {
     return undefined
   }
 
@@ -53,6 +53,9 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
   const response = NextResponse.next()
   for (const cookie of cookies) {
     response.cookies.set(cookie.name, cookie.value, cookie.options)
+  }
+  for (const sessionCookie of sessionCookies) {
+    response.headers.append('Set-Cookie', sessionCookie)
   }
   return response
 }

@@ -35,16 +35,9 @@ export function resetSecurityClientModuleCache(): void {
   securityClientModulePromise = undefined
 }
 
-export async function getClientCsrfField(): Promise<{ readonly name: string, readonly value: string } | undefined> {
-  const runtime = globalThis as BrowserLikeGlobal
-
-  if (!runtime.document || typeof runtime.document.cookie !== 'string') {
-    return undefined
-  }
-
-  let security: SecurityClientModule
+async function loadInstalledSecurityClientModule(): Promise<SecurityClientModule | undefined> {
   try {
-    security = await loadSecurityClientModule()
+    return await loadSecurityClientModule()
   } catch (error) {
     if (error instanceof FormContractError) {
       return undefined
@@ -52,6 +45,24 @@ export async function getClientCsrfField(): Promise<{ readonly name: string, rea
 
     throw error
   }
+}
+
+export async function getClientCsrfHeaderName(): Promise<string> {
+  return (await loadInstalledSecurityClientModule())?.getSecurityClientConfig().csrf.header ?? 'X-CSRF-TOKEN'
+}
+
+export async function getClientCsrfField(): Promise<{ readonly name: string, readonly value: string } | undefined> {
+  const runtime = globalThis as BrowserLikeGlobal
+
+  if (!runtime.document || typeof runtime.document.cookie !== 'string') {
+    return undefined
+  }
+
+  const security = await loadInstalledSecurityClientModule()
+  if (!security) {
+    return undefined
+  }
+
   const config = security.getSecurityClientConfig().csrf
   const value = parseCookieHeader(runtime.document.cookie)[config.cookie]
 

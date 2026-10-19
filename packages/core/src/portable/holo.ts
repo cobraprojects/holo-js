@@ -95,6 +95,7 @@ import {
 } from './recordPersistence'
 import { createCoreNotificationStore } from './notificationPersistence'
 import { createCoreDatabaseSessionAdapter } from './sessionPersistence'
+import { createCsrfSessionAccessor } from './csrfSession'
 import {
   createCoreNotificationMailSender,
   createNotificationMailText,
@@ -223,6 +224,7 @@ type SessionModule = Pick<typeof SessionFeature,
   | 'createFileSessionStore'
   | 'createRedisSessionStore'
   | 'getSessionRuntime'
+  | 'parseCookieHeader'
   | 'resetSessionRuntime'
 >
 
@@ -1549,8 +1551,12 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   const sessionConfigured = hasLoadedConfigFile(loadedConfig, 'session') || hasLoadedConfigFile(loadedConfig, 'auth')
   const authConfigured = hasLoadedConfigFile(loadedConfig, 'auth')
   const securityConfigured = hasLoadedConfigFile(loadedConfig, 'security')
+  const csrfConfigured = securityConfigured && loadedConfig.security.csrf.enabled
   const securityModule = securityConfigured
     ? await loadSecurityModule(true)
+    : undefined
+  const sessionModule = sessionConfigured || csrfConfigured
+    ? await loadSessionModule(true)
     : undefined
   const existingManagedSecurityRedisAdapter = getRuntimeState().securityRedisAdapter
   const existingManagedSecurityStore = getRuntimeState().securityRateLimitStore
@@ -1599,6 +1605,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         cors: loadedConfig.cors,
         rateLimitStore,
         csrfSigningKey: loadedConfig.app.key,
+        ...(csrfConfigured && sessionModule
+          ? { csrfSession: createCsrfSessionAccessor(sessionModule, () => loadedConfig.session.cookie.name) }
+          : {}),
         defaultKeyResolver: async () => {
           const authModule = await loadAuthModule()
           if (!authModule) {
@@ -1639,9 +1648,6 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     existingSecurityModule?.resetSecurityRuntime()
   }
 
-  const sessionModule = sessionConfigured || authConfigured
-    ? await loadSessionModule(true)
-    : undefined
   const existingManagedSessionRedisAdapters = getRuntimeState().sessionRedisAdapters
 
   /* v8 ignore start -- redundant defensive guards after required-module loaders above */

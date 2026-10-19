@@ -159,7 +159,7 @@ With no `submitter`, the built-in one sends the form with `fetch`:
 - **URL:** `action` option, or the `<form action>` attribute.
 - **Method:** `method` option, or the `<form method>` attribute, or `POST`.
 - **Body:** `FormData` built from the form element and `form.values`. For `GET` and `HEAD`, the values go in the query string instead.
-- **CSRF:** for unsafe methods, the [CSRF token](/basics/security/csrf) from the security cookie is added automatically when `@holo-js/security` is installed.
+- **CSRF:** for unsafe methods, the [CSRF token](/basics/security/csrf) from the security cookie is added automatically as `_token` when `@holo-js/security` is installed. A `_token` field already in the form is kept.
 
 The response is applied to the form:
 
@@ -218,7 +218,7 @@ const form = useForm(contactForm, {
 })
 ```
 
-Before each unsafe submission, `useForm()` fetches the endpoint with the same `credentials` and sends the token in the `X-CSRF-TOKEN` header. The API must allow the page's origin with credentials; see [CORS and Proxies](/basics/security/cors-and-proxies). These options only apply to the built-in submitter.
+Before each unsafe submission, `useForm()` fetches the endpoint with the same `credentials` and sends the token in the `csrf.header` header from `config/security.ts` (`X-CSRF-TOKEN` by default). The API must allow the page's origin with credentials; see [CORS and Proxies](/basics/security/cors-and-proxies). These options only apply to the built-in submitter.
 
 ## Field state
 

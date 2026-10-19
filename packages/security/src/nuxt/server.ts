@@ -1,6 +1,7 @@
 import {
   createError,
   defineEventHandler,
+  appendResponseHeader,
   getCookie,
   getMethod,
   getRequestHeaders,
@@ -61,9 +62,12 @@ async function createRequest(event: H3Event): Promise<Request> {
 }
 
 async function issueCsrfCookie(event: H3Event, request: Request): Promise<void> {
-  const cookies = await prepareCsrfCookies(request, name => getCookie(event, name))
+  const { cookies, sessionCookies } = await prepareCsrfCookies(request, name => getCookie(event, name))
   for (const cookie of cookies) {
     setCookie(event, cookie.name, cookie.value, cookie.options)
+  }
+  for (const sessionCookie of sessionCookies) {
+    appendResponseHeader(event, 'set-cookie', sessionCookie)
   }
 }
 

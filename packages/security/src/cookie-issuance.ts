@@ -17,23 +17,28 @@ type SecurityCookie = {
   }
 }
 
+export type PreparedCsrfCookies = {
+  readonly cookies: readonly SecurityCookie[]
+  readonly sessionCookies: readonly string[]
+}
+
+const NO_CSRF_COOKIES: PreparedCsrfCookies = Object.freeze({ cookies: Object.freeze([]), sessionCookies: Object.freeze([]) })
+
 export async function prepareCsrfCookies(
   request: Request,
   getCookie: (name: string) => string | undefined,
-): Promise<readonly SecurityCookie[]> {
+): Promise<PreparedCsrfCookies> {
   const { config } = getSecurityRuntime()
   const method = request.method.trim().toUpperCase()
   if (!config.csrf.enabled || (method !== 'GET' && method !== 'HEAD')) {
-    return []
+    return NO_CSRF_COOKIES
   }
 
+  const { token, sessionCookies } = await csrfInternals.ensureSessionToken(request)
   const existingCookie = getCookie(config.csrf.cookie)
   const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(config))
-  const shouldIssueToken = !existingCookie || !csrfInternals.decryptCsrfToken(existingCookie)
+  const shouldIssueToken = !existingCookie || csrfInternals.decryptCsrfToken(existingCookie) !== token
   const shouldIssueClientConfig = getCookie(SECURITY_CLIENT_CONFIG_COOKIE) !== clientConfig
-  if (!shouldIssueToken && !shouldIssueClientConfig) {
-    return []
-  }
 
   const options = {
     httpOnly: false as const,
@@ -43,10 +48,27 @@ export async function prepareCsrfCookies(
   }
   const cookies: SecurityCookie[] = []
   if (shouldIssueToken) {
-    cookies.push({ name: config.csrf.cookie, value: await encryptedToken(request), options })
+    cookies.push({ name: config.csrf.cookie, value: await encryptedToken(request, token), options })
   }
   if (shouldIssueClientConfig) {
     cookies.push({ name: SECURITY_CLIENT_CONFIG_COOKIE, value: clientConfig, options })
   }
-  return cookies
+  return { cookies, sessionCookies }
+}
+
+export function appendSetCookies(response: Response, setCookies: readonly string[]): Response {
+  if (setCookies.length === 0) {
+    return response
+  }
+
+  const headers = new Headers(response.headers)
+  for (const setCookie of setCookies) {
+    headers.append('Set-Cookie', setCookie)
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }

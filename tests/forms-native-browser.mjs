@@ -77,6 +77,12 @@ globalThis.submitNativeUpload = async () => {
   })
   return await runWithBrowserFormElement(form, document.querySelector('#upload'))
 }
+globalThis.submitRenderedCsrfForm = async () => {
+  const form = createFormClient(schema({ email: field.string().required().email() }), {
+    submitter: ({ formData }) => ({ ok: true, status: 200, data: Object.fromEntries(formData) }),
+  })
+  return await runWithBrowserFormElement(form, document.getElementById('rendered'))
+}
 globalThis.submitNativeConcurrentForms = async () => {
   return await Promise.all(['first', 'second'].map(id => {
     const form = createFormClient(schema({ email: field.string().required().email() }), {
@@ -99,7 +105,7 @@ const server = createServer((request, response) => {
     return
   }
   response.setHeader('content-type', 'text/html')
-  response.end('<!doctype html><title>Native form client</title><form id="upload"><input name="title" value="Native upload"><input name="image" type="file"></form><form id="first" action="/first" method="post"><input name="email" value="first@example.com"></form><form id="second" action="/second" method="post"><input name="email" value="second@example.com"></form><script src="/client.js"></script>')
+  response.end('<!doctype html><title>Native form client</title><form id="upload"><input name="title" value="Native upload"><input name="image" type="file"></form><form id="first" action="/first" method="post"><input name="email" value="first@example.com"></form><form id="second" action="/second" method="post"><input name="email" value="second@example.com"></form><form id="rendered" action="/rendered" method="post"><input name="email" value="ava@example.com"><input type="hidden" name="_token" value="server-rendered-token"></form><script src="/client.js"></script>')
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const address = server.address()
@@ -112,7 +118,8 @@ try {
     await Promise.all([
       { name: 'attaches the default CSRF cookie on unsafe submissions', cookie: 'XSRF-TOKEN=client-token', method: 'POST', expected: { email: 'ava@example.com', _token: 'client-token' } },
       { name: 'ignores malformed unrelated cookies while reading the native CSRF cookie', cookie: 'tracking=%; XSRF-TOKEN=client-token', method: 'POST', expected: { email: 'ava@example.com', _token: 'client-token' } },
-      { name: 'reads custom CSRF names from the real security client configuration cookie', cookie: 'csrf-token=custom-token; HOLO-CSRF-CONFIG=' + encodeURIComponent(JSON.stringify({ csrf: { field: '_csrf', cookie: 'csrf-token' } })), method: 'POST', expected: { email: 'ava@example.com', _csrf: 'custom-token' } },
+      { name: 'reads custom CSRF names from the real security client configuration cookie', cookie: 'csrf-token=custom-token; HOLO-CSRF-CONFIG=' + encodeURIComponent(JSON.stringify({ csrf: { field: '_csrf', header: 'X-App-CSRF', cookie: 'csrf-token' } })), method: 'POST', expected: { email: 'ava@example.com', _csrf: 'custom-token' } },
+      { name: 'reads custom CSRF names from configuration cookies issued before the header name was added', cookie: 'csrf-token=custom-token; HOLO-CSRF-CONFIG=' + encodeURIComponent(JSON.stringify({ csrf: { field: '_csrf', cookie: 'csrf-token' } })), method: 'POST', expected: { email: 'ava@example.com', _csrf: 'custom-token' } },
       { name: 'omits CSRF fields for safe submissions', cookie: 'XSRF-TOKEN=safe-token', method: 'GET', expected: { email: 'ava@example.com' } },
       { name: 'omits CSRF fields when the browser has no token cookie', cookie: '', method: 'POST', expected: { email: 'ava@example.com' } },
     ].map(scenario => suite.test(scenario.name, async () => {
@@ -157,6 +164,18 @@ try {
         const result = await page.evaluate(() => globalThis.invitationResult)
         const expected = { token: 'invitation-token', password: 'secure-password' }
         assert.deepEqual(result, { ok: true, status: 200, data: { values: expected, entries: expected } })
+      } finally {
+        await context.close()
+      }
+    })
+    await suite.test('keeps a server-rendered CSRF token instead of the cookie value', async () => {
+      const context = await browser.newContext()
+      try {
+        await context.addCookies([{ name: 'XSRF-TOKEN', value: 'encrypted-cookie-token', url }])
+        const page = await context.newPage()
+        await page.goto(url)
+        const result = await page.evaluate(() => globalThis.submitRenderedCsrfForm())
+        assert.deepEqual(result, { ok: true, status: 200, data: { email: 'ava@example.com', _token: 'server-rendered-token' } })
       } finally {
         await context.close()
       }

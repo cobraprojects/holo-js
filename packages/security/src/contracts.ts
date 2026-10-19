@@ -33,11 +33,17 @@ export type {
   SecurityRateLimitRedisConfig,
 } from './config'
 
+export interface SecurityCsrfSessionAccessor {
+  read(request: Request): Promise<string | undefined>
+  write(request: Request, token: string): Promise<readonly string[]>
+}
+
 export interface SecurityRuntimeBindings {
   readonly config: HoloSecurityConfig | NormalizedHoloSecurityConfig
   readonly cors?: HoloCorsConfig | NormalizedHoloCorsConfig
   readonly rateLimitStore?: SecurityRateLimitStore
   readonly csrfSigningKey?: string
+  readonly csrfSession?: SecurityCsrfSessionAccessor
   readonly defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
 }
 
@@ -46,12 +52,14 @@ export interface SecurityRuntimeFacade {
   readonly cors: NormalizedHoloCorsConfig
   readonly rateLimitStore?: SecurityRateLimitStore
   readonly csrfSigningKey?: string
+  readonly csrfSession?: SecurityCsrfSessionAccessor
   readonly defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
 }
 
 export interface SecurityClientConfig {
   readonly csrf: {
     readonly field: string
+    readonly header: string
     readonly cookie: string
   }
 }
@@ -274,6 +282,7 @@ export function defineSecurityRuntimeBindings(
   cors: NormalizedHoloCorsConfig
   rateLimitStore?: SecurityRateLimitStore
   csrfSigningKey?: string
+  csrfSession?: SecurityCsrfSessionAccessor
   defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
 }> {
   return Object.freeze({
@@ -281,6 +290,7 @@ export function defineSecurityRuntimeBindings(
     cors: normalizeCorsConfig(bindings.cors),
     rateLimitStore: bindings.rateLimitStore,
     csrfSigningKey: bindings.csrfSigningKey,
+    csrfSession: bindings.csrfSession,
     defaultKeyResolver: bindings.defaultKeyResolver,
   })
 }

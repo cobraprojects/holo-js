@@ -67,7 +67,7 @@ function resolveAllowedOrigin(config: NormalizedHoloCorsConfig, origin: string |
   }
 
   if (config.origins.includes('*')) {
-    return config.credentials ? origin : '*'
+    return '*'
   }
 
   return undefined
