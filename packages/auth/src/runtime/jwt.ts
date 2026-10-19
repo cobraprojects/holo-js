@@ -68,50 +68,98 @@ function verifyJwtSignatureWithJwk(
   }
 }
 
-async function fetchCachedJwks(
+const JWKS_MAX_AGE_MS = 10 * 60 * 1000
+const JWKS_REFRESH_INTERVAL_MS = 60 * 1000
+
+type AuthRuntimeJwksCacheEntry = {
+  readonly keys: Promise<readonly AuthRuntimeJwkKey[]>
+  readonly loadedAt: number
+  failed: boolean
+}
+
+export type AuthRuntimeJwksCache = Map<string, AuthRuntimeJwksCacheEntry>
+
+function findJwk(keys: readonly AuthRuntimeJwkKey[], kid: string | undefined): AuthRuntimeJwkKey | undefined {
+  return kid
+    ? keys.find(candidate => candidate.kid === kid)
+    : keys[0]
+}
+
+function loadJwks(
+  cache: AuthRuntimeJwksCache,
   cacheKey: string,
   options: {
-    readonly cache: Map<string, Promise<readonly AuthRuntimeJwkKey[]>>
     readonly requestUrl: string
-    readonly refresh?: boolean
     readonly errorMessage: string
   },
-): Promise<readonly AuthRuntimeJwkKey[]> {
-  if (options.refresh) {
-    options.cache.delete(cacheKey)
+): AuthRuntimeJwksCacheEntry {
+  const entry: AuthRuntimeJwksCacheEntry = {
+    loadedAt: Date.now(),
+    failed: false,
+    keys: (async () => {
+      const response = await fetch(options.requestUrl, {
+        headers: {
+          accept: 'application/json',
+        },
+      })
+      if (!response.ok) {
+        throw new Error(options.errorMessage)
+      }
+
+      const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
+      return payload.keys ?? []
+    })(),
   }
 
-  const existing = options.cache.get(cacheKey)
-  if (existing) {
-    return existing
+  entry.keys.catch(() => {
+    entry.failed = true
+  })
+  cache.set(cacheKey, entry)
+  return entry
+}
+
+function resolveCacheEntry(
+  cache: AuthRuntimeJwksCache,
+  cacheKey: string,
+  options: {
+    readonly requestUrl: string
+    readonly errorMessage: string
+  },
+): AuthRuntimeJwksCacheEntry {
+  const existing = cache.get(cacheKey)
+  const age = existing ? Date.now() - existing.loadedAt : Number.POSITIVE_INFINITY
+  if (!existing || age >= JWKS_MAX_AGE_MS || (existing.failed && age >= JWKS_REFRESH_INTERVAL_MS)) {
+    return loadJwks(cache, cacheKey, options)
   }
 
-  const pending = (async () => {
-    const response = await fetch(options.requestUrl, {
-      headers: {
-        accept: 'application/json',
-      },
-    })
-    if (!response.ok) {
-      throw new Error(options.errorMessage)
-    }
+  return existing
+}
 
-    const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
-    return payload.keys ?? []
-  })()
-
-  options.cache.set(cacheKey, pending)
-  try {
-    return await pending
-  } catch (error) {
-    options.cache.delete(cacheKey)
-    throw error
+async function resolveCachedJwk(
+  cache: AuthRuntimeJwksCache,
+  cacheKey: string,
+  options: {
+    readonly requestUrl: string
+    readonly kid: string | undefined
+    readonly errorMessage: string
+  },
+): Promise<AuthRuntimeJwkKey | undefined> {
+  const entry = resolveCacheEntry(cache, cacheKey, options)
+  const key = findJwk(await entry.keys, options.kid)
+  if (key || Date.now() - entry.loadedAt < JWKS_REFRESH_INTERVAL_MS) {
+    return key
   }
+
+  const latest = cache.get(cacheKey)
+  const refreshed = latest && latest !== entry
+    ? latest
+    : loadJwks(cache, cacheKey, options)
+  return findJwk(await refreshed.keys, options.kid)
 }
 
 export const authJwtInternals = {
-  fetchCachedJwks,
   getJwtStringClaim,
   parseJwt,
+  resolveCachedJwk,
   verifyJwtSignatureWithJwk,
 }

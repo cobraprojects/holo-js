@@ -233,13 +233,19 @@ function getStateCookieName(provider: string): string {
   return `holo_oauth_state_${suffix}`
 }
 
-function serializeStateCookie(provider: string, state: string, nonce: string, request: Request): string {
+function serializeStateCookie(
+  provider: string,
+  state: string,
+  nonce: string,
+  request: Request,
+  formPostCallback: boolean,
+): string {
   const secure = new URL(request.url).protocol === 'https:'
   const attributes = [
     `${getStateCookieName(provider)}=${state}.${nonce}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    formPostCallback && secure ? 'SameSite=None' : 'SameSite=Lax',
     'Max-Age=600',
   ]
   if (secure) {
@@ -669,7 +675,7 @@ export async function redirect(provider: string, input: SocialRequestInput): Pro
   const headers = new Headers({
     location: authorizationUrl,
   })
-  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request))
+  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request, new URL(authorizationUrl).searchParams.get('response_mode') === 'form_post'))
 
   return new Response(null, {
     status: 302,

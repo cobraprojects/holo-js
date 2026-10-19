@@ -50,10 +50,10 @@ import {
 } from './contracts'
 import {
   CLERK_API_BASE_URL,
-  fetchClerkJwks,
+  resetClerkJwksCache,
+  resolveClerkJwk,
   parseJwt,
   resolveClerkJwksUrl,
-  type JwkKey,
   verifyJwtSignatureWithJwk,
 } from './jwt'
 import { normalizeClerkRequest } from './request'
@@ -143,18 +143,7 @@ async function verifyClerkSessionToken(
 ): Promise<VerifiedClerkClaims> {
   const parsed = parseJwt(token)
   const headerKid = typeof parsed.header.kid === 'string' ? parsed.header.kid : undefined
-  const jwksUrl = resolveClerkJwksUrl(config)
-  const resolveKey = async (refresh = false): Promise<JwkKey | undefined> => {
-    const keys = await fetchClerkJwks(jwksUrl, { refresh })
-    return headerKid
-      ? keys.find(candidate => candidate.kid === headerKid)
-      : keys[0]
-  }
-
-  let key = await resolveKey()
-  if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
-    key = await resolveKey(true)
-  }
+  const key = await resolveClerkJwk(resolveClerkJwksUrl(config), headerKid)
   if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
     throw new Error('[@holo-js/auth-clerk] Clerk token signature verification failed.')
   }
@@ -1260,6 +1249,7 @@ export function configureClerkAuthRuntime(bindings?: ConfigureClerkAuthRuntimeOp
 export function resetClerkAuthRuntime(): void {
   getRuntimeState().bindings = undefined
   clerkDefaultProviderRuntimeCache.clear()
+  resetClerkJwksCache()
 }
 
 export const clerkAuth = Object.freeze({

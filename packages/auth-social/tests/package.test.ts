@@ -340,6 +340,29 @@ describe('@holo-js/auth-social', () => {
     }
   })
 
+  it('sends the state cookie cross-site on HTTPS for providers that return by form POST', async () => {
+    await configureRuntime()
+    const bindings = socialAuthInternals.getBindings()
+    configureSocialAuthRuntime({
+      ...bindings,
+      providers: {
+        google: {
+          ...bindings.providers.google!,
+          buildAuthorizationUrl() {
+            return 'https://provider.test/authorize?response_mode=form_post'
+          },
+        },
+      },
+    })
+
+    const secure = await redirect('google', new Request('https://app.test/auth/google'))
+    expect(secure.headers.get('set-cookie')).toMatch(/; SameSite=None; Max-Age=600; Secure$/)
+
+    const plain = await redirect('google', new Request('http://app.test/auth/google'))
+    expect(plain.headers.get('set-cookie')).toContain('SameSite=Lax')
+    expect(plain.headers.get('set-cookie')).not.toContain('SameSite=None')
+  })
+
   it('builds a redirect URL with state and PKCE and rejects unknown callback state', async () => {
     const runtime = await configureRuntime()
     const response = await redirect('google', new Request('https://app.test/auth/google'))
