@@ -15,7 +15,7 @@ Go through this list before your first production deploy, and again when you add
 
 - [ ] `DB_*` variables point at the production database.
 - [ ] `npx holo migrate` runs as a deploy step, before `holo build` and before new code serves traffic. See [Deploying](/deployment/#run-migrations).
-- [ ] You never run `migrate:fresh` or `seed` against production. (`holo seed` refuses in production unless you pass `--force`.)
+- [ ] You never run `migrate:fresh` or `seed` against production. (`migrate:fresh`, `migrate:rollback`, and `seed` ask for confirmation in production, and stop without a terminal unless you pass `--force`.)
 - [ ] Postgres pool settings (`DB_POOL_MAX` and friends) fit your database's connection limit across all web and worker processes.
 
 ## Build and start

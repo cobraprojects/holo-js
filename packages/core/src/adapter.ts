@@ -10,7 +10,7 @@ import {
   type CreateHoloOptions,
   type HoloRuntime,
 } from './portable/holo'
-import { configureConfigRuntime, loaderInternals, resolveEnvironmentFileOrder } from '@holo-js/config'
+import { configureConfigRuntime, loaderInternals, resolveEnvironmentFileOrder, resolveProjectAppEnvironmentSync } from '@holo-js/config'
 import type {
   DotPath,
   HoloConfigValues,
@@ -156,11 +156,16 @@ export function resolveHoloFrameworkOptions(
   options: HoloFrameworkOptions = {},
 ): ResolvedHoloFrameworkOptions {
   const processEnv = options.processEnv ?? process.env
+  const projectRoot = resolve(options.projectRoot ?? /* turbopackIgnore: true */ process.cwd())
   return {
-    projectRoot: resolve(options.projectRoot ?? /* turbopackIgnore: true */ process.cwd()),
+    projectRoot,
     runtime: {
       envName: options.envName,
-      preferCache: options.preferCache ?? processEnv.NODE_ENV === 'production',
+      preferCache: options.preferCache ?? resolveProjectAppEnvironmentSync({
+        cwd: projectRoot,
+        envName: options.envName,
+        processEnv,
+      }) === 'production',
       processEnv,
       renderView: options.renderView,
       authRequest: options.authRequest,
@@ -174,11 +179,16 @@ export function createHoloProjectAccessors<
   TCustom extends HoloConfigMap = HoloConfigMap,
 >(
   resolveProject: () => Promise<HoloAdapterProject<TCustom>>,
-  options: { readonly cache?: boolean } = {},
+  options: { readonly cache?: boolean | (() => boolean) } = {},
 ): HoloAdapterProjectAccessors<TCustom> {
   let projectPromise: Promise<HoloAdapterProject<TCustom>> | undefined
-  const resolveCachedProject = (): Promise<HoloAdapterProject<TCustom>> => {
-    if (!options.cache) return resolveProject()
+  let cacheProject: boolean | undefined
+  const shouldCacheProject = (): boolean => {
+    cacheProject ??= typeof options.cache === 'function' ? options.cache() : options.cache === true
+    return cacheProject
+  }
+  const resolveCachedProject = async (): Promise<HoloAdapterProject<TCustom>> => {
+    if (!shouldCacheProject()) return resolveProject()
     if (projectPromise) return projectPromise
     projectPromise = resolveProject().catch((error: unknown) => {
       projectPromise = undefined

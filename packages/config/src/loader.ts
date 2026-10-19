@@ -27,7 +27,7 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 6
+const HOLO_CONFIG_CACHE_VERSION = 7
 const CONFIG_CACHE_UNDEFINED_MARKER = '__holoUndefined'
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
@@ -44,6 +44,7 @@ type ConfigCachePayload = {
   }
   readonly configFiles: readonly string[]
   readonly config: RawConfigMap
+  readonly envSnapshot: Readonly<Record<string, string | null>>
   readonly deferredConfigNames: readonly ConfigFileName[]
   readonly normalizerConfigNames?: readonly ConfigFileName[]
 }
@@ -195,6 +196,7 @@ async function collectRawConfig(
   configDir: string,
   options: {
     onlyConfigNames?: readonly ConfigFileName[]
+    envReads?: Map<ConfigFileName, Map<string, string | null>>
   } = {},
 ): Promise<{ rawConfig: RawConfigMap, loadedFiles: readonly string[] }> {
   const rawConfig: RawConfigMap = {}
@@ -209,7 +211,13 @@ async function collectRawConfig(
     : configEntries
 
   for (const entry of selectedEntries) {
-    rawConfig[entry.configName] = resolveConfigExport(await importConfigModule(entry.filePath))
+    if (options.envReads) {
+      const recorded = await configEvaluationInternals.recordEnvReads(() => importConfigModule(entry.filePath))
+      rawConfig[entry.configName] = resolveConfigExport(recorded.value)
+      options.envReads.set(entry.configName, recorded.reads)
+    } else {
+      rawConfig[entry.configName] = resolveConfigExport(await importConfigModule(entry.filePath))
+    }
     loadedFiles.push(entry.filePath)
   }
 
@@ -337,6 +345,7 @@ function isCachePayload(value: unknown): value is ConfigCachePayload {
     && Array.isArray(value.environment.warnings)
     && Array.isArray(value.configFiles)
     && isObject(value.config)
+    && isObject(value.envSnapshot)
     && (typeof value.deferredConfigNames === 'undefined' || Array.isArray(value.deferredConfigNames))
     && (typeof value.normalizerConfigNames === 'undefined' || Array.isArray(value.normalizerConfigNames))
 }
@@ -370,16 +379,31 @@ export async function writeConfigCache(
 ): Promise<string> {
   const root = resolve(projectRoot)
   const configDir = join(root, 'config')
-  const { environment, rawConfig, loadedFiles } = await configEvaluationInternals.evaluate({
+  const { environment, rawConfig, loadedFiles, envReads } = await configEvaluationInternals.evaluate({
     cwd: root,
     ...options,
   }, async (environment) => {
-    return { environment, ...await collectRawConfig(configDir) }
+    const envReads = new Map<ConfigFileName, Map<string, string | null>>()
+    return { environment, ...await collectRawConfig(configDir, { envReads }), envReads }
   })
   const {
     cacheableConfig,
     deferredConfigNames,
   } = splitCacheableConfig(rawConfig)
+  const normalizerConfigNames = configRegistryInternals
+    .getRegisteredNames()
+    .filter(name => Object.hasOwn(rawConfig, name))
+  const liveConfigNames = new Set<string>([...deferredConfigNames, ...normalizerConfigNames])
+  const envSnapshot: Record<string, string | null> = {}
+  for (const [configName, reads] of envReads) {
+    if (!liveConfigNames.has(configName)) {
+      continue
+    }
+
+    for (const [key, value] of reads) {
+      envSnapshot[key] = value
+    }
+  }
 
   const cachePath = resolveConfigCachePath(root)
   const contents = `${JSON.stringify({
@@ -391,10 +415,9 @@ export async function writeConfigCache(
     },
     configFiles: loadedFiles,
     config: encodeConfigCacheValue(cacheableConfig) as RawConfigMap,
+    envSnapshot,
     deferredConfigNames,
-    normalizerConfigNames: configRegistryInternals
-      .getRegisteredNames()
-      .filter(name => Object.hasOwn(rawConfig, name)),
+    normalizerConfigNames,
   } satisfies ConfigCachePayload, null, 2)}\n`
   await writeConfigCacheFile(cachePath, contents)
 
@@ -439,7 +462,10 @@ export async function loadConfigDirectory<TCustom extends HoloConfigMap = HoloCo
       return { environment, rawConfig: cached.config, loadedFiles: cached.configFiles }
     }
 
-    const live = await collectRawConfig(configDir, { onlyConfigNames: evaluationNames })
+    const live = await configEvaluationInternals.withEnvSnapshot(
+      cached.envSnapshot,
+      () => collectRawConfig(configDir, { onlyConfigNames: evaluationNames }),
+    )
     return {
       environment,
       rawConfig: {
