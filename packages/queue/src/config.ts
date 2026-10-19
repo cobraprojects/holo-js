@@ -266,7 +266,7 @@ function normalizeRedisConnection(
     connection: resolvedRedisConnection?.name ?? connectionName ?? name,
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
-      minimum: 0,
+      minimum: 1,
     }),
     blockFor: parseInteger(config.blockFor, DEFAULT_QUEUE_BLOCK_FOR, `queue connection "${name}" blockFor`, {
       minimum: 0,
