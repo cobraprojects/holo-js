@@ -7,7 +7,12 @@ import { beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } fr
 import { createNativeRedisQueue } from '../../queue-redis/tests/support/native-queue'
 import { createNativeMediaStorage, storageFiles } from './support/native-storage'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
-import { Storage } from '@holo-js/storage/runtime'
+import {
+  Storage,
+  StorageMetadataUnsupportedError,
+  type StorageDisk,
+  type StorageFileMetadata,
+} from '@holo-js/storage/runtime'
 import {
   belongsTo,
   column,
@@ -211,6 +216,40 @@ async function createImageBuffer(
   return format === 'png'
     ? base.png().toBuffer()
     : base.jpeg().toBuffer()
+}
+
+async function* countStreamedBytes(
+  chunks: AsyncIterable<Uint8Array>,
+  observed: { streamedBytes: number },
+): AsyncGenerator<Uint8Array> {
+  for await (const chunk of chunks) {
+    observed.streamedBytes += chunk.byteLength
+    yield chunk
+  }
+}
+
+function observeDiskReads(overrides: {
+  readonly stat?: (path: string) => Promise<StorageFileMetadata | null>
+} = {}): { streamedBytes: number, fullReads: number } {
+  const observed = { streamedBytes: 0, fullReads: 0 }
+  const openDisk = Storage.disk.bind(Storage)
+  vi.spyOn(Storage, 'disk').mockImplementation((diskName?: string) => {
+    const disk = openDisk(diskName)
+    return {
+      ...disk,
+      stat: overrides.stat ?? (async path => await disk.stat(path)),
+      getBytes: async (path: string) => {
+        observed.fullReads += 1
+        return await disk.getBytes(path)
+      },
+      readStream: async (path: string, streamOptions?: Parameters<StorageDisk['readStream']>[1]) => {
+        const chunks = await disk.readStream(path, streamOptions)
+        return chunks ? countStreamedBytes(chunks, observed) : null
+      },
+    } as StorageDisk
+  })
+  onTestFinished(() => { vi.restoreAllMocks() })
+  return observed
 }
 
 function createAnimatedGif(frameCount: number): Buffer {
@@ -1929,6 +1968,90 @@ describe('@holo-js/media', () => {
 
     await expect(post.addMediaFromDisk('uploads/missing.png', 'local').toMediaCollection('images'))
       .rejects.toThrow('"uploads/missing.png" was not found on disk "local"')
+  })
+
+  it('rejects oversize disk files from their metadata without reading the body', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(2 * 1024 * 1024, 1))
+    const observed = observeDiskReads()
+    const post = await Post.create({ title: 'Oversize disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.data).toBeNull()
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(result.error?.actualSize).toBe(2 * 1024 * 1024)
+    expect(observed).toEqual({ streamedBytes: 0, fullReads: 0 })
+  })
+
+  it('stops streaming an oversize disk file once it passes the limit when metadata is unavailable', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(1024 * 1024, 1))
+    const observed = observeDiskReads({
+      stat: async () => {
+        throw new StorageMetadataUnsupportedError()
+      },
+    })
+    const post = await Post.create({ title: 'Unknown size disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(observed.fullReads).toBe(0)
+    expect(observed.streamedBytes).toBeGreaterThan(0)
+    expect(observed.streamedBytes).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it('stops streaming a disk file whose stored metadata understates its size', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(1024 * 1024, 1))
+    const observed = observeDiskReads({
+      stat: async () => ({ size: 512, mimeType: null }),
+    })
+    const post = await Post.create({ title: 'Stale size disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(observed.fullReads).toBe(0)
+    expect(observed.streamedBytes).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it('attaches disk files that fit the collection limit', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/small.png', pngPixel)
+    const post = await Post.create({ title: 'Small disk file' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads/small.png', 'local').toMediaCollection('images'))
+
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
   })
 
   it('stores collections without a disk on the configured media disk', async () => {

@@ -10,7 +10,12 @@ import { basename, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { config } from '@holo-js/config'
 import { inspectFileContent } from '@holo-js/kernel/file-content'
-import { Storage } from '@holo-js/storage/runtime'
+import {
+  Storage,
+  StorageMetadataUnsupportedError,
+  type StorageDisk,
+  type StorageFileMetadata,
+} from '@holo-js/storage/runtime'
 import type { Entity, ModelRecord, TableDefinition } from '@holo-js/db'
 import {
   getMediaPathGenerator,
@@ -257,39 +262,56 @@ async function readRemoteMediaContents(
     return contents
   }
 
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let totalSize = 0
+  return await readBoundedMediaContents(
+    readWebStreamChunks(response.body),
+    fileName,
+    resolvedMaxSize,
+    collectionName,
+  )
+}
 
+async function* readWebStreamChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = stream.getReader()
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) {
-        break
+        return
       }
 
-      if (!value) {
-        continue
+      if (value) {
+        yield value
       }
-
-      totalSize += value.byteLength
-      if (totalSize > resolvedMaxSize) {
-        /* v8 ignore next -- reader cancellation failures are intentionally swallowed. */
-        await reader.cancel().catch(() => undefined)
-        throw createMaxSizeError(fileName, collectionName, resolvedMaxSize, totalSize)
-      }
-
-      chunks.push(value)
     }
   } finally {
+    await reader.cancel().catch(() => undefined)
     reader.releaseLock()
+  }
+}
+
+async function readBoundedMediaContents(
+  chunks: AsyncIterable<Uint8Array>,
+  fileName: string,
+  maxSize: number,
+  collectionName: string,
+): Promise<Uint8Array> {
+  const parts: Uint8Array[] = []
+  let totalSize = 0
+
+  for await (const chunk of chunks) {
+    totalSize += chunk.byteLength
+    if (totalSize > maxSize) {
+      throw createMaxSizeError(fileName, collectionName, maxSize, totalSize)
+    }
+
+    parts.push(chunk)
   }
 
   const contents = new Uint8Array(totalSize)
   let offset = 0
-  for (const chunk of chunks) {
-    contents.set(chunk, offset)
-    offset += chunk.byteLength
+  for (const part of parts) {
+    contents.set(part, offset)
+    offset += part.byteLength
   }
 
   return contents
@@ -329,7 +351,7 @@ async function readMediaSource(
   }
 
   if (input instanceof StoredMediaSource) {
-    return resolveStorageMediaSource(input, overrideFileName, overrideName)
+    return resolveStorageMediaSource(input, overrideFileName, overrideName, options)
   }
 
   if ((typeof input === 'string' && /^https?:\/\//i.test(input)) || (typeof input === 'object' && input !== null && 'url' in input)) {
@@ -388,13 +410,29 @@ async function resolveStorageMediaSource(
   input: StoredMediaSource,
   overrideFileName: string | undefined,
   overrideName: string | undefined,
+  options: {
+    readonly maxSize?: number
+    readonly collectionName: string
+  },
 ): Promise<ReadMediaSource> {
-  const contents = await Storage.disk(input.disk).getBytes(input.path)
-  if (!contents) {
-    throw new Error(`[@holo-js/media] File "${input.path}" was not found on disk "${input.disk}".`)
+  const disk = Storage.disk(input.disk)
+  const fileName = sanitizeFileName(overrideFileName ?? basename(input.path))
+  if (typeof options.maxSize === 'number') {
+    await rejectOversizedStoredFile(disk, input, fileName, options.maxSize, options.collectionName)
   }
 
-  const fileName = sanitizeFileName(overrideFileName ?? basename(input.path))
+  const chunks = await disk.readStream(input.path)
+  if (!chunks) {
+    throw missingStoredFileError(input)
+  }
+
+  const contents = await readBoundedMediaContents(
+    chunks,
+    fileName,
+    options.maxSize ?? Number.POSITIVE_INFINITY,
+    options.collectionName,
+  )
+
   return {
     contents,
     fileName,
@@ -402,6 +440,37 @@ async function resolveStorageMediaSource(
     size: contents.byteLength,
     name: getDisplayName(fileName, overrideName),
   }
+}
+
+async function rejectOversizedStoredFile(
+  disk: StorageDisk,
+  input: StoredMediaSource,
+  fileName: string,
+  maxSize: number,
+  collectionName: string,
+): Promise<void> {
+  let metadata: StorageFileMetadata | null
+  try {
+    metadata = await disk.stat(input.path)
+  } catch (error) {
+    if (error instanceof StorageMetadataUnsupportedError) {
+      return
+    }
+
+    throw error
+  }
+
+  if (!metadata) {
+    throw missingStoredFileError(input)
+  }
+
+  if (metadata.size > maxSize) {
+    throw createMaxSizeError(fileName, collectionName, maxSize, metadata.size)
+  }
+}
+
+function missingStoredFileError(input: StoredMediaSource): Error {
+  return new Error(`[@holo-js/media] File "${input.path}" was not found on disk "${input.disk}".`)
 }
 
 async function withRemoteMediaDeadline<TResult>(
