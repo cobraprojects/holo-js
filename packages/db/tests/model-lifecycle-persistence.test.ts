@@ -128,6 +128,23 @@ describe('model lifecycle persistence', () => {
     expect((await db.table('accounts').get()).map(row => row.name)).toEqual(['Ada!', 'Grace!', 'Linus!'])
   })
 
+  it('reads the raw assigned value until save applies the set mutator', async () => {
+    const db = await openDatabase()
+    const people = defineTable('people', { id: column.id(), email: column.string() })
+    await createTestTable(db, people)
+    const Person = defineModelFromTable(people, {
+      fillable: ['email'],
+      mutators: { email: value => String(value).trim().toLowerCase() },
+    })
+
+    const person = Person.make({ email: '  Amina@Example.com ' })
+    expect(person.get('email')).toBe('  Amina@Example.com ')
+
+    await person.save()
+    expect(person.get('email')).toBe('amina@example.com')
+    expect(await db.table('people').get()).toMatchObject([{ email: 'amina@example.com' }])
+  })
+
   it('saves a model loaded with withCount and withExists without writing the computed values', async () => {
     const db = await openDatabase()
     const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
