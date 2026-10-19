@@ -23,7 +23,7 @@ export function encryptCookieValue(name: string, value: string, appKey: string |
 export function decryptCookieValue(name: string, value: string, appKey: string | undefined): string | undefined {
   const key = cookieEncryptionKey(appKey)
   const payload = Buffer.from(value, 'base64url')
-  if (payload.length <= IV_BYTES + TAG_BYTES) return undefined
+  if (payload.length < IV_BYTES + TAG_BYTES) return undefined
 
   try {
     const decipher = createDecipheriv('aes-256-gcm', key, payload.subarray(0, IV_BYTES))
