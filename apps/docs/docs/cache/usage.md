@@ -129,9 +129,6 @@ await cache.forget('dashboard.stats')
 await cache.flush()
 ```
 
-::: warning
-`flush()` clears the whole store, not just your keys. If several apps or services share the same Redis database or cache table, give each one its own `prefix` in `config/cache.ts`. A store with a prefix only flushes keys with that prefix. See [Cache drivers](/cache/drivers#key-prefixes).
-:::
 
 ## Counters
 
@@ -376,7 +373,7 @@ await cache.flush()
 ```
 
 ::: warning
-`flush()` clears the whole store, not just your keys. If several apps or services share the same Redis database or cache table, give each one its own `prefix` in `config/cache.ts`. A store with a prefix only flushes keys with that prefix. See [Cache drivers](/cache/drivers#key-prefixes).
+`flush()` clears the whole store, not just your keys. Redis deletes its whole database, `database` empties its cache table, and `file` empties its folder. Give each app its own store, Redis database, or tables. See [Cache drivers](/cache/drivers#key-prefixes).
 :::
 
 ### `increment(key, amount?)` {#increment}

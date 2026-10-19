@@ -312,6 +312,32 @@ Social sign-in no longer signs in as an existing user whose email isn't verified
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
+### Cache flushes clear the whole store
+
+`cache.flush()` and `npx holo cache:clear` now delete everything in the store, as Laravel does, and a key `prefix` no longer limits them. A Redis store flushes its whole Redis database, a `database` store empties its cache table, and a `file` store empties its folder. If your Redis cache shares a database with queues or sessions, move it to its own database before you flush, or the flush deletes that data too.
+
+Add a `cache` connection to `config/redis.ts` on a database that holds nothing else, and point the Redis store at it. The scaffold uses database `1`:
+
+```ts [config/redis.ts]
+cache: {
+  url: env('REDIS_URL') || undefined,
+  host: env('REDIS_HOST', '127.0.0.1'),
+  port: env('REDIS_PORT', 6379),
+  username: env('REDIS_USERNAME'),
+  password: env('REDIS_PASSWORD'),
+  db: env('REDIS_CACHE_DB', 1),
+},
+```
+
+```ts [config/cache.ts]
+redis: {
+  driver: 'redis',
+  connection: 'cache',
+}
+```
+
+Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

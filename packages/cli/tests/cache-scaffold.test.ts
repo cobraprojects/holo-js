@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import { afterEach, describe, expect, it } from 'vitest'
-import { renderCacheConfig, renderCacheEnvFiles } from '../src/project/scaffold'
+import { renderCacheConfig, renderCacheEnvFiles, renderRedisConfig } from '../src/project/scaffold'
 
 const tempDirs: string[] = []
 
@@ -12,6 +12,24 @@ afterEach(async () => {
 })
 
 describe('cache scaffold', () => {
+  it('places the scaffolded cache on a dedicated Redis database', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-cache-scaffold-'))
+    tempDirs.push(root)
+    await mkdir(join(root, 'config'))
+    await writeFile(join(root, 'config/cache.ts'), renderCacheConfig('redis')
+      .replace("'@holo-js/cache'", JSON.stringify(resolve(import.meta.dirname, '../../cache/src/index.ts')))
+      .replace("'@holo-js/config'", JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))))
+    await writeFile(join(root, 'config/redis.ts'), renderRedisConfig()
+      .replace("'@holo-js/config'", JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts')))
+      .replace("'@holo-js/kernel'", JSON.stringify(resolve(import.meta.dirname, '../../kernel/src/index.ts'))))
+
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+
+    expect(loaded.cache.drivers.redis).toMatchObject({ driver: 'redis', connection: 'cache' })
+    expect(loaded.redis.connections.cache).toMatchObject({ db: 1 })
+    expect(loaded.redis.connections.default).toMatchObject({ db: 0 })
+  })
+
   it.each(['file', 'redis', 'database'] as const)('loads the %s default and always includes Redis', async (driver) => {
     const root = await mkdtemp(join(tmpdir(), 'holo-cache-scaffold-'))
     tempDirs.push(root)
@@ -22,12 +40,12 @@ describe('cache scaffold', () => {
     await writeFile(join(root, 'config/cache.ts'), config)
     await writeFile(join(root, 'config/redis.ts'), `export default {
   default: 'shared',
-  connections: { shared: { host: '127.0.0.1', port: 6379 } },
+  connections: { shared: { host: '127.0.0.1', port: 6379 }, cache: { host: '127.0.0.1', port: 6379, db: 1 } },
 }`)
 
     const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
     expect(loaded.cache.default).toBe(driver)
-    expect(loaded.cache.drivers.redis).toMatchObject({ driver: 'redis', connection: 'shared', prefix: '' })
+    expect(loaded.cache.drivers.redis).toMatchObject({ driver: 'redis', connection: 'cache', prefix: '' })
 
     const overridden = await loadConfigDirectory(root, {
       processEnv: { CACHE_DRIVER: 'redis', CACHE_PREFIX: 'myapp:cache:' },
