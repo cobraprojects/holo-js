@@ -182,7 +182,7 @@ Like other query writes, this skips model events.
 
 ## Track changes
 
-Before you save, `isDirty()` tells you whether anything changed. After you save, `wasChanged()` tells you what the last save wrote.
+Before you save, `isDirty()` tells you whether anything changed. After you save, `wasChanged()` tells you what the last save wrote. A save that creates a record reports no changes, as in Laravel, and after any save the model is clean: an attribute that a `saved` handler changes is not written and isn't reported as a change.
 
 Changes made in place count too. Pushing onto a JSON array, editing a nested JSON value, or moving a `Date` is detected and saved. Computed values such as `withCount()` results are never written.
 

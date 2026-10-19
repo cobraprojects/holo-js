@@ -227,6 +227,11 @@ class EntityBase<
     return this
   }
 
+  finishSave(): this {
+    this.#persisted = true
+    return this.syncOriginal()
+  }
+
   syncPersisted(
     entity: EntityBase<TTable>,
     changes: Record<string, unknown> = {},
@@ -472,8 +477,7 @@ class EntityBase<
       throw new HydrationError(errorMessage)
     }
 
-    const persisted = await method.call(repo, this)
-    this.applyPersistedEntity(persisted, this.getChanges())
+    await method.call(repo, this)
     return this
   }
 

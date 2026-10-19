@@ -1621,12 +1621,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           ? { [this.definition.primaryKey]: result.lastInsertId }
           : {}),
       } as Partial<ModelRecord<TTable>>
-      const created = this.hydrate(attributes).syncOriginal()
-      entity.recordChanges(entity.toAttributes())
-      await this.dispatchEvent('created', created)
-      await this.dispatchEvent('saved', created)
-      await this.touchOwners(created)
-      return created
+      entity.forceFill(this.normalizeFromStorage(attributes))
+      entity.recordChanges({})
+      await this.dispatchEvent('created', entity)
+      await this.dispatchEvent('saved', entity)
+      await this.touchOwners(entity)
+      entity.finishSave()
+      return entity
     })
   }
 
@@ -1735,31 +1736,35 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
       await this.dispatchCancelableEvent('saving', entity)
       if (Object.keys(entity.getDirty()).length === 0) {
-        entity.syncChanges()
-        await this.dispatchEvent('saved', entity)
-        return entity
+        return this.finishUnchangedSave(entity)
       }
 
       await this.dispatchCancelableEvent('updating', entity)
       const beforeTimestamps = snapshotAttributes(entity.toAttributes())
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
-      const dirty = this.sanitizeWritePayload(entity.getDirty(), 'update', false, false)
+      const written = entity.getDirty()
+      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
       if (Object.keys(dirty).length === 0) {
-        entity.syncChanges()
-        await this.dispatchEvent('saved', entity)
-        return entity
+        return this.finishUnchangedSave(entity)
       }
 
       await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
-      entity.syncChanges()
-      const updated = new Entity<TTable>(this, { ...entity.toAttributes(), ...this.normalizeFromStorage(dirty) }, true)
-      updated.syncOriginal()
-      await this.dispatchEvent('updated', updated)
-      await this.dispatchEvent('saved', updated)
-      await this.touchOwners(updated)
-      return updated
+      entity.recordChanges(written)
+      entity.forceFill(this.normalizeFromStorage(dirty))
+      await this.dispatchEvent('updated', entity)
+      await this.dispatchEvent('saved', entity)
+      await this.touchOwners(entity)
+      entity.finishSave()
+      return entity
     })
+  }
+
+  private async finishUnchangedSave(entity: Entity<TTable>): Promise<Entity<TTable>> {
+    entity.recordChanges({})
+    await this.dispatchEvent('saved', entity)
+    entity.finishSave()
+    return entity
   }
 
   async saveEntityQuietly(entity: Entity<TTable>): Promise<Entity<TTable>> {

@@ -549,6 +549,77 @@ describe('model lifecycle persistence', () => {
     expect(await db.table('slugged').get()).toMatchObject([{ title: 'Changed', slug: null }])
   })
 
+  it('leaves the entity clean after save when a saved handler edits an attribute', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string(), slug: column.string().nullable() })
+    await createTestTable(db, slugged)
+    await db.table('slugged').insert({ id: 1, title: 'Hello', slug: null })
+    const Post = defineModelFromTable(slugged, {
+      timestamps: false,
+      fillable: ['title', 'slug'],
+      events: {
+        saved: [entity => { asTestEntity(entity).set('slug', 'set-after-save') }],
+      },
+    })
+
+    const post = await Post.findOrFail(1)
+    post.set('title', 'Changed')
+    await post.save()
+    expect(post.isDirty()).toBe(false)
+    expect(post.isDirty('slug')).toBe(false)
+
+    const clean = await Post.findOrFail(1)
+    await clean.save()
+    expect(clean.isDirty()).toBe(false)
+    expect(clean.isDirty('slug')).toBe(false)
+  })
+
+  it('passes the caller\'s own instance to lifecycle handlers on create and update', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string() })
+    await createTestTable(db, slugged)
+    await db.table('slugged').insert({ id: 1, title: 'Hello' })
+    const seen: unknown[] = []
+    const Post = defineModelFromTable(slugged, {
+      timestamps: false,
+      fillable: ['title'],
+      events: {
+        created: [entity => { seen.push(entity) }],
+        updated: [entity => { seen.push(entity) }],
+        saved: [entity => { seen.push(entity) }],
+      },
+    })
+
+    const made = Post.make({ title: 'Made' })
+    await made.save()
+    expect(seen.slice(0, 2).every(entity => entity === made)).toBe(true)
+
+    seen.length = 0
+    const loaded = await Post.findOrFail(1)
+    loaded.set('title', 'Changed')
+    await loaded.save()
+    expect(seen.length).toBe(2)
+    expect(seen.every(entity => entity === loaded)).toBe(true)
+  })
+
+  it('records no changes after a create, as Laravel does', async () => {
+    const db = await openDatabase()
+    const slugged = defineTable('slugged', { id: column.id(), title: column.string() })
+    await createTestTable(db, slugged)
+    const Post = defineModelFromTable(slugged, { timestamps: false, fillable: ['title'] })
+
+    const created = await Post.create({ title: 'Fresh' })
+    expect(created.getChanges()).toEqual({})
+    expect(created.wasChanged()).toBe(false)
+    expect(created.isDirty()).toBe(false)
+
+    const made = Post.make({ title: 'Made' })
+    await made.save()
+    expect(made.getChanges()).toEqual({})
+    expect(made.wasChanged()).toBe(false)
+    expect(made.isDirty()).toBe(false)
+  })
+
   it('runs the full update path when a saving handler dirties a clean timestamped model', async () => {
     const db = await openDatabase()
     const stamped = defineTable('stamped', {
