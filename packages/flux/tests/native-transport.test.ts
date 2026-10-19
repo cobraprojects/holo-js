@@ -91,6 +91,26 @@ it('does not deliver private broadcasts when the real worker rejects channel aut
   expect(transport.client.getStatus()).toBe('connected')
 })
 
+it('retries a subscription the real worker refused when the channel is subscribed again', async () => {
+  let allowed = false
+  const transport = await startNativeTransport({ authorizeOrders: () => allowed })
+  const delivered: string[] = []
+  const barrier: string[] = []
+  transport.client.private('orders.1').listen('order.shipped', payload => delivered.push(String(payload.title)))
+  transport.client.channel('barrier').listen('order.shipped', payload => barrier.push(String(payload.title)))
+  await transport.client.connect()
+  await expect.poll(() => transport.subscriptions()).toBe(1)
+  await transport.publish('Refused', { event: 'order.shipped', channels: ['private-orders.1', 'barrier'] })
+  await expect.poll(() => barrier).toEqual(['Refused'])
+  expect(delivered).toEqual([])
+  allowed = true
+  transport.client.private('orders.1')
+  await expect.poll(() => transport.subscriptions()).toBe(2)
+  await transport.publish('Shipped', { event: 'order.shipped', channels: ['private-orders.1', 'barrier'] })
+  await expect.poll(() => delivered).toEqual(['Shipped'])
+  expect(transport.client.getStatus()).toBe('connected')
+})
+
 it('leaves all subscriptions of one channel kind while retaining its other kind and unrelated channels', async () => {
   const transport = await startNativeTransport()
   configureFluxClient(transport.client)

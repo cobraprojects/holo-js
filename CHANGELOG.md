@@ -15,7 +15,7 @@
 
 ### Security
 
-- Harden the Broadcast worker protocol. A refused or failed channel subscription returns `pusher:subscription_error` and keeps the socket open. `holo broadcast:work` authorizes unsigned private and presence subscriptions with the user resolved from the connection's session cookie or `Authorization` header and refuses them without a user. Socket IDs use the full Pusher range and duplicate IDs are refused. Unexpected subscription, Realtime and publish errors go to the error reporter while clients receive a generic message; `RealtimeError`, access and validation errors keep their message. See [Broadcast errors](apps/docs/docs/broadcasting/production.md#errors).
+- Harden the Broadcast worker protocol. A refused or failed channel subscription returns `pusher:subscription_error` and keeps the socket open; Flux marks that channel unsubscribed and retries it on the next subscribe or connect. `holo broadcast:work` authorizes unsigned private and presence subscriptions with the user resolved from the connection's session cookie or `Authorization` header and refuses them without a user. Socket IDs use the full Pusher range and duplicate IDs are refused. Unexpected subscription, Realtime and publish errors go to the error reporter while clients receive a generic message; `RealtimeError`, access and validation errors keep their message. See [Broadcast errors](apps/docs/docs/broadcasting/production.md#errors).
 
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 

@@ -84,6 +84,8 @@ The `payload` type comes from the `payload` of the matching `defineBroadcast` in
 
 The client type must match the server. A browser on the public channel `feed` won't receive events sent to `privateChannel('feed')`.
 
+If the server refuses a private or presence channel, the connection stays open and the browser's other channels keep working. Flux tries that channel again the next time you subscribe to it or connect. See [Refused subscriptions](/broadcasting/events-and-channels#refused-subscriptions).
+
 ```ts
 useFluxPublic('feed.global', 'feed.updated', (payload) => {
   console.log(payload)
