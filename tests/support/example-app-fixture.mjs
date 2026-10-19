@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
 const generatedDirectories = new Set(['node_modules', 'storage', '.holo-js', '.next', '.nuxt', '.output', '.svelte-kit', 'build', 'dist'])
@@ -14,6 +14,12 @@ export async function createExampleAppFixture(root, framework) {
       filter: source => !generatedDirectories.has(relative(sourceRoot, source).split(sep)[0]),
     })
     await mkdir(join(projectRoot, 'storage'))
+    const manifestPath = join(projectRoot, 'package.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8').catch(() => 'null'))
+    if (manifest?.scripts?.prepare) {
+      manifest.scripts.prepare = 'holo key:generate && holo prepare'
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    }
     for (const name of ['packages', 'tests', 'node_modules']) {
       await symlink(join(root, name), join(directory, name), 'dir')
     }

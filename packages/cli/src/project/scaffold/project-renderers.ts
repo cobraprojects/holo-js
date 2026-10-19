@@ -17,6 +17,7 @@ import {
   type ScaffoldedFile,
 } from './types'
 import { getFrameworkDescriptor } from '../frameworks'
+import { generateAppKey } from '../../app-key'
 
 export function renderAuthEnvFiles(
   features: AuthInstallFeatures = {},
@@ -561,7 +562,7 @@ export function renderScaffoldEnvFiles(
   const optionalPackageNames = normalizeScaffoldOptionalPackages(options.optionalPackages)
   const baseLines = [
     'APP_NAME=',
-    'APP_KEY=',
+    `APP_KEY=${generateAppKey()}`,
     `APP_URL=${defaultUrl}`,
     'APP_TIMEZONE=UTC',
     'APP_ENV=development',

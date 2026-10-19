@@ -727,8 +727,8 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports:a%26b.txt',
-      'reports:less%3Cmore%3E.txt',
+      'reports:a&b.txt',
+      'reports:less<more>.txt',
     ])
 
     await driver.clear('reports')
@@ -755,7 +755,7 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports:keep%26unknown%3B.txt',
+      'reports:keep&unknown;.txt',
     ])
   })
 
@@ -778,7 +778,7 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports:%22quoted%22.txt',
+      'reports:"quoted".txt',
       'reports:it\'s.txt',
     ])
   })
@@ -802,7 +802,7 @@ describe('custom s3 storage driver', () => {
     })
 
     await expect(driver.getKeys('reports')).resolves.toEqual([
-      'reports:%22decimal%22.txt',
+      'reports:"decimal".txt',
       'reports:hex\'s.txt',
     ])
   })

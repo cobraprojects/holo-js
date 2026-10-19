@@ -23,6 +23,7 @@ export function encryptCookieValue(name: string, value: string, appKey: string |
 export function decryptCookieValue(name: string, value: string, appKey: string | undefined): string | undefined {
   const key = cookieEncryptionKey(appKey)
   const payload = Buffer.from(value, 'base64url')
+  if (payload.toString('base64url') !== value) return undefined
   if (payload.length < IV_BYTES + TAG_BYTES) return undefined
 
   try {

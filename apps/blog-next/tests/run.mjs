@@ -20,6 +20,7 @@ import { clearExampleAppRateLimitBuckets } from '../../../tests/example-app-rate
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 import { assertExampleAppRequestSecurity } from '../../../tests/example-app-request-security.mjs'
+import { assertExampleAppStorageRuntime } from '../../../tests/example-app-storage-runtime.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -633,7 +634,13 @@ try {
   await assertExampleAppDevelopmentReload({ cwd, baseUrl: `http://localhost:${port}` })
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
-  await assertExampleAppRequestSecurity({ cwd, baseUrl: `http://localhost:${port}`, exposesConnectionAddress: false })
+  await assertExampleAppRequestSecurity({
+    cwd,
+    baseUrl: `http://localhost:${port}`,
+    exposesConnectionAddress: false,
+    getOutput: () => capturedOutput,
+  })
+  await assertExampleAppStorageRuntime({ baseUrl: `http://localhost:${port}` })
   await waitForRedirect(`http://localhost:${port}/admin`, '/login')
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertExampleAppAuthFlow({

@@ -235,7 +235,7 @@ it('reports a presence synchronization failure as a subscription error and keeps
   })
   onTestFinished(() => runtime.close())
   const sent: Array<{ event: string, channel?: string, data: string }> = []
-  runtime.connectWebSocket({ socketId: '1.1', app: { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {} })
+  runtime.connectWebSocket({ socketId: '1.1', app: { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
   await runtime.receiveWebSocketMessage('1.1', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
   await runtime.receiveWebSocketMessage('1.1', JSON.stringify({ event: 'pusher:ping', data: {} }))
   expect(sent.slice(1)).toEqual([
@@ -275,9 +275,9 @@ it('rejects a socket identifier that is already connected without disturbing the
   const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
   const first: string[] = []
   const second: string[] = []
-  runtime.connectWebSocket({ socketId: '1.1', app, headers: new Headers(), send: payload => first.push(payload), close: () => {} })
+  runtime.connectWebSocket({ socketId: '1.1', app, headers: new Headers(), send: payload => first.push(payload), close: () => {}, bufferedAmount: () => 0 })
   await runtime.receiveWebSocketMessage('1.1', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'news' } }))
-  expect(() => runtime.connectWebSocket({ socketId: '1.1', app, headers: new Headers(), send: payload => second.push(payload), close: () => {} }))
+  expect(() => runtime.connectWebSocket({ socketId: '1.1', app, headers: new Headers(), send: payload => second.push(payload), close: () => {}, bufferedAmount: () => 0 }))
     .toThrow('Socket id "1.1" is already connected.')
   const signed = new URL('http://worker.test/apps/main/events')
   const body = JSON.stringify({ name: 'news.posted', channels: ['news'], data: '{}' })
@@ -319,7 +319,7 @@ it('retries a presence member whose rollback delete failed when the socket disco
   onTestFinished(() => runtime.close())
   const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
   const sent: Array<{ event: string, channel?: string, data: string }> = []
-  runtime.connectWebSocket({ socketId: '3.3', app, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {} })
+  runtime.connectWebSocket({ socketId: '3.3', app, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
   outage.reads = true
   outage.deletes = true
   await runtime.receiveWebSocketMessage('3.3', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
@@ -339,10 +339,10 @@ it('removes a socket whose connection_established send fails so its identifier c
   onTestFinished(() => runtime.close())
   const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
   const failure = new Error('socket closed during handshake')
-  expect(() => runtime.connectWebSocket({ socketId: '2.2', app, headers: new Headers(), send: () => { throw failure }, close: () => {} })).toThrow(failure)
+  expect(() => runtime.connectWebSocket({ socketId: '2.2', app, headers: new Headers(), send: () => { throw failure }, close: () => {}, bufferedAmount: () => 0 })).toThrow(failure)
   expect(runtime.getStats().connectionCount).toBe(0)
   const sent: string[] = []
-  runtime.connectWebSocket({ socketId: '2.2', app, headers: new Headers(), send: payload => sent.push(payload), close: () => {} })
+  runtime.connectWebSocket({ socketId: '2.2', app, headers: new Headers(), send: payload => sent.push(payload), close: () => {}, bufferedAmount: () => 0 })
   expect(sent.map(payload => JSON.parse(payload).event)).toEqual(['pusher:connection_established'])
   expect(runtime.getStats().connectionCount).toBe(1)
 })
@@ -392,6 +392,8 @@ it('forwards real socket credentials to HTTP authorization and isolates whisper 
       method: 'POST', headers: { 'content-type': incoming.headers['content-type'] ?? '' }, body: Buffer.concat(chunks),
     }), {
       user: { id: second ? 'second' : 'first' },
+      appKey: 'main-key',
+      appSecret: 'main-secret',
       channelAuth: { definitions: [defineChannel('orders.1', {
         type: 'private', authorize: () => true,
         whispers: { [second ? 'typing.stop' : 'typing.start']: defineSchema({ editing: field.boolean().required() }) },

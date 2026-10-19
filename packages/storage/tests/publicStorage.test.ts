@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NormalizedHoloStorageConfig } from '../src/config'
-import { createPublicStorageResponse } from '../src'
+import { createPublicStorageResponse, normalizeModuleOptions } from '../src'
+import { createTemporaryLocalStorageUrl } from '../src/temporaryLocalStorage'
 
 const tempRoots = new Set<string>()
 
@@ -301,5 +302,75 @@ describe('createPublicStorageResponse', () => {
       const response = await createPublicStorageResponse(projectRoot, config, new Request(`https://app.test${path}`))
       expect(response.status).toBe(404)
     }
+  })
+})
+
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+  if (!descriptor) throw new Error('Missing platform descriptor')
+  Object.defineProperty(process, 'platform', { value: platform })
+  try {
+    return await run()
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor)
+  }
+}
+
+describe('public storage names on Windows', () => {
+  afterEach(async () => {
+    await Promise.all(Array.from(tempRoots, root => rm(root, { recursive: true, force: true })))
+    tempRoots.clear()
+  })
+
+  it('serves a public disk whose name is not a Windows file name, and still refuses its sidecar aliases', async () => {
+    const { projectRoot } = await createProject()
+    const conRoot = join(projectRoot, 'storage/app/con-disk')
+    await mkdir(conRoot, { recursive: true })
+    await writeFile(join(conRoot, 'report.txt'), 'report')
+    await writeFile(join(conRoot, 'report.txt$'), '{"owner":"ops"}')
+    await writeFile(join(conRoot, 'report.txt$.'), 'metadata alias')
+    const config: NormalizedHoloStorageConfig = {
+      defaultDisk: 'CON',
+      routePrefix: '/storage',
+      disks: { CON: { driver: 'public', visibility: 'public', root: './storage/app/con-disk' } },
+    }
+    const runtime = normalizeModuleOptions(config)
+    const appKey = 'windows-disk-name-test-key'
+    const request = (url: string) => createPublicStorageResponse(projectRoot, config, new Request(url), appKey)
+
+    await withPlatform('win32', async () => {
+      const served = await request('https://app.test/storage/__holo/CON/report.txt')
+      expect(served.status).toBe(200)
+      await expect(served.text()).resolves.toBe('report')
+      for (const path of ['report.txt%24', 'report.txt%24.', 'nul.txt']) {
+        expect((await request(`https://app.test/storage/__holo/CON/${path}`)).status, path).toBe(404)
+      }
+
+      const temporary = createTemporaryLocalStorageUrl(runtime.disks.CON!, 'report.txt', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)
+      const signed = await request(temporary)
+      expect(signed.status).toBe(200)
+      await expect(signed.text()).resolves.toBe('report')
+      expect(() => createTemporaryLocalStorageUrl(runtime.disks.CON!, 'report.txt$.', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)).toThrow()
+    })
+  })
+
+  it('refuses requests that Windows would resolve to a metadata sidecar or device, and still serves normal files', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await writeFile(join(publicRoot, 'report.txt'), 'report')
+    await writeFile(join(publicRoot, 'report.txt$'), '{"owner":"ops"}')
+    for (const alias of ['report.txt$.', 'report.txt$ ', 'nul.txt', 'CON', 'COM¹.txt', 'lpt³', 'Com² .log']) {
+      await writeFile(join(publicRoot, alias), 'metadata alias')
+    }
+    const config = storageConfig('./storage/app/public')
+    const request = (path: string) => createPublicStorageResponse(projectRoot, config, new Request(`https://app.test/storage/${path}`))
+
+    await withPlatform('win32', async () => {
+      for (const path of ['report.txt%24.', 'report.txt%24%20', 'nul.txt', 'CON', 'report.txt%24', encodeURIComponent('COM¹.txt'), encodeURIComponent('lpt³'), encodeURIComponent('Com² .log')]) {
+        expect((await request(path)).status, path).toBe(404)
+      }
+      const served = await request('report.txt')
+      expect(served.status).toBe(200)
+      await expect(served.text()).resolves.toBe('report')
+    })
   })
 })

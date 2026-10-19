@@ -29,6 +29,12 @@ function cookieValue(setCookie: string, name: string): string {
   return value
 }
 
+function flipCiphertextBit(value: string): string {
+  const payload = Buffer.from(value, 'base64url')
+  payload[payload.length - 1] = payload[payload.length - 1]! ^ 1
+  return payload.toString('base64url')
+}
+
 describe('Holo-owned session cookies', () => {
   it('encrypts the session and remember cookies so only the runtime can read them back', () => {
     configure('session-cookie-test-key')
@@ -49,7 +55,7 @@ describe('Holo-owned session cookies', () => {
     const runtime = getSessionRuntime()
     const sessionValue = cookieValue(sessionCookie('session-id'), 'holo_session')
 
-    expect(runtime.decryptCookie('holo_session', `${sessionValue.slice(0, -2)}xx`)).toBeUndefined()
+    expect(runtime.decryptCookie('holo_session', flipCiphertextBit(sessionValue))).toBeUndefined()
     expect(runtime.decryptCookie('holo_session_remember', sessionValue)).toBeUndefined()
     expect(runtime.decryptCookie('holo_session', 'session-id')).toBeUndefined()
 

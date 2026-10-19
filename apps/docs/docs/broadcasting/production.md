@@ -13,7 +13,6 @@ Realtime and Broadcast are not production-ready. The deployment settings below d
 - Browser reconnection and resubscription, heartbeat handling, and dead-connection cleanup still need reliability work. Do not rely on uninterrupted live updates.
 - Presence membership can become stale after a worker crashes.
 - Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
-- Protocol hardening is pending: per-connection limits, backpressure, and Nuxt definition bundling.
 
 These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
 
@@ -116,6 +115,16 @@ The worker doesn't authenticate `/stats`. If you enable it, block it at your pro
 ### Size limits
 
 The worker rejects publish requests larger than `worker.maxRequestBytes` (1 MB by default) with `413`, and closes sockets that send messages larger than `worker.maxMessageBytes` (64 KB by default) with code `1009`. Raise them only if your payloads need it.
+
+### Connection limits
+
+Each WebSocket connection can hold 100 channels and 100 realtime query subscriptions, and can send 200 messages in each one-second window. These limits are fixed in 0.4.0 and can't be changed in configuration.
+
+- A channel subscription beyond the limit gets `pusher:subscription_error` with status `429`. The socket stays open.
+- A realtime subscription beyond the limit gets a `holo:realtime:error` event with the message `Too many realtime subscriptions.` and status `429`. The socket stays open.
+- A connection that sends more than 200 messages in a one-second window, pings included, is closed with code `1008`.
+
+The worker also closes a connection with code `1008` when more than 4 MB of output is waiting to be sent to it, so a client that stops reading can't make the worker hold unbounded memory.
 
 ### Errors
 

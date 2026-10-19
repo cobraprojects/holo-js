@@ -44,3 +44,6 @@ jobs:
       - name: Test native package loading and server lifecycle
         working-directory: packages/cli
         run: bun run test:platform
+      - name: Test local storage path validation
+        working-directory: packages/storage
+        run: node ../../node_modules/vitest/vitest.mjs --run tests/local-path.test.ts --fileParallelism --maxWorkers 2 --reporter=json

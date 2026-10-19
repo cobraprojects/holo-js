@@ -14,6 +14,18 @@ export function generateAppKey(): string {
   return randomBytes(32).toString('base64')
 }
 
+export function generateBroadcastCredentials(): {
+  readonly appId: string
+  readonly key: string
+  readonly secret: string
+} {
+  return {
+    appId: randomBytes(8).toString('hex'),
+    key: randomBytes(16).toString('hex'),
+    secret: randomBytes(32).toString('base64url'),
+  }
+}
+
 function isEmptyAppKeyValue(value: string): boolean {
   const normalized = value.trim()
 
