@@ -2,12 +2,13 @@ import { once } from 'node:events'
 import { createServer } from 'node:net'
 import WebSocket from 'ws'
 import { expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { normalizeBroadcastConfig, startBroadcastWorker } from '../src'
-import { executeRealtimeMutation, executeRealtimeQuery, subscribeRealtimeQuery } from '../../realtime/src/server'
+import { executeRealtimeMutation, executeRealtimeQuery, RealtimeError, RealtimeForbiddenError, subscribeRealtimeQuery } from '../../realtime/src/server'
 import { mutation, query } from '../../realtime/src'
 import { openRealtimeDatabase } from '../../realtime/tests/helpers/native-database'
 
-type Packet = { event: string; data: { id?: string; snapshot?: { data: { records: Array<{ id: number; score: number }> } }; result?: { data: { updated: number } } } }
+type Packet = { event: string; data: { id?: string; message?: string; kind?: string; name?: string; status?: number; snapshot?: { data: { records: Array<{ id: number; score: number }> } }; result?: { data: { updated: number } } } }
 
 async function startWorker(realtime: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>) {
   const reservation = createServer()
@@ -106,4 +107,34 @@ it.each(['complete', 'fail'] as const)('closes native sockets and settles an in-
   }
   await stopped
   await expect(fetch(`${worker.baseUrl}/health`)).rejects.toThrow()
+})
+
+it('reports internal realtime failures with a generic message while keeping authorization and application error messages', async () => {
+  const reports: Array<{ error: unknown, context: HoloErrorReportContext }> = []
+  errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  const failure = new Error('SQLITE_ERROR: no such table: secret_records')
+  class PostMissingError extends RealtimeError {
+    constructor(message: string) {
+      super(message)
+      this.name = 'PostMissingError'
+    }
+  }
+  const worker = await startWorker({
+    query: async () => { throw failure },
+    mutate: async () => { throw new RealtimeForbiddenError('You cannot rename records.') },
+    subscribe: async () => { throw new PostMissingError('Post not found.') },
+  })
+  worker.send('query', 'query')
+  worker.send('mutation', 'mutation')
+  worker.send('subscription', 'subscribe')
+  await expect.poll(() => worker.packets.filter(packet => packet.event === 'holo:realtime:error').length).toBe(3)
+  const errors = Object.fromEntries(worker.packets.filter(packet => packet.event === 'holo:realtime:error').map(packet => [packet.data.id, packet.data]))
+  expect(errors).toEqual({
+    query: { id: 'query', message: 'Realtime request failed.', kind: 'runtime', status: 500 },
+    subscription: { id: 'subscription', message: 'Post not found.', kind: 'runtime', name: 'PostMissingError', status: 400 },
+    mutation: { id: 'mutation', message: 'You cannot rename records.', kind: 'authorization', name: 'RealtimeForbiddenError', status: 403 },
+  })
+  expect(reports).toEqual([{ error: failure, context: { capability: 'broadcast', operation: 'worker.realtime' } }])
+  expect(worker.socket.readyState).toBe(WebSocket.OPEN)
 })

@@ -15,6 +15,8 @@
 
 ### Security
 
+- Harden the Broadcast worker protocol. A refused or failed channel subscription returns `pusher:subscription_error` and keeps the socket open. `holo broadcast:work` authorizes unsigned private and presence subscriptions with the user resolved from the connection's session cookie or `Authorization` header and refuses them without a user. Socket IDs use the full Pusher range and duplicate IDs are refused. Unexpected subscription, Realtime and publish errors go to the error reporter while clients receive a generic message; `RealtimeError`, access and validation errors keep their message. See [Broadcast errors](apps/docs/docs/broadcasting/production.md#errors).
+
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.
@@ -36,6 +38,7 @@
 
 ### Compatibility and upgrade requirements
 
+- Broadcast clients that relied on close code `4001` after a refused subscription must handle `pusher:subscription_error`. Channel rules served by `holo broadcast:work` no longer receive a `null` user for unsigned subscriptions. See [Broadcast subscription errors](apps/docs/docs/getting-started/upgrading.md#broadcast-subscription-errors-and-channel-authorization).
 - **Migrate before deploying the updated Core Auth integration.** Existing applications must add and apply the `auth_session_revocations` migration using `npx holo migrate`. New Auth scaffolds include it. This durable table is required independently of whether sessions use database, file or Redis storage; missing-table and persistence errors propagate explicitly. The documented MySQL migration requires **MySQL 8.0.17 or later** and exact binary identity comparison.
 - **Existing browser users must sign in again on adoption.** Authenticated browser payloads without logical-session and generation metadata are rejected when revocation persistence is enabled, including old remember-cookie payloads. **Existing personal access tokens remain valid.** No session enumeration or store cleanup is required. See [existing application rollout](apps/docs/docs/auth/session-and-cookies.md#existing-application-rollout) for the migration and deployment instructions.
 - Custom `EmailVerificationTokenStore` and `PasswordResetTokenStore` implementations must provide atomic `redeem<TResult>(record, operation): Promise<TResult | null>`. Custom `AuthTokenStore.deleteByUserId` implementations must honor optional `{ exceptId?: string }` to retain the current token during other-token revocation.

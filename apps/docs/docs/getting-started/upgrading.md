@@ -20,6 +20,14 @@ Use the existing `withoutGlobalScope()` / `withoutGlobalScopes()` and `withTrash
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Broadcast subscription errors and channel authorization
+
+A refused channel subscription no longer closes the WebSocket. The worker sends `pusher:subscription_error` for that channel and keeps the connection open, so Flux keeps the browser's other channels. If your own client waited for close code `4001` after a refused subscription, listen for `pusher:subscription_error` instead.
+
+`holo broadcast:work` now checks unsigned private and presence subscriptions with the user from the connection's session cookie or `Authorization` header, and refuses them when nobody is signed in. Before, those rules received `null`. Subscriptions signed by `/broadcasting/auth` are unchanged.
+
+The worker also stops sending internal error messages. Unexpected realtime errors reach clients as `Realtime request failed.`, failed publishes return `Broadcast publish failed.`, and the original errors go to your [error reporter](/basics/errors#reporting-errors). See [Errors](/broadcasting/production#errors).
+
 ### Node.js 22.14 or newer
 
 Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.

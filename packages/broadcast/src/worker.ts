@@ -321,6 +321,19 @@ type BroadcastScalingAdapter = {
 }
 
 const MAX_PUBLISH_TIMESTAMP_SKEW_SECONDS = 300
+const SUBSCRIPTION_ERROR_MESSAGE = 'Unable to authorize the channel subscription.'
+const REALTIME_ERROR_MESSAGE = 'Realtime request failed.'
+const PUBLISH_ERROR_MESSAGE = 'Broadcast publish failed.'
+
+class BroadcastSubscriptionDeniedError extends Error {
+  readonly status: number
+
+  constructor(status: number, message = `[@holo-js/broadcast] Channel authorization was denied (${status}).`) {
+    super(message)
+    this.name = 'BroadcastSubscriptionDeniedError'
+    this.status = status
+  }
+}
 
 type BroadcastWorkerScalingRuntime = {
   readonly driver: 'redis'
@@ -468,12 +481,12 @@ function verifyClientChannelAuth(
 ): { readonly whispers: readonly string[], readonly member?: PresenceMember } {
   const [key, signature] = clientAuth.auth.split(':', 2)
   if (key !== app.key || !signature) {
-    throw new Error('[@holo-js/broadcast] Channel authorization signature is invalid.')
+    throw new BroadcastSubscriptionDeniedError(403, '[@holo-js/broadcast] Channel authorization signature is invalid.')
   }
 
   const expected = signChannelAuth(app.secret, socketId, channel, clientAuth.channelData ?? '')
   if (!safeEqual(signature, expected)) {
-    throw new Error('[@holo-js/broadcast] Channel authorization signature is invalid.')
+    throw new BroadcastSubscriptionDeniedError(403, '[@holo-js/broadcast] Channel authorization signature is invalid.')
   }
 
   return parseSignedChannelData(clientAuth.channelData)
@@ -492,7 +505,7 @@ function isRealtimeSubscriptionCurrent(socket: SocketState, id: string, token: o
 }
 
 function createSocketId(): string {
-  return `${randomInt(1, 999_999)}.${randomInt(1, 999_999)}`
+  return `${randomInt(1, 1_000_000_000)}.${randomInt(1, 1_000_000_000)}`
 }
 
 function createScalingNodeId(): string {
@@ -886,7 +899,7 @@ async function authenticateSubscription(
     })
     const response = await fetcher(authRequest)
     if (!response.ok) {
-      throw new Error(`[@holo-js/broadcast] Channel authorization rejected (${response.status}).`)
+      throw new BroadcastSubscriptionDeniedError(response.status)
     }
 
     const body = await response.json() as Record<string, unknown>
@@ -917,15 +930,18 @@ async function authenticateSubscription(
       connection: app.connection,
     })
     : null
+  if (typeof resolvedUser === 'undefined' || resolvedUser === null) {
+    throw new BroadcastSubscriptionDeniedError(403)
+  }
 
   const authorized = await authorizeBroadcastChannel({
     channel: canonical,
     socketId: connection.socketId,
-    user: resolvedUser ?? null,
+    user: resolvedUser,
   }, channelAuth)
 
   if (!authorized.ok) {
-    throw new Error(`[@holo-js/broadcast] Channel authorization denied for "${channel}".`)
+    throw new BroadcastSubscriptionDeniedError(403)
   }
 
   return Object.freeze({
@@ -955,7 +971,21 @@ function resolveRealtimeErrorStatus(error: unknown): number | undefined {
     return 403
   }
 
+  if (name !== 'RealtimeAuthUnavailableError' && isRealtimeApplicationError(error)) {
+    return 400
+  }
+
   return undefined
+}
+
+function isRealtimeApplicationError(error: object): boolean {
+  for (let prototype: unknown = Object.getPrototypeOf(error); isRecord(prototype); prototype = Object.getPrototypeOf(prototype)) {
+    if (typeof prototype.constructor === 'function' && prototype.constructor.name === 'RealtimeError') {
+      return true
+    }
+  }
+
+  return false
 }
 
 function resolveRealtimeErrorCode(error: unknown): string | undefined {
@@ -1235,9 +1265,20 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
   function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
     const status = resolveRealtimeErrorStatus(error)
+    const kind = resolveRealtimeErrorKind(error, status)
+    if (kind !== 'authorization' && (typeof status === 'undefined' || status >= 500)) {
+      report(error, { capability: 'broadcast', operation: 'worker.realtime' })
+      sendRealtimeMessage(socket, 'holo:realtime:error', {
+        id,
+        message: REALTIME_ERROR_MESSAGE,
+        kind,
+        status: 500,
+      })
+      return
+    }
+
     const code = resolveRealtimeErrorCode(error)
     const name = error instanceof Error ? error.name : undefined
-    const kind = resolveRealtimeErrorKind(error, status)
     sendRealtimeMessage(socket, 'holo:realtime:error', {
       id,
       message: error instanceof Error ? error.message : String(error),
@@ -1516,7 +1557,24 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
   async function handleSubscribe(socket: SocketState, rawChannel: string, clientAuth?: ClientChannelAuth): Promise<void> {
     const channel = normalizeRequiredString(rawChannel, 'Subscription channel')
-    const authorization = await authenticateSubscription(socket.app, socket, channel, clientAuth, options.channelAuth, options.fetch)
+    let authorization: Awaited<ReturnType<typeof authenticateSubscription>>
+    try {
+      authorization = await authenticateSubscription(socket.app, socket, channel, clientAuth, options.channelAuth, options.fetch)
+    } catch (error) {
+      if (!(error instanceof BroadcastSubscriptionDeniedError)) {
+        report(error, { capability: 'broadcast', operation: 'worker.subscription' })
+      }
+
+      if (socket.active && connectedSockets.get(socket.socketId) === socket) {
+        socket.send(pusherEvent('pusher:subscription_error', {
+          type: 'AuthError',
+          error: SUBSCRIPTION_ERROR_MESSAGE,
+          status: error instanceof BroadcastSubscriptionDeniedError ? error.status : 500,
+        }, channel))
+      }
+      return
+    }
+
     if (!socket.active || connectedSockets.get(socket.socketId) !== socket) {
       return
     }
@@ -1718,8 +1776,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         appId: app.appId,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Broadcast publish failed.'
-      return new Response(message, { status: 500 })
+      report(error, { capability: 'broadcast', operation: 'worker.publish' })
+      return new Response(PUBLISH_ERROR_MESSAGE, { status: 500 })
     }
     return new Response(JSON.stringify({
       ok: true,
@@ -1763,6 +1821,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       return new Response('Not Found', { status: 404 })
     },
     connectWebSocket(connection: WorkerWebSocketConnection): void {
+      if (connectedSockets.has(connection.socketId)) {
+        throw new Error(`[@holo-js/broadcast] Socket id "${connection.socketId}" is already connected.`)
+      }
+
       connectedSockets.set(connection.socketId, {
         socketId: connection.socketId,
         app: connection.app,
@@ -1973,6 +2035,7 @@ export async function startBroadcastWorker(
   const pathPrefix = config.worker.path.replace(/\/$/, '')
   const appPathRegex = new RegExp(`^${escapeRegExp(pathPrefix)}/([^/]+)$`)
   if (bun?.serve) {
+    const rejectedSockets = new WeakSet<object>()
     const server = bun.serve({
       hostname: config.worker.host,
       port: config.worker.port,
@@ -2006,18 +2069,27 @@ export async function startBroadcastWorker(
       },
       websocket: {
         open(socket) {
-          runtime.connectWebSocket({
-            ...socket.data,
-            send(payload) {
-              socket.send(payload)
-            },
-            /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
-            close(code, reason) {
-              socket.close(code, reason)
-            },
-          })
+          try {
+            runtime.connectWebSocket({
+              ...socket.data,
+              send(payload) {
+                socket.send(payload)
+              },
+              /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
+              close(code, reason) {
+                socket.close(code, reason)
+              },
+            })
+          } catch (error) {
+            rejectedSockets.add(socket)
+            report(error, { capability: 'broadcast', operation: 'worker.socketConnect' })
+            socket.close(4200, 'Reconnect')
+          }
         },
         message(socket, message) {
+          if (rejectedSockets.has(socket)) {
+            return
+          }
           const messageBytes = typeof message === 'string'
             ? Buffer.byteLength(message)
             : message.byteLength
@@ -2036,6 +2108,10 @@ export async function startBroadcastWorker(
           })
         },
         close(socket) {
+          if (rejectedSockets.has(socket)) {
+            return
+          }
+
           runtime.disconnectWebSocket(socket.data.socketId)
         },
       },
@@ -2075,15 +2151,21 @@ export async function startBroadcastWorker(
     const connectionInfo = requestConnectionInfo.get(request)!
 
     const socketId = connectionInfo.socketId
-    runtime.connectWebSocket({
-      ...connectionInfo,
-      send(payload) {
-        socket.send(payload)
-      },
-      close(code, reason) {
-        socket.close(code, reason)
-      },
-    })
+    try {
+      runtime.connectWebSocket({
+        ...connectionInfo,
+        send(payload) {
+          socket.send(payload)
+        },
+        close(code, reason) {
+          socket.close(code, reason)
+        },
+      })
+    } catch (error) {
+      report(error, { capability: 'broadcast', operation: 'worker.socketConnect' })
+      socket.close(4200, 'Reconnect')
+      return
+    }
     socket.on('message', (message) => {
       const messageBytes = getNodeWebSocketMessageBytes(message)
       if (messageBytes > config.worker.maxMessageBytes) {

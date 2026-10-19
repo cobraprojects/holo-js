@@ -13,7 +13,7 @@ Realtime and Broadcast are not production-ready. The deployment settings below d
 - Browser reconnection and resubscription, heartbeat handling, and dead-connection cleanup still need reliability work. Do not rely on uninterrupted live updates.
 - Presence membership can become stale after a worker crashes.
 - Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
-- Protocol hardening is pending, including subscription-error handling, socket-ID collision checks, private-channel authorization for anonymous users in the default worker, per-connection limits, backpressure, error-message handling, and Nuxt definition bundling.
+- Protocol hardening is pending: per-connection limits, backpressure, and Nuxt definition bundling.
 
 These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
 
@@ -116,6 +116,20 @@ The worker doesn't authenticate `/stats`. If you enable it, block it at your pro
 ### Size limits
 
 The worker rejects publish requests larger than `worker.maxRequestBytes` (1 MB by default) with `413`, and closes sockets that send messages larger than `worker.maxMessageBytes` (64 KB by default) with code `1009`. Raise them only if your payloads need it.
+
+### Errors
+
+The worker never sends internal error details to clients. It passes the original error to your [error reporter](/basics/errors#reporting-errors) and sends a generic message instead:
+
+| Failure | Client receives |
+| --- | --- |
+| A channel check throws | `pusher:subscription_error` with status `500`. See [Refused subscriptions](/broadcasting/events-and-channels#refused-subscriptions). |
+| A realtime query or mutation throws an unexpected error | `Realtime request failed.` with status `500` |
+| A publish request fails | `500` with `Broadcast publish failed.` |
+
+[`RealtimeError`](/realtime/#realtimeerror), access errors, and validation errors are meant for the caller, so they keep their message.
+
+Each connection gets a unique socket ID in the Pusher `123.456` format. If a new connection would reuse an ID that is already connected, the worker closes it with code `4200` and the client reconnects.
 
 ## Run several workers
 

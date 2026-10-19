@@ -84,11 +84,11 @@ it('does not deliver private broadcasts when the real worker rejects channel aut
   observer.channel('barrier').listen('feed.updated', payload => barrier.push(String(payload.title)))
   await observer.connect()
   await transport.client.connect()
-  await expect.poll(() => transport.client.getStatus()).toBe('disconnected')
   await expect.poll(() => transport.subscriptions()).toBe(1)
   await transport.publish('Restricted', { channels: ['private-unregistered', 'barrier'] })
   await expect.poll(() => barrier).toEqual(['Restricted'])
   expect(delivered).toEqual([])
+  expect(transport.client.getStatus()).toBe('connected')
 })
 
 it('leaves all subscriptions of one channel kind while retaining its other kind and unrelated channels', async () => {

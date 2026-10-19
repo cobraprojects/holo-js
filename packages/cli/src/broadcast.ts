@@ -33,6 +33,7 @@ type BroadcastCliModule = {
         }[]
       }
       importModule?: (absolutePath: string) => Promise<unknown>
+      resolveUser?: (context: BroadcastChannelUserContext) => Promise<unknown>
     }
     realtime?: BroadcastRealtimeRuntimeBindings
   }): Promise<{
@@ -40,6 +41,11 @@ type BroadcastCliModule = {
     port: number
     stop(): Promise<void>
   }>
+}
+
+type BroadcastChannelUserContext = {
+  readonly headers: Headers
+  readonly guard?: string
 }
 
 type BroadcastRealtimeExecutionContext = {
@@ -178,6 +184,11 @@ type RequestAwareHoloRuntime = HoloRuntime & {
   ): Promise<TValue>
 }
 
+type ProjectRuntimeLoader = {
+  load(): Promise<RequestAwareHoloRuntime>
+  shutdown(): Promise<void>
+}
+
 type ProjectPackageManifest = {
   readonly dependencies?: Readonly<Record<string, string>>
   readonly devDependencies?: Readonly<Record<string, string>>
@@ -255,7 +266,7 @@ function readCookieFromHeader(header: string | null, name: string): string | und
   return undefined
 }
 
-function createRealtimeAuthRequestAccessors(headers: Headers): RealtimeAuthRequestAccessors {
+function createAuthRequestAccessors(headers: Headers): RealtimeAuthRequestAccessors {
   return {
     async getCookie(name: string) {
       return readCookieFromHeader(headers.get('cookie'), name)
@@ -270,7 +281,41 @@ function createRealtimeAuthRequestAccessors(headers: Headers): RealtimeAuthReque
   }
 }
 
-async function createRealtimeWorkerBindings(projectRoot: string): Promise<(BroadcastRealtimeRuntimeBindings & { shutdown(): Promise<void> }) | undefined> {
+function createProjectRuntimeLoader(projectRoot: string): ProjectRuntimeLoader {
+  let loading: Promise<RequestAwareHoloRuntime> | undefined
+  return {
+    async load() {
+      loading ??= (initializeProjectRuntime(projectRoot) as Promise<RequestAwareHoloRuntime>).catch((error: unknown) => {
+        loading = undefined
+        throw error
+      })
+      return await loading
+    },
+    async shutdown() {
+      const runtime = await loading?.catch(() => undefined)
+      await runtime?.shutdown()
+    },
+  }
+}
+
+function createChannelUserResolver(runtimeLoader: ProjectRuntimeLoader): (context: BroadcastChannelUserContext) => Promise<unknown> {
+  return async ({ headers, guard }) => {
+    const runtime = await runtimeLoader.load()
+    return await runtime.runWithAuthRequestAccessors(createAuthRequestAccessors(headers), async () => {
+      const auth = runtime.auth
+      if (!auth) {
+        return null
+      }
+
+      return await (guard ? auth.guard(guard) : auth).user()
+    })
+  }
+}
+
+async function createRealtimeWorkerBindings(
+  projectRoot: string,
+  runtimeLoader: ProjectRuntimeLoader,
+): Promise<BroadcastRealtimeRuntimeBindings | undefined> {
   if (!(await hasProjectPackageDependency(projectRoot, '@holo-js/realtime'))) {
     return undefined
   }
@@ -280,7 +325,7 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<(Broad
     return undefined
   }
 
-  const runtime = await initializeProjectRuntime(projectRoot) as RequestAwareHoloRuntime
+  const runtime = await runtimeLoader.load()
   realtime.configureRealtimeRuntime?.({
     async runWithAuthRequestAccessors(accessors, callback) {
       const runner = runtime.runWithAuthRequestAccessors
@@ -308,13 +353,10 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<(Broad
     context: BroadcastRealtimeExecutionContext,
     callback: (authRequest: RealtimeAuthRequestAccessors) => Promise<TValue>,
   ): Promise<TValue> => {
-    return await callback(createRealtimeAuthRequestAccessors(context.headers))
+    return await callback(createAuthRequestAccessors(context.headers))
   }
 
   return {
-    async shutdown() {
-      await runtime.shutdown()
-    },
     async query(name, args, context) {
       return await withRealtimeRequest(context, async (authRequest) => {
         return await realtime.executeRealtimeQuery(await resolveDefinition(name), args, { authRequest })
@@ -354,9 +396,10 @@ export async function runBroadcastWorkCommand(
   await loadRegistry(projectRoot).catch(() => undefined)
   const registry = await prepareProjectDiscovery(projectRoot, project.config)
   const broadcastModule = await loadModule(projectRoot)
-  const realtime = await createRealtimeWorkerBindings(projectRoot)
+  const runtimeLoader = createProjectRuntimeLoader(projectRoot)
   const previousExceptions = errorReportingInternals.configure(config.app.exceptions)
   try {
+    const realtime = await createRealtimeWorkerBindings(projectRoot, runtimeLoader)
     const worker = await broadcastModule.startBroadcastWorker({
       config: config.broadcast,
       queue: config.queue,
@@ -371,6 +414,7 @@ export async function runBroadcastWorkCommand(
               channels: registry.channels,
             },
             importModule: async (absolutePath: string) => await importProjectModule(projectRoot, absolutePath),
+            resolveUser: createChannelUserResolver(runtimeLoader),
           },
         }
         : {}),
@@ -402,6 +446,6 @@ export async function runBroadcastWorkCommand(
     })
   } finally {
     errorReportingInternals.configure(previousExceptions)
-    await realtime?.shutdown()
+    await runtimeLoader.shutdown()
   }
 }
