@@ -402,7 +402,10 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
 
       const record = deserializeSessionRecord(encoded)
       if (!record) return { found: false }
-      if (Object.hasOwn(record.data, key)) return { found: true, value: record.data[key] }
+      const existing = record.data[key]
+      if (Object.hasOwn(record.data, key) && (key !== '_token' || (typeof existing === 'string' && existing))) {
+        return { found: true, value: existing }
+      }
 
       const next = serializeSessionRecord({ ...record, data: { ...record.data, [key]: value } })
       const result = await this.client.eval(SET_SESSION_DATA_SCRIPT, 1, redisKey, encoded, next)

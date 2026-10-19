@@ -26,7 +26,7 @@ type NextResponseWithCookies = Response & {
 
 type NextServerModule = {
   readonly NextResponse: {
-    next(): NextResponseWithCookies
+    next(options?: { readonly request: { readonly headers: Headers } }): NextResponseWithCookies
   }
 }
 
@@ -50,7 +50,20 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
   }
 
   const { NextResponse } = await import('next/server.js') as NextServerModule
-  const response = NextResponse.next()
+  let requestHeaders: Headers | undefined
+  if (sessionCookies.length > 0) {
+    requestHeaders = new Headers(request.headers)
+    const forwardedCookies = new Map<string, string>()
+    for (const cookie of [
+      ...(request.headers.get('cookie') ?? '').split(';'),
+      ...sessionCookies.map(cookie => cookie.split(';', 1)[0] ?? ''),
+    ]) {
+      const separator = cookie.indexOf('=')
+      if (separator > 0) forwardedCookies.set(cookie.slice(0, separator).trim(), cookie.slice(separator + 1).trim())
+    }
+    requestHeaders.set('cookie', [...forwardedCookies].map(([name, value]) => `${name}=${value}`).join('; '))
+  }
+  const response = NextResponse.next(requestHeaders ? { request: { headers: requestHeaders } } : undefined)
   for (const cookie of cookies) {
     response.cookies.set(cookie.name, cookie.value, cookie.options)
   }

@@ -463,7 +463,10 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
           await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
           return { found: false }
         }
-        if (Object.hasOwn(record.data, key)) return { found: true, value: record.data[key] }
+        const existing = record.data[key]
+        if (Object.hasOwn(record.data, key) && (key !== '_token' || (typeof existing === 'string' && existing))) {
+          return { found: true, value: existing }
+        }
         await writePathAtomically(recordPath, serializeRecord({ ...record, data: { ...record.data, [key]: value } }))
         return { found: true, value }
       } finally {

@@ -212,7 +212,10 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         }
 
         const stored = splitStoredSessionData(row.data)
-        if (Object.hasOwn(stored.publicData, key)) return { found: true, value: stored.publicData[key] }
+        const existing = stored.publicData[key]
+        if (Object.hasOwn(stored.publicData, key) && (key !== '_token' || (typeof existing === 'string' && existing))) {
+          return { found: true, value: existing }
+        }
 
         const publicData = Object.freeze({ ...stored.publicData, [key]: value })
         await new TableQueryBuilder(tableName, transaction)
