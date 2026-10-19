@@ -5,7 +5,7 @@ import type {
   HoloProjectPrepareRun,
 } from '@holo-js/kernel'
 import type { IoStreams } from './cli-types'
-import { installProjectDependencies, resolveProjectPackageManager } from './package-manager'
+import { installProjectDependencies, resolvePackageManagerSpawn, resolveProjectPackageManager, terminateProcessOnAbort } from './package-manager'
 import {
   ensureProjectConfig,
   ensureGeneratedSchemaPlaceholder,
@@ -101,19 +101,21 @@ async function runFrameworkSync(
 ): Promise<void> {
   const manager = await resolveProjectPackageManager(projectRoot)
   signal?.throwIfAborted()
-  const invocation = sync.commands[manager]
+  const invocation = resolvePackageManagerSpawn({ command: sync.commands[manager][0], args: sync.commands[manager].slice(1) })
   await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(invocation[0], invocation.slice(1), {
+    const child = spawn(invocation.command, [...invocation.args], {
       cwd: projectRoot,
       stdio: 'inherit',
-      ...(signal ? { signal } : {}),
+      shell: invocation.shell,
     })
+    terminateProcessOnAbort(child, signal)
     let processError: Error | undefined
     child.on('error', (error) => {
       processError = error
     })
     child.on('close', (code: number | null) => {
-      if (processError) reject(processError)
+      if (signal?.aborted) reject(signal.reason)
+      else if (processError) reject(processError)
       else if (code === 0) resolvePromise()
       else reject(new Error(`${sync.errorLabel} exited with ${code}`))
     })

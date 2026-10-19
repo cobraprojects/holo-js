@@ -2,7 +2,25 @@ import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readTextFile } from './project/runtime'
+import { terminateChildProcess } from './framework-run'
 import type { IoStreams, PackageManagerCommand, SpawnProcessLike, SupportedScaffoldPackageManager } from './cli-types'
+
+export function resolvePackageManagerSpawn(
+  invocation: PackageManagerCommand,
+  platform: NodeJS.Platform = process.platform,
+): { readonly command: string, readonly args: readonly string[], readonly shell: boolean } {
+  if (platform !== 'win32') {
+    return { command: invocation.command, args: [...invocation.args], shell: false }
+  }
+
+  return { command: [invocation.command, ...invocation.args].map(quoteWindowsArgument).join(' '), args: [], shell: true }
+}
+
+function quoteWindowsArgument(value: string): string {
+  if (value.length > 0 && !/[\s"&|<>^()]/.test(value)) return value
+
+  return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`
+}
 
 async function fileExists(path: string): Promise<boolean> {
   try {
@@ -50,6 +68,19 @@ export async function resolveProjectPackageManager(projectRoot: string): Promise
   return 'bun'
 }
 
+export function terminateProcessOnAbort(child: SpawnProcessLike, signal: AbortSignal | undefined): void {
+  if (!signal) return
+
+  const terminate = () => terminateChildProcess(child, 'SIGTERM')
+  if (signal.aborted) {
+    terminate()
+    return
+  }
+
+  signal.addEventListener('abort', terminate, { once: true })
+  child.on('close', () => signal.removeEventListener('abort', terminate))
+}
+
 export async function resolvePackageManagerCommand(projectRoot: string, scriptName: string): Promise<PackageManagerCommand> {
   const packageManager = await resolveProjectPackageManager(projectRoot)
   return {
@@ -80,13 +111,15 @@ export async function installProjectDependencies(
   spawnProcess: typeof spawn,
   signal?: AbortSignal,
 ): Promise<void> {
-  const invocation = await resolvePackageManagerInstallInvocation(projectRoot)
+  const invocation = resolvePackageManagerSpawn(await resolvePackageManagerInstallInvocation(projectRoot))
+  signal?.throwIfAborted()
   const child = spawnProcess(invocation.command, [...invocation.args], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    ...(signal ? { signal } : {}),
+    shell: invocation.shell,
   }) as SpawnProcessLike
+  terminateProcessOnAbort(child, signal)
   let stdout = ''
   let stderr = ''
 
@@ -108,6 +141,7 @@ export async function installProjectDependencies(
   if (result.kind === 'error') {
     throw result.error
   }
+  signal?.throwIfAborted()
 
   if (stdout) {
     io.stdout.write(stdout)

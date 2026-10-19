@@ -89,6 +89,12 @@ A `redis` or `database` connection's `retryAfter` must now be at least `1`. Befo
 
 A job whose name isn't registered now fails into the failed jobs table and the worker keeps going. Before, the worker stopped with an error and left the job reserved. If you rename or delete jobs, drain their queued jobs first or retry them later with `npx holo queue:retry`. See [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly).
 
+### queue:listen waits for its worker
+
+`queue:listen` now passes `Ctrl+C`, `SIGINT`, and `SIGTERM` to its worker and exits only after the worker has closed, so stopping `queue:listen` no longer leaves a worker running. A change that restarts the worker waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error instead of starting a replacement. Before, it started one.
+
+If you run `queue:listen` under a process manager, check that it stops when the manager sends `SIGTERM`. Your code doesn't change. See [Develop with queue:listen](/queue/workers#develop-with-queue-listen).
+
 ### Sensitive input in validation failures
 
 Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) are now left out of every validation failure, including inside nested objects and arrays. This covers the 422 response in Next.js, Nuxt, and SvelteKit, `ValidationException` `values` and `toJSON()`, and `submission.fail()` and `submission.serialize()`. If your code reads a password back from a caught `ValidationException`, read it from the request instead.
