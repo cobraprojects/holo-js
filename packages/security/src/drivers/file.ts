@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SecurityRateLimitHitResult, SecurityRateLimitStore } from '../contracts'
 
 type StoredFileRateLimitBucket = {
@@ -31,35 +32,48 @@ export interface FileRateLimitStoreOptions {
   readonly lockTimeoutMs?: number
 }
 
+type FileRateLimitKeyHashes = {
+  readonly namespaceHash: string
+  readonly prefixHashes: readonly string[]
+}
+
 const LOCK_OWNER_FILE = 'owner'
 const BUCKETS_DIRECTORY = 'buckets'
+const PRUNE_INTERVAL_MS = 60_000
 
 function createBucketHash(key: string): string {
   return createHash('sha256').update(key).digest('hex')
 }
 
-function createBucketNamespace(key: string): string {
-  const separatorIndex = key.indexOf('|')
-  return separatorIndex >= 0 ? key.slice(0, separatorIndex + 1) : key
-}
-
-function createBucketNamespaceHash(key: string): string {
-  return createBucketHash(createBucketNamespace(key))
-}
-
-function createBucketPrefixHashes(key: string): string[] {
+function hashBucketKey(key: string, keyHash: string): FileRateLimitKeyHashes {
+  const hash = createHash('sha256')
   const prefixHashes: string[] = []
+  let namespaceHash: string | undefined
+  let prefixLength = 0
 
-  for (let index = 1; index <= key.length; index += 1) {
-    prefixHashes.push(createBucketHash(key.slice(0, index)))
+  for (const character of key) {
+    hash.update(character)
+    prefixLength += character.length
+    const prefixHash = prefixLength === key.length ? keyHash : hash.copy().digest('hex')
+    prefixHashes.push(prefixHash)
+
+    if (namespaceHash === undefined && character === '|') {
+      namespaceHash = prefixHash
+    }
   }
 
-  return prefixHashes
+  return Object.freeze({
+    namespaceHash: namespaceHash ?? keyHash,
+    prefixHashes: Object.freeze(prefixHashes),
+  })
+}
+
+function getBucketPathForKeyHash(root: string, keyHash: string): string {
+  return join(root, BUCKETS_DIRECTORY, keyHash.slice(0, 2), keyHash.slice(2, 4), `${keyHash}.json`)
 }
 
 function getBucketPath(root: string, key: string): string {
-  const hash = createBucketHash(key)
-  return join(root, BUCKETS_DIRECTORY, hash.slice(0, 2), hash.slice(2, 4), `${hash}.json`)
+  return getBucketPathForKeyHash(root, createBucketHash(key))
 }
 
 function serializeBucket(bucket: FileRateLimitBucket): string {
@@ -337,18 +351,43 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
   const resolveNow = options.now ?? (() => new Date())
   const lockRetryDelayMs = options.lockRetryDelayMs ?? 5
   const lockTimeoutMs = options.lockTimeoutMs ?? 2000
+  const lockOptions = {
+    retryDelayMs: lockRetryDelayMs,
+    timeoutMs: lockTimeoutMs,
+  }
+  let lastPrunedAt: number | undefined
+
+  const pruneExpiredBuckets = async (now: Date): Promise<void> => {
+    for (const path of await listBucketPaths(root)) {
+      await withBucketLock(path, lockOptions, async () => {
+        const bucket = await readBucket(path)
+        if (bucket && isExpired(bucket, now)) {
+          await deleteBucket(path)
+        }
+      }).catch((error: unknown) => {
+        reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
+      })
+    }
+  }
 
   return {
     async hit(key, hitOptions) {
-      const now = resolveNow()
-      const path = getBucketPath(root, key)
-      return await withBucketLock(path, {
-        retryDelayMs: lockRetryDelayMs,
-        timeoutMs: lockTimeoutMs,
-      }, async () => {
-        const existing = await readBucket(path)
+      const sweepNow = resolveNow()
+      const keyHash = createBucketHash(key)
+      const path = getBucketPathForKeyHash(root, keyHash)
 
-        if (existing && existing.keyHash !== createBucketHash(key)) {
+      if (lastPrunedAt === undefined || sweepNow.getTime() - lastPrunedAt >= PRUNE_INTERVAL_MS) {
+        lastPrunedAt = sweepNow.getTime()
+        await pruneExpiredBuckets(sweepNow).catch((error: unknown) => {
+          reportError(error, { capability: 'security', operation: 'rate-limit expired-bucket sweep' })
+        })
+      }
+
+      return await withBucketLock(path, lockOptions, async () => {
+        const existing = await readBucket(path)
+        const now = resolveNow()
+
+        if (existing && existing.keyHash !== keyHash) {
           throw new Error(`[@holo-js/security] File rate-limit bucket hash collision detected for stored bucket ${existing.keyHash}.`)
         }
 
@@ -362,9 +401,8 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
               attempts: existing.attempts + 1,
             }
           : {
-              namespaceHash: createBucketNamespaceHash(key),
-              keyHash: createBucketHash(key),
-              prefixHashes: Object.freeze(createBucketPrefixHashes(key)),
+              ...hashBucketKey(key, keyHash),
+              keyHash,
               attempts: 1,
               expiresAt: new Date(now.getTime() + hitOptions.decaySeconds * 1000),
             }
@@ -379,13 +417,11 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       })
     },
     async clear(key) {
-      const path = getBucketPath(root, key)
-      return await withBucketLock(path, {
-        retryDelayMs: lockRetryDelayMs,
-        timeoutMs: lockTimeoutMs,
-      }, async () => {
+      const keyHash = createBucketHash(key)
+      const path = getBucketPathForKeyHash(root, keyHash)
+      return await withBucketLock(path, lockOptions, async () => {
         const existing = await readBucket(path)
-        if (!existing || existing.keyHash !== createBucketHash(key)) {
+        if (!existing || existing.keyHash !== keyHash) {
           return false
         }
 
@@ -396,13 +432,11 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     async clearByPrefix(prefix) {
       let cleared = 0
       const now = resolveNow()
+      const prefixHash = createBucketHash(prefix)
       const paths = await listBucketPaths(root)
 
       for (const path of paths) {
-        const removed = await withBucketLock(path, {
-          retryDelayMs: lockRetryDelayMs,
-          timeoutMs: lockTimeoutMs,
-        }, async () => {
+        const removed = await withBucketLock(path, lockOptions, async () => {
           const bucket = await readBucket(path)
           if (!bucket) {
             return false
@@ -413,7 +447,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
             return false
           }
 
-          if (!bucket.prefixHashes.includes(createBucketHash(prefix))) {
+          if (!bucket.prefixHashes.includes(prefixHash)) {
             return false
           }
 
@@ -433,10 +467,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       let cleared = 0
 
       for (const path of paths) {
-        const removed = await withBucketLock(path, {
-          retryDelayMs: lockRetryDelayMs,
-          timeoutMs: lockTimeoutMs,
-        }, async () => {
+        const removed = await withBucketLock(path, lockOptions, async () => {
           const bucket = await readBucket(path)
           if (!bucket) {
             return false

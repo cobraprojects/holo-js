@@ -81,6 +81,19 @@ export default defineSecurityConfig({
 
 Both values must be whole numbers of at least `1`.
 
+## How the window works
+
+A window opens with the first attempt for a key and lasts `decaySeconds`. Every attempt in the window counts, including rejected ones. When the window ends, the next attempt starts a new one.
+
+For a `login` limiter of five attempts per minute:
+
+- At `00:00`, five attempts succeed.
+- At `00:30`, the sixth attempt gets a `429` with `Retry-After: 30`.
+- At `00:45`, another attempt also gets a `429`, now with `Retry-After: 15`. Rejected attempts don't extend the window.
+- At `01:00`, the window has ended. The next attempt counts as the first of a new window.
+
+The `memory`, `file`, and `redis` drivers all follow these rules, so switching drivers doesn't change when a key is limited.
+
 ## Who gets counted
 
 Each limiter counts attempts per **key**. With `.define()`, the key is:
@@ -308,7 +321,7 @@ Pick where attempt counts are stored with `rateLimit.driver`. The generated conf
 | `file` | Yes, on the same machine | No | Yes | A single server |
 | `redis` | Yes | Yes | Yes | Multiple instances or serverless |
 
-The `memory` driver keeps counts inside the running process, so `holo rate-limit:clear` refuses to run against it.
+The `memory` driver keeps counts inside the running process, so `holo rate-limit:clear` refuses to run against it. It keeps at most 10,000 keys per process. When it's full, it drops expired keys first, then the least recently used key.
 
 [Multi-factor auth](/auth/multi-factor) attempt limits use the same driver. Use `redis` when several app instances must share those limits.
 
@@ -327,7 +340,7 @@ export default defineSecurityConfig({
 })
 ```
 
-`path` defaults to `./storage/framework/rate-limits`. Keys are hashed before they're written to disk.
+`path` defaults to `./storage/framework/rate-limits`. Keys are hashed before they're written to disk. Each key is one file. Holo deletes expired files while it handles requests, at most once a minute. A file for an expired key stays on disk until the next request after that minute.
 
 ### Redis driver
 
@@ -370,6 +383,8 @@ export default defineRedisConfig({
 ```
 
 `connection` defaults to the `default` connection in `config/redis.ts`. `prefix` defaults to `holo:rate-limit:`. If `config/redis.ts` is missing, startup fails with an error naming the missing connection.
+
+Each key is one Redis string that counts attempts and expires when its window ends. Rejected attempts only increment that counter, so a flood of attempts doesn't grow Redis memory.
 
 ## Configuration reference
 

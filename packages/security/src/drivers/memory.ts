@@ -6,6 +6,8 @@ type MemoryRateLimitBucket = {
   expiresAt: Date
 }
 
+const DEFAULT_MEMORY_MAX_BUCKETS = 10_000
+
 export interface MemoryRateLimitStoreOptions {
   readonly now?: () => Date
   readonly maxBuckets?: number
@@ -36,8 +38,8 @@ function isExpired(bucket: MemoryRateLimitBucket, now: Date): boolean {
 export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions = {}): SecurityRateLimitStore {
   const buckets = new Map<string, MemoryRateLimitBucket>()
   const resolveNow = options.now ?? (() => new Date())
-  const maxBuckets = options.maxBuckets
-  if (typeof maxBuckets !== 'undefined' && (!Number.isInteger(maxBuckets) || maxBuckets < 1)) {
+  const maxBuckets = options.maxBuckets ?? DEFAULT_MEMORY_MAX_BUCKETS
+  if (!Number.isInteger(maxBuckets) || maxBuckets < 1) {
     throw new TypeError('[@holo-js/security] Memory rate-limit store maxBuckets must be an integer greater than or equal to 1.')
   }
 
@@ -46,17 +48,21 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
     throw new TypeError('[@holo-js/security] Memory rate-limit store pruneIntervalMs must be an integer greater than or equal to 1.')
   }
 
-  const pruneExpiredBuckets = (): void => {
-    const now = resolveNow()
+  let nextExpiryAt = Number.POSITIVE_INFINITY
+
+  const pruneExpiredBuckets = (now: Date): void => {
+    nextExpiryAt = Number.POSITIVE_INFINITY
 
     for (const [key, bucket] of buckets) {
       if (isExpired(bucket, now)) {
         buckets.delete(key)
+      } else {
+        nextExpiryAt = Math.min(nextExpiryAt, bucket.expiresAt.getTime())
       }
     }
   }
 
-  const pruneTimer = setInterval(pruneExpiredBuckets, pruneIntervalMs)
+  const pruneTimer = setInterval(() => pruneExpiredBuckets(resolveNow()), pruneIntervalMs)
   pruneTimer.unref?.()
 
   const evictOldestBucket = (): void => {
@@ -84,7 +90,10 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
             expiresAt: new Date(now.getTime() + hitOptions.decaySeconds * 1000),
           }
 
-      if (!active && typeof maxBuckets === 'number') {
+      if (!active && buckets.size >= maxBuckets) {
+        if (now.getTime() >= nextExpiryAt) {
+          pruneExpiredBuckets(now)
+        }
         while (buckets.size >= maxBuckets) {
           evictOldestBucket()
         }
@@ -95,6 +104,7 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
       }
 
       buckets.set(key, bucket)
+      nextExpiryAt = Math.min(nextExpiryAt, bucket.expiresAt.getTime())
 
       return Object.freeze({
         limited: bucket.attempts > hitOptions.maxAttempts,

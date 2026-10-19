@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1067,8 +1067,8 @@ describe('@holo-js/security rate-limit drivers', () => {
         now: () => memoryNow,
       })
     },
-    advancePastExpiry() {
-      memoryNow = new Date('2026-04-16T12:02:00.000Z')
+    advanceSeconds(seconds) {
+      memoryNow = new Date(memoryNow.getTime() + seconds * 1000)
     },
     cleanup() {
       memoryNow = new Date('2026-04-16T12:00:00.000Z')
@@ -1147,6 +1147,70 @@ describe('@holo-js/security rate-limit drivers', () => {
     await store.close?.()
   })
 
+  it('bounds the default memory store and evicts the oldest bucket when it is full', async () => {
+    const store = createMemoryRateLimitStore({
+      now: () => new Date('2026-04-16T12:00:00.000Z'),
+    })
+
+    for (let index = 0; index <= 10_000; index += 1) {
+      await store.hit(`limiter:login|user:${index}`, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+    }
+
+    await expect(store.clear('limiter:login|user:0')).resolves.toBe(false)
+    await expect(store.clear('limiter:login|user:10000')).resolves.toBe(true)
+    await store.close?.()
+  })
+
+  it('evicts expired memory buckets before evicting active ones when full', async () => {
+    let now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 2,
+      pruneIntervalMs: 60_000,
+    })
+
+    await store.hit('limiter:login|user:active', {
+      maxAttempts: 2,
+      decaySeconds: 600,
+    })
+    await store.hit('limiter:login|user:short', {
+      maxAttempts: 2,
+      decaySeconds: 10,
+    })
+    now = new Date('2026-04-16T12:00:20.000Z')
+
+    await store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 600,
+    })
+
+    await expect(store.clear('limiter:login|user:active')).resolves.toBe(true)
+    await expect(store.clear('limiter:login|user:short')).resolves.toBe(false)
+    await store.close?.()
+  })
+
+  it('preserves live memory limits when another bucket expires between capacity sweeps', async () => {
+    let now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({ now: () => now, maxBuckets: 2 })
+    try {
+      await store.hit('short', { maxAttempts: 1, decaySeconds: 1 })
+      await store.hit('live', { maxAttempts: 1, decaySeconds: 600 })
+      now = new Date('2026-04-16T12:00:02.000Z')
+      await store.hit('next-short', { maxAttempts: 1, decaySeconds: 1 })
+      now = new Date('2026-04-16T12:00:04.000Z')
+      await store.hit('new', { maxAttempts: 1, decaySeconds: 60 })
+      await expect(store.hit('live', { maxAttempts: 1, decaySeconds: 600 })).resolves.toMatchObject({
+        limited: true,
+        snapshot: { attempts: 2 },
+      })
+    } finally {
+      await store.close?.()
+    }
+  })
+
   it('prunes expired memory buckets on a timer', async () => {
     vi.useFakeTimers()
 
@@ -1205,6 +1269,7 @@ describe('@holo-js/security rate-limit drivers', () => {
       | {
           root: string
           setNow(value: Date): void
+          advanceSeconds(seconds: number): void
           createStore(): SecurityRateLimitStore
         }
       | undefined
@@ -1218,6 +1283,9 @@ describe('@holo-js/security rate-limit drivers', () => {
         root,
         setNow(value: Date) {
           now = value
+        },
+        advanceSeconds(seconds: number) {
+          now = new Date(now.getTime() + seconds * 1000)
         },
         createStore() {
           return createFileRateLimitStore(root, {
@@ -1233,8 +1301,8 @@ describe('@holo-js/security rate-limit drivers', () => {
         harness = await createHarness()
         return harness.createStore()
       },
-      advancePastExpiry() {
-        harness?.setNow(new Date('2026-04-16T12:02:00.000Z'))
+      advanceSeconds(seconds) {
+        harness?.advanceSeconds(seconds)
       },
       supportsPersistence: true,
       recreateStore() {
@@ -1361,6 +1429,82 @@ describe('@holo-js/security rate-limit drivers', () => {
 
       expect(alpha.snapshot.attempts).toBe(1)
       expect(beta.snapshot.attempts).toBe(2)
+    })
+
+    it('keeps hitting healthy keys when the sweep meets an unreadable bucket file', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+      const brokenPath = join(harness.root, 'buckets', 'aa', 'bb', 'broken.json')
+      await mkdir(dirname(brokenPath), { recursive: true })
+      await writeFile(brokenPath, '{bad json', 'utf8')
+
+      await expect(store.hit('limiter:login|user:healthy', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).resolves.toMatchObject({
+        limited: false,
+        snapshot: { attempts: 1 },
+      })
+    })
+
+    it('keeps hitting healthy keys when a sweep cannot read another directory', async () => {
+      const harness = await createHarness()
+      const unreadable = join(harness.root, 'unreadable')
+      await mkdir(unreadable)
+      await chmod(unreadable, 0)
+      try {
+        await expect(harness.createStore().hit('healthy', {
+          maxAttempts: 1,
+          decaySeconds: 60,
+        })).resolves.toMatchObject({ limited: false, snapshot: { attempts: 1 } })
+      } finally {
+        await chmod(unreadable, 0o700)
+      }
+    })
+
+    it('starts a file window after waiting for its bucket lock', async () => {
+      const harness = await createHarness()
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      let signalStarted!: () => void
+      const started = new Promise<void>((resolve) => { signalStarted = resolve })
+      const store = createFileRateLimitStore(harness.root, {
+        now: () => { signalStarted(); return now },
+        lockTimeoutMs: 2000,
+      })
+      const path = fileRateLimitDriverInternals.getBucketPath(harness.root, 'waiting')
+      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(path)
+      await mkdir(lockPath, { recursive: true })
+      const hit = store.hit('waiting', { maxAttempts: 1, decaySeconds: 60 })
+      await started
+      now = new Date('2026-04-16T12:02:00.000Z')
+      await rm(lockPath, { recursive: true })
+      const result = await hit
+      expect(result.snapshot.expiresAt).toEqual(new Date('2026-04-16T12:03:00.000Z'))
+      await expect(store.hit('waiting', { maxAttempts: 1, decaySeconds: 60 })).resolves.toMatchObject({ limited: true })
+    })
+
+    it('removes expired bucket files on a sweep even when their keys are never hit again', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+      tempDirs.push(root)
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createFileRateLimitStore(root, {
+        now: () => now,
+      })
+
+      await store.hit('limiter:login|user:abandoned', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      const abandonedPath = fileRateLimitDriverInternals.getBucketPath(root, 'limiter:login|user:abandoned')
+
+      now = new Date('2026-04-16T12:02:00.000Z')
+      await store.hit('limiter:login|user:fresh', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+
+      await expect(readFile(abandonedPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(store.clear('limiter:login|user:fresh')).resolves.toBe(true)
     })
 
     it('serializes concurrent hits on the same bucket so attempts are not lost', async () => {
@@ -1490,36 +1634,27 @@ describe('@holo-js/security rate-limit drivers', () => {
       const harness = await createHarness()
       const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, 'limiter:login|user:live-lock')
       let releaseLock!: () => void
-
-      const lockAcquired = new Promise<void>((resolve) => {
-        releaseLock = resolve
-      })
-
+      let signalAcquired!: () => void
+      const releaseRequested = new Promise<void>((resolve) => { releaseLock = resolve })
+      const lockAcquired = new Promise<void>((resolve) => { signalAcquired = resolve })
       const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
         retryDelayMs: 1,
-        timeoutMs: 20,
+        timeoutMs: 100,
       }, async () => {
-        await lockAcquired
+        signalAcquired()
+        await releaseRequested
       })
 
-      const waitForAcquired = new Promise<void>((resolve) => {
-        void fileRateLimitDriverInternals.withBucketLock(bucketPath, {
+      await lockAcquired
+      try {
+        await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
           retryDelayMs: 1,
-          timeoutMs: 100,
-        }, async () => {
-          resolve()
-        })
-      })
-
-      await fileRateLimitDriverInternals.sleep(5)
-      await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-        retryDelayMs: 1,
-        timeoutMs: 20,
-      }, async () => 'reclaimed')).rejects.toThrow(`Timed out waiting for file rate-limit lock "${fileRateLimitDriverInternals.getBucketLockPath(bucketPath)}"`)
-
-      releaseLock()
-      await holdingLock
-      await waitForAcquired
+          timeoutMs: 300,
+        }, async () => 'reclaimed')).rejects.toThrow(`Timed out waiting for file rate-limit lock "${fileRateLimitDriverInternals.getBucketLockPath(bucketPath)}"`)
+      } finally {
+        releaseLock()
+        await holdingLock
+      }
     })
 
     it('waits for active bucket locks before clearing all persisted buckets', async () => {
@@ -1719,8 +1854,8 @@ describe('@holo-js/security rate-limit drivers', () => {
           now: () => currentNow,
         })
       },
-      advancePastExpiry() {
-        currentNow = new Date('2026-04-16T12:02:00.000Z')
+      advanceSeconds(seconds) {
+        currentNow = new Date(currentNow.getTime() + seconds * 1000)
         currentAdapter?.setNow(currentNow)
       },
       cleanup() {
