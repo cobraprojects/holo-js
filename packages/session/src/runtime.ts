@@ -482,7 +482,7 @@ export async function flashSession(sessionId: string, key: string, value: unknow
   await collectExpiredSessions(store)
 }
 
-export async function setSessionDataIfAbsent(
+async function setSessionDataIfAbsent(
   sessionId: string,
   key: string,
   value: unknown,

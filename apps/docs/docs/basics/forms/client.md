@@ -218,7 +218,7 @@ const form = useForm(contactForm, {
 })
 ```
 
-Before each unsafe submission, `useForm()` fetches the endpoint with the same `credentials` and sends the token in the `csrf.header` header from `config/security.ts` (`X-CSRF-TOKEN` by default). It doesn't add the cookie's `_token` field in this mode. The API must allow the page's origin with credentials; see [CORS and Proxies](/basics/security/cors-and-proxies). These options only apply to the built-in submitter.
+Before each unsafe submission, `useForm()` fetches the endpoint with the same `credentials` and sends the token in the `csrf.header` header from `config/security.ts` (`X-CSRF-TOKEN` by default). When that header is `X-XSRF-TOKEN`, it sends the endpoint token in the configured `csrf.field` form field instead, because this header only accepts encrypted cookie values. It doesn't add the cookie's token in this mode. The API must allow the page's origin with credentials; see [CORS and Proxies](/basics/security/cors-and-proxies). These options only apply to the built-in submitter.
 
 ## Field state
 

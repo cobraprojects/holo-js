@@ -7,15 +7,16 @@ import { validationExceptionToFailure } from '../src/internal/validation-excepti
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
-async function createFormHttpEndpoint(response: Response | ((request: IncomingMessage) => Response | Promise<Response>)) {
+async function createFormHttpEndpoint(response: Response | ((request: IncomingMessage, body: string) => Response | Promise<Response>)) {
   const headers: IncomingHttpHeaders[] = []
   const requests: Array<{ method: string | undefined, url: string | undefined, body: string }> = []
   const server = createServer(async (request, outgoing) => {
     const chunks: Buffer[] = []
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
-    requests.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString() })
+    const body = Buffer.concat(chunks).toString()
+    requests.push({ method: request.method, url: request.url, body })
     headers.push(request.headers)
-    const result = typeof response === 'function' ? await response(request) : response.clone()
+    const result = typeof response === 'function' ? await response(request, body) : response.clone()
     outgoing.writeHead(result.status, Object.fromEntries(result.headers))
     outgoing.end(Buffer.from(await result.arrayBuffer()))
   })
@@ -64,6 +65,57 @@ function createSensitiveSchemaFixture(fields: Record<string, unknown>): Sensitiv
 }
 
 describe('@holo-js/forms client', () => {
+  it.each(['endpoint', 'cookie'])('submits the %s token through real CSRF validation with the reserved header configured', async (transport) => {
+    const { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } = await import('../../security/src')
+    const config = { field: '_csrf', header: 'x-XsRf-ToKeN', cookie: 'app-xsrf' }
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { ...config, enabled: true } }),
+      csrfSigningKey: 'native-form-reserved-header-key',
+      csrfSession: { read: async () => 'session-token', write: async (_request: Request, token: string) => ({ token, cookies: [] }) },
+    })
+    onTestFinished(resetSecurityRuntime)
+    const browserGlobal: { document?: { cookie?: string } } = globalThis
+    const originalDocument = browserGlobal.document
+    const encryptedCookie = (await csrf.cookie(new Request('http://localhost/enquiries'))).split(';', 1)[0]!
+    browserGlobal.document = {
+      cookie: `HOLO-CSRF-CONFIG=${encodeURIComponent(JSON.stringify({ csrf: config }))}${transport === 'cookie' ? `; ${encryptedCookie}` : ''}`,
+    }
+    onTestFinished(() => {
+      if (originalDocument) browserGlobal.document = originalDocument
+      else delete browserGlobal.document
+    })
+    const endpoint = await createFormHttpEndpoint(async (incoming, body) => {
+      const headers = new Headers()
+      for (const [name, value] of Object.entries(incoming.headers)) {
+        if (typeof value === 'string') headers.set(name, value)
+      }
+      const request = new Request(`http://${incoming.headers.host}${incoming.url}`, {
+        method: incoming.method,
+        headers,
+        ...(incoming.method === 'POST' ? { body } : {}),
+      })
+      if (incoming.url === '/csrf') return Response.json({ token: await csrf.token(request) })
+      try {
+        await csrf.verify(request)
+        return Response.json({ ok: true, status: 201, data: { submitted: true } }, { status: 201 })
+      } catch {
+        return new Response('CSRF validation failed', { status: 419 })
+      }
+    })
+    const client = useForm(schema({ email: field.string().required().email() }), {
+      action: `${endpoint.url}/enquiries`,
+      ...(transport === 'endpoint' ? { csrf: { endpoint: `${endpoint.url}/csrf` } } : {}),
+      initialValues: { email: 'ava@example.com' },
+    })
+
+    await expect(client.submit()).resolves.toMatchObject({ ok: true, status: 201 })
+    expect(endpoint.requests.at(-1)?.body).toContain('name="_csrf"')
+    expect(endpoint.requests.at(-1)?.body).toContain(transport === 'endpoint'
+      ? 'session-token'
+      : decodeURIComponent(encryptedCookie.slice(encryptedCookie.indexOf('=') + 1)))
+    expect(endpoint.headers.at(-1)?.['x-xsrf-token']).toBeUndefined()
+  })
+
   it('bootstraps a native CSRF token before an unsafe HTTP submission', async () => {
     const { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } = await import('../../security/src')
     configureSecurityRuntime({

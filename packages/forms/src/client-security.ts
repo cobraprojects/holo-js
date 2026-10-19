@@ -47,8 +47,9 @@ async function loadInstalledSecurityClientModule(): Promise<SecurityClientModule
   }
 }
 
-export async function getClientCsrfHeaderName(): Promise<string> {
-  return (await loadInstalledSecurityClientModule())?.getSecurityClientConfig().csrf.header ?? 'X-CSRF-TOKEN'
+export async function getClientCsrfConfig(): Promise<{ readonly field: string, readonly header: string }> {
+  const config = (await loadInstalledSecurityClientModule())?.getSecurityClientConfig().csrf
+  return { field: config?.field ?? '_token', header: config?.header ?? 'X-CSRF-TOKEN' }
 }
 
 export async function getClientCsrfField(): Promise<{ readonly name: string, readonly value: string } | undefined> {

@@ -24,7 +24,7 @@ import {
   type WebFileLike,
   safeParse,
 } from '@holo-js/validation'
-import { getClientCsrfField, getClientCsrfHeaderName } from '../client-security'
+import { getClientCsrfConfig, getClientCsrfField } from '../client-security'
 import { validationExceptionToFailure } from './validation-exception'
 import { FormClientState } from './state'
 import { normalizeHoloHttpError } from '@holo-js/kernel/http-errors'
@@ -659,7 +659,12 @@ async function defaultSubmitter<TData, TSuccess>(
       return createTransportFailure(context.values)
     }
 
-    headers.set(await getClientCsrfHeaderName(), csrfPayload.token)
+    const config = await getClientCsrfConfig()
+    if (config.header.toLowerCase() === 'x-xsrf-token') {
+      context.formData.set(config.field, csrfPayload.token)
+    } else {
+      headers.set(config.header, csrfPayload.token)
+    }
   }
 
   const response = await fetch(context.action, {
