@@ -12,7 +12,8 @@ const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
 const APPLE_TOKEN_CLOCK_SKEW_MS = 60_000
 
 type JwkKey = Parameters<typeof authRuntimeInternals.jwt.verifyJwtSignatureWithJwk>[1]
-const APPLE_JWKS_CACHE = new Map<string, Promise<readonly JwkKey[]>>()
+type AuthRuntimeJwksCache = Parameters<typeof authRuntimeInternals.jwt.resolveCachedJwk>[0]
+const APPLE_JWKS_CACHE: AuthRuntimeJwksCache = new Map()
 let appleJwksCacheFetch: typeof fetch | undefined
 
 async function readAppleUserPayload(request: Request): Promise<{
@@ -75,15 +76,15 @@ function verifyJwtSignatureWithJwk(
   })
 }
 
-async function fetchAppleJwks(): Promise<readonly JwkKey[]> {
+async function resolveAppleJwk(kid: string | undefined): Promise<JwkKey | undefined> {
   if (appleJwksCacheFetch !== globalThis.fetch) {
     APPLE_JWKS_CACHE.clear()
     appleJwksCacheFetch = globalThis.fetch
   }
 
-  return authRuntimeInternals.jwt.fetchCachedJwks(APPLE_JWKS_URL, {
-    cache: APPLE_JWKS_CACHE,
+  return authRuntimeInternals.jwt.resolveCachedJwk(APPLE_JWKS_CACHE, APPLE_JWKS_URL, {
     requestUrl: APPLE_JWKS_URL,
+    kid,
     errorMessage: '[@holo-js/auth-social-apple] Failed to load Apple JWKS.',
   })
 }
@@ -107,10 +108,7 @@ async function verifyAppleIdToken(
 
   const parsed = parseJwt(token)
   const headerKid = typeof parsed.header.kid === 'string' ? parsed.header.kid : undefined
-  const keys = await fetchAppleJwks()
-  const key = headerKid
-    ? keys.find(candidate => candidate.kid === headerKid)
-    : keys[0]
+  const key = await resolveAppleJwk(headerKid)
 
   if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
     throw new Error('[@holo-js/auth-social-apple] Apple id_token signature verification failed.')

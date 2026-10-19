@@ -1,12 +1,5 @@
 export type HoloAppEnv = 'development' | 'production' | 'test'
 
-export function normalizeMailEnvironment(
-  value: string | undefined,
-  fallback: HoloAppEnv = 'development',
-): HoloAppEnv {
-  return value === 'development' || value === 'production' || value === 'test' ? value : fallback
-}
-
 export interface HoloMailAddressConfig {
   readonly email: string
   readonly name?: string

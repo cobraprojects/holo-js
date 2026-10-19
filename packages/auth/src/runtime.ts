@@ -2142,7 +2142,16 @@ async function updateUserRecord(
   },
 ): Promise<AuthenticatedAuthUser> {
   const { adapter } = getProviderAdapter(providerName)
-  const user = await adapter.findById(userId)
+  return await updateLoadedUserRecord(providerName, userId, await adapter.findById(userId), input)
+}
+
+async function updateLoadedUserRecord(
+  providerName: string,
+  userId: string | number,
+  user: unknown,
+  input: Parameters<typeof updateUserRecord>[2],
+): Promise<AuthenticatedAuthUser> {
+  const { adapter } = getProviderAdapter(providerName)
   if (!user) {
     throwAuthError('auth_user_missing', `Auth user "${providerName}:${String(userId)}" no longer exists.`, {
       provider: providerName,
@@ -2170,6 +2179,21 @@ async function updateUserRecord(
   }
 
   return serializeUser(adapter, updated, providerName)
+}
+
+async function verifyIssuedEmail(record: EmailVerificationTokenRecord): Promise<AuthenticatedAuthUser | null> {
+  const { adapter } = getProviderAdapter(record.provider)
+  const user = await adapter.findById(record.userId)
+  if (user) {
+    const current = serializeUser(adapter, user, record.provider)
+    if (typeof current.email !== 'string' || current.email.trim() !== record.email) {
+      return null
+    }
+  }
+
+  return await updateLoadedUserRecord(record.provider, record.userId, user, {
+    email_verified_at: new Date(),
+  })
 }
 
 function createEmailVerificationFacade(): AuthEmailVerificationFacade {
@@ -2261,9 +2285,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }
 
-        const updated = await store.redeem(record, () => updateUserRecord(record.provider, record.userId, {
-          email_verified_at: new Date(),
-        }))
+        const updated = await store.redeem(record, () => verifyIssuedEmail(record))
         if (!updated) {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }

@@ -105,7 +105,7 @@ export const verifyEmailForm = schema({
 
 On the page, read `token` from the URL and submit it, either automatically on load or with a "Verify my email" button. A button is safer, because some email scanners open links before the user does.
 
-`verifyEmail()` returns the updated user. Each token works once; a second request with the same token fails.
+`verifyEmail()` returns the updated user. Each token works once; a second request with the same token fails. A token only verifies the address it was sent to: if the user changes their email after the link was sent, the old link fails with `email_verification_token_expired`. Send a new link to the new address.
 
 ## Resend the email
 
@@ -259,7 +259,7 @@ These throw a `ValidationException`, so they show up in forms like any validatio
 | Code | When | Field | Status |
 | --- | --- | --- | --- |
 | `email_verification_token_invalid` | The token is wrong or already used | `token` | 422 |
-| `email_verification_token_expired` | The link expired | `token` | 422 |
+| `email_verification_token_expired` | The link expired, or the user's email changed after it was sent | `token` | 422 |
 | `email_verification_user_missing` | Resend found no user | `_root` | 401 |
 | `email_already_verified` | Resend for a verified user | `_root` | 409 |
 

@@ -4,7 +4,7 @@ import type { AuthClerkProviderConfig } from '@holo-js/auth'
 export type JwkKey = Parameters<typeof authRuntimeInternals.jwt.verifyJwtSignatureWithJwk>[1]
 
 export const CLERK_API_BASE_URL = 'https://api.clerk.com'
-const clerkJwksCache = new Map<string, Promise<readonly JwkKey[]>>()
+const clerkJwksCache: Parameters<typeof authRuntimeInternals.jwt.resolveCachedJwk>[0] = new Map()
 
 export function parseJwt(token: string): {
   readonly header: Readonly<Record<string, unknown>>
@@ -27,6 +27,10 @@ export function verifyJwtSignatureWithJwk(
   })
 }
 
+export function resetClerkJwksCache(): void {
+  clerkJwksCache.clear()
+}
+
 export function resolveClerkJwksUrl(config: AuthClerkProviderConfig): string {
   const frontendApi = config.frontendApi?.trim()
   if (frontendApi) {
@@ -37,14 +41,10 @@ export function resolveClerkJwksUrl(config: AuthClerkProviderConfig): string {
   return `${apiUrl.replace(/\/$/, '')}/v1/jwks`
 }
 
-export async function fetchClerkJwks(
-  jwksUrl: string,
-  options: { readonly refresh?: boolean } = {},
-): Promise<readonly JwkKey[]> {
-  return authRuntimeInternals.jwt.fetchCachedJwks(jwksUrl, {
-    cache: clerkJwksCache,
+export async function resolveClerkJwk(jwksUrl: string, kid: string | undefined): Promise<JwkKey | undefined> {
+  return authRuntimeInternals.jwt.resolveCachedJwk(clerkJwksCache, jwksUrl, {
     requestUrl: jwksUrl,
-    refresh: options.refresh,
+    kid,
     errorMessage: `[@holo-js/auth-clerk] Failed to load Clerk JWKS from "${jwksUrl}".`,
   })
 }

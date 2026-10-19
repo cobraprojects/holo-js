@@ -1757,7 +1757,7 @@ describe('model core slice', () => {
     const User = defineModelFromTable(users, {
       fillable: ['name', 'email'],
       guarded: ['status'] })
-    const OpenUser = defineModelFromTable(users)
+    const OpenUser = defineModelFromTable(users, { guarded: [] })
     const WildcardUser = defineModelFromTable(users, {
       fillable: ['*'],
       guarded: ['status'] })
@@ -1931,8 +1931,7 @@ describe('model core slice', () => {
     await expect(user.delete()).rejects.toThrow('Cannot delete an entity that has not been persisted yet.')
 
     const repo = User.getRepository()
-    const brokenDelete = repo.hydrate({ id: 2, name: 'Ghost', email: 'g@example.com', status: 'active' })
-    brokenDelete.set('id', undefined as never)
+    const brokenDelete = repo.hydrate({ name: 'Ghost', email: 'g@example.com', status: 'active' })
     await expect(repo.deleteEntity(brokenDelete)).rejects.toThrow('Cannot delete User without a primary key value.')
 
     const orphan = new Entity({ definition: User.definition, getConnection: () => DB.connection() } as never, { id: 9 }, true)
@@ -2226,9 +2225,8 @@ describe('model core slice', () => {
 
     await expect(User.firstOrFail()).rejects.toThrow('User not found.')
 
-    const broken = User.make({ name: 'Broken' })
-    await broken.save()
-    broken.set('id', undefined as never)
+    const broken = User.getRepository().hydrate({ name: 'Broken' })
+    broken.set('name', 'Still broken')
     await expect(broken.save()).rejects.toThrow('Cannot persist User without a primary key value.')
 
     const orphan = new Entity({ definition: User.definition, getConnection: () => DB.connection() } as never, { id: 9 }, true)
@@ -2242,8 +2240,7 @@ describe('model core slice', () => {
     const SoftUser = defineModelFromTable(softTable, {
       softDeletes: true })
     const repo = User.getRepository()
-    const brokenRestore = SoftUser.getRepository().hydrate({ id: 1, deleted_at: '2025-01-01T00:00:00.000Z' as never })
-    brokenRestore.set('id', undefined as never)
+    const brokenRestore = SoftUser.getRepository().hydrate({ deleted_at: '2025-01-01T00:00:00.000Z' as never })
     await expect(SoftUser.getRepository().restoreEntity(brokenRestore)).rejects.toThrow(
       'Cannot restore SoftUser without a primary key value.',
     )
@@ -2665,7 +2662,7 @@ describe('model core slice', () => {
     await createTestTable(DB.connection('default'), posts)
     await DB.connection('default').table(posts).insert([{ id: 1, title: 'Post' }])
 
-    const User = defineModelFromTable(users)
+    const User = defineModelFromTable(users, { guarded: [] })
     const SecondaryUser = defineModelFromTable(users, {
       name: 'SecondaryUser',
       connectionName: 'secondary' })
@@ -2764,7 +2761,7 @@ describe('model core slice', () => {
     await db.table(users).insert({ id: 1, name: 'Original' })
     await db.table(posts).insert({ id: 10, user_id: 1, title: 'Loaded' })
     const Post = defineModelFromTable(posts)
-    const User = defineModelFromTable(users, { relations: { posts: hasMany(() => Post, 'user_id') } })
+    const User = defineModelFromTable(users, { guarded: [], relations: { posts: hasMany(() => Post, 'user_id') } })
     const user = await User.findOrFail(1)
     user.name = 'Changed'
     await user.save()

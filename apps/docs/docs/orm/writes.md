@@ -343,14 +343,21 @@ await Post.withoutEvents(async () => {
 
 ## Write guarded columns
 
-Mass assignment rules from `fillable` and `guarded` apply to every write. Writing a blocked column throws a `SecurityError`:
+Mass assignment rules from `fillable` and `guarded` apply whenever you assign attributes. Assigning a blocked column throws a `SecurityError`, including through property assignment or `Object.assign()`. Other properties you assign onto a model, such as `attributes` or `original`, are never saved:
 
 ```ts
 await User.create({ name: 'Ada', is_admin: true })
 // SecurityError: Column "is_admin" is not writable on model "User".
 ```
 
-When trusted server code must set a protected column, wrap the write in `unguarded()`:
+When trusted server code must set a protected column on one model, use `forceFill()`:
+
+```ts
+const user = User.make({ name: 'Ada', email: 'ada@example.com' })
+await user.forceFill({ is_admin: true }).save()
+```
+
+To turn the rules off for a whole block of writes, wrap them in `unguarded()`:
 
 ```ts
 const admin = await User.unguarded(() => User.create({
@@ -479,7 +486,7 @@ await Product.where('id', productId).decrement('stock', 1)
 
 ### fill()
 
-Assigns several attributes on an instance without saving. Mass assignment rules are checked when you save.
+Assigns several attributes on an instance without saving. It throws a `SecurityError` for any column that [mass assignment](/orm/#mass-assignment) rules block.
 
 ```ts
 post.fill({ title: 'New title', excerpt: 'Short summary' })
@@ -488,15 +495,16 @@ await post.save()
 
 ### forceFill()
 
-Assigns attributes the same way as `fill()`. Holo still checks writable columns when you save, so this doesn't bypass guards.
+Assigns attributes without checking mass assignment rules, so the next save writes them even when they're guarded. Use it only for trusted values. See [write guarded columns](#write-guarded-columns).
 
 ```ts
 post.forceFill({ views: 0 })
+await post.save()
 ```
 
 ### set()
 
-Assigns one attribute on an instance. It's the same as assigning the property directly.
+Assigns one attribute on an instance. It's the same as assigning the property directly, and it throws a `SecurityError` for a guarded column.
 
 ```ts
 post.set('status', 'review')
@@ -505,6 +513,8 @@ post.set('status', 'review')
 ### save()
 
 Saves an instance. A new instance is inserted. A loaded instance updates only its changed columns, and does nothing when nothing changed. Events fire for inserts and updates, not for an empty save.
+
+A loaded instance always updates the row it was loaded from. Changing its primary key changes that row's key; it never writes to another row.
 
 ```ts
 post.title = 'Renamed'

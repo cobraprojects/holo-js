@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createInternalCommands } from '../src/cli'
 import { runProjectStartServer } from '../src/dev'
 import { parseTokens } from '../src/parsing'
@@ -51,6 +51,30 @@ describe('start command', () => {
       ],
       expect.objectContaining({ cwd: projectRoot }),
     )
+  })
+
+  it('launches the framework with NODE_ENV=production', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const projectRoot = '/tmp/holo-start'
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough
+      stderr: PassThrough
+      stdin: PassThrough
+    }
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.stdin = new PassThrough()
+    const spawn = vi.fn((_command: string, _args?: readonly string[], _options?: { env?: NodeJS.ProcessEnv }) => {
+      queueMicrotask(() => child.emit('close', 0))
+      return child as never
+    })
+
+    await runProjectStartServer(createIo(projectRoot), projectRoot, spawn as never)
+
+    expect(spawn.mock.calls[0]?.[2]?.env?.NODE_ENV).toBe('production')
   })
 
   it.each([

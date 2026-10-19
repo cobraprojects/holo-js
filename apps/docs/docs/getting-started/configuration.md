@@ -116,10 +116,18 @@ Holo picks an environment, then loads the files for it in order. Later files ove
 
 If both `.env.production` and `.env.prod` exist, Holo uses `.env.production`, skips `.env.prod`, and prints a warning.
 
-Holo picks the environment from the first of `HOLO_ENV`, `APP_ENV`, or `NODE_ENV` that is set in the process environment to `development`, `production`, or `test`. If none is set, it uses `development`.
+Holo takes the environment from `APP_ENV`, checked in this order:
+
+1. The `--env` option, for example `npx holo migrate --env=test`.
+2. `APP_ENV` in the real environment, for example in your hosting provider's settings.
+3. `APP_ENV` in `.env`.
+
+If none of them sets it, the environment is `production`. New projects write `APP_ENV=development` to `.env`, so local commands run in development.
+
+`APP_ENV` must be `development`, `production`, or `test`. Any other value stops Holo with an error.
 
 ::: warning
-The environment is chosen before any `.env` file is read. Setting `APP_ENV=production` inside `.env` does not make Holo load `.env.production`. Set `NODE_ENV`, `APP_ENV`, or `HOLO_ENV` in the real environment instead, for example in your hosting provider's settings.
+Only `.env` is read to find `APP_ENV`. Setting `APP_ENV` in `.env.local` or `.env.production` does not change which files load.
 :::
 
 ### `.env.example`
