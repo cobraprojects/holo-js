@@ -386,7 +386,7 @@ function selectQueryPatchCapability(
   }
 
   if (rowPatchMode === 'offset-window') {
-    return 'patchable'
+    return query.patchable ? 'patchable' : 'refresh'
   }
 
   if (rowPatchMode === 'pagination') {

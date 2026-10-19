@@ -18,6 +18,7 @@ import {
 } from './predicate-matching'
 import { collectRelevantMutationTargets } from './query-relevant-mutations'
 import type {
+  DatabaseQueryObservation,
   PatchedQueryDelivery,
   PatchedQueryResult,
   QueryPatchTarget,
@@ -447,6 +448,14 @@ function hasPatchableColumnTarget(
       continue
     }
 
+    if (includeSelectedColumns && (candidate.query.resultBound === false || !coversResultPath(target.query.resultPath, candidate.query.resultPath))) {
+      continue
+    }
+
+    if (includeSelectedColumns && target.query.relation?.kind === 'belongsToParentKey' && !isSameParentKeyRelation(target.query, candidate.query)) {
+      continue
+    }
+
     if (candidate.query.scalarColumn === column) {
       return true
     }
@@ -466,6 +475,29 @@ function hasPatchableColumnTarget(
   }
 
   return false
+}
+
+function isSameParentKeyRelation(
+  target: DatabaseQueryObservation,
+  candidate: DatabaseQueryObservation,
+): boolean {
+  return candidate.relation?.kind === 'belongsToParentKey'
+    && target.relation?.kind === 'belongsToParentKey'
+    && candidate.relation.relationKey === target.relation.relationKey
+}
+
+function coversResultPath(
+  targetPath: readonly unknown[] | undefined,
+  candidatePath: readonly unknown[] | undefined,
+): boolean {
+  const base = targetPath ?? EMPTY_RESULT_PATH
+  const path = candidatePath ?? EMPTY_RESULT_PATH
+  const isRowOfTarget = path.length === base.length + 1 && typeof path.at(-1) === 'number'
+  if (path.length !== base.length && !isRowOfTarget) {
+    return false
+  }
+
+  return base.every((segment, index) => path[index] === segment)
 }
 
 function candidateCoversSelectedColumn(
