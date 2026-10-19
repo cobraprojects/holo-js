@@ -256,6 +256,16 @@ const active = await touchSession(sessionId)
 
 It returns `null` if the session is gone. The new expiry is never later than `createdAt` plus `absoluteLifetime`.
 
+## Expired session cleanup
+
+A session that a visitor abandons stays in the store until it is cleaned up. About 2 in every 100 requests that write a session also delete expired sessions, the same odds Laravel uses by default. The check runs inside the request, so the request that wins the draw takes a little longer.
+
+- **File store:** Holo deletes expired session files in the session folder. It skips a session that is in use, never follows symbolic links, and checks at most 1,000 entries per run. Subsequent runs continue through the folder.
+- **Database store:** Holo deletes every row past its expiry.
+- **Redis store:** nothing runs. Redis deletes each session when its expiry passes.
+
+The odds aren't configurable. Cleanup runs with the other session work, so you don't need a scheduled task.
+
 ## Flash data
 
 Flash data is a value you read once. `flashSession()` stores it, and `takeSession()` returns it and removes it in one step, so two requests can't both read it:

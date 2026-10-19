@@ -134,7 +134,7 @@
     "typecheck:db": "bun run --filter @holo-js/db typecheck",
     "test": "bun run test:ci && bun run test:acceptance",
     "test:ci": "bun run test:libraries && bun run test:examples",
-    "test:platform": "bun run --cwd packages/cli test:platform",
+    "test:platform": "bun run --cwd packages/session test:platform && bun run --cwd packages/cli test:platform",
     "test:watch": "vitest",
     "test:db": "bun run --cwd packages/db test",
     "test:media": "bun run --cwd packages/media test",

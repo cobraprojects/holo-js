@@ -5,7 +5,7 @@ import { defineChannel, normalizeBroadcastConfig, startBroadcastWorker, type Bro
 import { createFluxClient, fluxInternals, resetFluxClient } from '../../src'
 import { defineSchema, field } from '../../../validation/src'
 
-export async function startNativeTransport(options: { allowedOrigins?: readonly string[] } = {}) {
+export async function startNativeTransport(options: { allowedOrigins?: readonly string[], authorizeOrders?: () => boolean } = {}) {
   const reservation = createServer()
   await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
   const address = reservation.address()
@@ -20,6 +20,9 @@ export async function startNativeTransport(options: { allowedOrigins?: readonly 
         whispers: {
           'typing.start': defineSchema({ editing: field.boolean().required() }),
         },
+      }), defineChannel('orders.{orderId}', {
+        type: 'private',
+        authorize: () => options.authorizeOrders?.() ?? true,
       }), defineChannel('chat.{roomId}', {
         type: 'presence',
         authorize: user => user && typeof user === 'object' && 'id' in user && typeof user.id === 'string' ? { id: user.id } : false,

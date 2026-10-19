@@ -3,6 +3,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { createServer } from 'node:net'
 import { expect, it, onTestFinished } from 'vitest'
 import { normalizeRedisConfig } from '@holo-js/kernel'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { createFluxClient, fluxInternals } from '../../flux/src'
 import { defineSchema, field } from '@holo-js/validation'
 import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
@@ -140,7 +141,10 @@ it('rejects a nonzero Redis Cluster database before starting a worker', () => {
   })).toThrow('Redis Cluster only supports database 0')
 })
 
-it('reports a real Redis publish permission failure and recovers after permissions are restored', async () => {
+it('reports a real Redis publish permission failure without exposing it and recovers after permissions are restored', async () => {
+  const reports: Array<{ error: unknown, context: HoloErrorReportContext }> = []
+  errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
   const redis = await startRedisService()
   const client = redis.clients[0]
   const redisPort = redis.ports[0]
@@ -159,7 +163,8 @@ it('reports a real Redis publish permission failure and recovers after permissio
   await client.acl('SETUSER', 'publisher', '-publish')
   const rejected = await publishNativeEvent(worker, 'orders.updated', { title: 'Denied publish' })
   expect(rejected.status).toBe(500)
-  expect(await rejected.text()).toMatch(/NOPERM/)
+  expect(await rejected.text()).toBe('Broadcast publish failed.')
+  expect(reports).toEqual([{ error: expect.objectContaining({ message: expect.stringMatching(/NOPERM/) }), context: { capability: 'broadcast', operation: 'worker.publish' } }])
   await client.acl('SETUSER', 'publisher', '+publish')
   const restored = await publishNativeEvent(worker, 'orders.updated', { title: 'Restored publish' })
   expect(restored.status, await restored.text()).toBe(200)

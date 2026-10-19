@@ -24,6 +24,7 @@ describe('@holo-js/security client config', () => {
     expect(config).toEqual({
       csrf: {
         field: '_token',
+        header: 'X-CSRF-TOKEN',
         cookie: 'XSRF-TOKEN',
       },
     })
@@ -36,6 +37,7 @@ describe('@holo-js/security client config', () => {
       cookie: `${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(serializeSecurityClientConfig({
         csrf: {
           field: '_csrf',
+          header: 'X-App-CSRF',
           cookie: 'csrf-token',
         },
       }))}`,
@@ -44,6 +46,7 @@ describe('@holo-js/security client config', () => {
     expect(getSecurityClientConfig()).toEqual({
       csrf: {
         field: '_csrf',
+        header: 'X-App-CSRF',
         cookie: 'csrf-token',
       },
     })
@@ -57,6 +60,7 @@ describe('@holo-js/security client config', () => {
     expect(getSecurityClientConfig()).toEqual({
       csrf: {
         field: '_token',
+        header: 'X-CSRF-TOKEN',
         cookie: 'XSRF-TOKEN',
       },
     })
@@ -73,21 +77,32 @@ describe('@holo-js/security client config', () => {
     }))}`)).toBeUndefined()
   })
 
+  it('sends the readable XSRF-TOKEN cookie in the X-XSRF-TOKEN header', () => {
+    expect(securityClientInternals.getCsrfRequestHeaders('XSRF-TOKEN=encrypted-value')).toEqual({ 'X-XSRF-TOKEN': 'encrypted-value' })
+    expect(securityClientInternals.getCsrfRequestHeaders(`${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(serializeSecurityClientConfig({
+      csrf: { field: '_csrf', header: 'X-App-CSRF', cookie: 'csrf-token' },
+    }))}; csrf-token=encrypted-value`)).toEqual({ 'X-XSRF-TOKEN': 'encrypted-value' })
+    expect(securityClientInternals.getCsrfRequestHeaders(undefined)).toEqual({})
+  })
+
   it('exposes the browser client runtime internals for tests', () => {
     expect(securityClientInternals.getDefaultSecurityClientConfig()).toEqual({
       csrf: {
         field: '_token',
+        header: 'X-CSRF-TOKEN',
         cookie: 'XSRF-TOKEN',
       },
     })
     expect(securityClientInternals.readSecurityClientConfigFromCookies(`${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(JSON.stringify({
       csrf: {
         field: '_csrf',
+        header: 'X-App-CSRF',
         cookie: 'csrf-token',
       },
     }))}`)).toEqual({
       csrf: {
         field: '_csrf',
+        header: 'X-App-CSRF',
         cookie: 'csrf-token',
       },
     })
