@@ -12,8 +12,7 @@ const RECORD_LOCK_ACQUIRE_MAX_MS = 30_000
 const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
-const RELEASED_RECORD_LOCK_LIMIT = 1_024
-const releasedRecordLocks = new Map<string, string>()
+const heldRecordLockTokens = new Set<string>()
 type MakeDirectory = typeof defaultMkdir
 
 type RecordLockOwner = {
@@ -194,7 +193,6 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
 async function reclaimStaleLock(lockPath: string, expected: RecordLockIdentity): Promise<boolean> {
   if (!recordLockIdentityMatches(expected, await readRecordLockIdentity(lockPath))) return false
   const removed = await removeRecordLock(lockPath, expected.fileName, BUSY_FILE_RETRY_MS)
-  if (removed && expected.owner && releasedRecordLocks.get(lockPath) === expected.owner.token) releasedRecordLocks.delete(lockPath)
   return removed
 }
 
@@ -203,27 +201,15 @@ async function reclaimableRecordLock(lockPath: string, identity: RecordLockIdent
   if (!identity.fileName) return identity
   const owner = identity.owner
   if (owner?.released) return identity
-  if (owner?.host === hostname()) {
-    if (owner.pid === process.pid) {
-      if (owner.processToken === PROCESS_INSTANCE_TOKEN) {
-        return releasedRecordLocks.get(lockPath) === owner.token ? identity : undefined
-      }
-    } else {
-      return processIsRunning(owner.pid) ? undefined : identity
-    }
+  if (owner?.host === hostname() && owner.pid === process.pid && owner.processToken === PROCESS_INSTANCE_TOKEN) {
+    return heldRecordLockTokens.has(owner.token) ? undefined : identity
+  }
+  if (owner?.host === hostname() && owner.pid !== process.pid) {
+    return processIsRunning(owner.pid) ? undefined : identity
   }
   const leasePath = identity.fileName ? join(lockPath, identity.fileName) : lockPath
   const stale = await stat(leasePath).then(value => value.mtimeMs <= Date.now() - RECORD_LOCK_STALE_MS).catch(() => false)
   return stale ? identity : undefined
-}
-
-function rememberReleasedRecordLock(lockPath: string, token: string): void {
-  releasedRecordLocks.delete(lockPath)
-  releasedRecordLocks.set(lockPath, token)
-  if (releasedRecordLocks.size > RELEASED_RECORD_LOCK_LIMIT) {
-    const oldest = releasedRecordLocks.keys().next().value
-    if (oldest !== undefined) releasedRecordLocks.delete(oldest)
-  }
 }
 
 async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner): Promise<boolean> {
@@ -243,8 +229,12 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
 }
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
-  if (!(await markRecordLockReleased(lockPath, owner))) rememberReleasedRecordLock(lockPath, owner.token)
+  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) {
+    heldRecordLockTokens.delete(owner.token)
+    return
+  }
+  await markRecordLockReleased(lockPath, owner)
+  heldRecordLockTokens.delete(owner.token)
   reportError(
     new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
     { capability: 'session', operation: 'file.releaseLock' },
@@ -272,9 +262,10 @@ async function acquireRecordLockBefore(
   const owner = Object.freeze({ host: hostname(), pid: process.pid, processToken: PROCESS_INSTANCE_TOKEN, token: randomUUID() })
   const pendingPath = `${lockPath}.${owner.token}.pending`
   const ownerFileName = recordLockOwnerFileName(owner)
-  await makeDirectory(pendingPath)
   let acquired = false
+  heldRecordLockTokens.add(owner.token)
   try {
+    await makeDirectory(pendingPath)
     const ownerHandle = await open(join(pendingPath, ownerFileName), 'wx', 0o600)
     try {
       await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
@@ -305,6 +296,7 @@ async function acquireRecordLockBefore(
           if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
         }
         if (wait === undefined) {
+          heldRecordLockTokens.delete(owner.token)
           await rm(pendingPath, { recursive: true, force: true })
           return undefined
         }
@@ -323,7 +315,10 @@ async function acquireRecordLockBefore(
     }
   } catch (error) {
     if (acquired) await releaseRecordLock(recordPath, lockPath, owner)
-    else await rm(pendingPath, { recursive: true, force: true })
+    else {
+      heldRecordLockTokens.delete(owner.token)
+      await rm(pendingPath, { recursive: true, force: true })
+    }
     throw error
   }
 }
@@ -627,9 +622,7 @@ export function createFileSessionStore(root: string): SessionStore {
 }
 
 export const fileSessionDriverInternals = {
-  RELEASED_RECORD_LOCK_LIMIT,
-  releasedRecordLocks,
-  rememberReleasedRecordLock,
+  heldRecordLockTokens,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,

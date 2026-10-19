@@ -1,7 +1,8 @@
 import type * as FsPromises from 'node:fs/promises'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
 import type { WindowsFsState } from './support/windows-fs'
@@ -43,44 +44,72 @@ describe('released file locks across processes', () => {
     await rm(root, { force: true, recursive: true })
   })
 
-  it('leaves the releasing process with no local fallback once the released marker is published', async () => {
+  it('reclaims through the published released marker and keeps no state in the releasing process', async () => {
     const releasing = await loadProcess()
     const holder = await releasing.acquireRecordLock(recordPath, mkdir)
     windowsFs.blockedUnlinkPrefixes.add(lockPath)
     await holder()
     expect(reports).toHaveLength(1)
-    expect(releasing.releasedRecordLocks.size).toBe(0)
+    expect(releasing.heldRecordLockTokens.size).toBe(0)
 
     windowsFs.blockedUnlinkPrefixes.clear()
     const successor = await loadProcess()
-    const handoff = await successor.acquireRecordLock(recordPath, mkdir)
-    await handoff()
-    expect(releasing.releasedRecordLocks.size).toBe(0)
-    expect(successor.releasedRecordLocks.size).toBe(0)
+    await (await successor.acquireRecordLock(recordPath, mkdir))()
+    expect(successor.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
-  it('keeps the local fallback only while the released marker cannot be published, and drops it on reclaim', async () => {
-    const releasing = await loadProcess()
-    const holder = await releasing.acquireRecordLock(recordPath, mkdir)
+  it('reclaims its own lease after the release could neither unlink nor publish, and keeps no state', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
     windowsFs.blockedUnlinkPrefixes.add(lockPath)
     windowsFs.blockedWritePrefixes.add(lockPath)
     await holder()
-    expect(releasing.releasedRecordLocks.has(lockPath)).toBe(true)
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+    expect(await readdir(lockPath)).toHaveLength(1)
 
     windowsFs.blockedUnlinkPrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
-    const next = await releasing.acquireRecordLock(recordPath, mkdir)
-    await next()
-    expect(releasing.releasedRecordLocks.size).toBe(0)
+    await (await owner.acquireRecordLock(recordPath, mkdir))()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
-  it('bounds the local fallback however many locks fail to publish', async () => {
-    const releasing = await loadProcess()
-    const { RELEASED_RECORD_LOCK_LIMIT, rememberReleasedRecordLock, releasedRecordLocks } = releasing
-    for (let index = 0; index < RELEASED_RECORD_LOCK_LIMIT * 2; index += 1) {
-      rememberReleasedRecordLock(`/locks/${index}.lock`, `token-${index}`)
-    }
-    expect(releasedRecordLocks.size).toBe(RELEASED_RECORD_LOCK_LIMIT)
-    expect(releasedRecordLocks.has('/locks/0.lock')).toBe(false)
-  })
+  it('keeps every lease reclaimable by its owner after more than 1,024 failed releases', async () => {
+    const owner = await loadProcess()
+    const paths = Array.from({ length: 1_025 }, (_, index) => join(root, `session-${index}.json`))
+    const holders: Array<() => Promise<void>> = []
+    for (const path of paths) holders.push(await owner.acquireRecordLock(path, mkdir))
+
+    windowsFs.blockedUnlinkPrefixes.add(root)
+    windowsFs.blockedWritePrefixes.add(root)
+    await Promise.all(holders.map(release => release()))
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+
+    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedWritePrefixes.clear()
+    for (const path of paths) await (await owner.acquireRecordLock(path, mkdir))()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+  }, 60_000)
+
+  it('does not reclaim a lease its own process still holds', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    expect(owner.heldRecordLockTokens.size).toBe(1)
+
+    await expect(owner.acquireRecordLock(recordPath, mkdir)).rejects.toThrow('Timed out acquiring file session lock')
+    expect(owner.heldRecordLockTokens.size).toBe(1)
+
+    await holder()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
+
+  it('does not mistake a live lease from another instance with the same PID for its own', async () => {
+    const other = await loadProcess()
+    expect(other.heldRecordLockTokens.size).toBe(0)
+    const token = randomUUID()
+    await mkdir(lockPath)
+    await writeFile(join(lockPath, `owner.${token}.json`), JSON.stringify({ host: hostname(), pid: process.pid, processToken: randomUUID(), token }))
+
+    await expect(other.acquireRecordLock(recordPath, mkdir)).rejects.toThrow('Timed out acquiring file session lock')
+    expect(other.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
 })
