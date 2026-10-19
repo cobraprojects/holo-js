@@ -199,9 +199,20 @@ export function renderCacheConfig(
 }
 
 export const REDIS_CONFIG_ENV_IMPORT = 'import { env } from \'@holo-js/config\''
-export const REDIS_CONFIG_ENV_REQUIRE = 'const { env } = require(\'@holo-js/config\')'
+export function renderRedisCacheConnectionLines(moduleFormat: ConfigModuleFormat = 'esm'): readonly string[] {
+  if (moduleFormat === 'cjs') {
+    return [
+      '    cache: {',
+      '      url: process.env.REDIS_URL || undefined,',
+      '      host: process.env.REDIS_HOST || \'127.0.0.1\',',
+      '      port: Number(process.env.REDIS_PORT || 6379),',
+      '      username: process.env.REDIS_USERNAME || undefined,',
+      '      password: process.env.REDIS_PASSWORD || undefined,',
+      '      db: Number(process.env.REDIS_CACHE_DB || 1),',
+      '    },',
+    ]
+  }
 
-export function renderRedisCacheConnectionLines(): readonly string[] {
   return [
     '    cache: {',
     '      url: env(\'REDIS_URL\') || undefined,',

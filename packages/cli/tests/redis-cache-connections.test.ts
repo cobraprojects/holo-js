@@ -1,4 +1,6 @@
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
+import { renderRedisCacheConnectionLines } from '../src/project/scaffold/config-renderers'
 import {
   assertRedisCacheConnectionsAvailable,
   resolveRequiredRedisConnections,
@@ -65,11 +67,13 @@ describe('redis cache connection check', () => {
 
       const message = failureOf(() => assertRedisCacheConnectionsAvailable({ redisConfig, requiredConnections: required }))
       expect(message).toContain('cache: {')
-      if (envImport === 'none') {
-        expect(message).toContain(envImportLines[moduleFormat])
-        if (moduleFormat === 'cjs') {
-          expect(message).not.toContain('import { env }')
-        }
+      if (moduleFormat === 'cjs') {
+        expect(message).toContain('db: Number(process.env.REDIS_CACHE_DB || 1),')
+        expect(message).not.toContain('env(')
+        expect(message).not.toContain('require(')
+        expect(message).not.toContain('also add this import')
+      } else if (envImport === 'none') {
+        expect(message).toContain(envImportLines.esm)
       } else {
         expect(message).not.toContain('also add this import')
       }
@@ -115,6 +119,27 @@ describe('redis cache connection check', () => {
     }))
     expect(message).toContain('"sessions", "cache", "queue" Redis connections')
     expect(message).toContain('cache: {')
+  })
+
+  it('evaluates the CommonJS snippet to the cache connection on database 1 unless REDIS_CACHE_DB says otherwise', () => {
+    const cacheConnectionFor = (env: Record<string, string>) => runInNewContext(
+      `({ connections: { ${renderRedisCacheConnectionLines('cjs').join('\n')} } })`,
+      { process: { env } },
+    ).connections.cache
+    expect(cacheConnectionFor({})).toEqual({
+      url: undefined,
+      host: '127.0.0.1',
+      port: 6379,
+      username: undefined,
+      password: undefined,
+      db: 1,
+    })
+    expect(cacheConnectionFor({ REDIS_CACHE_DB: '' }).db).toBe(1)
+    expect(cacheConnectionFor({ REDIS_CACHE_DB: '5', REDIS_HOST: 'redis.internal', REDIS_PORT: '6380' })).toMatchObject({
+      host: 'redis.internal',
+      port: 6380,
+      db: 5,
+    })
   })
 
   describe('resolveRequiredRedisConnections', () => {

@@ -1,12 +1,8 @@
-import { REDIS_CONFIG_ENV_IMPORT, REDIS_CONFIG_ENV_REQUIRE, renderRedisCacheConnectionLines, resolveConfigModuleFormat } from './config-renderers'
-import type { ConfigModuleFormat } from './types'
+import { REDIS_CONFIG_ENV_IMPORT, renderRedisCacheConnectionLines, resolveConfigModuleFormat } from './config-renderers'
 
 const SCAFFOLDED_REDIS_CONNECTIONS = ['default', 'cache'] as const
 
-const ENV_IMPORT_PATTERNS: Readonly<Record<ConfigModuleFormat, RegExp>> = {
-  esm: /import\s*\{[^}]*\benv\b[^}]*\}\s*from\s*['"]@holo-js\/config['"]/,
-  cjs: /const\s*\{[^}]*\benv\b[^}]*\}\s*=\s*require\(\s*['"]@holo-js\/config['"]\s*\)/,
-}
+const ESM_ENV_IMPORT_PATTERN = /import\s*\{[^}]*\benv\b[^}]*\}\s*from\s*['"]@holo-js\/config['"]/
 
 export type RedisConfigSnapshot = {
   readonly path: string
@@ -49,13 +45,12 @@ export function assertRedisCacheConnectionsAvailable(options: {
   if (missing.includes('cache')) {
     sections.push(
       `The "cache" connection keeps cache flushes on their own Redis database, because a flush deletes that whole database. `
-      + `Add this connection to the connections object in config/redis.ts:\n\n${renderRedisCacheConnectionLines().join('\n')}`,
+      + `Add this connection to the connections object in config/redis.ts:\n\n${renderRedisCacheConnectionLines(moduleFormat).join('\n')}`,
       'REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.',
     )
-    if (redisConfig && !ENV_IMPORT_PATTERNS[moduleFormat].test(redisConfig.source)) {
+    if (moduleFormat === 'esm' && redisConfig && !ESM_ENV_IMPORT_PATTERN.test(redisConfig.source)) {
       sections.push(
-        `The connection uses env(), so also add this import at the top of config/redis.ts:\n\n`
-        + (moduleFormat === 'cjs' ? REDIS_CONFIG_ENV_REQUIRE : REDIS_CONFIG_ENV_IMPORT),
+        `The connection uses env(), so also add this import at the top of config/redis.ts:\n\n${REDIS_CONFIG_ENV_IMPORT}`,
       )
     }
   }

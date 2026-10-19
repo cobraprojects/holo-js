@@ -7,6 +7,7 @@ import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { CacheConfigError, CacheInvalidNumericMutationError, deserializeCacheValue, serializeCacheValue } from '@holo-js/cache'
 import {
   DB,
+  DatabaseError,
   TableQueryBuilder,
   clearGeneratedTables,
   column,
@@ -194,6 +195,24 @@ describe('@holo-js/cache-db', () => {
   })
 
   it('normalizes missing-table errors only for matching cache table failures', async () => {
+    expect(cacheDbInternals.isDatabaseCacheTableMissingError(
+      new DatabaseError(
+        'Connection "cache" failed to execute via driver "mysql": the table is gone',
+        'DRIVER_EXECUTE_ERROR',
+        Object.assign(new Error('the table is gone'), { code: 'ER_NO_SUCH_TABLE' }),
+      ),
+      'cache_entries',
+      'cache_entry_locks',
+    )).toBe(false)
+    expect(cacheDbInternals.isDatabaseCacheTableMissingError(
+      new DatabaseError(
+        'Connection "cache" failed to execute via driver "mysql": cache_entries is gone',
+        'DRIVER_EXECUTE_ERROR',
+        Object.assign(new Error('cache_entries is gone'), { code: 'ER_NO_SUCH_TABLE' }),
+      ),
+      'cache_entries',
+      'cache_entry_locks',
+    )).toBe(true)
     expect(cacheDbInternals.isDatabaseCacheTableMissingError('boom', 'cache_entries', 'cache_entry_locks')).toBe(false)
     expect(cacheDbInternals.isDatabaseCacheTableMissingError(
       Object.assign(new Error('SQLITE_ERROR: no such table: cache_entries'), { code: 'SQLITE_ERROR' }),

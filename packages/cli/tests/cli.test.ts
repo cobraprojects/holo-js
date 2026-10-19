@@ -9989,13 +9989,14 @@ export default defineRedisConfig({
         const message = await refusalMessage(projectRoot)
 
         expect(message).toContain('cache: {')
-        if (importEnv) {
+        if (moduleFormat === 'cjs') {
+          expect(message).toContain('db: Number(process.env.REDIS_CACHE_DB || 1),')
+          expect(message).not.toContain('require(')
+          expect(message).not.toContain('also add this import')
+        } else if (importEnv) {
           expect(message).not.toContain('also add this import')
         } else {
           expect(message).toContain(envImportLineFor(moduleFormat))
-          if (moduleFormat === 'cjs') {
-            expect(message).not.toContain('import { env }')
-          }
         }
         await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       },

@@ -15,6 +15,8 @@ import {
   createConnectionManager,
   createSchemaService,
   createRuntimeConnectionOptions,
+  driverErrorCodes,
+  isDatabaseDeadlockError,
   TableQueryBuilder,
   type DatabaseContext,
   type DatabaseContextOptions,
@@ -27,6 +29,7 @@ import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
 export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'
 const DATABASE_CACHE_LOCK_LOTTERY = { chances: 2, outOf: 100 }
+const MISSING_TABLE_DRIVER_CODES: ReadonlySet<string> = new Set(['SQLITE_ERROR', 'ER_NO_SUCH_TABLE', '42P01'])
 
 export type CacheDatabaseTableColumnKind = 'string' | 'text' | 'bigInteger'
 
@@ -272,12 +275,9 @@ function isDatabaseCacheTableMissingError(
   }
 
   const message = error.message.toLowerCase()
-  const errorCode = typeof Reflect.get(error, 'code') === 'string'
-    ? String(Reflect.get(error, 'code')).toUpperCase()
-    : undefined
   const mentionsCacheTable = message.includes(tableName.toLowerCase()) || message.includes(lockTableName.toLowerCase())
 
-  if (errorCode === 'SQLITE_ERROR' || errorCode === 'ER_NO_SUCH_TABLE' || errorCode === '42P01') {
+  if (driverErrorCodes(error).some(code => MISSING_TABLE_DRIVER_CODES.has(code.toUpperCase()))) {
     return mentionsCacheTable || message.includes('no such table') || message.includes('does not exist')
   }
 
@@ -365,15 +365,6 @@ async function readLock(
   }
 
   return { ...row, expires_at: normalizeDatabaseTimestamp(row.expires_at) }
-}
-
-function isDatabaseDeadlockError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false
-  }
-
-  const errorCode = Reflect.get(error, 'code')
-  return errorCode === 'ER_LOCK_DEADLOCK' || errorCode === '40P01' || errorCode === '40001'
 }
 
 async function retryOnDeadlock<TValue>(operation: () => Promise<TValue>): Promise<TValue> {
