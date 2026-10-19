@@ -1,12 +1,9 @@
 import type * as FsPromises from 'node:fs/promises'
+import { createWindowsFsModel } from './windows-fs-model.mjs'
 
 export type WindowsFsState = {
   readonly blockedRenameSources: Set<string>
   readonly renameAttempts: Map<string, number>
-}
-
-export function createWindowsFsState(): WindowsFsState {
-  return { blockedRenameSources: new Set(), renameAttempts: new Map() }
 }
 
 function permissionDenied(operation: string): NodeJS.ErrnoException {
@@ -14,13 +11,15 @@ function permissionDenied(operation: string): NodeJS.ErrnoException {
 }
 
 export function windowsFsOverrides(actual: typeof FsPromises, state: WindowsFsState): Partial<typeof FsPromises> {
+  const model = createWindowsFsModel(actual)
   return {
+    unlink: model.unlink,
+    rmdir: model.rmdir,
     rename: async (source, target) => {
       const sourcePath = String(source)
       state.renameAttempts.set(sourcePath, (state.renameAttempts.get(sourcePath) ?? 0) + 1)
       if (state.blockedRenameSources.has(sourcePath)) throw permissionDenied('rename')
-      if (await actual.stat(target).then(value => value.isDirectory(), () => false)) throw permissionDenied('rename')
-      return await actual.rename(source, target)
+      return await model.rename(source, target)
     },
   }
 }
