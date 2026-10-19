@@ -1,4 +1,5 @@
 import { createHmac, createHash } from 'node:crypto'
+import { localStoragePathInternals } from '@holo-js/kernel'
 import { createWriteStream, openAsBlob } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -214,6 +215,7 @@ function normalizeKey(input: string): string {
 }
 
 function normalizeFileKey(input: string, driver: RuntimeDiskConfig['driver']): string {
+  if (driver !== 's3') validateLocalStoragePath(input)
   const key = normalizeKey(input)
   if (driver !== 's3' && normalizeRelativePath(input).split('/').filter(Boolean).at(-1)?.endsWith('$')) {
     throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
@@ -319,7 +321,14 @@ function joinUrl(base: string, path: string): string {
   return `${baseWithoutSuffix}/${normalizedPath}${suffix}`
 }
 
+function validateLocalStoragePath(path: string): void {
+  for (const segment of path.trimStart().replace(/\\/g, '/').split('/').filter(Boolean)) {
+    localStoragePathInternals.assertValidSegment(segment)
+  }
+}
+
 function joinFilePath(base: string, path: string): string {
+  validateLocalStoragePath(path)
   const normalizedBase = base.replace(/\/+$/, '')
   assertNoTraversal(path)
   const normalizedPath = normalizeRelativePath(path).split('/').filter(Boolean).join('/')

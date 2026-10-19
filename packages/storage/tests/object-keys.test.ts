@@ -112,6 +112,8 @@ const names = [
   'uploads/already%20encoded.txt',
 ]
 
+const localNames = process.platform === 'win32' ? names.filter(name => !name.includes(':')) : names
+
 describe('object keys', () => {
   it.each(names)('stores %j on S3 under its literal name and serves it from url() and temporaryUrl()', async (name) => {
     const disk = useStorage('media')
@@ -135,7 +137,7 @@ describe('object keys', () => {
     expect([...objects.keys()]).toEqual(['uploads/my clip.bin'])
   })
 
-  it.each(names)('returns a local path() that holds the stored file for %j', async (name) => {
+  it.each(localNames)('returns a local path() that holds the stored file for %j', async (name) => {
     const disk = useStorage('local')
     await disk.put(name, `contents of ${name}`)
 
@@ -143,7 +145,6 @@ describe('object keys', () => {
   })
 })
 
-const localNames = process.platform === 'win32' ? names.filter(name => !name.includes(':')) : names
 
 describe('local file names', () => {
   it.each(localNames)('stores %j on a local disk under its literal name', async (name) => {

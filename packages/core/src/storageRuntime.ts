@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { localStoragePathInternals } from '@holo-js/kernel'
 import { type Dirent, openAsBlob } from 'node:fs'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
@@ -31,13 +32,7 @@ export function resolveStorageKeyPath(root: string, key: string): string {
     .filter(Boolean)
     .map(decodeStorageKeySegment)
 
-  if (segments.includes('..')) {
-    throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
-  }
-
-  if (segments.some(segment => segment === '.' || /[\\/]/u.test(segment) || segment.includes('\u0000') || (process.platform === 'win32' && segment.includes(':')))) {
-    throw new Error('[Holo Storage] Storage path segments must be file or folder names.')
-  }
+  for (const segment of segments) localStoragePathInternals.assertValidSegment(segment)
 
   const rootPath = resolve(root)
   const targetPath = resolve(rootPath, ...segments)
@@ -170,31 +165,6 @@ function decodeLegacyStorageName(name: string): string | null {
   }
 }
 
-const WINDOWS_DEVICE_NAMES = new Set([
-  'CON',
-  'PRN',
-  'AUX',
-  'NUL',
-  ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
-  ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`),
-])
-
-function windowsStorageNameProblem(name: string): string | null {
-  const hasControlCharacter = Array.from(name).some(character => character.charCodeAt(0) < 32)
-  if (hasControlCharacter || /[<>:"|?*]/u.test(name)) {
-    return 'Windows file names cannot contain < > : " | ? * or control characters'
-  }
-  if (/[. ]$/u.test(name)) {
-    return 'Windows file names cannot end with a dot or a space'
-  }
-  const baseName = (name.split('.', 1)[0] ?? '').replace(/ +$/u, '').toUpperCase()
-  if (WINDOWS_DEVICE_NAMES.has(baseName)) {
-    return 'Windows reserves this device name'
-  }
-
-  return null
-}
-
 function isStorageMetadataEntry(entry: Dirent): boolean {
   return !entry.isDirectory() && entry.name.endsWith('$')
 }
@@ -214,7 +184,7 @@ function storageNameDecodingSkipReason(entry: Dirent, decoded: string, platform:
     return 'the decoded name is not a valid file name'
   }
   if (platform === 'win32') {
-    const windowsProblem = windowsStorageNameProblem(decoded)
+    const windowsProblem = localStoragePathInternals.windowsStorageNameProblem(decoded)
     if (windowsProblem) return windowsProblem
   }
   if (entry.isFile() && !isMetadata && decoded.endsWith('$')) {
