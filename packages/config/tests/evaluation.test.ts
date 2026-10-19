@@ -5,7 +5,6 @@ import { afterEach, expect, it, onTestFinished } from 'vitest'
 import {
   configureEnvRuntime,
   env,
-  isEnvPlaceholder,
   loadConfigDirectory,
   resetConfigNormalizers,
   writeConfigCache,
@@ -14,15 +13,12 @@ import {
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../src/index.ts'))
 const roots: string[] = []
 const originalOwner = process.env.HOLO_EVALUATION_OWNER
-const originalCapture = process.env.HOLO_CAPTURE_ENV
 
 afterEach(async () => {
   configureEnvRuntime(undefined)
   resetConfigNormalizers()
   if (originalOwner === undefined) delete process.env.HOLO_EVALUATION_OWNER
   else process.env.HOLO_EVALUATION_OWNER = originalOwner
-  if (originalCapture === undefined) delete process.env.HOLO_CAPTURE_ENV
-  else process.env.HOLO_CAPTURE_ENV = originalCapture
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
@@ -60,32 +56,27 @@ export default { owner: env('HOLO_EVALUATION_OWNER'), direct: process.env.HOLO_E
   expect(process.env.HOLO_EVALUATION_OWNER).toBeUndefined()
 })
 
-it.each([false, true])('restores prior runtime values and capture state after an import failure: %s', async (capture) => {
+it('restores prior runtime values after an import failure', async () => {
   process.env.HOLO_EVALUATION_OWNER = 'ambient'
-  delete process.env.HOLO_CAPTURE_ENV
-  configureEnvRuntime({ HOLO_EVALUATION_OWNER: 'configured' }, { mode: capture ? 'capture' : 'resolve' })
+  configureEnvRuntime({ HOLO_EVALUATION_OWNER: 'configured' })
   const broken = await createProject("await Promise.resolve(); throw new Error('broken config')")
   const next = await createProject(`
 import { env } from ${configEntry}
 export default { owner: env('HOLO_EVALUATION_OWNER') }
 `)
   const failed = loadConfigDirectory(broken, {
-    processEnv: { HOLO_EVALUATION_OWNER: 'broken', HOLO_CAPTURE_ENV: '1' },
+    processEnv: { HOLO_EVALUATION_OWNER: 'broken' },
   })
   const failure = expect(failed).rejects.toThrow('broken config')
   const loaded = loadConfigDirectory<{ services: { owner: string } }>(next, { processEnv: { HOLO_EVALUATION_OWNER: 'next' } })
   await failure
   expect((await loaded).custom.services).toEqual({ owner: 'next' })
   expect(process.env.HOLO_EVALUATION_OWNER).toBe('ambient')
-  expect(process.env.HOLO_CAPTURE_ENV).toBeUndefined()
-  const restored = env('HOLO_EVALUATION_OWNER')
-  if (capture) expect(isEnvPlaceholder(restored)).toBe(true)
-  else expect(restored).toBe('configured')
+  expect(env('HOLO_EVALUATION_OWNER')).toBe('configured')
 })
 
-it('ends cache capture before deferred security imports and later callbacks', async () => {
+it('caches evaluated values for cacheable config and evaluates deferred config live', async () => {
   process.env.HOLO_EVALUATION_OWNER = 'ambient'
-  delete process.env.HOLO_CAPTURE_ENV
   const root = await createProject(`
 import { env } from ${configEntry}
 await new Promise(resolve => setTimeout(resolve, 10))
@@ -100,13 +91,13 @@ export default { owner: env('HOLO_EVALUATION_OWNER'), later: () => env('HOLO_EVA
     services: { owner: string, direct: string }
     security: { owner: string, later: () => string }
   }>(root, { envName: 'production', processEnv: { HOLO_EVALUATION_OWNER: 'live' } })
-  expect(loaded.custom.services).toEqual({ owner: 'live', direct: 'build' })
+  expect(loaded.custom.services).toEqual({ owner: 'build', direct: 'build' })
   expect(loaded.custom.security.owner).toBe('live')
   expect(loaded.custom.security.later()).toBe('ambient')
-  expect(process.env.HOLO_CAPTURE_ENV).toBeUndefined()
+  expect(process.env.HOLO_EVALUATION_OWNER).toBe('ambient')
 })
 
-it('captures cache placeholders independently of overlapping live imports', async () => {
+it('evaluates cache values independently of overlapping live imports', async () => {
   process.env.HOLO_EVALUATION_OWNER = 'ambient'
   const source = `
 import { env } from ${configEntry}
@@ -124,7 +115,7 @@ export default { owner: env('HOLO_EVALUATION_OWNER') }
     envName: 'production',
     processEnv: { HOLO_EVALUATION_OWNER: 'runtime' },
   })
-  expect(runtime.custom.services.owner).toBe('runtime')
+  expect(runtime.custom.services.owner).toBe('build')
   expect(process.env.HOLO_EVALUATION_OWNER).toBe('ambient')
 })
 
@@ -133,13 +124,13 @@ it('replays cached normalizer modules before importing deferred security config'
   onTestFinished(() => { delete runtime.__holoCacheReplayReady })
   const root = await createProject(`
 import { registerConfigNormalizer } from ${configEntry}
-registerConfigNormalizer({ name: 'zeta', normalize: value => value ?? {} })
+registerConfigNormalizer({ name: 'aaa', normalize: value => value ?? {} })
 globalThis.__holoCacheReplayReady = true
 export default { enabled: true }
-`, 'zeta')
+`, 'aaa')
   await writeFile(join(root, 'config/security.mjs'), `
 import { env } from ${configEntry}
-if (process.env.HOLO_CAPTURE_ENV !== '1' && !globalThis.__holoCacheReplayReady) {
+if (!globalThis.__holoCacheReplayReady) {
   throw new Error('normalizer module was not replayed first')
 }
 export default { ready: globalThis.__holoCacheReplayReady, later: () => env('HOLO_EVALUATION_OWNER') }

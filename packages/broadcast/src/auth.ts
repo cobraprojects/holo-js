@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse } from '@holo-js/validation'
+import { requireBroadcastCredentials } from './config'
 import {
   type BroadcastAuthEndpointBody,
   type BroadcastAuthEndpointOptions,
@@ -482,6 +483,23 @@ function jsonResponse(body: BroadcastAuthEndpointBody, status: number): Response
   })
 }
 
+function signChannelAuthorization(
+  options: BroadcastAuthEndpointOptions,
+  socketId: string,
+  channel: string,
+  channelData: string,
+): { readonly auth: string, readonly channel_data: string } {
+  const { key, secret } = requireBroadcastCredentials(
+    { key: options.appKey, secret: options.appSecret },
+    'authorize channels',
+  )
+
+  return {
+    auth: `${key}:${signBroadcastAuth(secret, socketId, channel, channelData)}`,
+    channel_data: channelData,
+  }
+}
+
 function signBroadcastAuth(appSecret: string, socketId: string, channel: string, channelData: string): string {
   return createHmac('sha256', appSecret).update(`${socketId}:${channel}:${channelData}`).digest('hex')
 }
@@ -550,11 +568,8 @@ export async function renderBroadcastAuthResponse(
     whispers: result.whispers,
     ...(result.type === 'presence' ? { member: result.member } : {}),
   })
-  const signed = options.appKey && options.appSecret && payload.socketId
-    ? {
-        auth: `${options.appKey}:${signBroadcastAuth(options.appSecret, payload.socketId, channel, channelData)}`,
-        channel_data: channelData,
-      }
+  const signed = payload.socketId
+    ? signChannelAuthorization(options, payload.socketId, channel, channelData)
     : {}
 
   return jsonResponse({

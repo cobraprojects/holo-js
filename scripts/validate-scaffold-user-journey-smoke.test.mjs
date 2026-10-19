@@ -39,7 +39,7 @@ test('blog apps use the scaffold lifecycle contract', async () => {
     const gitignore = await readFile(join(repoRoot, 'apps', appName, '.gitignore'), 'utf8')
     const eslintConfig = await readFile(join(repoRoot, 'apps', appName, 'eslint.config.mjs'), 'utf8')
 
-    assert.equal(manifest.scripts.prepare, 'holo key:generate && holo prepare')
+    assert.equal(manifest.scripts.prepare, 'holo key:generate && holo install broadcast && holo prepare')
     assert.equal(manifest.scripts.dev, 'holo dev')
     assert.equal(manifest.scripts.build, 'holo build')
     assert.equal(manifest.scripts.start, 'holo start')

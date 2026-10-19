@@ -31,6 +31,7 @@ export function configureSecurityRuntime(bindings?: SecurityRuntimeBindings): vo
         cors: normalizeCorsConfig(bindings.cors),
         rateLimitStore: bindings.rateLimitStore,
         csrfSigningKey: bindings.csrfSigningKey,
+        csrfSession: bindings.csrfSession,
         defaultKeyResolver: bindings.defaultKeyResolver,
       })
     : undefined
