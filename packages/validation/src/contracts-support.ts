@@ -392,6 +392,7 @@ export function assignNestedValue(
     const requested = slotKindFor(next)
 
     if (Array.isArray(cursor) && token === '') {
+      repeatedFormValues.delete(cursor)
       if (last) {
         cursor.push(value)
         return
@@ -442,13 +443,20 @@ export function assignNestedValue(
 export function normalizeFormData(input: FormData | URLSearchParams): Record<string, unknown> {
   const output: Record<string, unknown> = {}
   const indexes: ArrayIndexes = new Map()
-  const entries = Array.from(input.entries())
-  if (entries.filter(([, value]) => !isBlobLike(value)).length > MAX_INPUT_VARIABLES) {
-    throw new MalformedInputError('The request contains too many input variables.')
+  let entryCount = 0
+  let variableCount = 0
+  for (const [, value] of input.entries()) {
+    entryCount += 1
+    if (!isBlobLike(value)) {
+      variableCount += 1
+      if (variableCount > MAX_INPUT_VARIABLES) {
+        throw new MalformedInputError('The request contains too many input variables.')
+      }
+    }
   }
 
-  for (const [key, value] of entries) {
-    assignNestedValue(output, key, value, indexes, entries.length)
+  for (const [key, value] of input.entries()) {
+    assignNestedValue(output, key, value, indexes, entryCount)
   }
 
   for (const recorded of indexes.values()) {

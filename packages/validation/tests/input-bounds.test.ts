@@ -279,6 +279,26 @@ describe('Validation input bounds', () => {
     if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })
   })
 
+  it.each([
+    ['tag=a&tag[]=b', ['a', 'b']],
+    ['tag[]=b&tag=a', ['b', 'a']],
+    ['tag=a&tag=b&tag[]=c', ['a', 'b', 'c']],
+    ['tag=a&tag[]=c&tag=b', ['a', 'c', 'b']],
+    ['tag=b&tag=a&tag[]=c', ['b', 'a', 'c']],
+    ['tag=b&tag[]=c&tag=a', ['b', 'c', 'a']],
+    ['tag[]=c&tag=a&tag=b', ['c', 'a', 'b']],
+    ['tag[]=c&tag=b&tag=a', ['c', 'b', 'a']],
+  ])('keeps explicit append syntax as a list in %s', async (query, expected) => {
+    const input = new URLSearchParams(query)
+    const scalar = await safeParse(input, schema({ tag: field.string() }))
+    expect(scalar.valid).toBe(false)
+    if (!scalar.valid) expect(scalar.errors.get('tag')).toEqual(['This field must be text.'])
+
+    const list = await safeParse(input, schema({ tag: field.array(field.string()) }))
+    expect(list.valid).toBe(true)
+    if (list.valid) expect(list.data.tag).toEqual(expected)
+  })
+
   it('gives every order of colliding names the same outcome', async () => {
     const forms: readonly ((value: string) => string)[] = [
       value => `x=${value}`,
