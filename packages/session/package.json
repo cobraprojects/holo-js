@@ -34,7 +34,7 @@
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run",
-    "test:platform": "vitest --run tests/file-lock.test.ts --pool forks --reporter=json"
+    "test:platform": "vitest --run tests/file-lock.test.ts tests/file-lock-busy.test.ts --pool forks --reporter=json"
   },
   "dependencies": {
     "@holo-js/config": "catalog:",

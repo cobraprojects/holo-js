@@ -183,12 +183,13 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
 
 async function reclaimStaleLock(lockPath: string, expected: RecordLockIdentity): Promise<boolean> {
   if (!recordLockIdentityMatches(expected, await readRecordLockIdentity(lockPath))) return false
-  return removeRecordLock(lockPath, expected.fileName)
+  return removeRecordLock(lockPath, expected.fileName, BUSY_FILE_RETRY_MS)
 }
 
 async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdentity | undefined> {
   const identity = await readRecordLockIdentity(lockPath)
   if (!identity) return undefined
+  if (!identity.fileName) return identity
   const owner = identity.owner
   if (owner?.host === hostname()) {
     if (owner.pid === process.pid) {
