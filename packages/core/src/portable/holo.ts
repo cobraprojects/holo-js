@@ -1551,7 +1551,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   const sessionConfigured = hasLoadedConfigFile(loadedConfig, 'session') || hasLoadedConfigFile(loadedConfig, 'auth')
   const authConfigured = hasLoadedConfigFile(loadedConfig, 'auth')
   const securityConfigured = hasLoadedConfigFile(loadedConfig, 'security')
-  const csrfConfigured = securityConfigured && loadedConfig.security.csrf.enabled
+  const csrfConfigured = securityConfigured && loadedConfig.security?.csrf?.enabled === true
   const securityModule = securityConfigured
     ? await loadSecurityModule(true)
     : undefined
