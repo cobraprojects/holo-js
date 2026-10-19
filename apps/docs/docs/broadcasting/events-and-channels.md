@@ -283,7 +283,7 @@ Private and presence channels need [authentication](/auth/) installed. Without i
 
 ### Refused subscriptions
 
-When a rule refuses a browser, the worker sends a `pusher:subscription_error` event on that channel and keeps the connection open. The browser's other channels keep working.
+When a rule refuses a browser, the worker sends a `pusher:subscription_error` event on that channel and keeps the connection open. The browser's other channels keep working. A subscription beyond the [connection limit](/broadcasting/production#connection-limits) gets the same event with status `429`.
 
 ```json
 { "type": "AuthError", "error": "Unable to authorize the channel subscription.", "status": 403 }

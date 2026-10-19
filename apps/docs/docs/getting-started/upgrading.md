@@ -63,6 +63,12 @@ A refused channel subscription no longer closes the WebSocket. The worker sends 
 
 The worker also stops sending internal error messages. Unexpected realtime errors reach clients as `Realtime request failed.`, failed publishes return `Broadcast publish failed.`, and the original errors go to your [error reporter](/basics/errors#reporting-errors). See [Errors](/broadcasting/production#errors).
 
+### Broadcast connection limits
+
+Each [Broadcast browser connection](/broadcasting/production#connection-limits) can hold 100 channels and 100 realtime query subscriptions, and can send 200 messages in each one-second window. Clients within these limits need no change.
+
+A subscription beyond the channel or realtime limit fails with status `429`, and the socket stays open. A connection that exceeds the message rate, or that has more than 4 MB of output waiting for it, is closed with code `1008`. If a page needs more live queries than one connection allows, split them across pages.
+
 ### Queue jobs interrupted by a stopped worker
 
 Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up once at least the connection's `retryAfter` seconds have passed; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.
