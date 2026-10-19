@@ -225,6 +225,12 @@ New dispatch options: `.afterCommit()` on a dispatch, and `afterCommit: true` on
 
 Queued mail, notifications, and event listeners accept `tries` and `backoff`, and `queue:work` and `queue:listen` accept `--tries` and `--backoff`. These jobs still run once unless you set `tries`. The worker's `--backoff` applies only to jobs that don't set their own `backoff`.
 
+### Event listener order and after-commit notification failures
+
+Event listeners run in registration order, with sync and queued listeners interleaved. Before, every sync listener ran first and queued listeners were sent after them. If a listener depended on running after the queued listeners, move it after them or change it to a queued listener. A listener that throws stops the dispatch, so listeners registered after it don't run. See [Order and errors](/events/listeners#order-and-errors).
+
+A notification channel that fails after a transaction commits is reported through `exceptions.report` with capability `notifications` and operation `channel.afterCommit`. Before, it was dropped without a report. Configure `exceptions.report` if you want these failures in your error tracker. See [Reporting errors](/basics/errors#reporting-errors).
+
 ### Framework peer dependencies
 
 Holo adapters now use your app's framework packages as peer dependencies instead of installing their own copies. Before you install 0.4.0, upgrade your framework to a release that fixes its published security advisories:

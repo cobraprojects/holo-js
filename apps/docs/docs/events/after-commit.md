@@ -83,6 +83,12 @@ await DB.transaction(async () => {
 })
 ```
 
+## Order and errors after commit
+
+Deferred listeners run in the same registration order as other listeners, with sync and queued listeners interleaved. Immediate listeners run first, when the dispatch happens.
+
+If a deferred listener throws, the listeners after it don't run, and the `DB.transaction()` call rejects with an error that includes the listener's message. The transaction has already committed when this happens, so catch the error where you call the transaction if the caller needs to handle it.
+
 ## Nested transactions
 
 Deferred work waits for the outermost transaction to commit. Committing an inner transaction doesn't run it early.
