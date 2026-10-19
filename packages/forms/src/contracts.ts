@@ -1,4 +1,4 @@
-import { resolveRequestUrl, type HoloRequestHeaders } from '@holo-js/kernel'
+import { requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
 import {
   type FormLikeValidationInput,
   type InferSchemaData,
@@ -433,7 +433,7 @@ async function resolveAmbientFormDataRequest(input: unknown): Promise<Request | 
 
   const requestHeaders = await nextHeadersModule.headers()
 
-  return new Request(resolveRequestUrl({ headers: requestHeaders }), {
+  return new Request(requestUrlInternals.resolveRoutedRequestUrl({ headers: requestHeaders }), {
     method: 'POST',
     headers: createFormDataRequestHeaders(requestHeaders),
     body: input,
@@ -448,7 +448,7 @@ function getStructuredWebRequest(input: FormRequestLikeInput): StructuredRequest
 }
 
 function extractRequestLikeUrl(input: FormRequestLikeInput, headers: Headers): string {
-  return resolveRequestUrl({ ...input, headers }).href
+  return requestUrlInternals.resolveRoutedRequestUrl({ ...input, headers }).href
 }
 
 function extractRequestLikeMethod(input: FormRequestLikeInput): string {

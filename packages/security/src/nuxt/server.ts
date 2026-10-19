@@ -53,7 +53,7 @@ async function createRequest(event: H3Event): Promise<Request> {
     ? undefined
     : await readRawBody(event, false)
 
-  return new Request(getRequestURL(event), {
+  return new Request(getRequestURL(event, { xForwardedProto: false }), {
     method,
     headers,
     body: createRequestBody(body),
