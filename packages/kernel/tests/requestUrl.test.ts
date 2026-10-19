@@ -96,6 +96,15 @@ describe('client-facing request URLs', () => {
       .toBe('https://public.example:8443/login?next=%2Fadmin')
   })
 
+  it('resolves the client address from the connection, or from the registered resolver', () => {
+    const input = { url: 'http://localhost/login', headers: { host: 'app.test', 'x-forwarded-for': '203.0.113.66', 'x-real-ip': '203.0.113.67' } }
+    expect(requestUrlInternals.resolveClientAddress(input)).toBeUndefined()
+    requestUrlInternals.provideConnectionAddress(() => '198.51.100.4')
+    expect(requestUrlInternals.resolveClientAddress(input)).toBe('198.51.100.4')
+    requestUrlInternals.configureForwardedRequestResolver((readHeader, connectionAddress) => ({ address: `${readHeader('x-forwarded-for')} via ${connectionAddress}` }))
+    expect(requestUrlInternals.resolveClientAddress(input)).toBe('203.0.113.66 via 198.51.100.4')
+  })
+
   it('treats a failing connection address provider as an unknown connection', () => {
     let received: string | undefined = 'unset'
     requestUrlInternals.provideConnectionAddress(() => {

@@ -15,6 +15,7 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 - `X-Forwarded-Proto` values other than `https`, `on`, `ssl`, and `1` mean HTTP instead of answering `400`.
 - `X-Forwarded-Port` and `X-Forwarded-Prefix` now change the port and path of `resolveRequestUrl()`.
 - `X-Forwarded-For` entries that aren't IP addresses are skipped instead of becoming the client IP.
+- WorkOS sign-in sends WorkOS the client IP that Holo resolves through `trustedProxies`, instead of the first `X-Forwarded-For` entry or `X-Real-IP`.
 - Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
 - When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
 

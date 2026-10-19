@@ -3,10 +3,6 @@ import type { HoloForwardedRequest, HoloForwardedRequestResolver } from '@holo-j
 
 export type SecurityTrustedProxies = readonly string[] | '*'
 
-export type ResolvedForwarding = HoloForwardedRequest & {
-  readonly address?: string
-}
-
 type HeaderReader = (name: string) => string | undefined
 
 const ipv4MappedPrefix = '::ffff:'
@@ -93,7 +89,7 @@ export function resolveForwarding(
   readHeader: HeaderReader,
   rawConnectionAddress: string | undefined,
   trustedProxies: SecurityTrustedProxies,
-): ResolvedForwarding {
+): HoloForwardedRequest {
   const connectionAddress = rawConnectionAddress === undefined ? undefined : bareAddress(rawConnectionAddress) ?? rawConnectionAddress
   const isTrusted = createTrustedAddressMatcher(trustedProxies, connectionAddress)
   const fromTrustedProxy = connectionAddress === undefined ? trustedProxies === '*' : isTrusted(connectionAddress)
@@ -108,8 +104,5 @@ export function resolveForwarding(
 }
 
 export function createForwardedRequestResolver(trustedProxies: SecurityTrustedProxies): HoloForwardedRequestResolver {
-  return (readHeader, connectionAddress) => {
-    const { protocol, host, port, prefix } = resolveForwarding(readHeader, connectionAddress, trustedProxies)
-    return { protocol, host, port, prefix }
-  }
+  return (readHeader, connectionAddress) => resolveForwarding(readHeader, connectionAddress, trustedProxies)
 }

@@ -99,7 +99,7 @@ export default defineSecurityConfig({
 
 This is the setup for nginx on the same server. List IP addresses or CIDR ranges, such as `'10.0.0.0/8'`. The default is `[]`, which trusts no proxy.
 
-When a Nuxt app receives a request over a Unix socket, as it does behind `nuxt dev`, Holo treats the connection as coming from `127.0.0.1`.
+When a Nuxt app receives a request over a Unix socket, as it does behind `nuxt dev`, Holo treats the connection as coming from `127.0.0.1`. If you serve Nuxt behind a proxy over a Unix socket, add `'127.0.0.1'` to `trustedProxies`. Otherwise Holo ignores the proxy's headers, and every visitor shares the address `127.0.0.1`, including for rate limiting.
 
 ### How Holo finds the visitor
 

@@ -144,3 +144,7 @@ export function normalizeRequestInput(input: AuthRuntimeRequestInput): Request {
     headers,
   })
 }
+
+export function resolveClientAddress(request: Request): string | undefined {
+  return requestUrlInternals.resolveClientAddress(request)
+}
