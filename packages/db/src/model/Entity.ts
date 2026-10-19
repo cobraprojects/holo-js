@@ -222,6 +222,11 @@ class EntityBase<
     return this
   }
 
+  recordChanges(changes: Record<string, unknown>): this {
+    this.#changes = { ...changes }
+    return this
+  }
+
   syncPersisted(
     entity: EntityBase<TTable>,
     changes: Record<string, unknown> = {},

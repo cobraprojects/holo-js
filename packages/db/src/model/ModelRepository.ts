@@ -1622,7 +1622,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           : {}),
       } as Partial<ModelRecord<TTable>>
       const created = this.hydrate(attributes).syncOriginal()
-      entity.syncChanges()
+      entity.recordChanges(entity.toAttributes())
       await this.dispatchEvent('created', created)
       await this.dispatchEvent('saved', created)
       await this.touchOwners(created)
