@@ -1168,7 +1168,7 @@ describe('@holo-js/security rate-limit drivers', () => {
     expect(isolated.snapshot.attempts).toBe(1)
   })
 
-  it('clones snapshot expiry dates, evicts oldest buckets, and closes the pruning timer', async () => {
+  it('clones snapshot expiry dates, fails closed when full, and closes the pruning timer', async () => {
     const now = new Date('2026-04-16T12:00:00.000Z')
     const store = createMemoryRateLimitStore({
       now: () => now,
@@ -1186,17 +1186,17 @@ describe('@holo-js/security rate-limit drivers', () => {
       maxAttempts: 2,
       decaySeconds: 60,
     })
-    await store.hit('limiter:login|user:third', {
+    await expect(store.hit('limiter:login|user:third', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({ limited: true })
+
+    const repeated = await store.hit('limiter:login|user:first', {
       maxAttempts: 2,
       decaySeconds: 60,
     })
 
-    const recycled = await store.hit('limiter:login|user:first', {
-      maxAttempts: 2,
-      decaySeconds: 60,
-    })
-
-    expect(recycled.snapshot.attempts).toBe(1)
+    expect(repeated.snapshot.attempts).toBe(2)
     expect(first.snapshot.expiresAt.getFullYear()).toBe(2000)
     await store.close?.()
   })
@@ -1220,21 +1220,78 @@ describe('@holo-js/security rate-limit drivers', () => {
     await store.close?.()
   })
 
-  it('bounds the default memory store and evicts the oldest bucket when it is full', async () => {
+  it('keeps a live victim counter when distinct keys fill the default memory store', async () => {
+    let now = new Date('2026-04-16T12:00:00.000Z')
     const store = createMemoryRateLimitStore({
-      now: () => new Date('2026-04-16T12:00:00.000Z'),
+      now: () => now,
     })
+    const victim = 'limiter:login|user:victim'
 
-    for (let index = 0; index <= 10_000; index += 1) {
+    await store.hit(victim, {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+    await store.hit(victim, {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+    for (let index = 0; index < 9_999; index += 1) {
       await store.hit(`limiter:login|user:${index}`, {
         maxAttempts: 2,
         decaySeconds: 60,
       })
     }
 
-    await expect(store.clear('limiter:login|user:0')).resolves.toBe(false)
-    await expect(store.clear('limiter:login|user:10000')).resolves.toBe(true)
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({ limited: true })
+    await expect(store.hit(victim, {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({
+      limited: true,
+      snapshot: { attempts: 3 },
+    })
+
+    now = new Date(now.getTime() + 61_000)
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({
+      limited: false,
+      snapshot: { attempts: 1 },
+    })
     await store.close?.()
+  })
+
+  it('reports a full memory store once per window', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 1,
+      })
+      await store.hit('limiter:login|user:held', {
+        maxAttempts: 2,
+        decaySeconds: 600,
+      })
+
+      await store.hit('limiter:login|user:a', { maxAttempts: 2, decaySeconds: 60 })
+      await store.hit('limiter:login|user:b', { maxAttempts: 2, decaySeconds: 60 })
+      expect(consoleError).toHaveBeenCalledTimes(1)
+      expect(consoleError.mock.calls[0]?.[0]).toContain('rate-limit memory store at capacity')
+
+      now = new Date(now.getTime() + 61_000)
+      await store.hit('limiter:login|user:c', { maxAttempts: 2, decaySeconds: 600 })
+      await store.hit('limiter:login|user:d', { maxAttempts: 2, decaySeconds: 600 })
+      expect(consoleError).toHaveBeenCalledTimes(2)
+      await store.close?.()
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 
   it('evicts expired memory buckets before evicting active ones when full', async () => {
@@ -1614,7 +1671,7 @@ describe('@holo-js/security rate-limit drivers', () => {
       }
 
       async function waitUntil(predicate: () => Promise<boolean>) {
-        const deadline = Date.now() + 15_000
+        const deadline = Date.now() + 60_000
         while (!(await predicate())) {
           if (Date.now() > deadline) {
             throw new Error('Timed out waiting for the background sweep.')
@@ -1700,6 +1757,28 @@ describe('@holo-js/security rate-limit drivers', () => {
         await expect(store.clear('limiter:login|user:kicker')).resolves.toBe(true)
         await store.close?.()
       }, 60_000)
+
+      it('holds at most one batch of sweep entries per run across several thousand buckets', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 3_000, 'bounded')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
+        await store.close?.()
+      }, 120_000)
 
       it('finishes an in-flight sweep on close and starts no more after it', async () => {
         const root = await createSweepRoot()

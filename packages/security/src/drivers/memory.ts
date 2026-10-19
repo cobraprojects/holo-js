@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SecurityRateLimitHitResult, SecurityRateLimitStore } from '../contracts'
 
 type MemoryRateLimitBucket = {
@@ -65,9 +66,18 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
   const pruneTimer = setInterval(() => pruneExpiredBuckets(resolveNow()), pruneIntervalMs)
   pruneTimer.unref?.()
 
-  const evictOldestBucket = (): void => {
-    const oldestKey = buckets.keys().next().value as string
-    buckets.delete(oldestKey)
+  let capacityReportedUntil = Number.NEGATIVE_INFINITY
+
+  const reportCapacity = (now: Date, decaySeconds: number): void => {
+    if (now.getTime() < capacityReportedUntil) {
+      return
+    }
+
+    capacityReportedUntil = now.getTime() + decaySeconds * 1000
+    reportError(
+      new Error(`[@holo-js/security] Memory rate-limit store is at capacity (${maxBuckets} keys). New keys are limited until buckets expire. Use the redis or file rate-limit driver for high-cardinality limiters.`),
+      { capability: 'security', operation: 'rate-limit memory store at capacity' },
+    )
   }
 
   return {
@@ -94,8 +104,18 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
         if (now.getTime() >= nextExpiryAt) {
           pruneExpiredBuckets(now)
         }
-        while (buckets.size >= maxBuckets) {
-          evictOldestBucket()
+
+        if (buckets.size >= maxBuckets) {
+          reportCapacity(now, hitOptions.decaySeconds)
+          return Object.freeze({
+            limited: true,
+            snapshot: createSnapshot(key, {
+              key,
+              attempts: hitOptions.maxAttempts + 1,
+              expiresAt: new Date(now.getTime() + hitOptions.decaySeconds * 1000),
+            }, hitOptions.maxAttempts),
+            retryAfterSeconds: hitOptions.decaySeconds,
+          })
         }
       }
 

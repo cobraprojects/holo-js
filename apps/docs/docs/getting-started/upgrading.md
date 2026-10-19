@@ -162,7 +162,7 @@ Redis stores each key as a counter instead of a sorted set. Buckets left by 0.3.
 npx holo rate-limit:clear --all
 ```
 
-The `memory` driver keeps at most 10,000 keys per process, and the `file` driver deletes expired keys at most once a minute. The low-level `createSecurityRedisAdapter()` no longer takes a `now` option.
+The `memory` driver keeps at most 10,000 keys per process and never evicts a live key. When it is full, new keys are limited until one expires. The `file` driver deletes expired keys in the background at most once a minute. The low-level `createSecurityRedisAdapter()` no longer takes a `now` option.
 
 ### CSRF tokens stored in the session
 

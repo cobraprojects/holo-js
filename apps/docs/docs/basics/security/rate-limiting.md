@@ -321,7 +321,7 @@ Pick where attempt counts are stored with `rateLimit.driver`. The generated conf
 | `file` | Yes, on the same machine | No | Yes | A single server |
 | `redis` | Yes | Yes | Yes | Multiple instances or serverless |
 
-The `memory` driver keeps counts inside the running process, so `holo rate-limit:clear` refuses to run against it. It keeps at most 10,000 keys per process. When it's full, it drops expired keys first, then the least recently used key.
+The `memory` driver keeps counts inside the running process, so `holo rate-limit:clear` refuses to run against it. It keeps at most 10,000 keys per process. When it's full, it drops expired keys first. If it is still full, it doesn't evict any live key: new keys are limited (`429`) until a key expires, and Holo reports the full store once per window. The memory driver is per-process, so use `redis` or `file` for public, high-cardinality limiters, such as limiters keyed by IP address or email.
 
 [Multi-factor auth](/auth/multi-factor) attempt limits use the same driver. Use `redis` when several app instances must share those limits.
 
