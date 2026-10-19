@@ -209,6 +209,25 @@ describe('remember me', () => {
     await expect(browser.request(() => auth.check())).resolves.toBe(false)
   })
 
+  it('preserves a built-in async request scope across separately loaded auth modules', async () => {
+    vi.resetModules()
+    const reloaded = await import('../src')
+    const requestContext = reloaded.createAsyncAuthContext()
+    const browser = new Browser()
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      context: {
+        ...requestContext,
+        getRequestCookie: (name: string) => browser.cookies.get(name),
+        appendResponseCookie: (cookie: string) => browser.receive(cookie),
+      },
+    })
+
+    await requestContext.run(() => auth.loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    await expect(requestContext.run(() => auth.check())).resolves.toBe(true)
+  })
+
   it.each([{ scoped: true, accessor: 'none' }, { scoped: true, accessor: 'getter' }, { scoped: true, accessor: 'setter' }, { scoped: false, accessor: 'none' }])('restores guards across requests in a custom context (scope: $scoped, accessor: $accessor)', async ({ scoped, accessor }) => {
     const browser = new Browser()
     const storage = new AsyncLocalStorage<ReturnType<typeof authRuntimeInternals.createMemoryAuthContext>>()

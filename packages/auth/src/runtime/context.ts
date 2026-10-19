@@ -95,6 +95,7 @@ export function createAsyncAuthContext(): AsyncAuthContext {
   }
 
   const context: AsyncAuthContext = {
+    getRequestScope: () => resolveContext(),
     activate() {
       if (!storage.getStore()) {
         storage.enterWith(createMemoryAuthContext())
