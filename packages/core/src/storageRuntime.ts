@@ -357,8 +357,8 @@ function createFileStorageBackend(root: string): StorageBackend {
     },
 
     async removeItem(key: string): Promise<void> {
-      for (const itemKey of [key, `${key}$`]) {
-        const targetPath = await resolveStorageDeletePath(root, itemKey)
+      const targetPaths = [await resolveStorageDeletePath(root, key), await resolveStorageDeletePath(root, `${key}$`)]
+      for (const targetPath of targetPaths) {
         if (targetPath) await rm(targetPath, { force: true })
       }
     },
@@ -403,7 +403,10 @@ function createFileStorageBackend(root: string): StorageBackend {
       }
 
       const resolvedRoot = await resolveExistingRealPath(resolve(root))
-      if (!resolvedRoot) return
+      if (!resolvedRoot) {
+        await mkdir(root, { recursive: true })
+        return
+      }
       const entries = await readdir(resolvedRoot)
       await Promise.all(entries.map(entry => rm(join(resolvedRoot, entry), { recursive: true, force: true })))
     },

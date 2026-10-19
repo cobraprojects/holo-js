@@ -54,7 +54,7 @@ export default defineEventHandler(async () => {
 
 `@holo-js/storage` no longer exports the Nitro helpers `applyNitroStorageConfig()`, `buildStorageConfig()`, `buildStorageConfigWithDriver()`, or the `StorageConfig`, `NitroStorageLike`, and `StorageAdapterOptionsLike` types.
 
-On every framework, local disks now refuse to delete through symlinks that lead outside the disk root. `delete()` and `clear(base)` throw instead of deleting the outside file, and `clear()` with no base empties the disk root without replacing a symlinked root folder. `exists()` returns `false` for a folder instead of throwing. If your app keeps files outside the disk root and links them in, delete them through a disk whose root contains them.
+On every framework, local disks now refuse to delete through symlinks that lead outside the disk root. `delete()`, `removeItem()`, and `clear(base)` throw instead of deleting the outside file, and `clear()` with no base empties the disk root without replacing a symlinked root folder. `exists()` returns `false` for a folder instead of throwing. If your app keeps files outside the disk root and links them in, delete them through a disk whose root contains them.
 
 ### Node.js 22.14 or newer
 

@@ -21,7 +21,6 @@ declare module '#app' {
 
 declare module '#imports' {
   export function useRuntimeConfig(): HoloRuntimeConfig
-  export function useStorage(base: string): unknown
   export function useEvent(): import('h3').H3Event
   export function defineNitroPlugin<T>(plugin: T): T
   export * from 'h3'

@@ -211,6 +211,26 @@ describe('@holo-js/core local storage safety', () => {
     await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
   })
 
+  it('keeps the file when its sidecar metadata path leads outside the disk root', async () => {
+    const { storage, outside } = await configureLocalDisk()
+    await writeFile(join(outside, 'private.txt'), 'private')
+    await Storage.put('report.txt', 'kept')
+    await symlink(join(outside, 'private.txt'), join(storage, 'report.txt$'))
+
+    await expect(Storage.delete('report.txt')).rejects.toThrow('Storage paths must stay inside the configured disk root')
+    await expect(Storage.get('report.txt')).resolves.toBe('kept')
+    await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
+  })
+
+  it('recreates a missing disk root when clearing everything', async () => {
+    const { storage } = await configureLocalDisk()
+    await rm(storage, { recursive: true })
+
+    await useStorage('local').clear?.()
+
+    expect((await lstat(storage)).isDirectory()).toBe(true)
+  })
+
   it.skipIf(!canRestrictPermissions)('checks existence without reading file contents', async () => {
     const { storage } = await configureLocalDisk()
     await Storage.put('unreadable.txt', 'secret')

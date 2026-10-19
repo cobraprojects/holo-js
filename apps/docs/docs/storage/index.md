@@ -250,7 +250,7 @@ With `overwrite: false`, it returns `false` instead of replacing a file that alr
 
 Paths are always relative to the disk root. Holo rejects paths that contain `..` segments, so user input can't reach files outside the disk. Leading slashes are removed, so `/reports/a.txt` and `reports/a.txt` are the same file.
 
-On local disks, symlinks can't lead outside the disk root either. Reading, writing into a folder, `delete()`, and `clear()` throw an error when the path goes through a symlink that points outside the disk, and nothing outside the disk is changed. Deleting a symlink that points to another file on the same disk removes only the link.
+On local disks, symlinks can't lead outside the disk root either. Reads, writes, `delete()`, `removeItem()`, and `clear()` throw an error when the path goes through a symlink that points outside the disk, and nothing outside the disk is changed. Deleting a symlink that points to another file on the same disk removes only the link.
 
 ## Override config with environment variables
 
@@ -464,7 +464,7 @@ const info = await Storage.stat('uploads/report.pdf')
 
 ### exists()
 
-Returns `true` when a file exists at the path. It returns `false` for a folder. On local disks it checks the file without reading it.
+Returns `true` when a file exists at the path. It returns `false` for a folder.
 
 ```ts
 if (await Storage.exists('reports/daily.txt')) {
