@@ -10,6 +10,8 @@ async function* chunks(...values: string[]): AsyncGenerator<Uint8Array> {
 export async function checkFrameworkStorage() {
   const disk = Storage.disk('local')
   const literalName = `${directory}/Q1 café ☕.txt`
+  const paths = [`${directory}/streamed.txt`, literalName]
+  await disk.delete(paths)
   try {
     await disk.writeStream(`${directory}/streamed.txt`, chunks('streamed ', 'contents'))
     await disk.put(literalName, 'second')
@@ -28,6 +30,6 @@ export async function checkFrameworkStorage() {
       pages: [firstPage.paths, secondPage.paths],
     }
   } finally {
-    await disk.delete([`${directory}/streamed.txt`, literalName])
+    await disk.delete(paths)
   }
 }

@@ -558,3 +558,82 @@ describe('local storage name decoding pairs', () => {
     expect((await readdir(root)).sort()).toEqual(['report%20four.txt', 'report%20four.txt$'])
   })
 })
+
+describe('local storage name decoding collisions', () => {
+  async function createCollisionDisk(): Promise<string> {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'holo-storage-collisions-')))
+    tempDirs.push(base)
+    const root = join(base, 'disk')
+    await mkdir(root)
+    return root
+  }
+
+  it('skips every unit whose decoded names differ only by case or Unicode normalization', async () => {
+    const root = await createCollisionDisk()
+    const files = {
+      'caf%C3%89.txt': 'upper',
+      'caf%C3%A9.txt': 'nfc',
+      'cafe%CC%81.txt': 'nfd',
+      'plain%20file.txt': 'plain',
+    }
+    for (const [name, contents] of Object.entries(files)) await writeFile(join(root, name), contents)
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([{ from: 'plain%20file.txt', to: 'plain file.txt' }])
+    expect(result.skipped).toEqual(expect.arrayContaining(['caf%C3%89.txt', 'caf%C3%A9.txt', 'cafe%CC%81.txt'].map(path => ({
+      path,
+      reason: expect.stringContaining('another decoded name'),
+    }))))
+    expect(result.skipped).toHaveLength(3)
+    for (const [name, contents] of Object.entries(files)) {
+      if (name === 'plain%20file.txt') continue
+      await expect(readFile(join(root, name), 'utf8')).resolves.toBe(contents)
+    }
+  })
+
+  it('checks destinations again right before renaming each unit', async () => {
+    const root = await createCollisionDisk()
+    await writeFile(join(root, 'a%20one.txt'), 'one')
+    await writeFile(join(root, 'b%20two.txt'), 'two')
+    await writeFile(join(root, 'b%20two.txt$'), '{"owner":"ops"}')
+    const moved: string[] = []
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, {
+      platform: 'linux',
+      rename: async (from, to) => {
+        moved.push(to)
+        await storageRuntimeInternals.moveWithoutReplacing(from, to)
+        if (to.endsWith('a one.txt')) await writeFile(join(root, 'b two.txt$'), '{"owner":"intruder"}')
+      },
+    })
+
+    expect(result.renamed).toEqual([{ from: 'a%20one.txt', to: 'a one.txt' }])
+    expect(result.skipped).toEqual([
+      { path: 'b%20two.txt', reason: expect.stringContaining('its metadata was skipped') },
+      { path: 'b%20two.txt$', reason: '"b two.txt$" already exists' },
+    ])
+    expect(moved).toEqual([join(root, 'a one.txt')])
+    await expect(readFile(join(root, 'b two.txt$'), 'utf8')).resolves.toBe('{"owner":"intruder"}')
+    await expect(readFile(join(root, 'b%20two.txt'), 'utf8')).resolves.toBe('two')
+  })
+
+  it('never replaces an existing file or folder when moving', async () => {
+    const root = await createCollisionDisk()
+    await writeFile(join(root, 'source.txt'), 'source')
+    await writeFile(join(root, 'target.txt'), 'target')
+    await mkdir(join(root, 'source-folder'))
+    await mkdir(join(root, 'target-folder'))
+
+    await expect(storageRuntimeInternals.moveWithoutReplacing(join(root, 'source.txt'), join(root, 'target.txt'))).rejects.toMatchObject({ code: 'EEXIST' })
+    await expect(storageRuntimeInternals.moveWithoutReplacing(join(root, 'source-folder'), join(root, 'target-folder'))).rejects.toMatchObject({ code: 'EEXIST' })
+    await expect(readFile(join(root, 'source.txt'), 'utf8')).resolves.toBe('source')
+    await expect(readFile(join(root, 'target.txt'), 'utf8')).resolves.toBe('target')
+    expect((await readdir(root)).sort()).toEqual(['source-folder', 'source.txt', 'target-folder', 'target.txt'])
+
+    await storageRuntimeInternals.moveWithoutReplacing(join(root, 'source.txt'), join(root, 'moved.txt'))
+    await storageRuntimeInternals.moveWithoutReplacing(join(root, 'source-folder'), join(root, 'moved-folder'))
+    await expect(readFile(join(root, 'moved.txt'), 'utf8')).resolves.toBe('source')
+    expect((await readdir(root)).sort()).toEqual(['moved-folder', 'moved.txt', 'target-folder', 'target.txt'])
+  })
+})

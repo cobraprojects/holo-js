@@ -224,6 +224,26 @@ function errorCode(error: unknown): string {
   return (error as NodeJS.ErrnoException).code ?? 'unknown error'
 }
 
+function destinationExistsError(to: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`[Holo Storage] "${to}" already exists.`), { code: 'EEXIST' })
+}
+
+async function moveWithoutReplacing(from: string, to: string): Promise<void> {
+  try {
+    await link(from, to)
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') throw destinationExistsError(to)
+    if (await storagePathExists(to)) throw destinationExistsError(to)
+    await rename(from, to)
+    return
+  }
+  await unlink(from)
+}
+
+function decodedNameCollisionKey(name: string): string {
+  return name.normalize('NFC').toLowerCase()
+}
+
 async function planDecodeRename(
   entry: Dirent,
   directory: string,
@@ -247,7 +267,7 @@ async function decodeLocalStorageNames(
   options: StorageNameDecodingOptions = {},
 ): Promise<StorageNameDecodingResult> {
   const platform = options.platform ?? process.platform
-  const renamePath = options.rename ?? rename
+  const renamePath = options.rename ?? moveWithoutReplacing
   const renamed: DecodedStorageName[] = []
   const skipped: SkippedStorageName[] = []
   const resolvedRoot = await resolveExistingRealPath(resolve(root))
@@ -293,10 +313,42 @@ async function decodeLocalStorageNames(
       if (members.length > 0) plans.push(members)
     }
 
+    const plansByTarget = new Map<string, Set<DecodeRename[]>>()
+    for (const members of plans) {
+      for (const member of members) {
+        const key = decodedNameCollisionKey(member.decodedName)
+        plansByTarget.set(key, (plansByTarget.get(key) ?? new Set()).add(members))
+      }
+    }
+    for (const colliding of plansByTarget.values()) {
+      if (colliding.size < 2) continue
+      for (const members of colliding) {
+        for (const member of members) {
+          member.reason ??= 'its decoded name matches another decoded name when case or Unicode normalization is ignored'
+        }
+      }
+    }
+
     const renamedFolders = new Map<string, string>()
     for (const members of plans) {
       if (members.some(member => member.reason !== null)) {
         for (const member of members) skipped.push({ path: member.from, reason: member.reason ?? 'its file was skipped' })
+        continue
+      }
+
+      const occupied: DecodeRename[] = []
+      for (const member of members) {
+        if (await storagePathExists(join(resolvedDirectory, member.decodedName))) occupied.push(member)
+      }
+      if (occupied.length > 0) {
+        for (const member of members) {
+          skipped.push({
+            path: member.from,
+            reason: occupied.includes(member)
+              ? `"${member.to}" already exists`
+              : isStorageMetadataEntry(member.entry) ? 'its file was skipped' : 'its metadata was skipped',
+          })
+        }
         continue
       }
 
@@ -726,6 +778,7 @@ export async function resetOptionalStorageRuntime(): Promise<void> {
 export const storageRuntimeInternals = {
   createFileStorageBackend,
   decodeLocalStorageNames,
+  moveWithoutReplacing,
   importOptionalModule,
   writeCompleteChunk,
 }

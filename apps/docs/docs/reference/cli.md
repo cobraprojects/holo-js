@@ -779,7 +779,8 @@ npx holo storage:decode-names --disk=local
 It prints every rename and every file it skips, then the total. Running it again right away renames nothing. Run it before new uploads arrive: a file uploaded after the upgrade under a name that looks URL-encoded, such as `May%20report.csv`, would be renamed by a later run. It skips:
 
 - a name that still looks URL-encoded after decoding, such as `100%2520off.txt`, because Holo can't tell what the original name was;
-- a name whose decoded form already exists;
+- a name whose decoded form already exists, checked again right before each rename;
+- names whose decoded forms differ only by letter case or Unicode normalization, such as `cafÉ.txt` and `café.txt`, because some filesystems treat them as the same file;
 - a file whose decoded name ends in `$`, because local disks use that ending for metadata;
 - on Windows, a name Windows can't store, such as one with `:` or `?`, one ending in a dot or space, or a device name such as `CON`;
 - a symbolic link, which is never followed, along with its metadata file.
