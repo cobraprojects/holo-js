@@ -23,13 +23,15 @@ export function valuesAreEqual(left: unknown, right: unknown): boolean {
     return left.getTime() === right.getTime()
   }
 
-  if (left instanceof Uint8Array && right instanceof Uint8Array) {
-    if (left.length !== right.length) {
+  if (isComparableBinaryView(left) && isComparableBinaryView(right)) {
+    if (left.byteLength !== right.byteLength) {
       return false
     }
 
-    for (let index = 0; index < left.length; index += 1) {
-      if (left[index] !== right[index]) {
+    const leftBytes = new Uint8Array(left.buffer, left.byteOffset, left.byteLength)
+    const rightBytes = new Uint8Array(right.buffer, right.byteOffset, right.byteLength)
+    for (let index = 0; index < leftBytes.length; index += 1) {
+      if (leftBytes[index] !== rightBytes[index]) {
         return false
       }
     }
@@ -79,6 +81,10 @@ function snapshotAttributeValue(value: unknown): unknown {
     return new Date(value.getTime())
   }
 
+  if (isComparableBinaryView(value)) {
+    return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength))
+  }
+
   if (Array.isArray(value)) {
     return value.map(snapshotAttributeValue)
   }
@@ -92,6 +98,10 @@ function snapshotAttributeValue(value: unknown): unknown {
   }
 
   return value
+}
+
+function isComparableBinaryView(value: unknown): value is ArrayBufferView {
+  return ArrayBuffer.isView(value) && !(value instanceof DataView)
 }
 
 function isPlainObject(value: object): boolean {

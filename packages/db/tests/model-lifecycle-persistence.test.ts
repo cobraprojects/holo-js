@@ -7,6 +7,7 @@ import {
   createDatabase,
   createDialect,
   createSeederService,
+  binaryCast,
   defineFactory,
   defineSeeder,
   hasMany,
@@ -290,6 +291,24 @@ describe('model lifecycle persistence', () => {
 
     await expect(seeders.seed()).rejects.toThrow('Column "code" is not writable on model "Ledger".')
     expect(await db.table('ledgers').get()).toEqual([])
+  })
+
+  it('detects in-place changes to binary attributes as dirty and saves them', async () => {
+    const db = await openDatabase()
+    const files = defineTable('files', { id: column.id(), payload: column.blob().nullable() })
+    await createTestTable(db, files)
+    const File = defineModelFromTable(files, { fillable: ['payload'], casts: { payload: binaryCast() } })
+    const created = await File.create({ payload: new Uint8Array([1, 2, 3, 4]) })
+
+    const file = await File.findOrFail(created.get('id'))
+    const payload = file.get('payload') as Uint8Array
+    payload[0] = 9
+    expect(file.isDirty('payload')).toBe(true)
+
+    await file.save()
+
+    const stored = await File.findOrFail(created.get('id'))
+    expect(Array.from(stored.get('payload') as Uint8Array)).toEqual([9, 2, 3, 4])
   })
 
   it('runs seeders without mass-assignment guards', async () => {
