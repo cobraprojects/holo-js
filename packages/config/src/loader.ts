@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createJiti } from 'jiti'
@@ -26,7 +27,8 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 5
+const HOLO_CONFIG_CACHE_VERSION = 6
+const CONFIG_CACHE_UNDEFINED_MARKER = '__holoUndefined'
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
@@ -103,8 +105,47 @@ async function writeConfigCacheFile(filePath: string, contents: string): Promise
   }
 
   await mkdir(dirname(filePath), { recursive: true })
-  await writeFile(filePath, contents, { encoding: 'utf8', mode: CONFIG_CACHE_FILE_MODE })
-  await chmod(filePath, CONFIG_CACHE_FILE_MODE)
+  const temporaryPath = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporaryPath, contents, { encoding: 'utf8', mode: CONFIG_CACHE_FILE_MODE, flag: 'wx' })
+    await rename(temporaryPath, filePath)
+  } catch (error) {
+    await rm(temporaryPath, { force: true })
+    throw error
+  }
+}
+
+function encodeConfigCacheValue(value: unknown): unknown {
+  if (value === undefined) {
+    return { [CONFIG_CACHE_UNDEFINED_MARKER]: true }
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(entry => encodeConfigCacheValue(entry))
+  }
+
+  if (isObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, encodeConfigCacheValue(entry)]))
+  }
+
+  return value
+}
+
+function decodeConfigCacheValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(entry => decodeConfigCacheValue(entry))
+  }
+
+  if (isObject(value)) {
+    const keys = Object.keys(value)
+    if (keys.length === 1 && value[CONFIG_CACHE_UNDEFINED_MARKER] === true) {
+      return undefined
+    }
+
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, decodeConfigCacheValue(entry)]))
+  }
+
+  return value
 }
 
 function getConfigExtensionPriority(fileName: string): number {
@@ -243,7 +284,8 @@ function isSerializableConfigValue(value: unknown): boolean {
   }
 
   if (isObject(value)) {
-    return Object.values(value).every(entry => entry === undefined || isSerializableConfigValue(entry))
+    return !Object.hasOwn(value, CONFIG_CACHE_UNDEFINED_MARKER)
+      && Object.values(value).every(entry => entry === undefined || isSerializableConfigValue(entry))
   }
 
   return false
@@ -312,7 +354,11 @@ async function readConfigCache(projectRoot: string): Promise<ConfigCachePayload 
 
   try {
     const parsed = JSON.parse(contents) as unknown
-    return isCachePayload(parsed) ? parsed : undefined
+    if (!isCachePayload(parsed)) {
+      return undefined
+    }
+
+    return { ...parsed, config: decodeConfigCacheValue(parsed.config) as RawConfigMap }
   } catch {
     return undefined
   }
@@ -344,7 +390,7 @@ export async function writeConfigCache(
       warnings: environment.warnings,
     },
     configFiles: loadedFiles,
-    config: cacheableConfig,
+    config: encodeConfigCacheValue(cacheableConfig) as RawConfigMap,
     deferredConfigNames,
     normalizerConfigNames: configRegistryInternals
       .getRegisteredNames()

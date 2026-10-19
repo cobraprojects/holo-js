@@ -2151,6 +2151,56 @@ export default defineConfig({
     expect((await stat(cachePath)).mode & 0o777).toBe(0o600)
   })
 
+  it.runIf(process.platform !== 'win32')('replaces a world-readable cache through a fresh owner-only file', async () => {
+    const root = await createProject()
+    const servicesSource = (secret: string) => `
+import { defineConfig } from ${packageEntry}
+
+export default defineConfig({
+  mailgun: {
+    secret: '${secret}',
+  },
+})
+`
+    await writeFile(join(root, 'config/services.ts'), servicesSource('first-secret'), 'utf8')
+    const cachePath = await writeConfigCache(root, { envName: 'development', processEnv: {} })
+    await chmod(cachePath, 0o644)
+    const before = await stat(cachePath)
+
+    await writeFile(join(root, 'config/services.ts'), servicesSource('rotated-secret'), 'utf8')
+    await writeConfigCache(root, { envName: 'development', processEnv: {} })
+
+    const after = await stat(cachePath)
+    expect(after.mode & 0o777).toBe(0o600)
+    expect(after.ino).not.toBe(before.ino)
+    expect(await readFile(cachePath, 'utf8')).toContain('rotated-secret')
+    expect(readdirSync(dirname(cachePath)).filter(name => name !== 'config-cache.json')).toEqual([])
+  })
+
+  it('preserves explicit undefined config properties when a cached load is used', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/services.ts'), `
+import { defineConfig, env } from ${packageEntry}
+
+export default defineConfig({
+  mailgun: {
+    domain: 'example.test',
+    secret: env('MAILGUN_SECRET') || undefined,
+    region: 'eu',
+  },
+})
+`, 'utf8')
+
+    await writeConfigCache(root, { envName: 'production', processEnv: {} })
+    type Services = { services: { mailgun: { domain: string, secret: string | undefined, region: string } } }
+    const live = await loadConfigDirectory<Services>(root, { envName: 'production', processEnv: {}, preferCache: false })
+    const cached = await loadConfigDirectory<Services>(root, { envName: 'production', processEnv: {}, preferCache: true })
+
+    expect(Object.hasOwn(cached.custom.services.mailgun, 'secret')).toBe(true)
+    expect(Object.keys(cached.custom.services.mailgun)).toEqual(Object.keys(live.custom.services.mailgun))
+    expect(cached.custom.services).toStrictEqual(live.custom.services)
+  })
+
   it('does not rewrite the config cache when the contents are unchanged', async () => {
     const root = await createProject()
 
