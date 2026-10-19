@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Holo-JS is pre-1.0. Security fixes ship in the latest 0.x release, and in the next release when a fix needs an application change. Upgrade to the latest release to receive them. See the [versioning policy](https://docs.holo-js.com/getting-started/versioning).
+Holo-JS is pre-1.0. Security fixes ship in the latest 0.x release, and in the next minor release when a fix needs an application change. Upgrade to the latest release to receive them. See the [versioning policy](https://docs.holo-js.com/getting-started/versioning).
 
 ## Reporting a vulnerability
 

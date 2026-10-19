@@ -101,7 +101,7 @@ Keep the example apps in `apps/` in line with what new projects get.
 
 ## Releases
 
-Merging to `main` runs the Release workflow in `.github/workflows/release.yml`. It runs `bun run release`, which builds the packages, publishes every package whose version is not on npm yet with npm provenance, and creates a git tag for each published version. The workflow needs an `NPM_TOKEN` repository secret with publish access to the `@holo-js` scope.
+Merging to `main` runs the Release workflow in `.github/workflows/release.yml`. It runs `bun run release`, which builds the packages, publishes every package whose version is not on npm yet with npm provenance, and pushes a git tag for each published version. The workflow needs an `NPM_TOKEN` repository secret with publish access to the `@holo-js` scope.
 
 `bun run release` replaces `catalog:` and `workspace:*` ranges in the package manifests for the publish and restores the original manifests afterwards, including when the run is interrupted with SIGINT, SIGTERM, or SIGHUP. The versioning rules that releases follow are in [Versioning](/getting-started/versioning).
 

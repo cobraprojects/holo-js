@@ -27,7 +27,7 @@
 - Allow session rotation to receive a complete replacement `data` payload and `renewLifetime`. Auth transitions renew lifetime while preserving private flash state and remember policy; ordinary rotation retains its defaults.
 - Add a `LICENSE` file (MIT) at the repository root and in every published package, and list it in each package's `files`.
 - Add `SECURITY.md` with a private reporting channel and the supported-version policy.
-- Add a [versioning policy](/getting-started/versioning) to the documentation: what `0.MINOR.PATCH` means, what a breaking change is, and how security fixes ship.
+- Add a [versioning policy](apps/docs/docs/getting-started/versioning.md) to the documentation: what `0.MINOR.PATCH` means, what a breaking change is, and how security fixes ship.
 - Add `repository` metadata to every published package, pointing at its directory in the Holo-JS repository.
 
 ### Security
@@ -94,7 +94,7 @@
 - Run set mutators after each lifecycle handler on the fields that handler changed, so a later handler on the same or a later event sees normalized values. Each value is still mutated once per assignment.
 - Persist attribute changes made in `creating`, `updating`, and `saving` handlers, and apply mutators once per write, including `make().save()` and factories. Models loaded with `withCount()` or `withExists()` save without writing the computed values, and in-place changes to JSON and date attributes are detected and saved. Factories and `holo seed` run seeders without mass-assignment guards, as Laravel does. See [lifecycle, factories, and seeders](apps/docs/docs/getting-started/upgrading.md#lifecycle-factories-and-seeders).
 - Publish packages from CI. The Release workflow runs on pushes to `main` and publishes every package version that npm doesn't have yet, with npm provenance. It needs an `NPM_TOKEN` repository secret.
-- `bun run release` restores the package manifests it rewrites when a publish is interrupted with SIGINT, SIGTERM, or SIGHUP, not only when the publish fails.
+- `bun run release` stops the running `changeset publish` and then restores the package manifests it rewrites when a publish is interrupted with SIGINT, SIGTERM, or SIGHUP, not only when the publish fails.
 
 ### Compatibility and upgrade requirements
 

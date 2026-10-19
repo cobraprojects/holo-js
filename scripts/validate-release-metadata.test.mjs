@@ -27,6 +27,7 @@ const validReleaseWorkflow = [
   '      - run: bun run release',
   '        env:',
   "          NPM_CONFIG_PROVENANCE: 'true'",
+  '      - run: git push origin --tags',
   '',
 ].join('\n')
 
@@ -146,11 +147,12 @@ test('release metadata skips private packages', async () => {
 
 test('release metadata requires the release workflow to publish with npm provenance', async () => {
   const root = await createTempRepo(completeRepo({
-    '.github/workflows/release.yml': validReleaseWorkflow.replace("          NPM_CONFIG_PROVENANCE: 'true'\n", ''),
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(`          NPM_CONFIG_PROVENANCE: 'true'
+`, ''),
   }))
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
-    '.github/workflows/release.yml must set NPM_CONFIG_PROVENANCE to \'true\' so npm publishes with provenance.',
+    `.github/workflows/release.yml must set NPM_CONFIG_PROVENANCE to 'true' so npm publishes with provenance.`,
   ])
 })
 
@@ -161,6 +163,16 @@ test('release metadata requires the release workflow to grant OIDC identity for 
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
     '.github/workflows/release.yml must grant id-token: write so npm can attest provenance.',
+  ])
+})
+
+test('release metadata requires the release workflow to push the release tags that publishing creates', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('git push origin --tags', 'true'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must push the tags that changeset publish creates with `git push origin --tags`.',
   ])
 })
 

@@ -71,6 +71,9 @@ async function collectReleaseWorkflowFailures(root) {
   if (!/NPM_CONFIG_PROVENANCE:\s*['"]?true['"]?/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must set NPM_CONFIG_PROVENANCE to 'true' so npm publishes with provenance.`)
   }
+  if (!/git push origin --tags/.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must push the tags that changeset publish creates with \`git push origin --tags\`.`)
+  }
   if (!/\bbun run release\b/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must publish with \`bun run release\`, which restores package manifests.`)
   }

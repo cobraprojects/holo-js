@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -203,7 +203,7 @@ test('publishing restores every source manifest when preparation fails partway',
   assert.equal(await readFile(join(root, 'packages/z-consumer/package.json'), 'utf8'), consumer)
 })
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   test(`catalog resolver restores package manifests when publishing receives ${signal}`, async () => {
     const originalManifest = '{ "name": "@holo-js/example", "dependencies": { "@holo-js/core": "catalog:" } }\n'
     const repoRoot = await createTempRepo({
@@ -233,3 +233,79 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     assert.equal(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), originalManifest)
   })
 }
+
+test('catalog resolver restores package manifests only after the interrupt hook finishes', async () => {
+  const originalManifest = '{ "name": "@holo-js/example", "dependencies": { "@holo-js/core": "catalog:" } }\n'
+  const repoRoot = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{"@holo-js/core":"^0.3.28"}}}'],
+    'packages/example/package.json': originalManifest.split('\n'),
+  })
+  const manifestPath = join(repoRoot, 'packages/example/package.json')
+  const modulePath = fileURLToPath(new URL('./publish-with-resolved-catalogs.mjs', import.meta.url))
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', [
+    `import { readFileSync } from 'node:fs'`,
+    `import { withResolvedCatalogManifests } from ${JSON.stringify(modulePath)}`,
+    `await withResolvedCatalogManifests(async () => {`,
+    `  process.stdout.write('published\\n')`,
+    `  await new Promise(() => setInterval(() => {}, 1000))`,
+    `}, ${JSON.stringify(repoRoot)}, {`,
+    `  onInterrupt: async () => {`,
+    `    process.stdout.write('hook:' + readFileSync(${JSON.stringify(manifestPath)}, 'utf8').includes('^0.3.28') + '\\n')`,
+    `    await new Promise(resolve => setTimeout(resolve, 200))`,
+    `  },`,
+    `})`,
+  ].join('\n')], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+  let output = ''
+  child.stdout.on('data', (chunk) => {
+    output += chunk
+  })
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', () => {
+      if (output.includes('published')) resolve()
+    })
+    child.once('exit', code => reject(new Error(`publish child exited early with code ${code}`)))
+  })
+
+  child.kill('SIGTERM')
+  await once(child, 'exit')
+
+  assert.match(output, /hook:true/)
+  assert.equal(await readFile(manifestPath, 'utf8'), originalManifest)
+})
+
+test('catalog resolver restores the remaining package manifests when one cannot be restored during an interrupt', async () => {
+  const lockedManifest = '{ "name": "@holo-js/a-locked", "dependencies": { "@holo-js/core": "catalog:" } }\n'
+  const writableManifest = '{ "name": "@holo-js/z-writable", "dependencies": { "@holo-js/core": "catalog:" } }\n'
+  const repoRoot = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{"@holo-js/core":"^0.3.28"}}}'],
+    'packages/a-locked/package.json': lockedManifest.split('\n'),
+    'packages/z-writable/package.json': writableManifest.split('\n'),
+  })
+  const lockedPath = join(repoRoot, 'packages/a-locked/package.json')
+  const writablePath = join(repoRoot, 'packages/z-writable/package.json')
+  const modulePath = fileURLToPath(new URL('./publish-with-resolved-catalogs.mjs', import.meta.url))
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', [
+    `import { chmod } from 'node:fs/promises'`,
+    `import { withResolvedCatalogManifests } from ${JSON.stringify(modulePath)}`,
+    `await withResolvedCatalogManifests(async () => {`,
+    `  await chmod(${JSON.stringify(lockedPath)}, 0o444)`,
+    `  process.stdout.write('published\\n')`,
+    `  await new Promise(() => setInterval(() => {}, 1000))`,
+    `}, ${JSON.stringify(repoRoot)})`,
+  ].join('\n')], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', (chunk) => {
+      if (String(chunk).includes('published')) resolve()
+    })
+    child.once('exit', code => reject(new Error(`publish child exited early with code ${code}`)))
+  })
+
+  child.kill('SIGTERM')
+  const [, signal] = await once(child, 'exit')
+
+  assert.equal(signal, 'SIGTERM')
+  assert.equal(await readFile(writablePath, 'utf8'), writableManifest)
+  await chmod(lockedPath, 0o644)
+})

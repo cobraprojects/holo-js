@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
+import { once } from 'node:events'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +11,7 @@ import { collectPackageManifestFailures } from './validate-dependency-version-po
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const interruptSignals = ['SIGINT', 'SIGTERM', 'SIGHUP']
+let activePublish
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -77,7 +79,7 @@ async function listPackageManifestPaths(root = repoRoot) {
   return manifestPaths.filter(manifestPath => typeof manifestPath === 'string')
 }
 
-export async function withResolvedCatalogManifests(callback, root = repoRoot) {
+export async function withResolvedCatalogManifests(callback, root = repoRoot, options = {}) {
   const rootManifest = await readJson(join(root, 'package.json'))
   const catalog = rootManifest.workspaces?.catalog
   if (!isObject(catalog)) {
@@ -91,14 +93,32 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
   const originalManifests = new Map()
   let callbackError
 
-  const restoreOnInterrupt = (signal) => {
+  let interruptStarted = false
+  let pendingWrites = Promise.resolve()
+  const restoreOnInterrupt = async (signal) => {
+    if (!interruptStarted) {
+      interruptStarted = true
+      try {
+        await options.onInterrupt?.(signal)
+      } catch (error) {
+        console.error(error)
+      }
+    }
+    await pendingWrites.catch(() => {})
     for (const [manifestPath, contents] of originalManifests) {
-      writeFileSync(manifestPath, contents)
+      try {
+        writeFileSync(manifestPath, contents)
+      } catch (error) {
+        console.error(`Failed to restore ${manifestPath}: ${error.message}`)
+      }
+    }
+    for (const interruptSignal of interruptSignals) {
+      process.removeListener(interruptSignal, restoreOnInterrupt)
     }
     process.kill(process.pid, signal)
   }
   for (const signal of interruptSignals) {
-    process.once(signal, restoreOnInterrupt)
+    process.on(signal, restoreOnInterrupt)
   }
 
   try {
@@ -106,7 +126,8 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
       const original = await readFile(manifestPath, 'utf8')
       originalManifests.set(manifestPath, original)
       const resolved = resolveReleaseManifest(JSON.parse(original), catalog)
-      await writeFile(manifestPath, `${JSON.stringify(resolved, null, 2)}\n`)
+      pendingWrites = writeFile(manifestPath, `${JSON.stringify(resolved, null, 2)}\n`)
+      await pendingWrites
     }
 
     await callback()
@@ -116,9 +137,10 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
 
   try {
     const manifestEntries = [...originalManifests]
-    const restoreResults = await Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
+    pendingWrites = Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
       writeFile(manifestPath, contents)
     )))
+    const restoreResults = await pendingWrites
     const restoreFailures = restoreResults.flatMap((result, index) => {
       if (result.status === 'fulfilled') {
         return []
@@ -149,10 +171,25 @@ function runChangesetPublish() {
       cwd: repoRoot,
       stdio: 'inherit',
     })
+    activePublish = child
 
-    child.on('error', rejectPublish)
-    child.on('close', code => resolvePublish(code ?? 1))
+    child.on('error', (error) => {
+      activePublish = undefined
+      rejectPublish(error)
+    })
+    child.on('close', (code) => {
+      activePublish = undefined
+      resolvePublish(code ?? 1)
+    })
   })
+}
+
+async function stopActivePublish(signal) {
+  if (!activePublish) return
+
+  const exited = once(activePublish, 'close')
+  activePublish.kill(signal)
+  await exited
 }
 
 async function publishWithResolvedCatalogs() {
@@ -161,7 +198,7 @@ async function publishWithResolvedCatalogs() {
 
   await withResolvedCatalogManifests(async () => {
     publishStatus = await runChangesetPublish()
-  })
+  }, repoRoot, { onInterrupt: stopActivePublish })
 
   return publishStatus
 }

@@ -2,11 +2,13 @@
 
 Holo-JS is pre-1.0. This page explains what a version number promises, when a release can break your app, and how to upgrade safely.
 
+This policy applies from `0.4.0`. Earlier `0.3.x` patch releases changed some APIs, and their changelog entries list those changes.
+
 ## Version numbers
 
 Holo-JS uses `0.MINOR.PATCH` version numbers.
 
-- A **minor** release, such as `0.3.28` to `0.4.0`, can contain breaking changes. Each one is listed under *Compatibility and upgrade requirements* in the [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md), and each app-facing change has a step in the [upgrade guide](/getting-started/upgrading).
+- A **minor** release, such as `0.3.28` to `0.4.0`, can contain breaking changes. Each one is listed in the [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) under the release that ships it, and each app-facing change has a step in the [upgrade guide](/getting-started/upgrading).
 - A **patch** release, such as `0.4.0` to `0.4.1`, contains fixes only. It doesn't remove or rename APIs, change config keys, or change what the scaffold generates in a way your app has to adapt to.
 
 Keep every `@holo-js/*` package on the same version. Holo-JS releases all packages together, so one version across them is what gets tested.
@@ -36,7 +38,7 @@ Security fixes ship in the latest release. If a fix needs an application change,
 
 ## Node.js support
 
-Every package declares its supported Node.js versions in `engines`. Currently that is Node.js 22.14 or newer on the 22 line, and Node.js 24 and 26. Dropping a Node.js release line is a breaking change and ships in a minor release.
+Every package declares its supported Node.js versions in `engines`. Currently that is Node.js 22.14 or newer on the 22 line, and Node.js 24 and 26.
 
 ## Next steps
 
