@@ -16,7 +16,7 @@ export default defineCorsConfig({
     env('FRONTEND_URL', 'http://localhost:3000'),
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  headers: ['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-Requested-With'],
+  headers: ['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-XSRF-TOKEN', 'X-Requested-With'],
   credentials: true,
   maxAge: 7200,
   statefulDomains: [
@@ -32,13 +32,13 @@ The [security middleware](/basics/security/#register-the-middleware) applies the
 For a request to a path in `paths`, Holo looks at the `Origin` header:
 
 - If the origin is listed in `origins`, or its host is in `statefulDomains`, Holo echoes it back in `Access-Control-Allow-Origin`.
-- If `origins` contains `'*'`, any origin is allowed. With `credentials: true`, Holo echoes the request's origin instead of `*`, because browsers reject `*` with credentials.
+- If `origins` contains `'*'`, any origin is allowed and Holo answers with `Access-Control-Allow-Origin: *`.
 - Otherwise no CORS headers are added and the browser blocks the response.
 
 Responses always include `Vary: Origin` so caches don't mix up origins.
 
-::: danger
-`origins: ['*']` together with `credentials: true` lets any website make cookie-authenticated requests to your API. List your real frontend origins instead.
+::: warning
+`origins: ['*']` can't be combined with `credentials: true`. That pair would let any website make cookie-authenticated requests to your API, so Holo refuses to start with it. List your real frontend origins instead.
 :::
 
 ### Cookies across origins
@@ -56,7 +56,7 @@ Cross-origin frontends usually can't read the CSRF cookie. See [CSRF with a sepa
 | `paths` | `['/api/*']` | Path patterns that get CORS headers. `*` matches any characters. |
 | `origins` | `[]` | Allowed origins, such as `https://app.example.com`. `'*'` allows any. |
 | `methods` | `GET, POST, PUT, PATCH, DELETE, OPTIONS` | Sent in `Access-Control-Allow-Methods` on preflight. |
-| `headers` | `Content-Type, Authorization, X-CSRF-TOKEN, X-Requested-With` | Sent in `Access-Control-Allow-Headers` on preflight. |
+| `headers` | `Content-Type, Authorization, X-CSRF-TOKEN, X-XSRF-TOKEN, X-Requested-With` | Sent in `Access-Control-Allow-Headers` on preflight. |
 | `credentials` | `false` (the generated config sets `true`) | Send `Access-Control-Allow-Credentials: true`. |
 | `maxAge` | `7200` | Seconds the browser may cache a preflight result. |
 | `statefulDomains` | `[]` | Hosts treated as first-party cookie clients. |

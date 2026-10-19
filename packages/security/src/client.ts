@@ -18,7 +18,7 @@ type BrowserLikeGlobal = typeof globalThis & {
 export function getSecurityClientConfig(): SecurityClientConfig {
   const runtime = globalThis as BrowserLikeGlobal
   const config = readSecurityClientConfigFromCookies(runtime.document?.cookie) ?? getDefaultSecurityClientConfig()
-  return Object.freeze({ csrf: Object.freeze({ field: config.csrf.field, cookie: config.csrf.cookie }) })
+  return Object.freeze({ csrf: Object.freeze({ field: config.csrf.field, header: config.csrf.header, cookie: config.csrf.cookie }) })
 }
 
 export const securityClientInternals = {

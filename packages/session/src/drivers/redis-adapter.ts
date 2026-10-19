@@ -2,7 +2,7 @@ import type {
   NormalizedSessionRedisStoreConfig,
 } from '../config'
 import Redis from 'ioredis'
-import type { SessionRecord, SessionStoreTakeResult } from '../contracts'
+import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult } from '../contracts'
 import type { SessionRedisDriverAdapter } from './redis'
 
 export interface SessionRedisAdapterOptions {
@@ -80,6 +80,20 @@ end
 redis.call('HSET', KEYS[1], 'flash:' .. ARGV[1], flashValue)
 return 1
 `
+
+const SET_SESSION_DATA_SCRIPT = `
+local current = redis.call('HGET', KEYS[1], 'record')
+if not current then
+  return 0
+end
+if current ~= ARGV[1] then
+  return -1
+end
+redis.call('HSET', KEYS[1], 'record', ARGV[2])
+return 1
+`
+
+const SET_SESSION_DATA_ATTEMPTS = 8
 
 const TAKE_SESSION_SCRIPT = `
 if redis.call('HEXISTS', KEYS[1], 'record') == 0 then
@@ -378,6 +392,28 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     if (result !== 1) {
       throw new Error(`[@holo-js/session] Session "${sessionId}" was not found.`)
     }
+  }
+
+  async setDataIfAbsent(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult> {
+    const redisKey = this.qualifyKey(sessionId)
+    for (let attempt = 0; attempt < SET_SESSION_DATA_ATTEMPTS; attempt += 1) {
+      const encoded = await this.client.eval(READ_SESSION_SCRIPT, 1, redisKey)
+      if (typeof encoded !== 'string') return { found: false }
+
+      const record = deserializeSessionRecord(encoded)
+      if (!record) return { found: false }
+      const existing = record.data[key]
+      if (Object.hasOwn(record.data, key) && (key !== '_token' || (typeof existing === 'string' && existing))) {
+        return { found: true, value: existing }
+      }
+
+      const next = serializeSessionRecord({ ...record, data: { ...record.data, [key]: value } })
+      const result = await this.client.eval(SET_SESSION_DATA_SCRIPT, 1, redisKey, encoded, next)
+      if (result === 1) return { found: true, value }
+      if (result === 0) return { found: false }
+    }
+
+    throw new Error(`[@holo-js/session] Session "${sessionId}" changed too often to store its data.`)
   }
 
   async take(sessionId: string, key: string): Promise<SessionStoreTakeResult> {
