@@ -11,13 +11,21 @@ import {
   configureNotificationsRuntime,
   defineNotification,
   listNotifications,
+  type NotificationChannel,
   normalizeNotificationsConfig,
   notify,
   notifyMany,
   notifyUsing,
+  registerNotificationChannel,
   resetNotificationChannelRegistry,
   resetNotificationsRuntime,
 } from '../src'
+
+declare module '../src/contracts' {
+  interface HoloNotificationChannelRegistry {
+    readonly flaky: NotificationChannel<unknown, unknown, void>
+  }
+}
 
 let harness: SQLiteQueueHarness
 const recipient = { id: 'native-recipient', type: 'users' }
@@ -132,6 +140,38 @@ it.each([
   expect(result.channels[0]).toMatchObject({ channel: 'database', success: false, error: expect.any(Error) })
   expect((await listNotifications(query, { limit: 20, offset: 0 })).total).toBe(0)
   expect(await harness.readJobRows()).toEqual([])
+})
+
+it('persists queued notification tries and retries a failed delivery after its backoff', async () => {
+  let sends = 0
+  registerNotificationChannel('flaky', {
+    async send() {
+      sends += 1
+      if (sends === 1) throw new Error('transient')
+    },
+  })
+  onTestFinished(() => resetNotificationChannelRegistry())
+  const notification = defineNotification({
+    type: 'native.flaky',
+    via: () => ['flaky'] as const,
+    build: { flaky: () => ({ data: { delivered: true } }) },
+    queue: () => ({ connection: 'database', queue: 'flaky', tries: 2, backoff: 1 }),
+  })
+  await notify(recipient, notification)
+  expect((await harness.readJobRows())[0]?.max_attempts).toBe(2)
+  expect(await runQueueWorker({ connection: 'database', queueNames: ['flaky'], once: true }))
+    .toMatchObject({ processed: 0, released: 1, failed: 0 })
+  await new Promise(resolve => setTimeout(resolve, 1100))
+  expect(await runQueueWorker({ connection: 'database', queueNames: ['flaky'], once: true })).toMatchObject({ processed: 1, failed: 0 })
+  expect(sends).toBe(2)
+})
+
+it('validates notification queue tries and backoff in configuration', () => {
+  expect(normalizeNotificationsConfig({ queue: { tries: 3, backoff: [1, 5] } }).queue).toMatchObject({ tries: 3, backoff: [1, 5] })
+  expect(() => normalizeNotificationsConfig({ queue: { tries: 0 } }))
+    .toThrow('[@holo-js/notifications] Notifications queue tries must be an integer greater than or equal to 1.')
+  expect(() => normalizeNotificationsConfig({ queue: { backoff: [] } }))
+    .toThrow('[@holo-js/notifications] Notifications queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
 })
 
 it('honors delay returned by a queue resolver and lets fluent delay override it', async () => {

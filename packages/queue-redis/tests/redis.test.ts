@@ -16,6 +16,7 @@ async function openQueue(options: { cluster?: boolean; tls?: boolean; socket?: b
     driver: 'redis',
     connection: 'default',
     queue,
+    afterCommit: false,
     retryAfter: 30,
     blockFor: 0,
     redis: options.cluster
@@ -136,7 +137,7 @@ describe('@holo-js/queue-redis native Redis behavior', () => {
 
   it('rejects nonzero Redis cluster databases before opening a connection', () => {
     expect(() => redisQueueDriverFactory.create({
-      name: 'redis', driver: 'redis', connection: 'default', queue: 'jobs', retryAfter: 30, blockFor: 0,
+      name: 'redis', driver: 'redis', connection: 'default', queue: 'jobs', afterCommit: false, retryAfter: 30, blockFor: 0,
       redis: { host: '127.0.0.1', port: 6379, db: 1, clusters: [{ host: '127.0.0.1', port: 6379 }] },
     }, { async execute() { throw new Error('Manual reservations do not execute jobs') } })).toThrow('only supports database 0')
   })
