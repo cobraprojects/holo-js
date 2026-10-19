@@ -987,12 +987,7 @@ function resolveRealtimeErrorStatus(error: unknown): number | undefined {
   return undefined
 }
 
-const CLIENT_FACING_REALTIME_ERROR_NAMES = new Set([
-  'AuthorizationError',
-  'RealtimeUnauthorizedError',
-  'RealtimeForbiddenError',
-  'ValidationException',
-])
+const CLIENT_FACING_REALTIME_ERROR_NAMES = new Set(['AuthorizationError', 'ValidationException'])
 
 function isClientFacingRealtimeError(error: unknown): boolean {
   if (!isRecord(error)) {
@@ -1292,7 +1287,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
     const status = resolveRealtimeErrorStatus(error)
     const kind = resolveRealtimeErrorKind(error, status)
-    if (!isClientFacingRealtimeError(error)) {
+    if (!isClientFacingRealtimeError(error) || (typeof status === 'number' && status >= 500)) {
       report(error, { capability: 'broadcast', operation: 'worker.realtime' })
       sendRealtimeMessage(socket, 'holo:realtime:error', {
         id,

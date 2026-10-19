@@ -114,14 +114,16 @@ it('reports internal realtime failures with a generic message while keeping auth
   errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
   onTestFinished(() => { errorReportingInternals.configure(undefined) })
   const failure = new Error('SQLITE_ERROR: no such table: secret_records')
+  const upstreamFailure = Object.assign(new Error('Upstream token sk_live_123 was rejected'), { status: 401 })
   class PostMissingError extends RealtimeError {
     constructor(message: string) {
       super(message)
       this.name = 'PostMissingError'
     }
   }
+  const outage = Object.assign(new RealtimeError('Replica db-2.internal is down'), { status: 503 })
   const worker = await startWorker({
-    query: async (name) => { throw name === 'records.internal' ? failure : Object.assign(new Error('Upstream token sk_live_123 was rejected'), { status: 401 }) },
+    query: async (name) => { throw name === 'records.internal' ? failure : name === 'records.outage' ? outage : upstreamFailure },
     mutate: async () => { throw new RealtimeForbiddenError('You cannot rename records.') },
     subscribe: async () => { throw new PostMissingError('Post not found.') },
   })
@@ -129,18 +131,17 @@ it('reports internal realtime failures with a generic message while keeping auth
   worker.send('mutation', 'mutation')
   worker.send('subscription', 'subscribe')
   worker.socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'internal', action: 'query', name: 'records.internal', args: {} } }))
-  await expect.poll(() => worker.packets.filter(packet => packet.event === 'holo:realtime:error').length).toBe(4)
+  worker.socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'outage', action: 'query', name: 'records.outage', args: {} } }))
+  await expect.poll(() => worker.packets.filter(packet => packet.event === 'holo:realtime:error').length).toBe(5)
   const errors = Object.fromEntries(worker.packets.filter(packet => packet.event === 'holo:realtime:error').map(packet => [packet.data.id, packet.data]))
   expect(errors).toEqual({
     query: { id: 'query', message: 'Realtime request failed.', kind: 'runtime', status: 500 },
     internal: { id: 'internal', message: 'Realtime request failed.', kind: 'runtime', status: 500 },
+    outage: { id: 'outage', message: 'Realtime request failed.', kind: 'runtime', status: 500 },
     subscription: { id: 'subscription', message: 'Post not found.', kind: 'runtime', name: 'PostMissingError', status: 400 },
     mutation: { id: 'mutation', message: 'You cannot rename records.', kind: 'authorization', name: 'RealtimeForbiddenError', status: 403 },
   })
-  expect(reports.map(report => report.context)).toEqual([
-    { capability: 'broadcast', operation: 'worker.realtime' },
-    { capability: 'broadcast', operation: 'worker.realtime' },
-  ])
-  expect(reports.map(report => report.error)).toContain(failure)
+  expect(reports.map(report => report.error)).toEqual([upstreamFailure, failure, outage])
+  expect(new Set(reports.map(report => report.context.operation))).toEqual(new Set(['worker.realtime']))
   expect(worker.socket.readyState).toBe(WebSocket.OPEN)
 })
