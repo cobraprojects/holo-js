@@ -41,6 +41,16 @@ A refused channel subscription no longer closes the WebSocket. The worker sends 
 
 The worker also stops sending internal error messages. Unexpected realtime errors reach clients as `Realtime request failed.`, failed publishes return `Broadcast publish failed.`, and the original errors go to your [error reporter](/basics/errors#reporting-errors). See [Errors](/broadcasting/production#errors).
 
+### Queue jobs interrupted by a stopped worker
+
+Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up once at least the connection's `retryAfter` seconds have passed; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.
+
+An interrupted run counts as an attempt on both the `redis` and `database` drivers. When a recovered job has no `tries` left, the worker fails it into the [failed jobs table](/queue/failed-jobs) and calls its `onFailed` hook, instead of running it again. Raise `tries` on jobs that should survive a worker crash on their last attempt.
+
+A `redis` or `database` connection's `retryAfter` must now be at least `1`. Before, `0` was accepted; now the config fails to load with `retryAfter must be greater than or equal to 1.` If you set it to `0`, remove it to use the default `90`, or set another whole number of seconds.
+
+A job whose name isn't registered now fails into the failed jobs table and the worker keeps going. Before, the worker stopped with an error and left the job reserved. If you rename or delete jobs, drain their queued jobs first or retry them later with `npx holo queue:retry`. See [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly).
+
 ### Sensitive input in validation failures
 
 Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) are now left out of every validation failure, including inside nested objects and arrays. This covers the 422 response in Next.js, Nuxt, and SvelteKit, `ValidationException` `values` and `toJSON()`, and `submission.fail()` and `submission.serialize()`. If your code reads a password back from a caught `ValidationException`, read it from the request instead.
