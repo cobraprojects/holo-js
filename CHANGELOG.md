@@ -35,7 +35,7 @@
 - Default native database pools use UTC timestamp handling: MySQL defaults its timezone to `Z` and sets connection time to UTC for that default; PostgreSQL parses text timestamps without timezone as UTC unless custom type parsers are configured.
 
 - S3 disks store files under their exact names and encode them once in request URLs, `url()` and `temporaryUrl()`, so files with spaces, non-ASCII characters or `%` are reachable. Low-level S3 `getKeys()` returns `:`-separated keys with URL-encoded names, like local disks. Local `path()` returns the stored file's URL-encoded name. See [S3 file names](apps/docs/docs/storage/s3.md#file-names).
-- S3 requests time out after 30 seconds without a response, with 1 extra second per 128 KB uploaded, and downloads fail after 30 seconds without data. `writeStream()` buffers one multipart part of at most 64 MB. `clear()` deletes one 1,000-key listing page at a time with at most 8 concurrent deletes. See [S3 timeouts](apps/docs/docs/storage/s3.md#timeouts).
+- S3 requests time out after 30 seconds without a response, with 1 extra second per 128 KiB uploaded, and downloads fail after 30 seconds without data. `writeStream()` buffers one multipart part of at most 64 MiB, which limits one stream to about 620 GiB. `clear()` deletes one 1,000-key listing page at a time with at most 8 concurrent deletes. See [S3 timeouts](apps/docs/docs/storage/s3.md#timeouts).
 
 ### Compatibility and upgrade requirements
 

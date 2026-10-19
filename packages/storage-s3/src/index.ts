@@ -24,6 +24,11 @@ export interface S3DriverOptions {
   forcePathStyleEndpoint?: boolean
 }
 
+type KeysPage = {
+  readonly nextCursor: string | null
+  readonly paths: string[]
+}
+
 type ResolvedS3DriverOptions = {
   accessKeyId: string
   secretAccessKey: string
@@ -113,6 +118,10 @@ function encodeObjectKey(key = ''): string {
       return encodeRfc3986(segment)
     })
     .join('/')
+}
+
+function assertValidObjectKey(key: string): void {
+  encodeObjectKey(key)
 }
 
 function canonicalizeUriPath(pathname: string): string {
@@ -830,8 +839,8 @@ export default function createS3Driver(input: S3DriverOptions) {
     async clear(base?: string) {
       let cursor: string | null = null
       do {
-        const page: { readonly nextCursor: string | null, readonly paths: string[] } = await this.getKeysPage(base, { cursor, limit: CLEAR_PAGE_KEYS })
-        for (const key of page.paths) encodeObjectKey(key)
+        const page: KeysPage = await this.getKeysPage(base, { cursor, limit: CLEAR_PAGE_KEYS })
+        page.paths.forEach(assertValidObjectKey)
         await forEachConcurrently(page.paths, CLEAR_CONCURRENCY, key => this.removeItem(key))
         cursor = page.nextCursor
       } while (cursor)

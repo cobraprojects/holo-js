@@ -36,7 +36,7 @@ aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%
 
 Files on local disks keep their names. For those, `path()` now returns the file Holo actually wrote, such as `<root>/reports/Q1%20caf%C3%A9.pdf`. If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys with URL-encoded names, the same as local disks.
 
-S3 requests now time out, and `writeStream()` uploads parts of at most 64 MB. See [S3 timeouts](/storage/s3#timeouts).
+S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
 
 ### Node.js 22.14 or newer
 
