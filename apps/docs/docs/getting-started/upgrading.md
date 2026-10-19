@@ -55,6 +55,10 @@ Saving or deleting a loaded model now targets the row it was loaded from, even a
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Unexpected SvelteKit errors
+
+Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Set `APP_DEBUG=false` in production, and export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).
+
 ### Broadcast subscription errors and channel authorization
 
 A refused channel subscription no longer closes the WebSocket. The worker sends `pusher:subscription_error` for that channel and keeps the connection open, so Flux keeps the browser's other channels and tries the refused channel again the next time you subscribe to it. If your own client waited for close code `4001` after a refused subscription, listen for `pusher:subscription_error` instead.
