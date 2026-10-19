@@ -193,4 +193,14 @@ describe('local file names', () => {
     await expect(disk.getMeta?.('prices.json')).resolves.toEqual({ owner: 'billing' })
     await expect(disk.listFiles()).resolves.toEqual({ nextCursor: null, paths: ['prices.json'] })
   })
+
+  it('refuses path() and url() for local names ending in $', () => {
+    for (const name of ['prices.json$', 'reports/prices.json$', 'prices.json$/']) {
+      expect(() => useStorage('local').path(name)).toThrow('ending in "$" are reserved')
+      expect(() => useStorage('public').url(name)).toThrow('ending in "$" are reserved')
+    }
+    expect(useStorage('local').path('prices$.json')).toBe(join(projectRoot, 'storage/app/prices$.json'))
+    expect(useStorage('public').url('prices$.json')).toContain('/prices%24.json')
+    expect(useStorage('media').path('prices.json$')).toBe('s3://files/prices.json$')
+  })
 })

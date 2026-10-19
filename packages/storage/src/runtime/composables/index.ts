@@ -214,13 +214,16 @@ function normalizeKey(input: string): string {
     .join(':')
 }
 
-function normalizeFileKey(input: string, driver: RuntimeDiskConfig['driver']): string {
-  if (driver !== 's3') validateLocalStoragePath(input)
-  const key = normalizeKey(input)
+function assertNotReservedLocalName(input: string, driver: RuntimeDiskConfig['driver']): void {
   if (driver !== 's3' && normalizeRelativePath(input).split('/').filter(Boolean).at(-1)?.endsWith('$')) {
     throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
   }
+}
 
+function normalizeFileKey(input: string, driver: RuntimeDiskConfig['driver']): string {
+  if (driver !== 's3') validateLocalStoragePath(input)
+  const key = normalizeKey(input)
+  assertNotReservedLocalName(input, driver)
   return key
 }
 
@@ -805,6 +808,7 @@ function createDisk(diskName?: string): StorageInstance {
         return `s3://${disk.bucket}/${normalizeRelativePath(path)}`
       }
 
+      assertNotReservedLocalName(path, disk.driver)
       return joinFilePath(disk.root ?? './storage/app', path)
     },
 
@@ -813,6 +817,7 @@ function createDisk(diskName?: string): StorageInstance {
         throw new Error(`[Holo Storage] Disk "${disk.name}" is private. Use get() or temporaryUrl() instead.`)
       }
 
+      assertNotReservedLocalName(path, disk.driver)
       return joinUrl(resolveBaseUrl(disk, config), path)
     },
 
