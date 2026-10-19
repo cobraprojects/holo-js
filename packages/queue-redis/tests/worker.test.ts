@@ -36,7 +36,7 @@ async function openRedisQueue() {
   onTestFinished(() => harness.cleanup())
   configureQueueRuntime({ driverFactories: [...createQueueDbRuntimeOptions().driverFactories, redisQueueDriverFactory] })
   const connection: NormalizedQueueRedisConnectionConfig = {
-    name: 'redis', driver: 'redis', connection: 'default', queue, retryAfter: 1, blockFor: 0,
+    name: 'redis', driver: 'redis', connection: 'default', queue, afterCommit: false, retryAfter: 1, blockFor: 0,
     redis: { host: '127.0.0.1', port, db: 0 },
   }
   const openDriver = () => {

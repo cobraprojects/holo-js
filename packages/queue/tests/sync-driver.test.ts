@@ -9,6 +9,7 @@ runQueueDriverContractSuite({
       name: 'sync',
       driver: 'sync',
       queue: 'default',
+      afterCommit: false,
     }, context)
   },
 })
@@ -21,6 +22,7 @@ runSharedQueueDriverContract({
       name: 'sync',
       driver: 'sync',
       queue: 'default',
+      afterCommit: false,
     }, queueRuntimeInternals.createQueueDriverFactoryContext())
   },
 })

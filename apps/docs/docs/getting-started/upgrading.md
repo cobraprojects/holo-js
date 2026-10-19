@@ -156,6 +156,16 @@ The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL an
 
 Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.
 
+### Queue job timeouts, dispatch, and retries
+
+A job that runs past its `timeout` now stops the worker, as in Laravel, and counts as an attempt. Before, the worker marked the job failed at once and moved on. Now the job stays reserved and runs again after the connection's `retryAfter` while `tries` remain. To keep failing on the first timeout, set `failOnTimeout: true` on the job. See [Timeouts](/queue/jobs#timeouts).
+
+A job `timeout`, or the worker's `--timeout`, must now be less than its connection's `retryAfter`. The dispatch throws, or `queue:work` refuses to start, when it isn't. `timeout` and `sleep` above `2147483` seconds are rejected too. Raise `retryAfter` or lower the value.
+
+New dispatch options: `.afterCommit()` on a dispatch, and `afterCommit: true` on a queue connection (default `false`), queue the job only once the surrounding database transaction commits. `@holo-js/queue` now lists `@holo-js/db` as an optional peer for this. Install `@holo-js/db` if you use it; without it, dispatch runs right away.
+
+Queued mail, notifications, and event listeners accept `tries` and `backoff`, and `queue:work` and `queue:listen` accept `--tries` and `--backoff`. These jobs still run once unless you set `tries`. The worker's `--backoff` applies only to jobs that don't set their own `backoff`.
+
 ### Framework peer dependencies
 
 Holo adapters now use your app's framework packages as peer dependencies instead of installing their own copies. Before you install 0.4.0, upgrade your framework to a release that fixes its published security advisories:
