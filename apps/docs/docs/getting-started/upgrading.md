@@ -55,7 +55,7 @@ Saving or deleting a loaded model now targets the row it was loaded from, even a
 
 Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.
 
-`saving` now fires on every `save()`, including one with no changes, before the dirty check. A model without timestamps fires only `saving` on a clean save. A model with timestamps still fires `updating`, `updated`, and `saved`, because `updated_at` changes. If your `saving` handler assumed a clean save runs no code, guard it on `isDirty()`.
+`save()` on a model with no changes now fires `saving` and `saved`, as in Laravel, and writes nothing. Clean saves no longer write `updated_at` or fire `updating` and `updated`; before, a timestamped model's clean save did both. If your `saving` or `saved` handler assumed a clean save runs no code, guard it on `isDirty()`.
 
 Models loaded with `withCount()` or `withExists()` save without error, and their computed values are never written. Changes made in place to JSON and date attributes, such as pushing onto a JSON array, are detected and saved.
 

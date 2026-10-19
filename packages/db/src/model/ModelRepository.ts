@@ -1733,7 +1733,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
       await this.dispatchCancelableEvent('saving', entity)
-      if (Object.keys(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update')).length === 0) {
+      if (Object.keys(entity.getDirty()).length === 0) {
+        await this.dispatchEvent('saved', entity)
         return entity
       }
 

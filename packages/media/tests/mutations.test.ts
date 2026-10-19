@@ -175,7 +175,7 @@ it('restores regenerated files when persistence fails after generation', async (
   setMediaConversionExecutor({
     async generate() {
       if (regenerating) await createSchemaService(DB.connection()).dropTable('media')
-      return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: 'thumb.txt' }
+      return { contents: Buffer.from(regenerating ? 'new contents' : 'old'), fileName: 'thumb.txt' }
     },
   })
   const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {

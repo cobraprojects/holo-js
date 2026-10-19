@@ -395,7 +395,7 @@ describe('model lifecycle persistence', () => {
     expect(await db.table('members').get()).toMatchObject([{ name: 'Grace', role: 'member' }])
   })
 
-  it('fires only saving on a clean save of a model without timestamps', async () => {
+  it('fires saving and saved on a clean save of a model without timestamps', async () => {
     const db = await openDatabase()
     const slugged = defineTable('slugged', { id: column.id(), title: column.string() })
     await createTestTable(db, slugged)
@@ -414,10 +414,10 @@ describe('model lifecycle persistence', () => {
 
     await (await Post.findOrFail(1)).save()
 
-    expect(events).toEqual(['saving'])
+    expect(events).toEqual(['saving', 'saved'])
   })
 
-  it('fires the update events on a clean save of a timestamped model because updated_at changes', async () => {
+  it('fires saving and saved on a clean save of a timestamped model without writing updated_at', async () => {
     const db = await openDatabase()
     const stamped = defineTable('stamped', {
       id: column.id(),
@@ -440,8 +440,40 @@ describe('model lifecycle persistence', () => {
 
     await (await Post.findOrFail(1)).save()
 
+    expect(events).toEqual(['saving', 'saved'])
+    expect((await db.table('stamped').get())[0]?.updated_at).toBeNull()
+  })
+
+  it('runs the full update path when a saving handler dirties a clean timestamped model', async () => {
+    const db = await openDatabase()
+    const stamped = defineTable('stamped', {
+      id: column.id(),
+      title: column.string(),
+      created_at: column.timestamp().nullable(),
+      updated_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, stamped)
+    await db.table('stamped').insert({ id: 1, title: 'Hello', created_at: null, updated_at: null })
+    const events: string[] = []
+    const Post = defineModelFromTable(stamped, {
+      fillable: ['title'],
+      events: {
+        saving: [entity => {
+          events.push('saving')
+          asTestEntity(entity).set('title', 'Changed by saving')
+        }],
+        updating: [() => { events.push('updating') }],
+        updated: [() => { events.push('updated') }],
+        saved: [() => { events.push('saved') }],
+      },
+    })
+
+    await (await Post.findOrFail(1)).save()
+
     expect(events).toEqual(['saving', 'updating', 'updated', 'saved'])
-    expect((await db.table('stamped').get())[0]?.updated_at).not.toBeNull()
+    const row = (await db.table('stamped').get())[0]
+    expect(row).toMatchObject({ title: 'Changed by saving' })
+    expect(row?.updated_at).not.toBeNull()
   })
 
   it('keeps guards on logger callbacks of seeders started with call()', async () => {
