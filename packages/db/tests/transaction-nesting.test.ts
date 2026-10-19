@@ -297,6 +297,52 @@ describe('transaction nesting and commit integrity', () => {
     expect(await db.table(table).pluck('name')).toEqual(['Callback'])
   }, 5_000)
 
+  it.each(drivers)('lets a savepoint start logger run database work on %s', async driver => {
+    let hook: (() => Promise<void>) | undefined
+    let hooked = false
+    const { db, table } = await openDatabase(driver, { logger: {
+      async onTransactionStart(entry) {
+        if (entry.scope === 'savepoint' && !hooked) {
+          hooked = true
+          await hook?.()
+        }
+      },
+    } })
+    hook = async () => {
+      await db.transaction(async work => {
+        await work.table(table).insert({ id: 9, name: 'Hooked' })
+      })
+    }
+    await db.transaction(async tx => {
+      await tx.transaction(async nested => {
+        await nested.table(table).insert({ id: 1, name: 'Nested' })
+      })
+    })
+    expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Nested', 'Hooked'])
+  }, 5_000)
+
+  it.each(drivers)('lets a transaction start logger run database work on %s', async driver => {
+    let hook: (() => Promise<void>) | undefined
+    let hooked = false
+    const { db, table } = await openDatabase(driver, { logger: {
+      async onTransactionStart(entry) {
+        if (entry.scope === 'transaction' && !hooked) {
+          hooked = true
+          await hook?.()
+        }
+      },
+    } })
+    hook = async () => {
+      await db.transaction(async work => {
+        await work.table(table).insert({ id: 9, name: 'Hooked' })
+      })
+    }
+    await db.transaction(async tx => {
+      await tx.table(table).insert({ id: 1, name: 'Outer' })
+    })
+    expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Outer', 'Hooked'])
+  }, 5_000)
+
   it.each(drivers)('joins the open transaction for work that resumes after its savepoint finished on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     const committed: string[] = []

@@ -68,8 +68,9 @@ type CommittedRootTransaction<T> = {
 }
 
 type SavepointOutcome<T> =
-  | { committed: true, value: T, entry: TransactionLog }
-  | { committed: false, error: unknown, transaction: DatabaseContext, entry: TransactionLog }
+  | { kind: 'committed', value: T, entry: TransactionLog }
+  | { kind: 'rolled-back', error: unknown, transaction: DatabaseContext, entry: TransactionLog }
+  | { kind: 'rollback-failed', rethrow: unknown, rollbackError: unknown, entry: TransactionLog }
 
 type ContextInternals = {
   rootContext: DatabaseContext
@@ -446,7 +447,6 @@ export class DatabaseContext {
     let commitStarted = false
 
     const runTransaction = async (): Promise<CommittedRootTransaction<T>> => {
-      await this._logger?.onTransactionStart?.(entry)
       return runWithinScope(async () => {
         await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
         const child = this._createChildContext(
@@ -488,6 +488,7 @@ export class DatabaseContext {
 
     let committed: CommittedRootTransaction<T>
     try {
+      await this._logger?.onTransactionStart?.(entry)
       committed = await (this._adapter.supportsConcurrentTransactionScopes === true
         ? this._runtime.scheduler.transaction(runTransaction)
         : this._adapter.runWithTransactionScope
@@ -534,20 +535,6 @@ export class DatabaseContext {
       )
     }
 
-    const outcome = await runSerialized(this._savepointQueue, () => this._runSavepoint(callback, options))
-    if (outcome.committed) {
-      await this._logger?.onTransactionCommit?.(outcome.entry)
-      return outcome.value
-    }
-
-    await this._settleRolledBackTransaction(outcome.transaction, outcome.entry, outcome.error)
-    throw outcome.error
-  }
-
-  private async _runSavepoint<T>(
-    callback: (tx: DatabaseContext) => Promise<T>,
-    options?: DatabaseTransactionOptions,
-  ): Promise<SavepointOutcome<T>> {
     const savepointName = `sp_${this._runtime.savepointCounter}`
     this._runtime.savepointCounter += 1
 
@@ -558,6 +545,29 @@ export class DatabaseContext {
     }
 
     await this._logger?.onTransactionStart?.(entry)
+    const outcome = await runSerialized(
+      this._savepointQueue,
+      () => this._runSavepoint(callback, options, savepointName, entry),
+    )
+    switch (outcome.kind) {
+      case 'committed':
+        await this._logger?.onTransactionCommit?.(outcome.entry)
+        return outcome.value
+      case 'rolled-back':
+        await this._settleRolledBackTransaction(outcome.transaction, outcome.entry, outcome.error)
+        throw outcome.error
+      case 'rollback-failed':
+        await this._logger?.onTransactionRollback?.({ ...outcome.entry, error: outcome.rollbackError })
+        throw outcome.rethrow
+    }
+  }
+
+  private async _runSavepoint<T>(
+    callback: (tx: DatabaseContext) => Promise<T>,
+    options: DatabaseTransactionOptions | undefined,
+    savepointName: string,
+    entry: TransactionLog,
+  ): Promise<SavepointOutcome<T>> {
     await this._callTransactionHook(
       'createSavepoint',
       () => this._adapter.createSavepoint!(savepointName, options),
@@ -584,7 +594,7 @@ export class DatabaseContext {
       released = true
       commitSchemaMutationScope(tx)
       this._mergeCommittedTransactionCallbacks(tx)
-      return { committed: true, value, entry }
+      return { kind: 'committed', value, entry }
     } catch (error) {
       if (released) {
         throw error
@@ -598,15 +608,14 @@ export class DatabaseContext {
           savepointName,
         )
       } catch (rollbackError) {
-        await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
         if (isDatabaseConcurrencyError(error)) {
           rollbackSchemaMutationScope(tx)
-          throw error
+          return { kind: 'rollback-failed', rethrow: error, rollbackError, entry }
         }
-        throw rollbackError
+        return { kind: 'rollback-failed', rethrow: rollbackError, rollbackError, entry }
       }
       rollbackSchemaMutationScope(tx)
-      return { committed: false, error, transaction: tx, entry }
+      return { kind: 'rolled-back', error, transaction: tx, entry }
     } finally {
       frame.open = false
     }
