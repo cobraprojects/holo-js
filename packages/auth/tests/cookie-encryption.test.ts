@@ -46,9 +46,10 @@ function browserCookies(setCookies: readonly string[]): Readonly<Record<string, 
 
 async function checkWithCookies(cookies: Readonly<Record<string, string>>): Promise<boolean> {
   const bindings = authRuntimeInternals.getRuntimeBindings()
+  const requestContext = authRuntimeInternals.createMemoryAuthContext()
   authRuntimeInternals.configureRuntime({
     ...bindings,
-    context: { ...authRuntimeInternals.createMemoryAuthContext(), getRequestCookie: (name: string) => cookies[name] },
+    context: { ...requestContext, getRequestScope: () => requestContext, getRequestCookie: (name: string) => cookies[name] },
   })
   try {
     return await auth.check()

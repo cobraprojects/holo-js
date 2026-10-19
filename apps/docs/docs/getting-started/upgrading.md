@@ -259,6 +259,7 @@ Behavior changes to expect:
 - Changing the user's password also stops their remember-me cookies.
 - Signing in without remember me clears that browser's remember-me cookie but keeps the user's token, so a copy of the cookie keeps working until `logout()`, `logoutOtherDevices()`, or a password change.
 - With multi-factor auth, the remember-me cookie is set after the user passes the challenge, not when they enter their password.
+- Confirming multi-factor enrollment ends remember-me cookies issued before it, so the user signs in with the challenge the next time. The browser that confirmed enrollment stays signed in.
 
 The sessions table no longer uses `remember_token_hash`. You can leave the column in place or drop it. `issueRememberMeToken()` and `consumeRememberMeToken()` are removed from `@holo-js/session`, and session records no longer have `rememberTokenHash`. `rememberMeCookie()` is unchanged.
 

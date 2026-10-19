@@ -105,6 +105,18 @@ function sessionCookieValue(sessionId: string | undefined): string {
   return cookieValue(getSessionRuntime().sessionCookie(sessionId ?? ''))
 }
 
+function createMemoryRequestContext(rememberCookie: string) {
+  const memory = authRuntimeInternals.createMemoryAuthContext()
+  return {
+    context: {
+      ...memory,
+      getRequestScope: () => memory,
+      getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookie : undefined,
+      appendResponseCookie: () => undefined,
+    },
+  }
+}
+
 function rememberCookieValue(rememberToken: string | undefined, guard = 'web'): string {
   return cookieValue(getSessionRuntime().rememberMeCookie(rememberToken ? JSON.stringify({ [guard]: JSON.parse(rememberToken) }) : ''))
 }
@@ -710,6 +722,39 @@ describe('@holo-js/auth package runtime', () => {
       id: createdUser.id,
       email: createdUser.email,
     })
+  })
+
+  it('cycles remember cookies issued before MFA enrollment so they stop restoring', async () => {
+    const runtime = await configureRuntime({ multiFactor: true })
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const remembered = await loginUsing(created, { remember: true })
+    const preEnrollmentCookie = rememberCookieValue(remembered.rememberToken)
+    const restoreFrom = async (cookie: string): Promise<boolean> => {
+      const bindings = authRuntimeInternals.getRuntimeBindings()
+      authRuntimeInternals.configureRuntime({ ...bindings, context: createMemoryRequestContext(cookie).context })
+      try {
+        return await auth.guard('web').check()
+      } finally {
+        authRuntimeInternals.configureRuntime({ ...bindings, context: runtime.context })
+      }
+    }
+    await expect(restoreFrom(preEnrollmentCookie)).resolves.toBe(true)
+
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const currentCounter = Math.floor(Date.now() / 30_000)
+    await auth.multiFactor.confirmEnrollment({ code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1) })
+
+    await expect(restoreFrom(preEnrollmentCookie)).resolves.toBe(false)
+    const enrollingRecaller = runtime.context.getRememberToken?.('web')
+    expect(enrollingRecaller).toEqual(expect.any(String))
+    expect(enrollingRecaller).not.toBe(remembered.rememberToken)
+    await expect(auth.check()).resolves.toBe(true)
+    await expect(restoreFrom(rememberCookieValue(enrollingRecaller))).resolves.toBe(true)
   })
 
   it('enrolls, challenges, rejects TOTP replay, and consumes recovery codes atomically', async () => {
@@ -2863,6 +2908,9 @@ describe('@holo-js/auth package runtime', () => {
           return rememberCookieValue(remembered.rememberToken)
         }
 
+        return undefined
+      },
+      appendResponseCookie() {
         return undefined
       },
     })

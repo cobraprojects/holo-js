@@ -341,6 +341,34 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
+  it('restores remember-cookie users without persisting sessions when the context has no response cookie writer', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    const storage = new AsyncLocalStorage<ReturnType<typeof authRuntimeInternals.createMemoryAuthContext>>()
+    const current = () => storage.getStore()!
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      context: {
+        getRequestScope: () => current(),
+        getSessionId: (guard: string) => current().getSessionId(guard),
+        setSessionId: (guard: string, id?: string) => current().setSessionId(guard, id),
+        getCachedUser: (guard: string) => current().getCachedUser(guard),
+        setCachedUser: (guard: string, user: AuthenticatedAuthUser | null) => current().setCachedUser(guard, user),
+        getRememberToken: (guard: string) => current().getRememberToken(guard),
+        setRememberToken: (guard: string, token?: string) => current().setRememberToken(guard, token),
+        getRequestCookie: (name: string) => browser.cookies.get(name),
+      },
+    })
+    const recordsBefore = await sessionFileCount()
+
+    for (let request = 0; request < 3; request++) {
+      await expect(storage.run(authRuntimeInternals.createMemoryAuthContext(), () => auth.check())).resolves.toBe(true)
+    }
+
+    expect(await sessionFileCount()).toBe(recordsBefore)
+  })
+
   it('restores several guards checked concurrently into one session', async () => {
     const browser = new Browser()
     await browser.request(async () => {

@@ -519,6 +519,17 @@ function isCookieWriteUnavailable(error: unknown): boolean {
   return (error as { readonly code?: unknown } | null)?.code === 'cookie_write_unavailable'
 }
 
+async function writeRestoredSessionCookie(bindings: RuntimeBindings, cookie: string): Promise<boolean> {
+  if (!bindings.context.appendResponseCookie) return false
+  try {
+    await appendResponseCookies(bindings, [cookie])
+    return true
+  } catch (error) {
+    if (isCookieWriteUnavailable(error)) return false
+    throw error
+  }
+}
+
 async function restoreRememberedSessionNow(
   bindings: RuntimeBindings,
   guardName: string,
@@ -554,10 +565,7 @@ async function restoreRememberedSessionNow(
     return true
   }
   const sessionId = randomUUID()
-  try {
-    await appendResponseCookies(bindings, [bindings.session.sessionCookie(sessionId)])
-  } catch (error) {
-    if (!isCookieWriteUnavailable(error)) throw error
+  if (!await writeRestoredSessionCookie(bindings, bindings.session.sessionCookie(sessionId))) {
     setRequestOnlyGuard(bindings, guardName, true)
     bindings.context.setCachedUser(guardName, user)
     return true
@@ -1111,10 +1119,14 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
   clearSessionRevocationReads(bindings.context)
   if (!retained) throwAuthError('auth_user_missing', 'This browser authentication has already been revoked.')
-  if (recaller && await getRememberRecaller(bindings, guardName)) {
-    const cookie = await rememberCookieFor(bindings, guardName, recaller)
-    if (cookie) await appendResponseCookies(bindings, [cookie])
-  }
+  await reissueRememberRecaller(bindings, guardName, recaller)
+}
+
+async function reissueRememberRecaller(bindings: RuntimeBindings, guardName: string, recaller: string | undefined): Promise<void> {
+  if (!recaller || !await getRememberRecaller(bindings, guardName)) return
+  bindings.context.setRememberToken?.(guardName, recaller)
+  const cookie = await rememberCookieFor(bindings, guardName, recaller)
+  if (cookie) await appendResponseCookies(bindings, [cookie])
 }
 
 async function resolveUserFromGuard(
@@ -1898,6 +1910,7 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
       const recoveryCodes = createMultiFactorRecoveryCodes(getRuntimeBindings().config.multiFactor.recoveryCodes)
       const now = new Date()
       const store = ensureMultiFactorStore()
+      const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
       try {
         await store.save(Object.freeze({
           provider: state.payload.provider,
@@ -1914,6 +1927,7 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
         }
         throw error
       }
+      if (!state.payload.impersonation) await reissueRememberRecaller(getRuntimeBindings(), guardName, recaller)
       try {
         await writeEnrollment(state, guardName)
       } catch (error) {
