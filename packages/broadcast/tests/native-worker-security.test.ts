@@ -293,6 +293,45 @@ it('rejects a socket identifier that is already connected without disturbing the
   expect(runtime.getStats().connectionCount).toBe(1)
 })
 
+it('retries a presence member whose rollback delete failed when the socket disconnects', async () => {
+  const reports: unknown[] = []
+  errorReportingInternals.configure({ report: error => { reports.push(error) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  const hashes = new Map<string, Map<string, string>>()
+  const outage = { reads: false, deletes: false }
+  const redisDown = (): never => { throw new Error('Redis connection lost') }
+  const presenceMembers = () => [...hashes.values()].flatMap(members => [...members.keys()])
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+    channelAuth: { resolveUser: () => ({ id: 'native-user' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: () => ({ id: 'native-user' }) })] },
+    scaling: {
+      driver: 'redis', connection: 'shared', nodeId: 'node-1', eventChannel: 'events',
+      adapter: {
+        publish: async () => {},
+        subscribe: async () => () => {},
+        hashSet: async (key, field, value) => { hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]])) },
+        hashGetAll: async key => { if (outage.reads) redisDown(); return Object.fromEntries(hashes.get(key) ?? []) },
+        hashDelete: async (key, field) => { if (outage.deletes) redisDown(); hashes.get(key)?.delete(field) },
+        close: async () => {},
+      },
+    },
+  })
+  onTestFinished(() => runtime.close())
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  const sent: Array<{ event: string, channel?: string, data: string }> = []
+  runtime.connectWebSocket({ socketId: '3.3', app, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {} })
+  outage.reads = true
+  outage.deletes = true
+  await runtime.receiveWebSocketMessage('3.3', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+  expect(sent.find(message => message.event === 'pusher:subscription_error')?.channel).toBe('presence-room.1')
+  expect(reports.length).toBeGreaterThan(0)
+  expect(presenceMembers()).toHaveLength(1)
+  outage.reads = false
+  outage.deletes = false
+  runtime.disconnectWebSocket('3.3')
+  await expect.poll(presenceMembers).toEqual([])
+})
+
 it('removes a socket whose connection_established send fails so its identifier can be reused', async () => {
   const runtime = createBroadcastWorkerRuntime({
     config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),

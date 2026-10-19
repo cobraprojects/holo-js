@@ -85,6 +85,7 @@ type SocketState = {
   readonly subscribedChannels: Set<string>
   readonly realtimeSubscriptions: Map<string, BroadcastRealtimeSubscription>
   readonly realtimeSubscriptionTokens: Map<string, object>
+  readonly presenceCleanupPending: Set<string>
   active: boolean
   pendingMessage: Promise<void>
 }
@@ -1601,6 +1602,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
     await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((cleanupError: unknown) => {
       report(cleanupError, { capability: 'broadcast', operation: 'worker.subscription' })
+      socket.presenceCleanupPending.add(channel)
     })
     sendSubscriptionError(socket, channel, 500)
   }
@@ -1883,6 +1885,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         subscribedChannels: new Set(),
         realtimeSubscriptions: new Map(),
         realtimeSubscriptionTokens: new Map(),
+        presenceCleanupPending: new Set(),
         active: true,
         pendingMessage: Promise.resolve(),
       }
@@ -1956,7 +1959,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       }
       socket.realtimeSubscriptions.clear()
       socket.realtimeSubscriptionTokens.clear()
-      const channelsToCleanup = [...socket.subscribedChannels]
+      const channelsToCleanup = [...new Set([...socket.subscribedChannels, ...socket.presenceCleanupPending])]
+      socket.presenceCleanupPending.clear()
       const scalingCleanupTasks = channelsToCleanup.map((channel) => {
         const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
         if (removedPresenceMember.removed && removedPresenceMember.member) {
