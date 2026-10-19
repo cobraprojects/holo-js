@@ -214,7 +214,7 @@ export function extractEnvironmentOption(argv: readonly string[]): { argv: reado
   }
 }
 
-export function isInteractive(io: IoStreams, flags: Record<string, string | boolean | readonly string[]>): boolean {
+export function isInteractive(io: IoStreams, flags: Readonly<Record<string, CommandFlagValue>>): boolean {
   const disabled = flags['no-interactive'] === true
   return io.stdin.isTTY === true && io.stdout.isTTY === true && !disabled
 }

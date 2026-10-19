@@ -458,12 +458,13 @@ npx holo make:channel orders.{orderId}
 Run every [migration](/database/migrations) that hasn't run yet.
 
 ```bash
-npx holo migrate [--step <n>]
+npx holo migrate [--step <n>] [--isolated]
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Run at most this many pending migrations. |
+| `--isolated` | Take a database lock first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
 
 ```bash
 npx holo migrate
@@ -482,11 +483,13 @@ npx holo migrate:fresh [--seed] [--only <names>] [--quietly] [--force]
 | `--seed` | Run seeders after migrating. |
 | `--only <names>` | With `--seed`, run only these seeders (comma-separated). |
 | `--quietly` | With `--seed`, run seeders without firing model events. |
-| `--force` | With `--seed`, allow seeding in production. |
+| `--force` | Skip the production confirmation. |
 
 ```bash
 npx holo migrate:fresh --seed
 ```
+
+When `APP_ENV` is `production`, `migrate:fresh` asks you to confirm before it drops anything. Without a terminal, it stops with an error unless you pass `--force`.
 
 ::: danger
 `migrate:fresh` deletes all your data. Never run it against a production database.
@@ -497,15 +500,16 @@ npx holo migrate:fresh --seed
 Undo migrations.
 
 ```bash
-npx holo migrate:rollback [--step <n>] [--batch <n>]
+npx holo migrate:rollback [--step <n>] [--batch <n>] [--force]
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Roll back at most this many migrations from the batch. |
 | `--batch <n>` | Roll back this batch number instead of the latest one. |
+| `--force` | Skip the production confirmation. |
 
-With no flags, every migration in the latest batch is rolled back.
+With no flags, every migration in the latest batch is rolled back. When `APP_ENV` is `production`, the command asks you to confirm first, and without a terminal it stops with an error unless you pass `--force`.
 
 ```bash
 npx holo migrate:rollback --step 1
@@ -523,11 +527,13 @@ npx holo seed [--only <names>] [--quietly] [--force]
 | --- | --- |
 | `--only <names>` | Run only these seeders. Comma-separate or repeat the flag. |
 | `--quietly` | Run seeders without firing model events (observers don't run). |
-| `--force` | Allow seeding when the environment is `production`. |
+| `--force` | Skip the production confirmation. |
 
 ```bash
 npx holo seed --only roles,admin
 ```
+
+When `APP_ENV` is `production`, `seed` asks you to confirm first. Without a terminal, it stops with an error unless you pass `--force`.
 
 ### prune
 

@@ -17,6 +17,7 @@ import {
   parseNumberFlag,
   splitCsv,
   extractEnvironmentOption,
+  confirm,
   SUPPORTED_INSTALL_TARGETS,
   SUPPORTED_CACHE_INSTALL_DRIVERS,
   SUPPORTED_QUEUE_INSTALL_DRIVERS,
@@ -385,6 +386,30 @@ async function cleanupDirectorySnapshot(snapshot: DirectorySnapshot): Promise<vo
 
 async function resolveApplicationEnvironment(projectRoot: string): Promise<string> {
   return (await loadEnvironment({ cwd: projectRoot, processEnv: process.env })).name
+}
+
+async function resolveDestructiveForce(
+  context: InternalCommandContext,
+  flags: Readonly<Record<string, CommandFlagValue>>,
+  commandName: string,
+): Promise<boolean> {
+  if (flags.force === true) {
+    return true
+  }
+
+  if (await resolveApplicationEnvironment(context.projectRoot) !== 'production') {
+    return false
+  }
+
+  if (!isInteractive(context, flags)) {
+    throw new Error(`Application In Production! ${commandName} needs --force to run without confirmation.`)
+  }
+
+  if (!await confirm(context, 'Application In Production! Do you really wish to run this command?')) {
+    throw new Error('Command canceled.')
+  }
+
+  return true
 }
 
 export function createInternalCommands(
@@ -1981,13 +2006,14 @@ export function createInternalCommands(
     {
       name: 'migrate',
       description: 'Run registered migrations.',
-      usage: 'holo migrate [--step N]',
+      usage: 'holo migrate [--step N] [--isolated]',
       source: 'internal',
       async prepare(input) {
         return {
           args: [],
           flags: {
             ...(typeof parseNumberFlag(input.flags, 'step') === 'number' ? { step: parseNumberFlag(input.flags, 'step')! } : {}),
+            isolated: resolveBooleanFlag(input.flags, 'isolated'),
           },
         }
       },
@@ -1998,6 +2024,7 @@ export function createInternalCommands(
           'migrate',
           {
             ...(typeof commandContext.flags.step === 'number' ? { step: commandContext.flags.step } : {}),
+            ...(commandContext.flags.isolated === true ? { isolated: true } : {}),
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No migrations were executed.')
@@ -2020,10 +2047,12 @@ export function createInternalCommands(
               : {}),
             quietly: resolveBooleanFlag(input.flags, 'quietly'),
             force: resolveBooleanFlag(input.flags, 'force'),
+            'no-interactive': resolveBooleanFlag(input.flags, 'no-interactive'),
           },
         }
       },
       async run(commandContext) {
+        const force = await resolveDestructiveForce(context, commandContext.flags, 'migrate:fresh')
         const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
         await executeRuntime(
           context.projectRoot,
@@ -2048,7 +2077,7 @@ export function createInternalCommands(
           {
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
-            force: commandContext.flags.force === true,
+            force,
             environment: await resolveApplicationEnvironment(context.projectRoot),
           },
           async (stdout) => {
@@ -2060,7 +2089,7 @@ export function createInternalCommands(
     {
       name: 'migrate:rollback',
       description: 'Rollback registered migrations.',
-      usage: 'holo migrate:rollback [--step N] [--batch N]',
+      usage: 'holo migrate:rollback [--step N] [--batch N] [--force]',
       source: 'internal',
       async prepare(input) {
         const step = parseNumberFlag(input.flags, 'step')
@@ -2070,10 +2099,13 @@ export function createInternalCommands(
           flags: {
             ...(typeof step === 'number' ? { step } : {}),
             ...(typeof batch === 'number' ? { batch } : {}),
+            force: resolveBooleanFlag(input.flags, 'force'),
+            'no-interactive': resolveBooleanFlag(input.flags, 'no-interactive'),
           },
         }
       },
       async run(commandContext) {
+        await resolveDestructiveForce(context, commandContext.flags, 'migrate:rollback')
         const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
         await executeRuntime(
           context.projectRoot,
@@ -2102,10 +2134,12 @@ export function createInternalCommands(
               : {}),
             quietly: resolveBooleanFlag(input.flags, 'quietly'),
             force: resolveBooleanFlag(input.flags, 'force'),
+            'no-interactive': resolveBooleanFlag(input.flags, 'no-interactive'),
           },
         }
       },
       async run(commandContext) {
+        const force = await resolveDestructiveForce(context, commandContext.flags, 'seed')
         const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
         await executeRuntime(
           context.projectRoot,
@@ -2113,7 +2147,7 @@ export function createInternalCommands(
           {
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
-            force: commandContext.flags.force === true,
+            force,
             environment: await resolveApplicationEnvironment(context.projectRoot),
           },
           async (stdout) => {

@@ -8,6 +8,8 @@
 
 ### Added
 
+- Add `holo migrate --isolated`, which takes a database lock so concurrent runners, such as deploy replicas, don't apply the same migrations. A run that finds the lock held skips the migrations and exits successfully. The lock lives in `_holo_migration_locks`, expires after 15 minutes if a runner stops, and is renewed before each migration. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
+- Add `--force` to `holo migrate:rollback`.
 - Add `exceptions.report` and `exceptions.dontReport` to `config/app.ts`, and `report(error)` from `@holo-js/core`. Errors that Queue hooks, Auth cleanup, Cache flexible refresh and driver disposal, query-cache invalidation listeners, the Broadcast worker and Realtime subscription callbacks previously logged to the console are reported with their capability and operation. A throwing or rejecting reporter never breaks the originating request or job. Without a reporter, errors go to `console.error`. `config:cache` keeps an `app` config with a reporter live, so it is loaded from `config/app.ts` at runtime. See [Reporting errors](apps/docs/docs/basics/errors.md#reporting-errors).
 - Add explicit other-device browser logout through `auth.logoutOtherDevices()` and session-guard `logoutOtherDevices()`, backed by durable provider/user revocation state. Retain the current logical browser session and reject the selected identity on other browsers' next authenticated request, including remember-cookie restoration. Unrelated identities and personal access tokens remain valid. Applications own recent reauthentication policy; Clerk and WorkOS logout affects Holo sessions, not upstream provider sessions.
 - Add `tokens.revokeOthers({ guard })` to revoke a user's other personal access tokens while retaining the verified token used for the current request. Browser-session revocation remains separate.
@@ -33,6 +35,8 @@
 
 ### Changed
 
+- `holo migrate:fresh`, `holo migrate:rollback` and `holo seed` ask for confirmation when `APP_ENV` is `production`, as Laravel's confirmable commands do. Without a terminal they stop with an error unless `--force` is passed, and `--force` is honored by all three. `migrate:rollback` previously ignored `--force`.
+- `@holo-js/core` and `@holo-js/adapter-nuxt` decide whether to read the config cache from the resolved application environment instead of `NODE_ENV`, so `APP_ENV` in `.env` selects the cache the same way it selects env files. Nuxt project accessors cache the loaded project under the same rule.
 - Require CI typechecks, lint and the full library suite on Node 24, plus native package loading and server lifecycle checks on Linux, Windows and macOS with Node 22.14.0, 24 and 26. Example-app, published-package, scaffold and browser-bundle acceptance run locally with `bun run test`. Monitor npm and Actions updates, block high/critical published-runtime dependency advisories, and reject new Fallow dead-code findings against a pinned baseline. Concurrent test typechecks retain their own generated configurations.
 
 - Core capability disposal and startup rollback continue cleanup after individual failures, close only Holo-owned resources, and restore prior live bindings. Multiple failures are reported together. Queue asynchronous shutdown closes all owned drivers and resets state even if closure fails.

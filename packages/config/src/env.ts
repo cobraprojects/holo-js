@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { basename, join, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import type { LoadedEnvironment, HoloAppEnv } from './types'
 
@@ -68,6 +69,14 @@ async function readEnvFile(filePath: string): Promise<Record<string, string> | u
   }
 }
 
+function readEnvFileSync(filePath: string): Record<string, string> | undefined {
+  try {
+    return parseEnvFile(readFileSync(filePath, 'utf8'))
+  } catch {
+    return undefined
+  }
+}
+
 export function resolveAppEnvironment(
   processEnv: NodeJS.ProcessEnv = process.env,
 ): HoloAppEnv {
@@ -81,6 +90,26 @@ export function resolveAppEnvironment(
   }
 
   throw new Error(`Invalid APP_ENV "${value}". Use development, production, or test.`)
+}
+
+function selectAppEnvironmentValue(
+  envName: string | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  baseValues: Record<string, string> | undefined,
+): string | undefined {
+  return envName ?? processEnv.APP_ENV ?? baseValues?.APP_ENV
+}
+
+export function resolveProjectAppEnvironmentSync(options: {
+  cwd: string
+  envName?: string
+  processEnv?: NodeJS.ProcessEnv
+}): HoloAppEnv {
+  const processEnv = options.processEnv ?? process.env
+  const baseValues = readEnvFileSync(join(resolve(options.cwd), '.env'))
+  return resolveAppEnvironment({
+    APP_ENV: selectAppEnvironmentValue(options.envName, processEnv, baseValues),
+  })
 }
 
 export function resolveEnvironmentFileOrder(envName: HoloAppEnv): string[] {
@@ -102,7 +131,7 @@ export async function loadEnvironment(
   const processEnv = options.processEnv ?? process.env
   const baseValues = await readEnvFile(join(cwd, '.env'))
   const envName = resolveAppEnvironment({
-    APP_ENV: options.envName ?? processEnv.APP_ENV ?? baseValues?.APP_ENV,
+    APP_ENV: selectAppEnvironmentValue(options.envName, processEnv, baseValues),
   })
   const loadedFiles: string[] = []
   const warnings: string[] = []

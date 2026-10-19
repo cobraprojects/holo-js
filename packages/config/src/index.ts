@@ -27,6 +27,7 @@ export {
   loadEnvironment,
   resolveAppEnvironment,
   resolveEnvironmentFileOrder,
+  resolveProjectAppEnvironmentSync,
   resolveEnvPlaceholders,
 } from './env'
 export {

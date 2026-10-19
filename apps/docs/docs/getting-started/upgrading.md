@@ -142,6 +142,16 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 `holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
+### Destructive commands confirm in production
+
+`migrate:fresh`, `migrate:rollback`, and `seed` now ask you to confirm when the application environment is `production`. The prompt appears only in a terminal. Without one, the command stops with an error unless you pass `--force`. `migrate:rollback` accepts `--force` now; before, it ignored the flag. `--force` skips the prompt for all three commands.
+
+Before upgrading, check every deploy script, CI job, and cron entry that runs these commands with `APP_ENV=production`, and add `--force` to them. Otherwise they stop instead of running. The `npx holo seed --only roles --force` example in the seeding guide shows the flag in use.
+
+### Migration runs can be isolated
+
+`npx holo migrate --isolated` takes a database lock, so replicas that migrate at deploy time don't apply the same migrations. A replica that finds the lock held skips the migrations and exits successfully. Holo creates a `_holo_migration_locks` table the first time an isolated run starts. Plain `migrate` doesn't use the lock. Use `--isolated` in your deploy step if more than one replica runs it.
+
 ### Encrypted session, remember-me, and CSRF cookies
 
 Holo now encrypts the cookies it sets: the session cookie, the remember-me cookie, and `XSRF-TOKEN`. It uses AES-256-GCM with a key derived from `APP_KEY`, and rejects any cookie that was changed. Your own cookies, including ones written with `cookie()` or `cookies.make()`, are not encrypted.
