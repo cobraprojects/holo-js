@@ -49,15 +49,6 @@ function requireAsyncDriver(driver: QueueDriver, connectionName: string): QueueA
   return driver
 }
 
-function requireRegisteredDefinition(jobName: string): QueueJobDefinition {
-  const registered = getRegisteredQueueJob(jobName)
-  if (!registered) {
-    throw new Error(`[Holo Queue] Queue job "${jobName}" is not registered.`)
-  }
-
-  return registered.definition
-}
-
 function normalizeQueueNames(
   queueNames: readonly string[] | undefined,
   fallbackQueueName: string | undefined,
@@ -174,15 +165,53 @@ async function runWithTimeout<TResult>(
   ])
 }
 
+async function failReservedJob(
+  driver: QueueAsyncDriver,
+  reserved: QueueReservedJob<QueueJsonValue>,
+  event: QueueWorkerJobEvent,
+  options: Pick<QueueWorkerRunOptions, 'onJobFailed'>,
+  failure: { readonly error: Error, readonly runJobFailedHook: boolean },
+): Promise<QueueWorkerProcessingOutcome> {
+  const { error, runJobFailedHook } = failure
+  await queueRuntimeInternals.getQueueRuntimeState().failedJobStore?.persistFailedJob(reserved, error)
+  await driver.delete(reserved)
+  if (runJobFailedHook) {
+    await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(reserved.envelope, error, { maxAttempts: event.maxAttempts })
+  }
+
+  if (options.onJobFailed) {
+    await runWorkerHook('onJobFailed', async () => {
+      await options.onJobFailed?.({ ...event, error })
+    })
+  }
+
+  return { kind: 'failed', error }
+}
+
 async function processReservedJob(
   driver: QueueAsyncDriver,
   reserved: QueueReservedJob<QueueJsonValue>,
   options: Pick<QueueWorkerRunOptions, 'timeout' | 'tries' | 'onJobFailed' | 'onJobProcessed' | 'onJobReleased'>,
 ): Promise<QueueWorkerProcessingOutcome> {
   const envelope = reserved.envelope
-  const definition = requireRegisteredDefinition(envelope.name)
+  const registered = getRegisteredQueueJob(envelope.name)
   const maxAttempts = options.tries ?? envelope.maxAttempts
   const event = createWorkerEvent(envelope, maxAttempts)
+  if (!registered) {
+    return await failReservedJob(driver, reserved, event, options, {
+      error: new Error(`[Holo Queue] Queue job "${envelope.name}" is not registered.`),
+      runJobFailedHook: false,
+    })
+  }
+
+  if (event.attempt > maxAttempts) {
+    return await failReservedJob(driver, reserved, event, options, {
+      error: new Error(`[Holo Queue] Queue job "${envelope.name}" has been attempted too many times.`),
+      runJobFailedHook: true,
+    })
+  }
+
+  const definition = registered.definition
   const executionState = {
     timedOut: false,
   }
@@ -260,14 +289,7 @@ async function processReservedJob(
       })
     }
   } else if (outcome.kind === 'failed') {
-    await queueRuntimeInternals.getQueueRuntimeState().failedJobStore?.persistFailedJob(reserved, outcome.error)
-    await driver.delete(reserved)
-    await queueRuntimeInternals.executeRegisteredQueueJobFailedHook(envelope, outcome.error, { maxAttempts })
-    if (options.onJobFailed) {
-      await runWorkerHook('onJobFailed', async () => {
-        await options.onJobFailed?.({ ...event, error: outcome.error })
-      })
-    }
+    await failReservedJob(driver, reserved, event, options, { error: outcome.error, runJobFailedHook: true })
   } else {
     await driver.acknowledge(reserved)
     if (options.onJobProcessed) {
@@ -278,6 +300,14 @@ async function processReservedJob(
   }
 
   return outcome
+}
+
+function abandonReservation(driver: QueueAsyncDriver, reserved: QueueReservedJob): void {
+  try {
+    driver.abandon?.(reserved)
+  } catch (error) {
+    reportError(error, { capability: 'queue', operation: 'worker.abandonReservation' })
+  }
 }
 
 function resolveWorkerStopReason(
@@ -385,6 +415,10 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
     }
 
     const outcome = await processReservedJob(driver, reserved as QueueReservedJob<QueueJsonValue>, options)
+      .catch((error: unknown) => {
+        abandonReservation(driver, reserved)
+        throw error
+      })
     if (outcome.kind === 'processed') {
       processed += 1
     } else if (outcome.kind === 'released') {
@@ -423,7 +457,6 @@ export const queueWorkerInternals = {
   normalizeQueueNames,
   processReservedJob,
   requireAsyncDriver,
-  requireRegisteredDefinition,
   resolveRetryDelaySeconds,
   resolveWorkerStopReason,
   runWithTimeout,
