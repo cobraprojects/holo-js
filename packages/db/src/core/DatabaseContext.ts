@@ -511,7 +511,7 @@ export class DatabaseContext {
     error: unknown,
   ): Promise<void> {
     try {
-      await transaction?._runAfterRollbackCallbacks()
+      await transaction?._runAfterRollbackCallbacks(this)
     } catch (compensationError) {
       throw new AggregateError([error, compensationError], 'Transaction failed and rollback compensation failed.')
     }
@@ -693,13 +693,12 @@ export class DatabaseContext {
     }
   }
 
-  private async _runAfterRollbackCallbacks(): Promise<void> {
+  private async _runAfterRollbackCallbacks(callbackConnection: DatabaseContext): Promise<void> {
     const callbacks = this._transactionCallbacks?.afterRollback
     if (!callbacks || callbacks.length === 0) {
       return
     }
 
-    const callbackConnection = this._createCallbackConnection()
     const failures: unknown[] = []
     for (let callback = callbacks.pop(); callback; callback = callbacks.pop()) {
       try {

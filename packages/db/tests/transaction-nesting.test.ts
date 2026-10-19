@@ -280,6 +280,23 @@ describe('transaction nesting and commit integrity', () => {
     expect(await db.table(table).pluck('name')).toEqual(['Callback'])
   }, 5_000)
 
+  it.each(drivers)('runs a rollback callback of a doubly nested savepoint without waiting on the outer savepoint queue on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.transaction(async outer => {
+      await outer.transaction(async middle => {
+        await middle.transaction(async inner => {
+          inner.afterRollback(async () => {
+            await outer.transaction(async work => {
+              await work.table(table).insert({ id: 9, name: 'Callback' })
+            })
+          })
+          throw new Error('inner abort')
+        }).catch(() => undefined)
+      })
+    })
+    expect(await db.table(table).pluck('name')).toEqual(['Callback'])
+  }, 5_000)
+
   it.each(drivers)('joins the open transaction for work that resumes after its savepoint finished on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     const committed: string[] = []

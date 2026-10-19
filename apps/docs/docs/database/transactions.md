@@ -112,7 +112,8 @@ How the callbacks run:
 - `afterCommit` callbacks run in the order you registered them, after the outermost transaction commits.
 - Callbacks registered inside a nested transaction wait for the outer commit. If the nested transaction fails, its `afterCommit` callbacks are dropped and its `afterRollback` callbacks run right away.
 - `afterRollback` callbacks run in reverse order.
-- Callbacks run outside the transaction, so queries inside them see the committed data.
+- `afterCommit` callbacks run outside the transaction, so queries inside them see the committed data.
+- When a nested transaction rolls back, its `afterRollback` callbacks run inside the transaction that contains it, which is still open. Queries inside them join that transaction.
 - On transaction objects, the same methods exist as `tx.afterCommit()` and `tx.afterRollback()`.
 
 ::: warning
