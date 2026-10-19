@@ -211,7 +211,7 @@ await security.protect(request)
 
 ### csrf.token() {#csrf-token}
 
-Returns the CSRF token string for a request. It reuses the cookie's token when that token is valid.
+Returns the CSRF token stored in the request's session.
 
 ```ts
 const token = await csrf.token(request)
@@ -237,7 +237,7 @@ const input = await csrf.input(request)
 
 ### csrf.cookie() {#csrf-cookie}
 
-Returns the `Set-Cookie` value for the CSRF token cookie. Pass an explicit token as the second argument to use that token instead.
+Returns the `Set-Cookie` value for the `XSRF-TOKEN` cookie, which holds the session token encrypted. Pass an explicit token as the second argument to encrypt that token instead.
 
 ```ts
 response.headers.set('Set-Cookie', await csrf.cookie(request))
@@ -271,7 +271,7 @@ const secure = isSecureRequest(request)
 
 ### getSecurityClientConfig() {#getsecurityclientconfig}
 
-Imported from `@holo-js/security/client`. Returns the CSRF field name and cookie name, for browser code that sends the token back.
+Imported from `@holo-js/security/client`. Returns the CSRF field, header, and cookie names, for browser code that sends the token back.
 
 ```ts
 import { getSecurityClientConfig } from '@holo-js/security/client'

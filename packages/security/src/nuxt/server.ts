@@ -1,6 +1,7 @@
 import {
   createError,
   defineEventHandler,
+  appendResponseHeader,
   getCookie,
   getMethod,
   getRequestHeaders,
@@ -11,6 +12,7 @@ import {
   type H3Event,
 } from 'h3'
 import { protect } from '../index'
+import { csrfInternals } from '../csrf'
 import { cors } from '../cors'
 import { prepareCsrfCookies } from '../cookie-issuance'
 import { isSecurityRejection } from '../rejection-response'
@@ -60,10 +62,27 @@ async function createRequest(event: H3Event): Promise<Request> {
   })
 }
 
+function shareSessionWithHandlers(event: H3Event, token: string, sessionCookies: readonly string[]): void {
+  const cookie = [event.headers.get('cookie'), ...sessionCookies.map(sessionCookie => sessionCookie.split(';', 1)[0])]
+    .filter(Boolean)
+    .join('; ')
+  event.headers.set('cookie', cookie)
+  event.node.req.headers.cookie = cookie
+  if (event.web?.request) {
+    csrfInternals.rememberSessionToken(event.web.request, token)
+  }
+}
+
 async function issueCsrfCookie(event: H3Event, request: Request): Promise<void> {
-  const cookies = await prepareCsrfCookies(request, name => getCookie(event, name))
+  const { token, cookies, sessionCookies } = await prepareCsrfCookies(request, name => getCookie(event, name))
   for (const cookie of cookies) {
     setCookie(event, cookie.name, cookie.value, cookie.options)
+  }
+  for (const sessionCookie of sessionCookies) {
+    appendResponseHeader(event, 'set-cookie', sessionCookie)
+  }
+  if (token && sessionCookies.length > 0) {
+    shareSessionWithHandlers(event, token, sessionCookies)
   }
 }
 

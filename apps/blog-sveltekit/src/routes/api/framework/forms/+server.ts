@@ -4,7 +4,10 @@ import { csrf } from '@holo-js/security'
 import { field, schema } from '@holo-js/validation'
 import type { RequestHandler } from './$types'
 
-export const GET: RequestHandler = async ({ request }) => json({ token: await csrf.token(request) })
+export const GET: RequestHandler = async ({ request }) => {
+  const { name: field, value: token } = await csrf.field(request)
+  return json({ token, field })
+}
 
 export const POST: RequestHandler = async ({ request }) => json({
   ok: true,

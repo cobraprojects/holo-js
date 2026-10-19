@@ -166,6 +166,25 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### CSRF tokens stored in the session
+
+The CSRF token now lives in the visitor's [session](/basics/session), as in Laravel. The `XSRF-TOKEN` cookie carries that session token encrypted, and a token copied from another browser or planted by a subdomain no longer matches.
+
+- **Tokens reissue after upgrading.** The first unsafe request each browser sends after the upgrade gets `419`, because its session has no token yet. The next page load stores a token in the session and issues a new `XSRF-TOKEN` cookie.
+- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf` without Auth, add `@holo-js/session` to your dependencies. Without a `config/session.ts`, Holo uses the default file session store.
+- **Send the session cookie.** Visitors without a session get one on their first page load. Scripts and tests that post with only the `XSRF-TOKEN` cookie must also send the `holo_session` cookie (or your `session.cookie.name`).
+- **`X-XSRF-TOKEN` is also accepted.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value, so existing `fetch` calls keep working. The new `X-XSRF-TOKEN` header accepts the cookie value, as in Laravel.
+- **Custom session stores need `setDataIfAbsent`.** The token is written with one atomic store call, so a rotation or logout that runs at the same moment can't bring back the old session. Built-in file, database and Redis stores support it. A custom store must add `setDataIfAbsent(sessionId, key, value)` before CSRF-protected pages load. Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, preserve an existing key or insert the value if absent, then return `{ found: true, value: storedValue }`. For the reserved `_token` key, treat a non-string or empty value as absent and replace it atomically; preserve a valid token initialized by another request. Keep the session's other data and expiry unchanged.
+- **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`, and the cookie value is no longer added as `_token`. If the configured header is `X-XSRF-TOKEN`, the fetched token goes in `csrf.field` instead; that header accepts only encrypted cookie values.
+
+### CSRF endpoints for separate frontends
+
+For a separate frontend using `useForm({ csrf: { endpoint } })`, your token endpoint can now return `{ token, field }`. Use `const { name: field, value: token } = await csrf.field(request)`. The client sends the token in that field, so custom API CSRF names work without reading API cookies. Existing `{ token }` responses keep their current behavior.
+
+### CORS wildcard origins with credentials
+
+`config/cors.ts` can no longer combine `origins: ['*']` with `credentials: true`. Holo throws at startup instead of echoing every origin with credentials. List your frontend origins in `origins`, or set `credentials: false`. A wildcard origin now always answers `Access-Control-Allow-Origin: *`.
+
 ### Social sign-in links only verified accounts
 
 Social sign-in no longer signs in as an existing user whose email isn't verified. When a provider's verified email matches such a user, `callback()` from `@holo-js/auth-social` throws `SocialAuthConflictError`. Catch it in your callback routes and ask the user to sign in with their password and verify their email; their next social sign-in links the accounts. See [Link an existing account](/auth/social-login#link-an-existing-account).

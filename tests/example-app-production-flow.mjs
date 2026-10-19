@@ -122,8 +122,12 @@ async function assertBrowserAuth(baseUrl, framework) {
         await page.getByRole('button', { name: 'Refresh authentication', exact: true }).click()
         await page.getByTestId('authenticated').filter({ hasText: 'false' }).waitFor()
         assert.equal(await page.getByTestId('user').innerText(), 'none')
+        await page.goto(`/framework/auth?guard=${guard}`, { waitUntil: 'networkidle' })
+        const refreshedCsrfCookie = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')
+        assert.ok(refreshedCsrfCookie)
+        const loginHeaders = { origin: baseUrl, 'x-csrf-token': decodeURIComponent(refreshedCsrfCookie.value) }
         const login = await context.request.post(`${endpoint}/login`, {
-          headers, form: { email: account.email, password: account.password },
+          headers: loginHeaders, form: { email: account.email, password: account.password },
         })
         assert.equal(login.status(), 200, await login.text())
         await page.getByRole('button', { name: 'Refresh authentication', exact: true }).click()

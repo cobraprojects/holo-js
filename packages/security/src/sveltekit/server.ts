@@ -1,6 +1,6 @@
 import { protect } from '../index'
 import { cors } from '../cors'
-import { prepareCsrfCookies } from '../cookie-issuance'
+import { appendSetCookies, prepareCsrfCookies } from '../cookie-issuance'
 import { createSecurityRejectionResponse, isSecurityRejection } from '../rejection-response'
 
 type SvelteKitCookieOptions = {
@@ -40,11 +40,12 @@ export type SvelteKitCsrfHandle = <TEvent extends SvelteKitCsrfEvent>(
   input: SvelteKitCsrfHandleInput<TEvent>,
 ) => Response | Promise<Response>
 
-async function issueCsrfCookie(event: SvelteKitCsrfEvent): Promise<void> {
-  const cookies = await prepareCsrfCookies(event.request, name => event.cookies.get(name))
+async function issueCsrfCookie(event: SvelteKitCsrfEvent): Promise<readonly string[]> {
+  const { cookies, sessionCookies } = await prepareCsrfCookies(event.request, name => event.cookies.get(name))
   for (const cookie of cookies) {
     event.cookies.set(cookie.name, cookie.value, cookie.options)
   }
+  return sessionCookies
 }
 
 export function csrfProtection(): SvelteKitCsrfHandle {
@@ -59,9 +60,10 @@ export function csrfProtection(): SvelteKitCsrfHandle {
       })
     }
 
+    let sessionCookies: readonly string[]
     try {
       await protect(event.request)
-      await issueCsrfCookie(event)
+      sessionCookies = await issueCsrfCookie(event)
     } catch (error) {
       if (isSecurityRejection(error)) {
         return cors.apply(event.request, createSecurityRejectionResponse(error))
@@ -70,7 +72,7 @@ export function csrfProtection(): SvelteKitCsrfHandle {
       throw error
     }
 
-    return cors.apply(event.request, await resolve(event))
+    return appendSetCookies(cors.apply(event.request, await resolve(event)), sessionCookies)
   }
 }
 

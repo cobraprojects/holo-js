@@ -163,6 +163,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
 
   if (optionalPackages.includes('security')) {
     dependencies['@holo-js/security'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/session'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('cache')) {

@@ -331,7 +331,7 @@ export function renderCorsConfig(): string {
     '    env(\'FRONTEND_URL\', \'http://localhost:3000\'),',
     '  ],',
     '  methods: [\'GET\', \'POST\', \'PUT\', \'PATCH\', \'DELETE\', \'OPTIONS\'],',
-    '  headers: [\'Content-Type\', \'Authorization\', \'X-CSRF-TOKEN\', \'X-Requested-With\'],',
+    '  headers: [\'Content-Type\', \'Authorization\', \'X-CSRF-TOKEN\', \'X-XSRF-TOKEN\', \'X-Requested-With\'],',
     '  credentials: true,',
     '  maxAge: 7200,',
     '  statefulDomains: [',

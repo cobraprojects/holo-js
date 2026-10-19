@@ -50,6 +50,16 @@ describe('cli regressions', () => {
     await expect(readFile(ignorePath, 'utf8')).resolves.toBe('*\n!.gitignore\n')
   })
 
+  it('installs the session package that stores CSRF tokens alongside security', async () => {
+    const root = await createProject()
+
+    await expect(installSecurityIntoProject(root)).resolves.toMatchObject({ updatedPackageJson: true })
+
+    const { dependencies } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+    expect(dependencies['@holo-js/security']).toBeDefined()
+    expect(dependencies['@holo-js/session']).toBe(dependencies['@holo-js/security'])
+  })
+
   it('preserves existing rate-limit gitignore rules when installing security', async () => {
     const root = await createProject()
     const ignorePath = join(root, 'storage/framework/rate-limits/.gitignore')
