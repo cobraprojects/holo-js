@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { createFileSessionStore } from '../../session/src'
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
+import { requestUrlInternals } from '../../kernel/src'
+import { configureSecurityRuntime, resetSecurityRuntime } from '../../security/src'
 import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, logout, provider, resetAuthRuntime } from '../../auth/src'
 import type { AuthProviderAdapter } from '../../auth/src'
 import {
@@ -216,6 +218,8 @@ afterEach(async () => {
   resetWorkosAuthRuntime()
   resetAuthRuntime()
   resetSessionRuntime()
+  resetSecurityRuntime()
+  requestUrlInternals.provideConnectionAddress(undefined)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   await Promise.all(sessionDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
@@ -252,7 +256,7 @@ function createUnsignedJwt(payload: Readonly<Record<string, unknown>>): string {
   ].join('.')
 }
 
-async function createWorkosCallbackRequest(code = 'code_123'): Promise<Request> {
+async function createWorkosCallbackRequest(code = 'code_123', headers: Record<string, string> = {}): Promise<Request> {
   const login = await loginWithWorkos(new Request('https://app.test/login'))
   const location = login.headers.get('location')
   const state = location ? new URL(location).searchParams.get('state') : null
@@ -263,6 +267,7 @@ async function createWorkosCallbackRequest(code = 'code_123'): Promise<Request> 
 
   return new Request(`https://app.test/api/auth/workos/callback?code=${code}&state=${state}`, {
     headers: {
+      ...headers,
       cookie: stateCookie,
     },
   })
@@ -965,6 +970,26 @@ describe('@holo-js/auth-workos', () => {
     expect(register.headers.get('location')).toContain('screen_hint=sign-up')
     expect(register.headers.get('location')).toContain('state=')
     expect(register.headers.get('set-cookie')).toContain('holo_workos_dashboard_state=')
+  })
+
+  it('sends WorkOS the client IP resolved through trusted proxies, never a spoofed forwarded address', async () => {
+    await configureRuntime()
+    const sentAddresses: unknown[] = []
+    vi.stubGlobal('fetch', async (_url: string | URL | Request, init?: RequestInit) => {
+      sentAddresses.push(JSON.parse(String(init?.body)).ip_address)
+      return new Response(JSON.stringify({
+        access_token: createUnsignedJwt({ sid: `session_workos_ip_${sentAddresses.length}` }),
+        user: { id: 'workos_ip', email: 'ip@app.test', emailVerified: true },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    requestUrlInternals.provideConnectionAddress(() => '198.51.100.4')
+    const spoofed = { 'x-forwarded-for': '203.0.113.66', 'x-real-ip': '203.0.113.67' }
+
+    await completeWorkosAuth(await createWorkosCallbackRequest('code_direct', spoofed))
+    configureSecurityRuntime({ config: { trustedProxies: ['198.51.100.4'] } })
+    await completeWorkosAuth(await createWorkosCallbackRequest('code_proxied', { 'x-forwarded-for': '203.0.113.66, 192.0.2.10' }))
+
+    expect(sentAddresses).toEqual(['198.51.100.4', '192.0.2.10'])
   })
 
   it('completes the hosted WorkOS callback with typed user mapping', async () => {

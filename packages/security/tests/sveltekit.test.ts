@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe('@holo-js/security SvelteKit csrf middleware', () => {
   it.each([
-    { 'x-forwarded-proto': 'wss' },
+    { 'x-forwarded-port': 'abc' },
     { 'x-forwarded-host': 'a b' },
   ])('answers malformed trusted proxy headers %j with a bad request', async (headers) => {
     configureSecurity([], '*')

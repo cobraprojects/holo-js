@@ -39,7 +39,7 @@ export default defineEventHandler(async (event) => {
       headers.set(key, value)
     }
   }
-  const request = new Request(getRequestURL(event), {
+  const request = new Request(getRequestURL(event, { xForwardedProto: false }), {
     method: event.method,
     headers,
     body: await readRawBody(event),
