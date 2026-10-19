@@ -619,6 +619,7 @@ export interface AuthSessionRuntime {
     value: string,
     options?: Record<string, unknown>,
   ): string
+  rememberMeLifetimeMinutes?(): number
   decryptCookie(name: string, value: string): string | undefined
 }
 

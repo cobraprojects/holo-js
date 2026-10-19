@@ -724,6 +724,32 @@ describe('@holo-js/auth package runtime', () => {
     })
   })
 
+  it('does not let a session restored from a remember cookie begin MFA enrollment until the user logs in with a password', async () => {
+    const runtime = await configureRuntime({ multiFactor: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+    const remembered = unwrapAuthResult(await login({ email: 'ava@example.com', password: 'secret-secret', remember: true }))
+    const restoreAndRun = async <TValue>(callback: () => Promise<TValue>): Promise<TValue> => {
+      const bindings = authRuntimeInternals.getRuntimeBindings()
+      authRuntimeInternals.configureRuntime({ ...bindings, context: createMemoryRequestContext(rememberCookieValue(remembered.rememberToken)).context })
+      try {
+        return await callback()
+      } finally {
+        authRuntimeInternals.configureRuntime({ ...bindings, context: runtime.context })
+      }
+    }
+
+    await expect(restoreAndRun(() => auth.multiFactor.beginEnrollment())).rejects.toMatchObject({ code: 'multi_factor_reauthentication_required' })
+
+    unwrapAuthResult(await login({ email: 'ava@example.com', password: 'secret-secret' }))
+    await expect(auth.multiFactor.beginEnrollment()).resolves.toMatchObject({ manualKey: expect.any(String) })
+  })
+
   it('cycles remember cookies issued before MFA enrollment so they stop restoring', async () => {
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({
@@ -2919,6 +2945,7 @@ describe('@holo-js/auth package runtime', () => {
     const runtime = await configureRuntime()
     const session = getSessionRuntime()
     const legacySession = {
+      rememberMeLifetimeMinutes: session.rememberMeLifetimeMinutes,
       create: session.create,
       read: session.read,
       touch: session.touch,

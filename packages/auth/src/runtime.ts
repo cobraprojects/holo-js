@@ -152,6 +152,7 @@ import {
 
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 const MAX_MULTI_FACTOR_CHALLENGE_ATTEMPTS = 5
+const NEVER_AUTHENTICATED_AT = new Date(0).toISOString()
 
 export {
   createAsyncAuthContext,
@@ -476,8 +477,11 @@ function getRememberToken(adapter: ErasedAuthProviderAdapter, user: unknown): st
 }
 
 function rememberRecallerFor(adapter: ErasedAuthProviderAdapter, user: unknown, token: string): string {
-  const cookie = parseSetCookieDefinition(getRuntimeBindings().session.rememberMeCookie(''))
-  const expiresAt = Date.now() + (cookie?.options.maxAge ?? 0) * 1000
+  const lifetimeMinutes = getRuntimeBindings().session.rememberMeLifetimeMinutes?.()
+  if (lifetimeMinutes === undefined) {
+    throwAuthError('runtime_unconfigured', 'Remember-me requires a session runtime that reports its remember lifetime.')
+  }
+  const expiresAt = Date.now() + lifetimeMinutes * 60_000
   return encodeRememberRecaller([adapter.getId(user), token, hashPasswordForRemember(getPasswordHash(adapter, user)), expiresAt])
 }
 
@@ -555,6 +559,7 @@ async function restoreRememberedSessionNow(
       guard: guardName,
       provider,
       preserveRemember: true,
+      payload: { ...toSessionPayload(guardName, provider, user), authenticatedAt: NEVER_AUTHENTICATED_AT, viaRemember: true },
       ...(revocation ? { revocation } : {}),
     })
   } catch (error) {
@@ -1102,10 +1107,10 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const metadata = state?.payload.revocation
   if (!state || !metadata || state.payload.multiFactorChallengeExpiresAt) throwAuthError('auth_user_missing', 'Other-device logout requires valid browser authentication.')
   if (!state.payload.impersonation && await getRememberRecaller(bindings, guardName)) await assertResponseCookiesWritable(bindings)
-  const recaller = state.payload.impersonation ? undefined : await cycleRememberToken(state.payload.provider, state.payload.userId)
   const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
   clearSessionRevocationReads(bindings.context)
   if (!retained) throwAuthError('auth_user_missing', 'This browser authentication has already been revoked.')
+  const recaller = state.payload.impersonation ? undefined : await cycleRememberToken(state.payload.provider, state.payload.userId)
   await reissueRememberRecaller(bindings, guardName, recaller)
 }
 
@@ -1124,6 +1129,22 @@ async function resolveUserFromGuard(
   const guard = getGuardConfig(guardName)
 
   await hydrateGuardContextFromRequest(guardName)
+
+  if (options.fresh && guard.driver === 'session' && isRequestOnlyGuard(bindings, guardName)) {
+    const cachedUser = bindings.context.getCachedUser(guardName)
+    if (cachedUser && cachedUser.id !== undefined) {
+      const { adapter } = getProviderAdapter(guard.provider)
+      const freshUser = await adapter.findById(cachedUser.id)
+      if (!freshUser) {
+        setRequestOnlyGuard(bindings, guardName, false)
+        bindings.context.setCachedUser(guardName, null)
+        return null
+      }
+      const serialized = serializeUser(adapter, freshUser, guard.provider)
+      bindings.context.setCachedUser(guardName, serialized)
+      return serialized
+    }
+  }
 
   if (guard.driver === 'token') {
     const token = bindings.context.getAccessToken?.(guardName)
@@ -1846,7 +1867,14 @@ function recoveryResult(codes: readonly string[]): AuthMultiFactorRecoveryCodes 
   return Object.freeze({ recoveryCodes: Object.freeze([...codes]) })
 }
 
+function requireNotRememberedSession(state: MultiFactorAuthenticatedState): void {
+  if (state.payload.viaRemember === true) {
+    throwAuthError('multi_factor_reauthentication_required', 'Recent authentication is required to enroll multi-factor authentication.')
+  }
+}
+
 function requireRecentMultiFactorAuthentication(state: MultiFactorAuthenticatedState): void {
+  requireNotRememberedSession(state)
   const reauthenticationWindowMs = getRuntimeBindings().config.multiFactor.enrollmentTtl * 1000
   if (!(Date.parse(state.payload.authenticatedAt) > Date.now() - reauthenticationWindowMs)) {
     throwAuthError('multi_factor_reauthentication_required', 'Recent authentication is required to enroll multi-factor authentication.')
@@ -1882,6 +1910,7 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
     },
     async confirmEnrollment(input: AuthMultiFactorCodeInput) {
       const state = await authenticatedMultiFactorState(guardName)
+      requireNotRememberedSession(state)
       const encrypted = enrollmentData(state.record)[guardName]
       if (!encrypted) throwAuthError('multi_factor_enrollment_missing', 'No multi-factor enrollment is pending.')
       let pending: { readonly expiresAt: string, readonly secret: string }

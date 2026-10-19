@@ -77,6 +77,7 @@ export interface SessionRuntimeBindings {
 }
 
 export interface SessionRuntimeFacade {
+  rememberMeLifetimeMinutes(): number
   create(input?: CreateSessionInput): Promise<SessionRecord>
   write(record: SessionRecord): Promise<SessionRecord>
   read(sessionId: string, options?: ReadSessionOptions): Promise<SessionRecord | null>

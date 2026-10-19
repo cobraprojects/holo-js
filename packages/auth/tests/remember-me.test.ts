@@ -412,6 +412,55 @@ describe('remember me', () => {
     await expect(replay.request(() => auth.check())).resolves.toBe(false)
   })
 
+  it('authorizes a refreshed user through a read-only request, and returns null once the user is deleted', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    const storage = new AsyncLocalStorage<ReturnType<typeof authRuntimeInternals.createMemoryAuthContext>>()
+    const current = () => storage.getStore()!
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const readOnly = () => {
+      authRuntimeInternals.configureRuntime({
+        ...bindings,
+        context: {
+          getRequestScope: () => current(),
+          getSessionId: (guard: string) => current().getSessionId(guard),
+          setSessionId: (guard: string, id?: string) => current().setSessionId(guard, id),
+          getCachedUser: (guard: string) => current().getCachedUser(guard),
+          setCachedUser: (guard: string, user: AuthenticatedAuthUser | null) => current().setCachedUser(guard, user),
+          getRememberToken: (guard: string) => current().getRememberToken(guard),
+          setRememberToken: (guard: string, token?: string) => current().setRememberToken(guard, token),
+          getRequestCookie: (name: string) => browser.cookies.get(name),
+        },
+      })
+    }
+    readOnly()
+    try {
+      await expect(storage.run(authRuntimeInternals.createMemoryAuthContext(), async () => (await auth.refreshUser())?.id)).resolves.toBe(1)
+      await expect(storage.run(authRuntimeInternals.createMemoryAuthContext(), async () => {
+        expect(await auth.check()).toBe(true)
+        users.delete(1)
+        return auth.refreshUser()
+      })).resolves.toBeNull()
+    } finally {
+      authRuntimeInternals.configureRuntime(bindings)
+    }
+  })
+
+  it('restores a remembered user when the session runtime emits only an Expires attribute', async () => {
+    const session = getSessionRuntime()
+    const expiresOnly = {
+      ...session,
+      rememberMeCookie: (value: string) => session.rememberMeCookie(value).replace(/;\s*Max-Age=\d+/i, `; Expires=${new Date(Date.now() + (30 * 86_400_000)).toUTCString()}`),
+    }
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), session: expiresOnly })
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1, { remember: true }))
+    expect(browser.cookies.get('holo_session_remember')).toEqual(expect.any(String))
+    browser.expireSession()
+    await expect(browser.request(() => auth.check())).resolves.toBe(true)
+  })
+
   it('restores several guards checked concurrently into one session', async () => {
     const browser = new Browser()
     await browser.request(async () => {
@@ -534,6 +583,22 @@ describe('remember me', () => {
 })
 
 describe('remember me with other-device logout', () => {
+  it('leaves the winning browser\'s reissued remember cookie valid when a losing browser loses the revocation race', async () => {
+    const states = revocationStore()
+    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), sessionRevocations: states })
+    const winner = new Browser()
+    const loser = new Browser()
+    await winner.request(() => auth.loginUsingId(1, { remember: true }))
+    await loser.request(() => auth.loginUsingId(1, { remember: true }))
+    await loser.request(async () => {
+      await auth.check()
+      await winner.request(() => auth.logoutOtherDevices())
+      await expect(auth.logoutOtherDevices()).rejects.toMatchObject({ code: 'auth_user_missing' })
+    })
+    winner.expireSession()
+    await expect(winner.request(() => auth.check())).resolves.toBe(true)
+  })
+
   function revocationStore(): AuthSessionRevocationStore {
     const states = new Map<string, { generation: number, retainedSessionId?: string }>()
     return {

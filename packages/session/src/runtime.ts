@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { decryptCookieValue, encryptCookieValue } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
+import { DEFAULT_SESSION_REMEMBER_ME_LIFETIME } from './config'
 import type {
   CookieSerializeOptions,
   CreateSessionInput,
@@ -496,6 +497,7 @@ export function configureSessionRuntime(bindings?: SessionRuntimeBindings): void
 
 export function getSessionRuntime(): SessionRuntimeFacade {
   return {
+    rememberMeLifetimeMinutes: () => getSessionRuntimeState().bindings?.config.rememberMeLifetime ?? DEFAULT_SESSION_REMEMBER_ME_LIFETIME,
     create: createSession,
     write: writeSession,
     read: readSession,
