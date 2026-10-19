@@ -73,16 +73,17 @@ const form = useForm(contactForm, {
 })
 ```
 
-The endpoint returns the current token:
+The endpoint returns the current token and the API's configured field name, so a separate frontend doesn't need to read the API's configuration cookie:
 
 ```ts [src/routes/api/csrf-token/+server.ts]
 import { json } from '@sveltejs/kit'
 import { csrf } from '@holo-js/security'
 import type { RequestHandler } from './$types'
 
-export const GET: RequestHandler = async ({ request }) => json({
-  token: await csrf.token(request),
-})
+export const GET: RequestHandler = async ({ request }) => {
+  const { name: field, value: token } = await csrf.field(request)
+  return json({ token, field })
+}
 ```
 
 ## Sending the token with `fetch`

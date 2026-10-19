@@ -659,11 +659,15 @@ async function defaultSubmitter<TData, TSuccess>(
       return createTransportFailure(context.values)
     }
 
-    const config = await getClientCsrfConfig()
-    if (config.header.toLowerCase() === 'x-xsrf-token') {
-      context.formData.set(config.field, csrfPayload.token)
+    if ('field' in csrfPayload && typeof csrfPayload.field === 'string' && csrfPayload.field) {
+      context.formData.set(csrfPayload.field, csrfPayload.token)
     } else {
-      headers.set(config.header, csrfPayload.token)
+      const config = await getClientCsrfConfig()
+      if (config.header.toLowerCase() === 'x-xsrf-token') {
+        context.formData.set(config.field, csrfPayload.token)
+      } else {
+        headers.set(config.header, csrfPayload.token)
+      }
     }
   }
 

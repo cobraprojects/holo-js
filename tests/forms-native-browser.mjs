@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { chromium } from 'playwright'
+import { configureSecurityRuntime, csrf, cors, defineSecurityConfig, resetSecurityRuntime } from '../packages/security/dist/index.mjs'
+import * as session from '../packages/session/dist/index.mjs'
+import { createCsrfSessionAccessor } from '../packages/core/src/portable/csrfSession.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const directory = await mkdtemp(join(tmpdir(), 'holo-native-browser-forms-'))
@@ -35,6 +38,13 @@ globalThis.mountInvitation = () => {
   const container = document.createElement('div')
   document.body.append(container)
   createRoot(container).render(createElement(Invitation))
+}
+globalThis.submitEndpointForm = async (apiUrl) => {
+  const form = createFormClient(schema({ email: field.string().required().email() }), {
+    action: apiUrl + '/contact', credentials: 'include', csrf: { endpoint: apiUrl + '/csrf' },
+    initialValues: { email: 'ava@example.com' },
+  })
+  return await form.submit()
 }
 globalThis.submitNativeForm = async (method) => {
   const form = createFormClient(schema({ email: field.string().required().email() }), {
@@ -140,6 +150,78 @@ try {
         await context.close()
       }
     })))
+    await suite.test('submits cross-origin endpoint metadata with custom API names and keeps legacy responses working', async () => {
+      const store = session.createFileSessionStore(join(directory, 'sessions'))
+      session.configureSessionRuntime({
+        config: session.normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: join(directory, 'sessions') } } }),
+        stores: { file: store }, appKey: 'native-cross-origin-key',
+      })
+      try {
+        for (const metadata of [true, false]) {
+          configureSecurityRuntime({
+            config: defineSecurityConfig({
+              csrf: { enabled: true, ...(metadata ? { field: '_api_csrf', header: 'X-API-CSRF', cookie: 'api-xsrf' } : {}) },
+            }),
+            cors: { paths: ['*'], origins: [url], credentials: true },
+            csrfSigningKey: 'native-cross-origin-key',
+            csrfSession: createCsrfSessionAccessor(session, () => 'holo_session'),
+          })
+          const api = createServer(async (incoming, outgoing) => {
+            const headers = new Headers()
+            for (const [name, value] of Object.entries(incoming.headers)) {
+              if (typeof value === 'string') headers.set(name, value)
+            }
+            const chunks = []
+            for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
+            const request = new Request(`http://${incoming.headers.host}${incoming.url}`, {
+              method: incoming.method, headers,
+              ...(incoming.method === 'POST' ? { body: Buffer.concat(chunks) } : {}),
+            })
+            let result = cors.preflight(request)
+            if (!result) {
+              try {
+                if (incoming.url === '/csrf') {
+                  const { name: field, value: token } = await csrf.field(request)
+                  result = Response.json(metadata ? { token, field } : { token })
+                } else {
+                  await csrf.verify(request)
+                  result = Response.json({ ok: true, status: 201, data: { submitted: true } }, { status: 201 })
+                }
+              } catch {
+                result = new Response('CSRF validation failed', { status: 419 })
+              }
+            }
+            const response = cors.apply(request, result)
+            outgoing.writeHead(response.status, Object.fromEntries(response.headers))
+            outgoing.end(Buffer.from(await response.arrayBuffer()))
+          })
+          await new Promise(resolve => api.listen(0, '127.0.0.1', resolve))
+          const address = api.address()
+          assert.ok(address && typeof address !== 'string')
+          const apiUrl = `http://127.0.0.1:${address.port}`
+          assert.notEqual(new URL(apiUrl).origin, new URL(url).origin)
+          const context = await browser.newContext()
+          try {
+            const record = await session.createSession({ data: { _token: 'native-api-session-token' } })
+            const cookie = session.getSessionRuntime().sessionCookie(record.id).split(';', 1)[0]
+            const separator = cookie.indexOf('=')
+            await context.addCookies([{ name: cookie.slice(0, separator), value: cookie.slice(separator + 1), url: apiUrl, httpOnly: true }])
+            const page = await context.newPage()
+            await page.goto(url)
+            assert.equal(await page.evaluate(() => document.cookie), '')
+            const result = await page.evaluate(apiUrl => globalThis.submitEndpointForm(apiUrl), apiUrl)
+            assert.deepEqual(result, { ok: true, status: 201, data: { submitted: true } }, metadata ? 'Custom API field metadata must work across origins.' : 'Legacy token-only responses must retain their transport.')
+          } finally {
+            await context.close()
+            api.closeAllConnections()
+            await new Promise(resolve => api.close(resolve))
+          }
+        }
+      } finally {
+        resetSecurityRuntime()
+        session.configureSessionRuntime(undefined)
+      }
+    })
     await suite.test('preserves native file input content when submitting a real browser form', async () => {
       const context = await browser.newContext()
       try {

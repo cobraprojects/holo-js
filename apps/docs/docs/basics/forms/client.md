@@ -206,7 +206,7 @@ If the submitter throws a validation error (such as a `$fetch` error with a 422 
 
 ## Frontend and API on different origins
 
-When the page and the API live on different origins, the page can't read the API's CSRF cookie. Point `csrf.endpoint` at an API route that returns `{ token: string }` and sets the CSRF cookie:
+When the page and the API live on different origins, the page can't read the API's CSRF configuration cookie. Point `csrf.endpoint` at an API route that returns `{ token: string, field?: string }`. Return the field name so the client can use your API's configured CSRF input:
 
 ```ts
 const form = useForm(contactForm, {
@@ -218,7 +218,20 @@ const form = useForm(contactForm, {
 })
 ```
 
-Before each unsafe submission, `useForm()` fetches the endpoint with the same `credentials` and sends the token in the `csrf.header` header from `config/security.ts` (`X-CSRF-TOKEN` by default). When that header is `X-XSRF-TOKEN`, it sends the endpoint token in the configured `csrf.field` form field instead, because this header only accepts encrypted cookie values. It doesn't add the cookie's token in this mode. The API must allow the page's origin with credentials; see [CORS and Proxies](/basics/security/cors-and-proxies). These options only apply to the built-in submitter.
+Your token route can return both values from `csrf.field(request)`:
+
+```ts [app/api/csrf/route.ts]
+import { csrf } from '@holo-js/security'
+
+export async function GET(request: Request) {
+  const { name: field, value: token } = await csrf.field(request)
+  return Response.json({ token, field })
+}
+```
+
+Before each unsafe submission, `useForm()` fetches the endpoint with the same `credentials`. If the response includes `field`, it sends the plain token in that form field. This works with custom API field and header names even when the frontend can't read the API's cookies.
+
+Existing `{ token }` responses keep their behavior: the client sends the token in the frontend's configured `csrf.header` (`X-CSRF-TOKEN` by default), or its configured form field when the header is the encrypted-cookie-only `X-XSRF-TOKEN`. The client doesn't add the cookie's token in endpoint mode. The API must allow the page's origin with credentials; see [CORS and Proxies](/basics/security/cors-and-proxies). These options only apply to the built-in submitter.
 
 ## Field state
 
