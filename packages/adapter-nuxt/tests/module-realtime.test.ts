@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { moduleInternals } from '../src/module'
 
@@ -36,6 +37,19 @@ describe('Nuxt realtime module transforms', () => {
     expect(moduleInternals.resolveRealtimeDefinitionImport('./server/realtime/posts', undefined)).toBeUndefined()
     expect(moduleInternals.resolveRealtimeDefinitionImport('unrelated', sourcePath)).toBeUndefined()
     expect(moduleInternals.resolveRealtimeDefinitionImport(sourcePath, undefined)).toBe(sourcePath)
+  })
+
+  it('builds one realtime definitions module from the project server/realtime files for the Nuxt query and mutation routes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-nuxt-realtime-definitions-'))
+    roots.push(root)
+    await mkdir(join(root, 'server/realtime/nested'), { recursive: true })
+    await writeFile(join(root, 'server/realtime/posts.ts'), `import { query } from '@holo-js/realtime'\nexport const posts = query({ name: 'posts.list', access: 'public', handler: async () => ({ records: [] }) })`)
+    await writeFile(join(root, 'server/realtime/nested/comments.ts'), `import { mutation } from '@holo-js/realtime'\nexport const comments = mutation({ name: 'comments.create', access: 'public', handler: async () => ({}) })`)
+    const modulePath = join(root, 'realtime-definitions.mjs')
+    await writeFile(modulePath, moduleInternals.renderRealtimeDefinitionsModule(root))
+
+    const { realtimeDefinitions } = await import(pathToFileURL(modulePath).href) as { realtimeDefinitions: readonly { readonly name: string }[] }
+    expect(realtimeDefinitions.map(definition => definition.name)).toEqual(['comments.create', 'posts.list'])
   })
 
   it('resolves, loads, and transforms realtime definitions in client builds', async () => {
