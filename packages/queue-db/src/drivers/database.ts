@@ -180,7 +180,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
               + `WHERE queue = ${queuePlaceholder} `
               + `AND available_at <= ${availablePlaceholder} `
               + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
-              + 'ORDER BY available_at ASC, created_at ASC, id ASC '
+              + 'ORDER BY available_at ASC, id ASC '
               + `LIMIT 1${lockClause}`,
             bindings: [queueName, now, this.getExpiredReservationCutoff(now)],
             source: `queue:${this.name}:reserve:select`,

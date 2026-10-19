@@ -35,7 +35,7 @@ export default defineQueueConfig({
 
 ## Database
 
-The `database` driver stores jobs in a table on one of your [database connections](/database/connections). It works with any database Holo supports and needs no extra service.
+The `database` driver stores jobs in a table on one of your [database connections](/database/connections). It works with SQLite, PostgreSQL, and MySQL 8.0.17 or later, and needs no extra service.
 
 ```ts [config/queue.ts]
 import { defineQueueConfig } from '@holo-js/queue'
@@ -91,7 +91,7 @@ npx holo queue:work
 
 ### Run several workers
 
-You can run as many workers as you need against the same jobs table. Each job is taken by one worker only. On MySQL and PostgreSQL, a worker skips jobs another worker is taking and moves on to the next one, so workers don't wait on each other. The `database` driver needs MySQL 8.0.17 or later. On SQLite, workers take jobs one at a time, because SQLite allows one write at a time.
+You can run as many workers as you need against the same jobs table. Each job is taken by one worker only. On MySQL and PostgreSQL, a worker skips jobs another worker is taking and moves on to the next one, so workers don't wait on each other. Keep the indexes the `queue:table` migration creates: without them, a worker on MySQL holds every waiting job while it takes one. On SQLite, workers take jobs one at a time, because SQLite allows one write at a time.
 
 ## Redis
 

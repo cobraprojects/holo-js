@@ -17,9 +17,8 @@ type ServerDriver = 'mysql' | 'postgres'
 
 type ContentionHarness = {
   readonly control: DatabaseContext
-  readonly driver: QueueAsyncDriver
-  readonly table: string
-  createDriver(): QueueAsyncDriver
+  readonly held: DatabaseContext
+  driver(connection?: 'database' | 'held'): QueueAsyncDriver
 }
 
 const cleanups: (() => Promise<void>)[] = []
@@ -30,9 +29,10 @@ afterEach(async () => {
   }
 })
 
-function connect(driver: ServerDriver): DatabaseContext {
+function connect(driver: ServerDriver, connectionName: string): DatabaseContext {
   if (driver === 'mysql') {
     return new DatabaseContext({
+      connectionName,
       driver,
       dialect: createDialect(driver),
       adapter: createMySQLAdapter({
@@ -41,13 +41,14 @@ function connect(driver: ServerDriver): DatabaseContext {
           port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
           user: process.env.HOLO_MYSQL_USER ?? 'root',
           password: process.env.HOLO_MYSQL_PASSWORD,
-          database: process.env.HOLO_MYSQL_DATABASE ?? 'holo_test',
+          database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
         },
       }),
     })
   }
 
   return new DatabaseContext({
+    connectionName,
     driver,
     dialect: createDialect(driver),
     adapter: createPostgresAdapter({
@@ -64,18 +65,17 @@ function connect(driver: ServerDriver): DatabaseContext {
 
 async function createContentionHarness(driver: ServerDriver): Promise<ContentionHarness> {
   const table = `jobs_${randomUUID().replaceAll('-', '')}`
-  const connection = connect(driver)
-  const control = connect(driver)
-  await connection.initialize()
-  await control.initialize()
+  const connection = connect(driver, 'main')
+  const held = connect(driver, 'held')
+  const control = connect(driver, 'control')
+  await Promise.all([connection.initialize(), held.initialize(), control.initialize()])
   cleanups.push(async () => {
     try {
       await control.executeCompiled({ sql: `DROP TABLE IF EXISTS ${table}`, source: 'test:queue:contention' })
     } finally {
       resetDB()
       resetQueueRuntime()
-      await connection.disconnect()
-      await control.disconnect()
+      await Promise.all([connection.disconnect(), held.disconnect(), control.disconnect()])
     }
   })
 
@@ -91,30 +91,36 @@ async function createContentionHarness(driver: ServerDriver): Promise<Contention
     builder.bigInteger('reserved_at').nullable()
     builder.string('reservation_id').nullable()
     builder.bigInteger('created_at')
+    builder.index(['queue', 'available_at'], `${table}_queue_available_at_index`)
+    builder.index(['queue', 'reserved_at'], `${table}_queue_reserved_at_index`)
+    builder.index(['reservation_id'], `${table}_reservation_id_index`)
   })
 
-  configureDB(new ConnectionManager({ defaultConnection: 'main', connections: { main: connection } }))
+  configureDB(new ConnectionManager({ defaultConnection: 'main', connections: { main: connection, held } }))
   configureQueueRuntime({
     config: {
       default: 'database',
       failed: false,
       connections: {
         database: { driver: 'database', connection: 'main', table, queue: 'default' },
+        held: { driver: 'database', connection: 'held', table, queue: 'default' },
       },
     },
     ...createQueueDbRuntimeOptions(),
   })
 
-  const createDriver = (): QueueAsyncDriver => {
-    const resolved = queueRuntimeInternals.resolveConnectionDriver('database')
-    if (resolved.mode !== 'async') {
-      throw new Error('Expected an async database queue driver.')
-    }
+  return {
+    control,
+    held,
+    driver(name = 'database') {
+      const resolved = queueRuntimeInternals.resolveConnectionDriver(name)
+      if (resolved.mode !== 'async') {
+        throw new Error('Expected an async database queue driver.')
+      }
 
-    return resolved
+      return resolved
+    },
   }
-
-  return { control, driver: createDriver(), table, createDriver }
 }
 
 async function dispatchJobs(driver: QueueAsyncDriver, count: number): Promise<readonly string[]> {
@@ -152,40 +158,35 @@ const servers: readonly { readonly driver: ServerDriver, readonly enabled: boole
 
 for (const server of servers) {
   describe.runIf(server.enabled)(`@holo-js/queue-db ${server.driver} reservation contention`, () => {
-    it('lets a losing worker return promptly while another worker holds the only job', async () => {
+    it('reserves the next job while another worker holds a reservation and returns promptly when none is left', async () => {
       const harness = await createContentionHarness(server.driver)
-      const [jobId] = await dispatchJobs(harness.driver, 1)
-
-      const outcome = await harness.control.transaction(async (tx) => {
-        await tx.queryCompiled({
-          sql: `SELECT id FROM ${harness.table} WHERE id = ${tx.getDialect().createPlaceholder(1)} FOR UPDATE`,
-          bindings: [jobId],
-          source: 'test:queue:contention:hold',
-        })
-        await tx.executeCompiled({
-          sql: `UPDATE ${harness.table} SET reserved_at = ${tx.getDialect().createPlaceholder(1)}, reservation_id = 'held' WHERE id = ${tx.getDialect().createPlaceholder(2)}`,
-          bindings: [Date.now(), jobId],
-          source: 'test:queue:contention:hold',
-        })
-
-        return withinDeadline(
-          harness.createDriver().reserve({ queueNames: ['default'], workerId: 'loser' }),
+      const ids = await dispatchJobs(harness.driver(), 3)
+      const reserve = async (connection: 'database' | 'held', workerId: string) => {
+        const job = await withinDeadline(
+          harness.driver(connection).reserve({ queueNames: ['default'], workerId }),
           2_000,
-          'The losing worker waited on a job another worker holds.',
+          `Worker "${workerId}" waited on a job another worker holds.`,
         )
-      })
+        return job?.envelope.id ?? null
+      }
 
-      expect(outcome).toBeNull()
-      await expect(harness.driver.reserve({ queueNames: ['default'], workerId: 'late' })).resolves.toBeNull()
+      const outcome = await harness.held.transaction(async () => [
+        await reserve('held', 'first'),
+        await reserve('database', 'second'),
+        await reserve('database', 'third'),
+        await reserve('database', 'fourth'),
+      ])
+
+      expect(outcome).toEqual([...ids, null])
     }, 20_000)
 
     it('reserves every job exactly once across concurrent workers', async () => {
       const harness = await createContentionHarness(server.driver)
-      const ids = await dispatchJobs(harness.driver, 40)
+      const ids = await dispatchJobs(harness.driver(), 40)
       const reserved: QueueReservedJob[] = []
 
       const work = async (workerId: string): Promise<void> => {
-        const driver = harness.createDriver()
+        const driver = harness.driver()
         while (true) {
           const job = await driver.reserve({ queueNames: ['default'], workerId })
           if (!job) {
