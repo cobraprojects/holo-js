@@ -3968,6 +3968,7 @@ export default defineCacheConfig({
     expect(first.stdout).toContain('  - updated package.json')
     expect(first.stdout).toContain('  - created media migration')
     expect(await readFile(join(projectRoot, 'config/media.ts'), 'utf8')).toContain('defineMediaConfig')
+    expect(await readFile(join(projectRoot, 'config/media.ts'), 'utf8')).toContain('disk: env(\'MEDIA_DISK\', \'public\')')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/media": "${expectedHoloPackageRange}"`)
 
     const migrations = await readdir(join(projectRoot, 'server/db/migrations'))

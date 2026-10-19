@@ -1,3 +1,8 @@
+export const imageDecodingLimits = Object.freeze({
+  maximumDecodedPixels: 40_000_000,
+  maximumFrames: 1_000,
+})
+
 export interface DecodedImageVerification {
   readonly valid: boolean
   readonly aspectRatios: readonly boolean[]

@@ -478,7 +478,11 @@ Worker options:
 
 ## media.ts
 
-Created by `holo install media`. It has no built-in options yet; collections and conversions are set on each model. See [Media Library](/media/).
+Created by `holo install media`. Collections and conversions are set on each model. See [Media Library](/media/).
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `disk` | `env('MEDIA_DISK', 'public')` | Disk for collections that don't set `disk()`. |
 
 ## Next steps
 
