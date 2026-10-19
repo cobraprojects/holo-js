@@ -196,7 +196,10 @@ Your `users` table needs nullable `password` and `avatar` columns for this, whic
 
 Holo never links a social account to a user whose email isn't verified, because anyone can sign up with an address they don't own. If a provider's verified email matches such a user, `callback()` throws a `SocialAuthConflictError` with `code` (`social_identity_conflict`), `provider`, `providerUserId`, and `email`. Catch it in your callback route and tell the user how to link the accounts:
 
-```ts [app/auth/google/callback/route.ts]
+::: code-group
+
+```ts [Next.js]
+// app/auth/google/callback/route.ts
 import { redirect } from 'next/navigation'
 import auth from '@holo-js/auth'
 import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
@@ -218,7 +221,54 @@ export async function GET(request: Request): Promise<Response> {
 }
 ```
 
-The same `.catch()` works in Nuxt and SvelteKit callback routes.
+```ts [Nuxt]
+// server/routes/auth/google/callback.get.ts
+import auth from '@holo-js/auth'
+import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
+
+export default defineEventHandler(async (event) => {
+  const result = await callback('google', event).catch((error: unknown) => {
+    if (error instanceof SocialAuthConflictError) {
+      return { ok: false, status: 409, message: 'Sign in with your password and verify your email to link this account.' } as const
+    }
+    throw error
+  })
+  if (!result.ok) {
+    setResponseStatus(event, result.status)
+    return { message: result.message }
+  }
+
+  await auth.guard(result.guard).loginUsing(result.user)
+
+  return sendRedirect(event, '/dashboard', 303)
+})
+```
+
+```ts [SvelteKit]
+// src/routes/auth/google/callback/+server.ts
+import { json, redirect } from '@sveltejs/kit'
+import auth from '@holo-js/auth'
+import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
+import type { RequestHandler } from './$types'
+
+export const GET: RequestHandler = async ({ request }) => {
+  const result = await callback('google', request).catch((error: unknown) => {
+    if (error instanceof SocialAuthConflictError) {
+      return { ok: false, status: 409, message: 'Sign in with your password and verify your email to link this account.' } as const
+    }
+    throw error
+  })
+  if (!result.ok) {
+    return json({ message: result.message }, { status: result.status })
+  }
+
+  await auth.guard(result.guard).loginUsing(result.user)
+
+  redirect(303, '/dashboard')
+}
+```
+
+:::
 
 To link the accounts, the user signs in with their password and [verifies their email](/auth/email-verification). The next time they continue with the provider, Holo links the social account to them.
 
