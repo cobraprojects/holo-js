@@ -33,7 +33,8 @@
     "build": "tsup",
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "test:platform": "vitest --run tests/file-lock.test.ts --pool forks --reporter=json"
   },
   "dependencies": {
     "@holo-js/config": "catalog:",
