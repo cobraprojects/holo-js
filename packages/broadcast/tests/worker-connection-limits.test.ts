@@ -183,6 +183,70 @@ it('leaves a replacement connection with a reused socket id in place when a queu
   expect(runtime.getStats().connectionCount).toBe(2)
 })
 
+it('clears a presence channel from pending cleanup once Redis recovers and the channel is resubscribed or unsubscribed', async () => {
+  const redis = { up: false, hashes: new Map<string, Map<string, string>>() }
+  let clock = 0
+  const reachRedis = (): void => {
+    if (!redis.up) throw new Error('Redis connection lost')
+  }
+  const runtime = createRuntime({
+    now: () => clock,
+    channelAuth: {
+      resolveUser: ({ socketId }) => ({ id: socketId }),
+      definitions: [defineChannel('room.{id}', { type: 'presence', authorize: user => typeof user === 'object' && user !== null && 'id' in user && typeof user.id === 'string' ? { id: user.id } : false })],
+    },
+    scaling: {
+      driver: 'redis',
+      connection: 'shared',
+      nodeId: 'node-1',
+      eventChannel: 'events',
+      adapter: {
+        publish: async () => {},
+        subscribe: async () => () => {},
+        hashSet: async (key, field, value) => {
+          reachRedis()
+          redis.hashes.set(key, new Map([...(redis.hashes.get(key) ?? []), [field, value]]))
+        },
+        hashGetAll: async key => {
+          reachRedis()
+          return Object.fromEntries(redis.hashes.get(key) ?? [])
+        },
+        hashDelete: async (key, field) => {
+          reachRedis()
+          redis.hashes.get(key)?.delete(field)
+        },
+        close: async () => {},
+      },
+    },
+  })
+  const client = connect(runtime, '1.1')
+  for (let index = 1; index <= 100; index += 1) {
+    await runtime.receiveWebSocketMessage('1.1', subscribe(`presence-room.${index}`))
+  }
+  expect(client.sent.filter(packet => packet.event === 'pusher:subscription_error').map(packet => JSON.parse(packet.data).status)).toEqual(Array(100).fill(500))
+
+  redis.up = true
+  clock = 1_000
+  for (let index = 1; index <= 50; index += 1) {
+    await runtime.receiveWebSocketMessage('1.1', JSON.stringify({ event: 'pusher:unsubscribe', data: { channel: `presence-room.${index}` } }))
+  }
+  for (let index = 51; index <= 100; index += 1) {
+    await runtime.receiveWebSocketMessage('1.1', subscribe(`presence-room.${index}`))
+  }
+  expect(client.sent.filter(packet => packet.event === 'pusher_internal:subscription_succeeded' && packet.channel?.startsWith('presence-room.')).length).toBe(50)
+
+  clock = 2_000
+  for (let index = 101; index <= 150; index += 1) {
+    await runtime.receiveWebSocketMessage('1.1', subscribe(`presence-room.${index}`))
+  }
+  expect(client.sent.filter(packet => packet.event === 'pusher_internal:subscription_succeeded' && packet.channel?.startsWith('presence-room.')).length).toBe(100)
+  await runtime.receiveWebSocketMessage('1.1', subscribe('presence-room.151'))
+
+  expect(client.sent.filter(packet => packet.event === 'pusher_internal:subscription_succeeded' && packet.channel === 'presence-room.151')).toEqual([])
+  expect(JSON.parse(client.sent.at(-1)!.data)).toMatchObject({ status: 429 })
+  expect(runtime.getStats().subscribedChannelCount).toBe(100)
+})
+
 it('refuses a payload that would take buffered output past the bound, closing the connection without handing it to the transport', async () => {
   const realtime: BroadcastRealtimeRuntimeBindings = {
     query: async () => { throw new Error('not used') },

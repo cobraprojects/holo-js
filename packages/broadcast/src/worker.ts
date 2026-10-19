@@ -1680,10 +1680,15 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     if (removedPresenceMember.removed && removedPresenceMember.member) {
       deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
     }
-    await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((cleanupError: unknown) => {
-      report(cleanupError, { capability: 'broadcast', operation: 'worker.subscription' })
-      socket.presenceCleanupPending.add(channel)
-    })
+    await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).then(
+      () => {
+        socket.presenceCleanupPending.delete(channel)
+      },
+      (cleanupError: unknown) => {
+        report(cleanupError, { capability: 'broadcast', operation: 'worker.subscription' })
+        socket.presenceCleanupPending.add(channel)
+      },
+    )
     sendSubscriptionError(socket, channel, 500)
   }
 
@@ -1736,6 +1741,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
           member,
           socket.socketId,
         )
+        socket.presenceCleanupPending.delete(channel)
         if (synchronized.isNewMember) {
           deliverPresenceMemberAddedLocal(socket.app.appId, channel, member, socket.socketId)
           await publishScalingPresenceMemberAdded(socket.app, channel, socket.socketId, member)
@@ -1762,6 +1768,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
     }
     await removePresenceMemberFromScaling(socket.app, socket.socketId, channel)
+    socket.presenceCleanupPending.delete(channel)
     if (removedPresenceMember.removed && removedPresenceMember.member) {
       await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member)
     }
