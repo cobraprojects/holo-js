@@ -65,6 +65,14 @@ Factories and `holo seed` now run without mass-assignment guards, as in Laravel.
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Unexpected SvelteKit errors
+
+Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).
+
+### Debug defaults to false
+
+`debug` in `config/app.ts` now defaults to `false` when `APP_DEBUG` is unset, as in Laravel. Before, it defaulted to `true`, so apps without `APP_DEBUG` showed the messages of unexpected errors in SvelteKit responses. Set `APP_DEBUG=true` in your local `.env` file to keep those messages during development. Apps that set `APP_DEBUG` already, including the scaffold's `.env`, keep their value. SvelteKit error responses and Nuxt's `useHoloDebug()` follow the same setting. Next.js doesn't read it. See [Configuration](/reference/config#app-ts).
+
 ### Broadcast subscription errors and channel authorization
 
 A refused channel subscription no longer closes the WebSocket. The worker sends `pusher:subscription_error` for that channel and keeps the connection open, so Flux keeps the browser's other channels and tries the refused channel again the next time you subscribe to it. If your own client waited for close code `4001` after a refused subscription, listen for `pusher:subscription_error` instead.
@@ -88,6 +96,12 @@ An interrupted run counts as an attempt on both the `redis` and `database` drive
 A `redis` or `database` connection's `retryAfter` must now be at least `1`. Before, `0` was accepted; now the config fails to load with `retryAfter must be greater than or equal to 1.` If you set it to `0`, remove it to use the default `90`, or set another whole number of seconds.
 
 A job whose name isn't registered now fails into the failed jobs table and the worker keeps going. Before, the worker stopped with an error and left the job reserved. If you rename or delete jobs, drain their queued jobs first or retry them later with `npx holo queue:retry`. See [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly).
+
+### queue:listen waits for its worker
+
+`queue:listen` now passes `Ctrl+C`, `SIGINT`, and `SIGTERM` to its worker and exits only after the worker has closed, so stopping `queue:listen` no longer leaves a worker running. A change that restarts the worker waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error instead of starting a replacement. Before, it started one.
+
+If you run `queue:listen` under a process manager, check that it stops when the manager sends `SIGTERM`. Your code doesn't change. See [Develop with queue:listen](/queue/workers#develop-with-queue-listen).
 
 ### Sensitive input in validation failures
 

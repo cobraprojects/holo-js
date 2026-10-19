@@ -63,7 +63,7 @@ export default defineAppConfig({
   key: env('APP_KEY'),
   url: env('APP_URL', 'http://localhost:3000'),
   timezone: env('APP_TIMEZONE', 'UTC'),
-  debug: env('APP_DEBUG', true),
+  debug: env('APP_DEBUG', false),
 })
 ```
 
@@ -73,7 +73,7 @@ export default defineAppConfig({
 | `key` | `''` | Secret key used to sign CSRF tokens and storage URLs, and to encrypt social login tokens. Generate it with `npx holo key:generate`. |
 | `url` | `'http://localhost:3000'` | Public base URL of your app. |
 | `timezone` | `'UTC'` | IANA timezone such as `'Europe/Berlin'`. Holo sets the server process timezone to this value. Invalid names are rejected at startup. |
-| `debug` | `true` | Show detailed errors. Set to `false` in production. |
+| `debug` | `false` | Shows the messages of unexpected errors in SvelteKit responses. Nuxt's `useHoloDebug()` returns it. Next.js doesn't read it. Set `APP_DEBUG=true` in local `.env` files and leave it unset or `false` in production. |
 | `env` | `'development'` | `'development'`, `'production'`, or `'test'`. |
 | `plugins` | `[]` | Active [plugin](/advanced/plugins) package names. `holo plugin:add` and `plugin:remove` edit this list. |
 | `exceptions` | `{}` | `report(error, { capability, operation })` receives errors Holo catches in background work and your `report()` calls. `dontReport` lists error classes to skip. See [Reporting errors](/basics/errors#reporting-errors). |

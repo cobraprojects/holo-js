@@ -58,7 +58,7 @@ Used in `config/app.ts`. See [app.ts](/reference/config#app-ts).
 | `APP_URL` | `http://localhost:3000` (`5173` for SvelteKit) | Public URL of the app. Also used for the broadcast worker's allowed origins and auth endpoint. |
 | `APP_TIMEZONE` | `UTC` | App timezone. |
 | `APP_ENV` | `production` | `development`, `production`, or `test`. Sets `app.env` and decides whether `migrate:fresh`, `migrate:rollback`, and `seed` ask for confirmation. New projects set it to `development` in `.env`. |
-| `APP_DEBUG` | `true` | Show detailed errors. |
+| `APP_DEBUG` | `false` | Shows the messages of unexpected errors in SvelteKit responses. Nuxt's `useHoloDebug()` returns it. Next.js doesn't read it. Set `APP_DEBUG=true` in local `.env` files. |
 
 ## Database
 

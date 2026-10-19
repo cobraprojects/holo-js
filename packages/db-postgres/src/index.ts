@@ -1,5 +1,5 @@
 import { holoRuntimeInternals } from '@holo-js/db'
-import { Pool, types, type PoolConfig } from 'pg'
+import { Pool, types, type PoolClient, type PoolConfig } from 'pg'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -64,6 +64,40 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
   }
 }
 
+const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
+
+function createHoloPool(config?: PoolConfig): Pool {
+  const pool = new Pool({
+    ...config,
+    types: config?.types ?? {
+      getTypeParser(oid: number, format: 'text' | 'binary' = 'text') {
+        if (oid === 1114 && format === 'text') return (value: string) => new Date(`${value}Z`)
+        return types.getTypeParser(oid, format)
+      },
+    },
+  })
+  const sessions = new Set<PoolClient>()
+  openPoolSessions.set(pool, sessions)
+  pool.on('connect', (client) => {
+    sessions.add(client)
+    client.once('end', () => sessions.delete(client))
+  })
+  pool.on('error', error => holoRuntimeInternals.reportError(error, { capability: 'db', operation: 'postgres.idleClient' }))
+  return pool
+}
+
+async function endPoolAndAwaitSessions(pool: PostgresPoolLike): Promise<void> {
+  if (!(pool instanceof Pool)) {
+    return pool.end()
+  }
+
+  const sessions = openPoolSessions.get(pool)
+  await pool.end()
+  await Promise.all([...sessions ?? []].map(client => new Promise<void>((resolve) => {
+    client.once('end', () => resolve())
+  })))
+}
+
 function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefined {
   if (!config) {
     return undefined
@@ -117,15 +151,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined
-      : config => new Pool({
-          ...config,
-          types: config?.types ?? {
-            getTypeParser(oid: number, format: 'text' | 'binary' = 'text') {
-              if (oid === 1114 && format === 'text') return (value: string) => new Date(`${value}Z`)
-              return types.getTypeParser(oid, format)
-            },
-          },
-        }))
+      : config => createHoloPool(config))
     this.config = options.config ?? (options.connectionString ? { connectionString: options.connectionString } as TConfig : undefined)
     this.connected = !!(options.client || options.pool)
     this.transactionClients = new holoRuntimeInternals.PooledTransactionClients(
@@ -173,7 +199,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
     this.transactionClients.disconnect()
 
     if (this.pool) {
-      await this.pool.end()
+      await endPoolAndAwaitSessions(this.pool)
       this.pool = undefined
     } else if (this.directClient?.end) {
       await this.directClient.end()
