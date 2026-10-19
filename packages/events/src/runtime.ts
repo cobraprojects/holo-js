@@ -253,6 +253,9 @@ function createQueuedListenerDispatch(
     ...(typeof (options.delay ?? listener.definition.delay) === 'undefined'
       ? {}
       : { delay: options.delay ?? listener.definition.delay }),
+    ...(typeof listener.definition.tries === 'undefined'
+      ? {}
+      : { tries: listener.definition.tries }),
   })
 }
 

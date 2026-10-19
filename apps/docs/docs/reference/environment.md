@@ -44,7 +44,7 @@ These are read by Holo directly, not through config files.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `APP_ENV` | `production` | Picks the environment and which `.env` files load. See [Env files and loading order](#env-files-and-loading-order). |
-| `NODE_ENV` | none | Not used to pick the environment. `holo start` sets it to `production` for the framework server. When it is `production`, the running app reads the [config cache](/reference/cli#config-cache) if one exists. |
+| `NODE_ENV` | none | Not used to pick the environment. `holo start` sets it to `production` for the framework server. The running app reads the [config cache](/reference/cli#config-cache) when the resolved `APP_ENV` is `production` and a cache exists. |
 | `PORT` | framework default | Port for `holo dev` and `holo start` when you don't pass `--port`. Must be a whole number up to 65535. |
 
 ## App
@@ -57,8 +57,8 @@ Used in `config/app.ts`. See [app.ts](/reference/config#app-ts).
 | `APP_KEY` | empty | Secret key for signing CSRF tokens and storage URLs and encrypting social tokens. Create it with `npx holo key:generate`. |
 | `APP_URL` | `http://localhost:3000` (`5173` for SvelteKit) | Public URL of the app. Also used for the broadcast worker's allowed origins and auth endpoint. |
 | `APP_TIMEZONE` | `UTC` | App timezone. |
-| `APP_ENV` | `production` | `development`, `production`, or `test`. Sets `app.env` and decides whether `holo seed` needs `--force`. New projects set it to `development` in `.env`. |
-| `APP_DEBUG` | `true` | Show detailed errors. |
+| `APP_ENV` | `production` | `development`, `production`, or `test`. Sets `app.env` and decides whether `migrate:fresh`, `migrate:rollback`, and `seed` ask for confirmation. New projects set it to `development` in `.env`. |
+| `APP_DEBUG` | `false` | Shows the messages of unexpected errors in SvelteKit responses. Nuxt's `useHoloDebug()` returns it. Next.js doesn't read it. Set `APP_DEBUG=true` in local `.env` files. |
 
 ## Database
 
@@ -143,6 +143,14 @@ Holo also checks `STORAGE_DISKS_<DISK>_<OPTION>` for **every** disk, even if you
 For example, `STORAGE_DISKS_MEDIA_BUCKET=blog-uploads` sets the bucket of a disk named `media`.
 
 These overrides are read from the process environment when storage starts. Values that only exist in a `.env` file may not reach them, so for settings you want in `.env`, use `env()` in `config/storage.ts` instead.
+
+## Media
+
+Used in `config/media.ts`. See [Media Library](/media/).
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MEDIA_DISK` | `public` | Disk for media in collections that don't set `disk()`. |
 
 ## Mail
 

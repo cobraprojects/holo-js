@@ -20,7 +20,6 @@ export type DatabaseCacheDriverOptions = {
   readonly connectionName: string
   readonly table: string
   readonly lockTable: string
-  readonly prefix?: string
   readonly connection: HoloDatabaseConnectionConfig | string
 }
 

@@ -52,6 +52,8 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 | `bun run test:coverage` | Coverage report, for finding untested behavior. |
 | `bun run check` | Typecheck, lint, and `test:ci`. |
 
+The CLI's package-manager tests run real `npm`, `pnpm`, and `yarn` installs, so those tools must be on your `PATH`. CI installs pnpm 10.34.7 and yarn 1.22.22 with npm. Install the same versions locally to run them.
+
 ## Before you push
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.

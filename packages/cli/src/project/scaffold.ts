@@ -15,6 +15,7 @@ import {
   MEDIA_CONFIG_FILE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
+  REDIS_CONFIG_FILE_NAMES,
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   type AuthInstallResult,
@@ -69,6 +70,10 @@ import {
   resolveConfigModuleFormat,
   syncBroadcastAuthSupportAfterAuthInstall,
 } from './scaffold/config-renderers'
+import {
+  assertRedisCacheConnectionsAvailable,
+  resolveRequiredRedisConnections,
+} from './scaffold/redis-cache-connections'
 import {
   detectProjectFrameworkDescriptor,
   detectProjectFrameworkFromPackageJson,
@@ -820,6 +825,17 @@ export async function installCacheIntoProject(
       `config/cache.ts already exists and does not configure the "${driver}" cache driver. `
       + `Update your cache config first, then rerun "holo install cache".`,
     )
+  }
+
+  if (driver === 'redis') {
+    const redisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)
+    const redisConfigSource = redisConfigPath ? await readTextFile(redisConfigPath) : undefined
+    assertRedisCacheConnectionsAvailable({
+      redisConfig: redisConfigPath && redisConfigSource !== undefined
+        ? { path: redisConfigPath, source: redisConfigSource, connections: Object.keys(loadedConfig.redis.connections) }
+        : undefined,
+      requiredConnections: resolveRequiredRedisConnections(loadedCacheConfig?.drivers),
+    })
   }
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })

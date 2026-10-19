@@ -11,7 +11,8 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
-import { DB, createSchemaService, generateMigrationTemplate } from '@holo-js/db'
+import { DB, TableQueryBuilder, createDatabase, createDialect, createSchemaService, generateMigrationTemplate } from '@holo-js/db'
+import { createSQLiteAdapter } from '../../db-sqlite/src'
 import {
   stageWorkspacePackagesSync,
   resolveInstalledDependencyRoot,
@@ -3967,6 +3968,7 @@ export default defineCacheConfig({
     expect(first.stdout).toContain('  - updated package.json')
     expect(first.stdout).toContain('  - created media migration')
     expect(await readFile(join(projectRoot, 'config/media.ts'), 'utf8')).toContain('defineMediaConfig')
+    expect(await readFile(join(projectRoot, 'config/media.ts'), 'utf8')).toContain('disk: env(\'MEDIA_DISK\', \'public\')')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/media": "${expectedHoloPackageRange}"`)
 
     const migrations = await readdir(join(projectRoot, 'server/db/migrations'))
@@ -5422,12 +5424,91 @@ export default defineMigration({
     const generatedPath = join(projectRoot, '.holo-js/generated/schema.generated.ts')
     await expect(readFile(generatedPath, 'utf8')).resolves.toContain('export const users = defineGeneratedTable("users", {')
 
-    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'])
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
     expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
 
     const generated = await readFile(generatedPath, 'utf8')
     expect(generated).toContain('registerGeneratedTables(tables)')
     expect(generated).not.toContain('defineGeneratedTable("users"')
+  }, 30000)
+
+  it('refuses destructive database commands in production without a terminal unless --force is passed', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    for (const args of [['seed'], ['migrate:rollback'], ['migrate:fresh']]) {
+      const refused = runCliProcess(projectRoot, args, { env: { APP_ENV: 'production' } })
+      expect(refused.status, args.join(' ')).toBe(1)
+      expect(refused.stderr, args.join(' ')).toContain('needs --force to run without confirmation')
+    }
+  }, 30000)
+
+  it('skips migrate --isolated while another runner holds the migration lock', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+
+    const built = await runWorkspacePackageBuild('@holo-js/db')
+    expect(built.status).toBe(0)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
+    const created = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(created.status, created.stderr || created.stdout).toBe(0)
+
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    const database = createDatabase({
+      adapter: createSQLiteAdapter({ filename: join(projectRoot, 'data.sqlite') }),
+      dialect: createDialect('sqlite'),
+    })
+    try {
+      await new TableQueryBuilder('_holo_migration_locks', database).insert({
+        name: 'migrations',
+        owner: 'other-runner',
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      })
+
+      const artifactPath = join(projectRoot, '.holo-js/generated/schema.generated.ts')
+      await writeFile(artifactPath, '// written by the runner that holds the lock\n', 'utf8')
+      const skipped = runCliProcess(projectRoot, ['migrate', '--isolated'])
+      expect(skipped.status, skipped.stderr || skipped.stdout).toBe(0)
+      expect(skipped.stdout).toContain('holds the migration lock; no migrations were executed.')
+      await expect(createSchemaService(database).hasTable('users')).resolves.toBe(false)
+      await expect(readFile(artifactPath, 'utf8')).resolves.toBe('// written by the runner that holds the lock\n')
+
+      await new TableQueryBuilder('_holo_migration_locks', database).where('owner', 'other-runner').delete()
+    } finally {
+      await database.disconnect()
+    }
+
+    const applied = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(applied.status, applied.stderr || applied.stdout).toBe(0)
+    expect(applied.stdout).toContain('Migrations executed:')
   }, 30000)
 
   it('executes plugin-published migrations through the existing migration lifecycle', async () => {
@@ -5492,7 +5573,7 @@ export const migrations = [defineMigration({
     await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
       .resolves.toContain('defineGeneratedTable("plugin_roles"')
 
-    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'])
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
     expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
     expect(rolledBack.stdout).toContain('2026_07_29_000001_create_plugin_roles')
   }, 60000)
@@ -9870,6 +9951,202 @@ export default defineCacheConfig({
       driver: 'bad' as never,
     })).rejects.toThrow('Unsupported cache driver: bad.')
   }, 30_000)
+
+  it('refuses a redis cache install when the existing redis config has no cache connection', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', '')
+    await writeProjectFile(projectRoot, '.env.example', '')
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('does not define the "cache" Redis connection')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('cache: {')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow("import { env } from '@holo-js/config'")
+    await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).not.toContain('cache: {')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('')
+  }, 30_000)
+
+  it('installs the redis cache store when the existing redis config defines the cache connection', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', '')
+    await writeProjectFile(projectRoot, '.env.example', '')
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 1,
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({
+      createdCacheConfig: true,
+      createdRedisConfig: false,
+    })
+    expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('connection: \'cache\'')
+  }, 30_000)
+
+  describe('redis cache connection check', () => {
+    const redisConfigFormats = [
+      { extension: 'ts', moduleFormat: 'esm' },
+      { extension: 'mts', moduleFormat: 'esm' },
+      { extension: 'js', moduleFormat: 'esm' },
+      { extension: 'mjs', moduleFormat: 'esm' },
+      { extension: 'cts', moduleFormat: 'cjs' },
+      { extension: 'cjs', moduleFormat: 'cjs' },
+    ] as const
+    const envImportLineFor = (moduleFormat: 'esm' | 'cjs') => moduleFormat === 'cjs'
+      ? 'const { env } = require(\'@holo-js/config\')'
+      : 'import { env } from \'@holo-js/config\''
+
+    function redisConfigSource(moduleFormat: 'esm' | 'cjs', options: { importEnv: boolean, extraConnections: readonly string[] }): string {
+      const connections = [
+        'default: { host: \'127.0.0.1\', port: 6379, db: 0 }',
+        ...options.extraConnections.map(name => `${name}: { host: '127.0.0.1', port: 6379, db: 1 }`),
+      ].join(', ')
+      if (moduleFormat === 'cjs') {
+        return [
+          'const { defineRedisConfig } = require(\'@holo-js/kernel\')',
+          ...(options.importEnv ? [envImportLineFor('cjs')] : []),
+          '',
+          `module.exports = defineRedisConfig({ default: 'default', connections: { ${connections} } })`,
+          '',
+        ].join('\n')
+      }
+      return [
+        'import { defineRedisConfig } from \'@holo-js/kernel\'',
+        ...(options.importEnv ? [envImportLineFor('esm')] : []),
+        '',
+        `export default defineRedisConfig({ default: 'default', connections: { ${connections} } })`,
+        '',
+      ].join('\n')
+    }
+
+    async function refusalMessage(projectRoot: string): Promise<string> {
+      const failure = await projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' }).then(() => undefined, (error: unknown) => error)
+      expect(failure).toBeInstanceOf(Error)
+      return failure instanceof Error ? failure.message : ''
+    }
+
+    it.each(redisConfigFormats.flatMap(format => [true, false].map(importEnv => ({ ...format, importEnv }))).filter(
+      // A CJS config cannot import @holo-js/config under Node today: the package has no require export, so the
+      // loader fails before the check runs. The CJS env-import case is covered by redis-cache-connections.test.ts.
+      ({ moduleFormat, importEnv }) => !(moduleFormat === 'cjs' && importEnv),
+    ))(
+      'refuses a redis cache install without a cache connection in a .$extension config (env imported: $importEnv)',
+      async ({ extension, moduleFormat, importEnv }) => {
+        const projectRoot = await createTempProject()
+        tempDirs.push(projectRoot)
+        await writeProjectFile(projectRoot, '.env', '')
+        await writeProjectFile(projectRoot, '.env.example', '')
+        await writeProjectFile(projectRoot, `config/redis.${extension}`, redisConfigSource(moduleFormat, { importEnv, extraConnections: [] }))
+
+        const message = await refusalMessage(projectRoot)
+
+        expect(message).toContain('cache: {')
+        if (moduleFormat === 'cjs') {
+          expect(message).toContain('db: Number(process.env.REDIS_CACHE_DB || 1),')
+          expect(message).not.toContain('require(')
+          expect(message).not.toContain('also add this import')
+        } else if (importEnv) {
+          expect(message).not.toContain('also add this import')
+        } else {
+          expect(message).toContain(envImportLineFor(moduleFormat))
+        }
+        await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      },
+      30_000,
+    )
+
+    it.each([
+      { store: 'none', redis: 'default-only', outcome: 'refuses', snippet: true, missing: '"cache"' },
+      { store: 'none', redis: 'default-and-cache', outcome: 'installs' },
+      { store: 'none', redis: 'absent', outcome: 'installs' },
+      { store: 'cache', redis: 'default-only', outcome: 'refuses', snippet: true, missing: '"cache"' },
+      { store: 'omitted', redis: 'default-only', outcome: 'installs' },
+      { store: 'sessions', redis: 'default-only', outcome: 'refuses', snippet: false, missing: '"sessions"' },
+      { store: 'cache', redis: 'default-and-cache', outcome: 'installs' },
+      { store: 'cache', redis: 'absent', outcome: 'installs' },
+      { store: 'sessions', redis: 'absent', outcome: 'refuses', snippet: false, missing: '"sessions"' },
+    ] as const)(
+      'redis cache install with redis config $redis and store $store $outcome',
+      async ({ store, redis, outcome, ...expected }) => {
+        const projectRoot = await createTempProject()
+        tempDirs.push(projectRoot)
+        await writeProjectFile(projectRoot, '.env', '')
+        await writeProjectFile(projectRoot, '.env.example', '')
+        if (redis !== 'absent') {
+          await writeProjectFile(projectRoot, 'config/redis.ts', redisConfigSource('esm', {
+            importEnv: false,
+            extraConnections: redis === 'default-and-cache' ? ['cache'] : [],
+          }))
+        }
+        if (store !== 'none') {
+          await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/cache'
+
+export default defineCacheConfig({
+  default: 'file',
+  drivers: {
+    file: {
+      driver: 'file',
+    },
+    redis: {
+      driver: 'redis'${store === 'omitted' ? '' : `,\n      connection: '${store}'`},
+    },
+  },
+})
+`)
+        }
+
+        if (outcome === 'refuses') {
+          const message = await refusalMessage(projectRoot)
+          expect(message).toContain(expected.missing)
+          if (expected.snippet) {
+            expect(message).toContain('cache: {')
+          } else {
+            expect(message).not.toContain('cache: {')
+          }
+          if (store === 'none') {
+            await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+          }
+          return
+        }
+
+        await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({
+          createdCacheConfig: store === 'none',
+          createdRedisConfig: redis === 'absent',
+        })
+      },
+      60_000,
+    )
+  })
 
   it('generates queue table migrations and flushes persisted failed jobs', async () => {
     const defaultProjectRoot = await createTempProject()

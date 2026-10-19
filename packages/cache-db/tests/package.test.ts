@@ -7,6 +7,7 @@ import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { CacheConfigError, CacheInvalidNumericMutationError, deserializeCacheValue, serializeCacheValue } from '@holo-js/cache'
 import {
   DB,
+  DatabaseError,
   TableQueryBuilder,
   clearGeneratedTables,
   column,
@@ -106,7 +107,6 @@ async function createPublicFeatureHarness() {
     table: DEFAULT_CACHE_DATABASE_TABLE,
     lockTable: DEFAULT_CACHE_DATABASE_LOCK_TABLE,
     connection: databasePath,
-    prefix: 'users:',
   })
 
   return {
@@ -195,6 +195,24 @@ describe('@holo-js/cache-db', () => {
   })
 
   it('normalizes missing-table errors only for matching cache table failures', async () => {
+    expect(cacheDbInternals.isDatabaseCacheTableMissingError(
+      new DatabaseError(
+        'Connection "cache" failed to execute via driver "mysql": the table is gone',
+        'DRIVER_EXECUTE_ERROR',
+        Object.assign(new Error('the table is gone'), { code: 'ER_NO_SUCH_TABLE' }),
+      ),
+      'cache_entries',
+      'cache_entry_locks',
+    )).toBe(false)
+    expect(cacheDbInternals.isDatabaseCacheTableMissingError(
+      new DatabaseError(
+        'Connection "cache" failed to execute via driver "mysql": cache_entries is gone',
+        'DRIVER_EXECUTE_ERROR',
+        Object.assign(new Error('cache_entries is gone'), { code: 'ER_NO_SUCH_TABLE' }),
+      ),
+      'cache_entries',
+      'cache_entry_locks',
+    )).toBe(true)
     expect(cacheDbInternals.isDatabaseCacheTableMissingError('boom', 'cache_entries', 'cache_entry_locks')).toBe(false)
     expect(cacheDbInternals.isDatabaseCacheTableMissingError(
       Object.assign(new Error('SQLITE_ERROR: no such table: cache_entries'), { code: 'SQLITE_ERROR' }),
@@ -333,7 +351,7 @@ describe('@holo-js/cache-db', () => {
     expect(await driver.get('alpha')).toEqual({ hit: false })
   })
 
-  it('preserves differently prefixed entries when flushing a shared database store', async () => {
+  it('flushes every entry in its table regardless of key prefix and leaves held locks in place', async () => {
     const { databasePath } = await createPreparedDriver()
     const primary = createDatabaseCacheDriver({
       name: 'primary',
@@ -344,7 +362,6 @@ describe('@holo-js/cache-db', () => {
         driver: 'sqlite',
         filename: databasePath,
       },
-      prefix: 'primary:',
     })
     const secondary = createDatabaseCacheDriver({
       name: 'secondary',
@@ -355,82 +372,25 @@ describe('@holo-js/cache-db', () => {
         driver: 'sqlite',
         filename: databasePath,
       },
-      prefix: 'secondary:',
     })
 
     await primary.put({
       key: 'primary:alpha',
-      payload: '"one"',
+      payload: '"first"',
       expiresAt: Date.now() + 60_000,
     })
     await secondary.put({
-      key: 'secondary:alpha',
-      payload: '"two"',
+      key: 'tenant_%:alpha',
+      payload: '"second"',
       expiresAt: Date.now() + 60_000,
     })
     expect(await primary.lock('primary:report', 60).get()).toBe(true)
-    expect(await secondary.lock('secondary:report', 60).get()).toBe(true)
 
     await primary.flush()
 
     expect(await primary.get('primary:alpha')).toEqual({ hit: false })
-    expect(await secondary.get('secondary:alpha')).toEqual({
-      hit: true,
-      payload: '"two"',
-      expiresAt: expect.any(Number),
-    })
-    expect(await primary.lock('primary:report', 60).get()).toBe(true)
-    expect(await secondary.lock('secondary:report', 60).get()).toBe(false)
-  })
-
-  it('flushes exact wildcard-containing prefixes without treating them as SQL wildcards', async () => {
-    const { databasePath } = await createPreparedDriver()
-    const exactPrefixDriver = createDatabaseCacheDriver({
-      name: 'database',
-      connectionName: 'cache',
-      table: DEFAULT_CACHE_DATABASE_TABLE,
-      lockTable: DEFAULT_CACHE_DATABASE_LOCK_TABLE,
-      connection: {
-        driver: 'sqlite',
-        filename: databasePath,
-      },
-      prefix: 'tenant_%:',
-    })
-    const overlappingPrefixDriver = createDatabaseCacheDriver({
-      name: 'database',
-      connectionName: 'cache',
-      table: DEFAULT_CACHE_DATABASE_TABLE,
-      lockTable: DEFAULT_CACHE_DATABASE_LOCK_TABLE,
-      connection: {
-        driver: 'sqlite',
-        filename: databasePath,
-      },
-      prefix: 'tenant-1:',
-    })
-
-    await exactPrefixDriver.put({
-      key: 'tenant_%:alpha',
-      payload: '"exact"',
-      expiresAt: Date.now() + 60_000,
-    })
-    await overlappingPrefixDriver.put({
-      key: 'tenant-1:alpha',
-      payload: '"other"',
-      expiresAt: Date.now() + 60_000,
-    })
-    expect(await exactPrefixDriver.lock('tenant_%:report', 60).get()).toBe(true)
-    expect(await overlappingPrefixDriver.lock('tenant-1:report', 60).get()).toBe(true)
-
-    await exactPrefixDriver.flush()
-
-    expect(await exactPrefixDriver.get('tenant_%:alpha')).toEqual({ hit: false })
-    expect(await overlappingPrefixDriver.get('tenant-1:alpha')).toEqual({
-      hit: true,
-      payload: '"other"',
-      expiresAt: expect.any(Number),
-    })
-    expect(await exactPrefixDriver.lock('tenant_%:report', 60).get()).toBe(true)
-    expect(await overlappingPrefixDriver.lock('tenant-1:report', 60).get()).toBe(false)
+    expect(await secondary.get('tenant_%:alpha')).toEqual({ hit: false })
+    expect(await secondary.lock('primary:report', 60).get()).toBe(false)
   })
 
   it('supports expiration cleanup and numeric mutation', async () => {
@@ -482,6 +442,20 @@ describe('@holo-js/cache-db', () => {
     expect(await blockingLock.get()).toBe(true)
     await expect(driver.lock('wait', 0.02).block(0.05, async () => 'after-wait')).resolves.toBe('after-wait')
   })
+
+  it('prunes expired lock rows through the lock lottery', async () => {
+    const { connection, driver } = await createPreparedDriver()
+    const locks = () => new TableQueryBuilder(DEFAULT_CACHE_DATABASE_LOCK_TABLE, connection)
+    for (let index = 0; index < 20; index += 1) {
+      await locks().insert({ name: `stale:${index}`, owner: 'stale', expires_at: Date.now() - 1_000 })
+    }
+
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      expect(await driver.lock('probe', 60).get(() => undefined)).toBeUndefined()
+    }
+
+    expect(await locks().where('expires_at', '<=', Date.now()).count()).toBe(0)
+  }, 30_000)
 
   it('times out contested locks and numeric mutations when the lock is held too long', async () => {
     const { driver } = await createPreparedDriver({

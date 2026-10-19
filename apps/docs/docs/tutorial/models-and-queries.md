@@ -111,15 +111,13 @@ export default defineSeeder({
     const timestamp = new Date('2026-04-26T09:00:00.000Z')
     const password = await hashPassword('secret-secret')
 
-    const author = await User.unguarded(() =>
-      User.create({
-        name: 'Holo Editor',
-        email: 'editor@example.com',
-        password,
-        avatar: null,
-        email_verified_at: timestamp,
-      }),
-    )
+    const author = await User.create({
+      name: 'Holo Editor',
+      email: 'editor@example.com',
+      password,
+      avatar: null,
+      email_verified_at: timestamp,
+    })
 
     const engineering = await Category.create({
       name: 'Engineering',
@@ -175,7 +173,7 @@ export default defineSeeder({
 Some notes:
 
 - `hashPassword()` hashes the password the same way sign-in checks it. You'll sign in as `editor@example.com` / `secret-secret` in [chapter 7](/tutorial/auth).
-- `User.unguarded()` lets the seeder set `email_verified_at`, which isn't in the `fillable` list.
+- The seeder sets `email_verified_at`, which isn't in the `fillable` list. `holo seed` runs seeders without mass-assignment guards, as Laravel does, so no `unguarded()` wrapper is needed.
 - `post.tags().sync({...})` sets the post's tags and the `is_primary` value for each link.
 
 Run it:

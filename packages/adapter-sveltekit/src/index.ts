@@ -13,6 +13,7 @@ import {
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
 import { requestUrlInternals } from '@holo-js/kernel'
+import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
   type SvelteKitTransportDefinition,
@@ -72,6 +73,10 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
 
 function isApiEvent(event: SvelteKitRequestEvent): boolean {
   return event.url?.pathname.startsWith('/api/') === true
+}
+
+function isDebugEnabled(): boolean {
+  return svelteKitAdapter.internals.getState().project?.config.app.debug === true
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -461,7 +466,9 @@ export function createSvelteKitHoloHooks(hooks: {
         return payload
       }
       if (hooks.handleError) return hooks.handleError(input)
-      return { message: input.error instanceof Error ? input.error.message : 'Internal server error' }
+      if (input.status >= 500) reportError(input.error, { capability: 'sveltekit', operation: 'handleError' })
+      if (input.error instanceof Error && isDebugEnabled()) return { message: input.error.message }
+      return { message: input.message }
     },
   }
 }

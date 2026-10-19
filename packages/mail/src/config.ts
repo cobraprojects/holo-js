@@ -10,6 +10,8 @@ export interface HoloMailQueueConfig {
   readonly connection?: string
   readonly queue?: string
   readonly afterCommit?: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 export interface HoloMailPreviewConfig {
@@ -77,6 +79,8 @@ export interface NormalizedHoloMailQueueConfig {
   readonly connection?: string
   readonly queue?: string
   readonly afterCommit: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 export interface NormalizedHoloMailPreviewConfig {
@@ -145,6 +149,8 @@ const DEFAULT_MAIL_QUEUE_CONFIG: Readonly<NormalizedHoloMailQueueConfig> = Objec
   connection: undefined,
   queue: undefined,
   afterCommit: false,
+  tries: undefined,
+  backoff: undefined,
 })
 
 export const holoMailDefaults: Readonly<NormalizedHoloMailConfig> = Object.freeze({
@@ -241,6 +247,40 @@ function normalizeMailAddress(
   })
 }
 
+export function normalizeOptionalMailTries(value: number | undefined): number | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('[Holo Mail] Mail queue tries must be an integer greater than or equal to 1.')
+  }
+
+  return value
+}
+
+export function normalizeOptionalMailBackoff(
+  value: number | readonly number[] | undefined,
+): number | readonly number[] | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error('[Holo Mail] Mail queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+    }
+
+    return value
+  }
+
+  if (!Array.isArray(value) || value.length === 0 || value.some(entry => !Number.isInteger(entry) || entry < 0)) {
+    throw new Error('[Holo Mail] Mail queue backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+  }
+
+  return Object.freeze([...value])
+}
+
 function normalizeMailQueueConfig(
   queue: HoloMailQueueConfig | undefined,
   fallback: NormalizedHoloMailQueueConfig = holoMailDefaults.queue,
@@ -250,6 +290,8 @@ function normalizeMailQueueConfig(
     connection: normalizeOptionalMailString(queue?.connection, 'Mail queue connection') ?? fallback.connection,
     queue: normalizeOptionalMailString(queue?.queue, 'Mail queue name') ?? fallback.queue,
     afterCommit: queue?.afterCommit ?? fallback.afterCommit,
+    tries: normalizeOptionalMailTries(queue?.tries) ?? fallback.tries,
+    backoff: normalizeOptionalMailBackoff(queue?.backoff) ?? fallback.backoff,
   })
 }
 

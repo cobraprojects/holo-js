@@ -230,7 +230,7 @@ npx holo key:generate
 
 ### config:cache
 
-Compile every file in `config/` into one cached file at `.holo-js/generated/config-cache.json`. Each `env()` call is evaluated with your current env values, and the results, secrets included, are written into the file. Holo still reads `.env` to choose the environment. When the app runs in production (`APP_ENV=production`, from your shell or from `.env`) and the cache was built for production, Holo reads the cache instead of loading `config/*.ts`. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached. Holo loads them live, so their `env()` values come from the runtime environment. Other environments ignore the cache.
+Compile every file in `config/` into one cached file at `.holo-js/generated/config-cache.json`. Each `env()` call is evaluated with your current env values, and the results, secrets included, are written into the file. Holo still reads `.env` to choose the environment. When the app runs in production (`APP_ENV=production`, from your shell or from `.env`) and the cache was built for production, Holo reads the cache instead of loading `config/*.ts`. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, are loaded from their files, but the `env()` values they read while loading are recorded in the cache too. Code that calls `env()` after startup, such as a reporter's body, reads the runtime environment. Other environments ignore the cache.
 
 ```bash
 APP_ENV=production npx holo config:cache
@@ -458,12 +458,13 @@ npx holo make:channel orders.{orderId}
 Run every [migration](/database/migrations) that hasn't run yet.
 
 ```bash
-npx holo migrate [--step <n>]
+npx holo migrate [--step <n>] [--isolated]
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Run at most this many pending migrations. |
+| `--isolated` | Take a database lock first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
 
 ```bash
 npx holo migrate
@@ -482,11 +483,13 @@ npx holo migrate:fresh [--seed] [--only <names>] [--quietly] [--force]
 | `--seed` | Run seeders after migrating. |
 | `--only <names>` | With `--seed`, run only these seeders (comma-separated). |
 | `--quietly` | With `--seed`, run seeders without firing model events. |
-| `--force` | With `--seed`, allow seeding in production. |
+| `--force` | Skip the production confirmation. |
 
 ```bash
 npx holo migrate:fresh --seed
 ```
+
+When `APP_ENV` is `production`, `migrate:fresh` asks you to confirm before it drops anything. Without a terminal, it stops with an error unless you pass `--force`.
 
 ::: danger
 `migrate:fresh` deletes all your data. Never run it against a production database.
@@ -497,15 +500,16 @@ npx holo migrate:fresh --seed
 Undo migrations.
 
 ```bash
-npx holo migrate:rollback [--step <n>] [--batch <n>]
+npx holo migrate:rollback [--step <n>] [--batch <n>] [--force]
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Roll back at most this many migrations from the batch. |
 | `--batch <n>` | Roll back this batch number instead of the latest one. |
+| `--force` | Skip the production confirmation. |
 
-With no flags, every migration in the latest batch is rolled back.
+With no flags, every migration in the latest batch is rolled back. When `APP_ENV` is `production`, the command asks you to confirm first, and without a terminal it stops with an error unless you pass `--force`.
 
 ```bash
 npx holo migrate:rollback --step 1
@@ -523,11 +527,13 @@ npx holo seed [--only <names>] [--quietly] [--force]
 | --- | --- |
 | `--only <names>` | Run only these seeders. Comma-separate or repeat the flag. |
 | `--quietly` | Run seeders without firing model events (observers don't run). |
-| `--force` | Allow seeding when the environment is `production`. |
+| `--force` | Skip the production confirmation. |
 
 ```bash
 npx holo seed --only roles,admin
 ```
+
+When `APP_ENV` is `production`, `seed` asks you to confirm first. Without a terminal, it stops with an error unless you pass `--force`.
 
 ### prune
 
@@ -588,6 +594,8 @@ Accepts the same flags as `queue:work` except `--once` and `--stop-when-empty`.
 ```bash
 npx holo queue:listen --connection redis --queue media
 ```
+
+`Ctrl+C`, `SIGINT`, and `SIGTERM` stop the worker after its current job and then stop `queue:listen`. A restart waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error and doesn't start a replacement. On Windows the worker's process tree is ended at once, so a job in progress is interrupted and retried later.
 
 ### queue:restart
 
@@ -674,7 +682,7 @@ npx holo queue:failed-table
 
 ### cache:clear
 
-Remove every item from a [cache](/cache/) store.
+Remove every item from a [cache](/cache/) store, whatever its key prefix. For a Redis store this runs `FLUSHDB` on its database; see [Cache drivers](/cache/drivers#redis) before pointing a store at shared data.
 
 ```bash
 npx holo cache:clear [--driver <name>]

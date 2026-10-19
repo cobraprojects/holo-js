@@ -1,6 +1,13 @@
 import { loadEnvironment } from '@holo-js/config'
-import { type spawn, spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnOptions } from 'node:child_process'
 import type { IoStreams, PackageManagerCommand, SpawnProcessLike } from './cli-types'
+
+export type FrameworkSpawn = (command: string, args: readonly string[], options: SpawnOptions) => SpawnProcessLike
+
+export type FrameworkQuiescence = {
+  readonly generation: () => number
+  readonly settle: () => Promise<void>
+}
 
 type FrameworkRunResult = (
   | { kind: 'close', code: number | null }
@@ -9,7 +16,7 @@ type FrameworkRunResult = (
   readonly restartRequested: boolean
 }
 
-function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
+export function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' || child.pid === undefined) {
     child.kill?.(signal)
     return
@@ -29,14 +36,15 @@ function launchFrameworkRun(
   projectRoot: string,
   invocation: PackageManagerCommand,
   serverArgs: readonly string[],
-  spawnProcess: typeof spawn,
+  spawnProcess: FrameworkSpawn,
   environment: NodeJS.ProcessEnv,
-): { readonly completion: Promise<FrameworkRunResult>, restart(): void, shutdown(signal: NodeJS.Signals): void } {
+): { readonly completion: Promise<FrameworkRunResult>, readonly startedAt: number, restart(): void, shutdown(signal: NodeJS.Signals): void } {
   const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
     cwd: projectRoot,
     env: environment,
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as SpawnProcessLike
+  const startedAt = Date.now()
   let restartRequested = false
   let shutdownSignal: NodeJS.Signals | undefined
   let processError: Error | undefined
@@ -87,6 +95,7 @@ function launchFrameworkRun(
 
   return {
     completion,
+    startedAt,
     shutdown,
     restart() {
       if (settled || processError || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
@@ -100,7 +109,7 @@ function launchFrameworkRun(
 export function createFrameworkSession(
   io: IoStreams,
   projectRoot: string,
-  spawnProcess: typeof spawn,
+  spawnProcess: FrameworkSpawn,
   onShutdown?: () => void,
 ): {
   readonly signal: AbortSignal
@@ -108,6 +117,7 @@ export function createFrameworkSession(
     invocation: PackageManagerCommand,
     serverArgs: readonly string[],
     environmentOverrides?: NodeJS.ProcessEnv,
+    quiescence?: FrameworkQuiescence,
   ): Promise<ReturnType<typeof launchFrameworkRun>>
   dispose(): void
 } {
@@ -132,8 +142,14 @@ export function createFrameworkSession(
 
   return {
     signal: controller.signal,
-    async launch(invocation: PackageManagerCommand, serverArgs: readonly string[], environmentOverrides = {}) {
-      const environment = await loadEnvironment({ cwd: projectRoot, processEnv: process.env })
+    async launch(invocation: PackageManagerCommand, serverArgs: readonly string[], environmentOverrides = {}, quiescence) {
+      let environment: Awaited<ReturnType<typeof loadEnvironment>>
+      let generation: number | undefined
+      do {
+        generation = quiescence?.generation()
+        await quiescence?.settle()
+        environment = await loadEnvironment({ cwd: projectRoot, processEnv: process.env })
+      } while (quiescence && quiescence.generation() !== generation)
       controller.signal.throwIfAborted()
       activeRun = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess, {
         ...environment.values,

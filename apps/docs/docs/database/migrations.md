@@ -154,6 +154,16 @@ npx holo migrate --step 1
 
 Holo never runs migrations when your app starts. Run `migrate` yourself, in your deploy script or CI.
 
+### Isolating migration runs
+
+When several replicas run `migrate` at the same time, add `--isolated`:
+
+```bash
+npx holo migrate --isolated
+```
+
+The first run takes a database lock and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is held in a `_holo_migration_locks` table and expires an hour after it was last renewed, so a runner that stops without releasing it doesn't block later deploys for longer than that. The run renews the lock before each migration. A single migration that runs longer than an hour can let another runner in, which can apply that migration again. Split very long data backfills into shorter runs, and don't start a second `migrate --isolated` while one is still working on a long migration.
+
 ### Rolling back
 
 Undo the latest batch:
@@ -166,8 +176,11 @@ npx holo migrate:rollback
 | --- | --- |
 | `--step <n>` | Roll back only the last `n` migrations of the batch |
 | `--batch <n>` | Roll back batch `n` instead of the latest one |
+| `--force` | Skip the production confirmation |
 
 Migrations roll back newest first. A migration without `down` is still marked as not run, but nothing in the database changes.
+
+When `APP_ENV` is `production`, `migrate:rollback` asks you to confirm first.
 
 ### Starting fresh
 
@@ -182,6 +195,8 @@ Add `--seed` to run your [seeders](/database/seeding) afterwards. The seeding fl
 ```bash
 npx holo migrate:fresh --seed --only database
 ```
+
+When `APP_ENV` is `production`, `migrate:fresh` asks you to confirm first.
 
 ::: warning
 `migrate:fresh` drops **every** table on the connection, including tables Holo didn't create. Never run it against a production database.
@@ -971,8 +986,8 @@ On SQLite, `schema.table()` can add columns, change columns with `.change()`, an
 | Command | Flags |
 | --- | --- |
 | `npx holo make:migration <name>` | `--create <table>`, `--table <table>` |
-| `npx holo migrate` | `--step <n>` |
-| `npx holo migrate:rollback` | `--step <n>`, `--batch <n>` |
+| `npx holo migrate` | `--step <n>`, `--isolated` |
+| `npx holo migrate:rollback` | `--step <n>`, `--batch <n>`, `--force` |
 | `npx holo migrate:fresh` | `--seed`, `--only <names>`, `--quietly`, `--force` |
 
 ## Next steps

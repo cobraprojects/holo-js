@@ -719,7 +719,6 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
     const storageModule = await importOptionalStorageModule()
     const loaded = await loadConfigDirectory(rootDir, {
-      preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
     })
     if ((loaded.app.plugins ?? []).includes('@holo-js/panels')) {

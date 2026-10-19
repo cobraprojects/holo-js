@@ -198,6 +198,86 @@ describe('@holo-js/events queue integration', () => {
     }
   })
 
+  it('applies listener tries to the queued job and defaults framework listeners to one try', async () => {
+    const database = await createSQLiteQueueHarness()
+    try {
+      const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+      registerEvent(event)
+      registerListener(defineListener({
+        name: 'send.welcome', listensTo: [event], queue: true, connection: 'database', tries: 3,
+        handle() {},
+      }))
+      registerListener(defineListener({
+        name: 'send.digest', listensTo: [event], queue: true, connection: 'database', queueName: 'digests',
+        handle() {},
+      }))
+      await Event.dispatch(event, { userId: 'usr-1' })
+      expect((await database.readJobRows()).map(row => row.max_attempts).sort()).toEqual([1, 3])
+    } finally {
+      await database.cleanup()
+    }
+  })
+
+  it('retries a failing queued listener after its backoff and runs the next attempt', async () => {
+    const database = await createSQLiteQueueHarness()
+    try {
+      const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+      registerEvent(event)
+      const attempts: number[] = []
+      registerListener(defineListener({
+        name: 'send.welcome', listensTo: [event], queue: true, connection: 'database', tries: 2, backoff: 1,
+        handle() {
+          attempts.push(attempts.length + 1)
+          if (attempts.length === 1) throw new Error('transient')
+        },
+      }))
+      await Event.dispatch(event, { userId: 'usr-1' })
+      const released: (number | undefined)[] = []
+      expect(await runQueueWorker({ connection: 'database', once: true, onJobReleased: ({ delaySeconds }) => { released.push(delaySeconds) } }))
+        .toMatchObject({ processed: 0, released: 1, failed: 0 })
+      expect(released).toEqual([1])
+      await new Promise(resolve => setTimeout(resolve, 1100))
+      expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ processed: 1, failed: 0 })
+      expect(attempts).toEqual([1, 2])
+    } finally {
+      await database.cleanup()
+    }
+  })
+
+  it('fails a queued listener terminally when its backoff is set but no attempts remain', async () => {
+    const database = await createSQLiteQueueHarness({ createFailedTable: true })
+    try {
+      const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+      registerEvent(event)
+      let handled = 0
+      registerListener(defineListener({
+        name: 'send.welcome', listensTo: [event], queue: true, connection: 'database', tries: 2, backoff: 0,
+        handle() {
+          handled += 1
+          throw new Error('still failing')
+        },
+      }))
+      await Event.dispatch(event, { userId: 'usr-1' })
+      expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ released: 1, failed: 0 })
+      expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ processed: 0, failed: 1 })
+      expect(handled).toBe(2)
+      expect(await listFailedQueueJobs()).toHaveLength(1)
+    } finally {
+      await database.cleanup()
+    }
+  })
+
+  it('rejects listener tries and backoff without queue delivery and invalid values', () => {
+    const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+    expect(() => defineListener({ listensTo: [event], tries: 2, handle() {} }))
+      .toThrow('[Holo Events] Listener queue metadata requires queue: true.')
+    expect(() => defineListener({ listensTo: [event], queue: true, backoff: 1, handle() {} })).not.toThrow()
+    expect(() => defineListener({ listensTo: [event], queue: true, tries: 0, handle() {} }))
+      .toThrow('[Holo Events] Listener tries must be an integer greater than or equal to 1.')
+    expect(() => defineListener({ listensTo: [event], queue: true, backoff: [] as unknown as number[], handle() {} }))
+      .toThrow('[Holo Events] Listener backoff must be an integer greater than or equal to 0 or a non-empty array of them.')
+  })
+
   it.each(['removed', 'retargeted', 'throws'] as const)('fails a persisted listener job when its listener is %s', async (failure) => {
     const database = await createSQLiteQueueHarness({ createFailedTable: true })
     try {

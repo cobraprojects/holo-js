@@ -52,7 +52,8 @@ npx holo queue:work --queue media
 | `--stop-when-empty` | Exit as soon as the queue is empty. |
 | `--sleep N` | Seconds to wait before checking an empty queue again. Defaults to the connection's `sleep`, or `1`. |
 | `--tries N` | Override every job's `tries`. |
-| `--timeout N` | Override every job's `timeout`, in seconds. |
+| `--backoff N[,N...]` | Seconds to wait before a retry, for jobs without a `backoff` of their own. A comma-separated list sets the wait per retry. |
+| `--timeout N` | Override every job's `timeout`, in seconds. Must be less than the connection's `retryAfter`. |
 | `--max-jobs N` | Exit after handling N jobs, counting successes, retries, and failures. |
 | `--max-time N` | Exit after running for N seconds. Checked between jobs. |
 
@@ -67,6 +68,14 @@ npx holo queue:listen --queue default
 ```
 
 It watches `config/`, `.env` files, your models, jobs, events, and listeners, and other source files. On a change it rescans your project and starts a fresh worker. It accepts the same flags as `queue:work`, except `--once` and `--stop-when-empty`.
+
+Stop `queue:listen` with `Ctrl+C`, or send it `SIGTERM` or `SIGINT`. It passes the signal to its worker, waits for the worker to finish its current job and exit, then exits too. When a change restarts the worker, `queue:listen` waits for the old worker to exit before it starts the new one.
+
+If the old worker reports a process error while it stops, `queue:listen` exits with that error instead of starting another worker. Two workers on the same queue would race for jobs, so fix the error and start `queue:listen` again.
+
+::: warning Windows stops workers immediately
+On Windows, `queue:listen` ends the worker's whole process tree at once instead of sending it a signal, so the job in progress is interrupted. The job is retried after the connection's `retryAfter` seconds. On macOS and Linux the worker finishes its current job first.
+:::
 
 Use `queue:listen` while developing and `queue:work` in production.
 
@@ -117,6 +126,8 @@ Run more copies of the service to process more jobs in parallel. See [Deploying 
 
 If a worker crashes, is killed, or loses its connection while running a job, the job isn't lost. After at least the connection's `retryAfter` seconds, another worker picks it up and runs it again. You don't need to do anything.
 
+A run that exceeds its `timeout` is handled the same way: the worker stops, and the job is run again after `retryAfter` unless it sets `failOnTimeout`.
+
 The interrupted run counts as one of the job's `tries`. When a picked-up job has already used all of its tries, the worker doesn't run it again. It fails the job with the error `Queue job "<name>" has been attempted too many times.`, calls the job's `onFailed` hook, and saves it to the [failed jobs table](/queue/failed-jobs).
 
 With the `redis` driver, a worker keeps renewing its hold on the job it's running, so a job that runs longer than `retryAfter` isn't handed to a second worker. The `database` driver doesn't renew, so keep each job's `timeout` shorter than `retryAfter`.
@@ -154,7 +165,8 @@ It accepts these options:
 | `stopWhenEmpty` | Return as soon as the queue is empty. |
 | `sleep` | Seconds to wait between checks of an empty queue. Defaults to the connection's `sleep`, or `1`. |
 | `tries` | Overrides every job's `tries`. |
-| `timeout` | Overrides every job's `timeout`, in seconds. |
+| `backoff` | Seconds to wait before a retry, for jobs without a `backoff` of their own. A number or an array of them. |
+| `timeout` | Overrides every job's `timeout`, in seconds. Must be less than the connection's `retryAfter`. |
 | `maxJobs` | Positive integer. Return after this many jobs are processed, released, or failed. |
 | `maxTime` | Positive integer, in seconds. Return once the worker has run this long. Checked between jobs. |
 | `workerId` | ID sent with each reservation. Defaults to a random UUID. |

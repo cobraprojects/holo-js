@@ -78,6 +78,8 @@ type MutableSendOptions = {
   queue?: string
   delay?: MailDelayValue
   afterCommit?: boolean
+  tries?: number
+  backoff?: number | readonly number[]
 }
 
 type ResolvedEnvelope = {
@@ -122,6 +124,8 @@ type ResolvedQueuePlan = {
   readonly queue?: string
   readonly delay?: MailDelayValue
   readonly afterCommit: boolean
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
 }
 
 type QueueDispatchChain = {
@@ -131,9 +135,15 @@ type QueueDispatchChain = {
   dispatch(): Promise<unknown>
 }
 
+type QueuedMailJobContext = {
+  readonly attempt: number
+  readonly maxAttempts: number
+  release(delaySeconds?: number): Promise<void>
+}
+
 type QueueModule = {
-  defineJob(definition: { handle(payload: QueuedMailDeliveryPayload): Promise<unknown> | unknown }): unknown
-  dispatch(jobName: string, payload: QueuedMailDeliveryPayload): QueueDispatchChain
+  defineJob(definition: { handle(payload: QueuedMailDeliveryPayload, context: QueuedMailJobContext): Promise<unknown> | unknown }): unknown
+  dispatch(jobName: string, payload: QueuedMailDeliveryPayload, options?: { readonly tries?: number }): QueueDispatchChain
   getRegisteredQueueJob(name: string): unknown
   registerQueueJob(definition: unknown, options: { name: string }): void
 }
@@ -224,6 +234,7 @@ type QueuedMailDeliveryPayload = Readonly<{
   readonly driver: string
   readonly queued: true
   readonly deferred?: boolean
+  readonly backoff?: number | readonly number[]
   readonly mail: QueuedResolvedMailPayload
 }>
 
@@ -582,6 +593,14 @@ function resolveQueuePlan(
       ?? mailQueue?.afterCommit
       ?? mailerConfig.queue.afterCommit
       ?? config.queue.afterCommit,
+    tries: options.tries
+      ?? mailQueue?.tries
+      ?? mailerConfig.queue.tries
+      ?? config.queue.tries,
+    backoff: options.backoff
+      ?? mailQueue?.backoff
+      ?? mailerConfig.queue.backoff
+      ?? config.queue.backoff,
   })
 }
 
@@ -1061,6 +1080,7 @@ function deserializeQueuedAttachment(
 function createQueuedMailPayload(
   mail: ResolvedMail,
   context: MailDriverExecutionContext,
+  backoff?: number | readonly number[],
 ): QueuedMailDeliveryPayload {
   return Object.freeze({
     messageId: context.messageId,
@@ -1068,6 +1088,7 @@ function createQueuedMailPayload(
     driver: context.driver,
     queued: true,
     ...(typeof context.deferred === 'boolean' ? { deferred: context.deferred } : {}),
+    ...(typeof backoff === 'undefined' ? {} : { backoff }),
     mail: Object.freeze({
       from: mail.from,
       replyTo: mail.replyTo,
@@ -1144,6 +1165,14 @@ async function runQueuedMailDelivery(
   )
 }
 
+function resolveQueuedMailRetryDelaySeconds(backoff: number | readonly number[], attempt: number): number {
+  if (typeof backoff === 'number') {
+    return backoff
+  }
+
+  return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)] ?? 0
+}
+
 async function ensureMailQueueJobRegistered(queueModule?: QueueModule): Promise<QueueModule> {
   const resolvedQueueModule = queueModule ?? await loadQueueModule()
   if (resolvedQueueModule.getRegisteredQueueJob(HOLO_MAIL_DELIVER_JOB)) {
@@ -1152,8 +1181,22 @@ async function ensureMailQueueJobRegistered(queueModule?: QueueModule): Promise<
 
   resolvedQueueModule.registerQueueJob(
     resolvedQueueModule.defineJob({
-      async handle(payload: QueuedMailDeliveryPayload) {
-        return await runQueuedMailDelivery(payload)
+      async handle(payload: QueuedMailDeliveryPayload, context: QueuedMailJobContext) {
+        try {
+          return await runQueuedMailDelivery(payload)
+        } catch (error) {
+          if (typeof payload.backoff === 'undefined' || context.attempt >= context.maxAttempts) {
+            throw error
+          }
+
+          try {
+            await context.release(resolveQueuedMailRetryDelaySeconds(payload.backoff, context.attempt))
+          } catch {
+            throw error
+          }
+
+          return undefined
+        }
       },
     }),
     { name: HOLO_MAIL_DELIVER_JOB },
@@ -1170,7 +1213,8 @@ async function dispatchQueuedMail(
   const queueModule = await ensureMailQueueJobRegistered()
   let pending = queueModule.dispatch(
     HOLO_MAIL_DELIVER_JOB,
-    createQueuedMailPayload(mail, context),
+    createQueuedMailPayload(mail, context, plan.backoff),
+    typeof plan.tries === 'undefined' ? {} : { tries: plan.tries },
   )
 
   if (typeof plan.connection !== 'undefined') {
