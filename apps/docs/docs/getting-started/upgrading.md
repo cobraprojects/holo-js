@@ -138,6 +138,12 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### Social sign-in links only verified accounts
+
+Social sign-in no longer signs in as an existing user whose email isn't verified. When a provider's verified email matches such a user, `callback()` from `@holo-js/auth-social` throws `SocialAuthConflictError`. Catch it in your callback routes and ask the user to sign in with their password and verify their email; their next social sign-in links the accounts. See [Link an existing account](/auth/social-login#link-an-existing-account).
+
+Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

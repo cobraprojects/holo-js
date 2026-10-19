@@ -181,7 +181,7 @@ Holo never treats a Facebook email as verified. If `emailVerification.required` 
 ## How Holo finds the local user
 
 1. If this social account signed in before, Holo loads the user it's linked to.
-2. Otherwise, if the provider gives a verified email and a user with that email exists, Holo links the social account to that user.
+2. Otherwise, if the provider gives a verified email and a user with that email exists, Holo links the social account to that user, but only when the user has verified that email in your app too. If the user hasn't, the callback throws a `SocialAuthConflictError`. See [Link an existing account](#link-an-existing-account).
 3. Otherwise Holo creates a user with the profile's `name`, `email`, and `avatar`, a `null` password, and `email_verified_at` set when the email is verified. Without a verified email, the user gets a placeholder email like `<id>@github.social.local`.
 
 The link is stored in the `auth_identities` table, along with the profile and the provider's access tokens.
@@ -191,6 +191,36 @@ When [email verification](/auth/email-verification) is required, Holo refuses to
 :::
 
 Your `users` table needs nullable `password` and `avatar` columns for this, which the auth migrations include.
+
+### Link an existing account
+
+Holo never links a social account to a user whose email isn't verified, because anyone can sign up with an address they don't own. If a provider's verified email matches such a user, `callback()` throws a `SocialAuthConflictError` with `code` (`social_identity_conflict`), `provider`, `providerUserId`, and `email`. Catch it in your callback route and tell the user how to link the accounts:
+
+```ts [app/auth/google/callback/route.ts]
+import { redirect } from 'next/navigation'
+import auth from '@holo-js/auth'
+import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
+
+export async function GET(request: Request): Promise<Response> {
+  const result = await callback('google', request).catch((error: unknown) => {
+    if (error instanceof SocialAuthConflictError) {
+      return { ok: false, status: 409, message: 'Sign in with your password and verify your email to link this account.' } as const
+    }
+    throw error
+  })
+  if (!result.ok) {
+    return Response.json({ message: result.message }, { status: result.status })
+  }
+
+  await auth.guard(result.guard).loginUsing(result.user)
+
+  redirect('/dashboard')
+}
+```
+
+The same `.catch()` works in Nuxt and SvelteKit callback routes.
+
+To link the accounts, the user signs in with their password and [verifies their email](/auth/email-verification). The next time they continue with the provider, Holo links the social account to them.
 
 ## Provider options
 
