@@ -86,6 +86,12 @@ async function collectReleaseWorkflowFailures(root) {
   if (!/^ {4}environment: release$/m.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must declare environment: release so NPM_TOKEN sits behind its protection rules.`)
   }
+  const unpinned = [...workflow.matchAll(/^\s*(?:- )?uses:\s*(\S+)/gm)]
+    .map(match => match[1])
+    .filter(reference => !/^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/.test(reference))
+  if (unpinned.length > 0) {
+    failures.push(`${releaseWorkflowPath} must pin every action to a full 40-character commit SHA; unpinned: ${unpinned.join(', ')}.`)
+  }
   const steps = workflow.split(/\n {6}- /)
   const tokenSteps = steps.filter(step => step.includes('secrets.NPM_TOKEN'))
   if (tokenSteps.length !== 1 || !/\bbun run release\b/.test(tokenSteps[0])) {

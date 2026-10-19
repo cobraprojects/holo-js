@@ -30,7 +30,7 @@ const validReleaseWorkflow = [
   '    steps:',
   '      - name: Reject runs from other refs',
   `        run: ${rejectOtherRefsRun}`,
-  '      - uses: actions/checkout@v7',
+  '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
   '        with:',
   '          ref: ${{ github.sha }}',
   '      - run: bun run build',
@@ -276,6 +276,19 @@ test('release metadata declares the release environment for the publish job', as
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
     '.github/workflows/release.yml must declare environment: release so NPM_TOKEN sits behind its protection rules.',
+  ])
+})
+
+test('release metadata requires every action in the release workflow to be pinned to a full commit SHA', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(
+      'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+      'actions/checkout@v7',
+    ),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must pin every action to a full 40-character commit SHA; unpinned: actions/checkout@v7.',
   ])
 })
 
