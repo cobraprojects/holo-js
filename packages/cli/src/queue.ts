@@ -1,4 +1,4 @@
-import { spawn, type SpawnOptions } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, watch } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
@@ -28,12 +28,12 @@ import {
 import { runProjectPrepare } from './project-prepare'
 import { writeLine } from './io'
 import { initializeProjectRuntime } from './runtime'
+import { createFrameworkSession, type FrameworkSpawn } from './framework-run'
 import type {
   IoStreams,
   QueueCliModule,
   QueueRuntimeEnvironment,
   QueueMaintenanceEnvironment,
-  SpawnProcessLike,
   WatchHandle,
 } from './cli-types'
 import type { LoadedProjectConfig, CommandFlagValue } from './types'
@@ -526,30 +526,40 @@ export async function runQueueListen(
   io: IoStreams,
   projectRoot: string,
   flags: Readonly<Record<string, CommandFlagValue>>,
-  spawnProcess: (command: string, args: readonly string[], options: SpawnOptions) => SpawnProcessLike = spawn,
+  spawnProcess: FrameworkSpawn = spawn,
   createWatcher: (path: string, options: { recursive: boolean }, listener: (eventType: string, fileName: string | null) => void) => WatchHandle = watch,
-  prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
+  prepare: (projectRoot: string, io?: IoStreams, options?: { readonly signal?: AbortSignal }) => Promise<void> = runProjectPrepare,
 ): Promise<void> {
   let project = await ensureProjectConfig(projectRoot)
   let refreshNonRecursiveWatchers: (() => Promise<void>) | undefined
-  let requestChildRestart: (() => void) | undefined
+  let closeWatchers: (() => void) | undefined
+  let restartActiveWorker: (() => void) | undefined
   const childArgs = buildQueueWorkArgs(flags)
   const cliEntrypoint = await resolveRunnableCliEntrypoint()
+  const session = createFrameworkSession(io, projectRoot, spawnProcess, () => closeWatchers?.())
+  let pendingPrepare: Promise<void> | undefined
+  let preparationGeneration = 0
+  let queued = false
 
   try {
     const prepareDiscovery = async (): Promise<void> => {
-      await prepare(projectRoot, io)
-      project = await ensureProjectConfig(projectRoot)
-      await refreshNonRecursiveWatchers?.()
+      preparationGeneration += 1
+      try {
+        await prepare(projectRoot, io, { signal: session.signal })
+        project = await ensureProjectConfig(projectRoot)
+        await refreshNonRecursiveWatchers?.()
+      } finally {
+        preparationGeneration += 1
+      }
     }
 
-    await prepareDiscovery()
+    await prepareDiscovery().catch((error: unknown) => {
+      if (!session.signal.aborted) throw error
+    })
+    if (session.signal.aborted) return
 
-    let pendingPrepare: Promise<void> | undefined
-    let queued = false
-    let shuttingDown = false
     const rerunPrepare = () => {
-      if (shuttingDown) {
+      if (session.signal.aborted) {
         return
       }
 
@@ -560,9 +570,11 @@ export async function runQueueListen(
 
       pendingPrepare = prepareDiscovery()
         .then(() => {
-          requestChildRestart?.()
+          restartActiveWorker?.()
         })
         .catch((error) => {
+          if (session.signal.aborted) return
+
           io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
         })
         .finally(() => {
@@ -574,10 +586,10 @@ export async function runQueueListen(
         })
     }
 
-    const closeWatchers = (() => {
+    closeWatchers = (() => {
       try {
         const watcher = createWatcher(projectRoot, { recursive: true }, (_eventType, fileName) => {
-          if (shuttingDown || typeof fileName !== 'string' || !isQueueListenRelevantPath(fileName, project)) {
+          if (session.signal.aborted || typeof fileName !== 'string' || !isQueueListenRelevantPath(fileName, project)) {
             return
           }
 
@@ -600,10 +612,11 @@ export async function runQueueListen(
         refreshNonRecursiveWatchers = async () => {
           closeAllWatchers()
           const watchRoots = await collectQueueWatchRoots(projectRoot, project)
+          if (session.signal.aborted) return
           for (const watchRoot of watchRoots) {
             try {
               watchers.push(createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
-                if (shuttingDown || typeof fileName !== 'string') {
+                if (session.signal.aborted || typeof fileName !== 'string') {
                   return
                 }
 
@@ -628,92 +641,44 @@ export async function runQueueListen(
 
     await refreshNonRecursiveWatchers?.()
 
-    while (!shuttingDown) {
+    const settlePreparation = async (): Promise<void> => {
       while (pendingPrepare) {
         await pendingPrepare
       }
+    }
 
+    while (!session.signal.aborted) {
       const childStartedAt = Date.now()
-      const child = spawnProcess(process.execPath, [cliEntrypoint.path, ...childArgs], {
-        cwd: projectRoot,
-        env: process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
+      const run = await session.launch({ command: process.execPath, args: [cliEntrypoint.path] }, childArgs, {}, {
+        generation: () => preparationGeneration,
+        settle: settlePreparation,
       })
-
-      child.stdout?.on('data', chunk => io.stdout.write(chunk))
-      child.stderr?.on('data', chunk => io.stderr.write(chunk))
-      if (child.stdin) {
-        io.stdin.pipe(child.stdin)
-      }
-
-      const result = await new Promise<
-        { kind: 'restart' }
-        | { kind: 'close', code: number | null }
-        | { kind: 'error', error: Error }
-      >((resolvePromise) => {
-        let restartRequested = false
-
-        requestChildRestart = () => {
-          if (restartRequested || shuttingDown || typeof child.kill !== 'function') {
-            return
-          }
-
-          restartRequested = true
-          child.kill('SIGTERM')
-        }
-
-        child.on('error', (error) => {
-          if (child.stdin) {
-            io.stdin.unpipe(child.stdin)
-          }
-          requestChildRestart = undefined
-          if (restartRequested) {
-            resolvePromise({ kind: 'restart' })
-            return
-          }
-
-          resolvePromise({ kind: 'error', error })
+        .catch((error: unknown) => {
+          if (session.signal.aborted) return undefined
+          throw error
         })
-        child.on('close', (code) => {
-          void (async () => {
-            if (child.stdin) {
-              io.stdin.unpipe(child.stdin)
-            }
-            requestChildRestart = undefined
-            if (restartRequested) {
-              resolvePromise({ kind: 'restart' })
-              return
-            }
+      if (!run) break
 
-            if (!shuttingDown && code === 0 && await hasQueueRestartSignalSince(projectRoot, childStartedAt)) {
-              resolvePromise({ kind: 'restart' })
-              return
-            }
-
-            resolvePromise({ kind: 'close', code })
-          })()
-        })
-      })
-
-      if (result.kind === 'restart') {
-        continue
-      }
-
-      shuttingDown = true
-      closeWatchers()
-      await Promise.resolve(pendingPrepare)
+      restartActiveWorker = run.restart
+      const result = await run.completion
+      restartActiveWorker = undefined
 
       if (result.kind === 'error') {
-        throw result.error
+        throw result.restartRequested
+          ? new Error(`Queue worker failed while stopping for a restart: ${result.error.message}`, { cause: result.error })
+          : result.error
       }
-
-      if (result.code === 0) {
-        return
-      }
+      if (session.signal.aborted) break
+      if (result.restartRequested) continue
+      if (result.code === 0 && await hasQueueRestartSignalSince(projectRoot, childStartedAt)) continue
+      if (result.code === 0) return
 
       throw new Error(`Queue worker failed with exit code ${result.code ?? 'unknown'}.`)
     }
   } finally {
+    session.dispose()
+    closeWatchers?.()
+    await pendingPrepare
     await cliEntrypoint.cleanup()
   }
 }
