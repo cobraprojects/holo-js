@@ -6,6 +6,19 @@
 
 [Realtime](/realtime/) and [Broadcast](/broadcasting/) are **Experimental** in 0.4.0. Review their [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates. This label does not change runtime behavior.
 
+### Forwarded headers follow Laravel's TrustProxies
+
+Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware does:
+
+- Only `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Port`, `X-Forwarded-Proto`, and `X-Forwarded-Prefix` are honored. The `Forwarded` header is ignored. If your proxy sends only `Forwarded`, configure it to send `X-Forwarded-*` headers.
+- When a header lists several values, Holo takes the first, not the last.
+- `X-Forwarded-Proto` values other than `https`, `on`, `ssl`, and `1` mean HTTP instead of answering `400`.
+- `X-Forwarded-Port` and `X-Forwarded-Prefix` now change the port and path of `resolveRequestUrl()`.
+- `X-Forwarded-For` entries that aren't IP addresses are skipped instead of becoming the client IP.
+- WorkOS sign-in sends WorkOS the client IP that Holo resolves through `trustedProxies`, instead of the first `X-Forwarded-For` entry or `X-Real-IP`.
+- Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
+- When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
+
 ### Realtime subscription isolation
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
@@ -51,6 +64,10 @@ aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%
 Files on local disks keep their names. For those, `path()` now returns the file Holo actually wrote, such as `<root>/reports/Q1%20caf%C3%A9.pdf`. If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys with URL-encoded names, the same as local disks.
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
+
+### Database queue workers on MySQL
+
+The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
 
 ### Node.js 22.14 or newer
 
