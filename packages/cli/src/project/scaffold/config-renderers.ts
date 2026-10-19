@@ -70,9 +70,12 @@ export function renderStorageConfig(): string {
 
 export function renderMediaConfig(): string {
   return [
+    'import { env } from \'@holo-js/config\'',
     'import { defineMediaConfig } from \'@holo-js/media/config\'',
     '',
-    'export default defineMediaConfig({})',
+    'export default defineMediaConfig({',
+    '  disk: env(\'MEDIA_DISK\', \'public\'),',
+    '})',
     '',
   ].join('\n')
 }
