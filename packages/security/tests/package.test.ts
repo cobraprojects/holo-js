@@ -1309,6 +1309,66 @@ describe('@holo-js/security rate-limit drivers', () => {
     await store.close?.()
   })
 
+  it('reports a full memory store once until a slot frees, whatever the rejected window is', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 2,
+      })
+      await store.hit('limiter:login|user:held-a', {
+        maxAttempts: 2,
+        decaySeconds: 3_600,
+      })
+      await store.hit('limiter:login|user:held-b', {
+        maxAttempts: 2,
+        decaySeconds: 3_600,
+      })
+
+      for (let second = 0; second < 10; second += 1) {
+        now = new Date(new Date('2026-04-16T12:00:00.000Z').getTime() + second * 1_000)
+        await expect(store.hit('limiter:ping|user:fast', {
+          maxAttempts: 1,
+          decaySeconds: 1,
+        })).resolves.toMatchObject({ limited: true })
+      }
+
+      expect(consoleError).toHaveBeenCalledTimes(1)
+      expect(consoleError.mock.calls[0]?.[0]).toContain('rate-limit memory store at capacity')
+      await store.close?.()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('reports a full memory store again after a slot frees and the store fills once more', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 1,
+      })
+      await store.hit('limiter:login|user:held', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      await store.hit('limiter:login|user:first-rejected', { maxAttempts: 2, decaySeconds: 60 })
+      expect(consoleError).toHaveBeenCalledTimes(1)
+
+      now = new Date(now.getTime() + 61_000)
+      await store.hit('limiter:login|user:admitted', { maxAttempts: 2, decaySeconds: 3_600 })
+      await store.hit('limiter:login|user:second-rejected', { maxAttempts: 2, decaySeconds: 60 })
+      expect(consoleError).toHaveBeenCalledTimes(2)
+      await store.close?.()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
   it('reports a full memory store once per window', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -1331,7 +1391,7 @@ describe('@holo-js/security rate-limit drivers', () => {
       now = new Date(now.getTime() + 61_000)
       await store.hit('limiter:login|user:c', { maxAttempts: 2, decaySeconds: 600 })
       await store.hit('limiter:login|user:d', { maxAttempts: 2, decaySeconds: 600 })
-      expect(consoleError).toHaveBeenCalledTimes(2)
+      expect(consoleError).toHaveBeenCalledTimes(1)
       await store.close?.()
     } finally {
       consoleError.mockRestore()

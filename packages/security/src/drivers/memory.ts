@@ -72,14 +72,14 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
   const pruneTimer = setInterval(() => pruneExpiredBuckets(resolveNow()), pruneIntervalMs)
   pruneTimer.unref?.()
 
-  let capacityReportedUntil = Number.NEGATIVE_INFINITY
+  let capacityReportedFor: number | undefined
 
-  const reportCapacity = (now: Date, decaySeconds: number): void => {
-    if (now.getTime() < capacityReportedUntil) {
+  const reportCapacity = (freesAt: number): void => {
+    if (capacityReportedFor === freesAt) {
       return
     }
 
-    capacityReportedUntil = now.getTime() + decaySeconds * 1000
+    capacityReportedFor = freesAt
     reportError(
       new Error(`[@holo-js/security] Memory rate-limit store is at capacity (${maxBuckets} keys). New keys are limited until buckets expire. Use the redis or file rate-limit driver for high-cardinality limiters.`),
       { capability: 'security', operation: 'rate-limit memory store at capacity' },
@@ -112,8 +112,8 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
         }
 
         if (buckets.size >= maxBuckets) {
-          reportCapacity(now, hitOptions.decaySeconds)
           const freesAt = nextExpiryAt
+          reportCapacity(freesAt)
           return Object.freeze({
             limited: true,
             snapshot: createSnapshot(key, {
