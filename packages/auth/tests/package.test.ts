@@ -5,7 +5,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
+import { configureSessionRuntime, getSessionRuntime, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 import { createNativeSessionStore } from './support/native-session'
 import { createNativeAuthPersistence } from './support/native-persistence'
 import { createFileRateLimitStore, createMemoryRateLimitStore, configureSecurityRuntime, resetSecurityRuntime } from '../../security/src'
@@ -95,6 +95,18 @@ declare global {
       }
     }
   }
+}
+
+function cookieValue(setCookie: string): string {
+  return Object.values(parseCookieHeader(setCookie.split(';', 1)[0]))[0] ?? ''
+}
+
+function sessionCookieValue(sessionId: string | undefined): string {
+  return cookieValue(getSessionRuntime().sessionCookie(sessionId ?? ''))
+}
+
+function rememberCookieValue(rememberToken: string | undefined): string {
+  return cookieValue(getSessionRuntime().rememberMeCookie(rememberToken ?? ''))
 }
 
 function isAuthResult<TData>(result: AuthResult<TData> | TData): result is AuthResult<TData> {
@@ -235,6 +247,7 @@ async function configureRuntime(options: {
     ...options.delivery,
   }
   configureSessionRuntime({
+    appKey: 'holo-test-app-key',
     config: {
       driver: 'file',
       stores: {
@@ -522,7 +535,7 @@ describe('@holo-js/auth package runtime', () => {
       },
     })
     expect(established.cookies).toHaveLength(2)
-    expect(established.cookies?.[0]).toContain(`holo_session=${encodeURIComponent(established.sessionId ?? '')}`)
+    expect(getSessionRuntime().decryptCookie('holo_session', cookieValue(established.cookies?.[0] ?? ''))).toBe(established.sessionId)
     expect(established.cookies?.[1]).toContain('holo_session_remember=')
     expect(runtime.context.getSessionId('web')).toBeTypeOf('string')
     expect(runtime.context.getRememberToken?.('web')).toMatch(/\./)
@@ -661,7 +674,8 @@ describe('@holo-js/auth package runtime', () => {
       },
     })
     await expect(getSessionRuntime().take(established.sessionId, 'login.notice')).resolves.toEqual({ message: 'Preserved' })
-    expect(established.cookies).toContainEqual(expect.stringContaining(`holo_session=${encodeURIComponent(established.sessionId)}`))
+    const establishedSessionCookie = established.cookies.find(cookie => cookie.startsWith('holo_session='))
+    expect(getSessionRuntime().decryptCookie('holo_session', cookieValue(establishedSessionCookie ?? ''))).toBe(established.sessionId)
   })
 
   it('rotates trusted login sessions and keeps logout isolated between guards', async () => {
@@ -737,7 +751,7 @@ describe('@holo-js/auth package runtime', () => {
       ...recoveryBindings,
       context: {
         ...authRuntimeInternals.createMemoryAuthContext(),
-        getRequestCookie: name => name === 'holo_session' ? pendingRecovery.sessionId : undefined,
+        getRequestCookie: name => name === 'holo_session' ? sessionCookieValue(pendingRecovery.sessionId) : undefined,
       },
     })
     await expect(auth.multiFactor.challenge({ code: challengeCode })).rejects.toMatchObject({
@@ -1200,7 +1214,7 @@ describe('@holo-js/auth package runtime', () => {
     const createRequestContext = () => ({
       ...authRuntimeInternals.createMemoryAuthContext(),
       getRequestCookie(name: string) {
-        return name === 'holo_session' ? established.sessionId : undefined
+        return name === 'holo_session' ? sessionCookieValue(established.sessionId) : undefined
       },
     })
 
@@ -1706,7 +1720,7 @@ describe('@holo-js/auth package runtime', () => {
       context: {
         ...authRuntimeInternals.createMemoryAuthContext(),
         getRequestCookie(name: string) {
-          return name === 'holo_session_remember' ? remembered.rememberToken : undefined
+          return name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined
         },
       },
     })
@@ -2346,6 +2360,7 @@ describe('@holo-js/auth package runtime', () => {
   it('refreshes the session idle timeout when resolving a session-backed user', async () => {
     const runtime = await configureRuntime()
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: {
         driver: 'database',
         stores: {
@@ -2808,6 +2823,7 @@ describe('@holo-js/auth package runtime', () => {
       issueRememberMeToken: session.issueRememberMeToken,
       sessionCookie: session.sessionCookie,
       rememberMeCookie: session.rememberMeCookie,
+      decryptCookie: session.decryptCookie,
     }
     reconfigureAuthRuntimeWithSession(runtime, legacySession)
 
@@ -2842,7 +2858,7 @@ describe('@holo-js/auth package runtime', () => {
       ...authRuntimeInternals.createMemoryAuthContext(),
       getRequestCookie(name: string) {
         if (name === 'holo_session_remember') {
-          return remembered.rememberToken
+          return rememberCookieValue(remembered.rememberToken)
         }
 
         return undefined
@@ -2915,6 +2931,7 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: {
         driver: 'database',
         stores: {
@@ -3228,6 +3245,7 @@ describe('@holo-js/auth package runtime', () => {
       cookie: session.cookie,
       sessionCookie: session.sessionCookie,
       rememberMeCookie: session.rememberMeCookie,
+      decryptCookie: session.decryptCookie,
     }
     reconfigureAuthRuntimeWithSession(runtime, sessionWithoutWrite)
 
@@ -4122,6 +4140,7 @@ describe('@holo-js/auth package runtime', () => {
     const passwordResetTokenStore = persistence.passwordResetTokens
 
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: {
         driver: 'database',
         stores: {
@@ -4749,6 +4768,7 @@ describe('@holo-js/auth package runtime', () => {
     const users = new Map<number, UserRecord>()
 
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: {
         driver: 'database',
         stores: {
@@ -5041,6 +5061,9 @@ describe('@holo-js/auth package runtime', () => {
         rememberMeCookie(value) {
           return `holo_session_remember=${value}; Path=/`
         },
+        decryptCookie(_name, value) {
+          return value
+        },
       },
       providers: {
         users: runtime.usersProvider,
@@ -5151,6 +5174,7 @@ describe('@holo-js/auth package runtime', () => {
     const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
 
     configureSessionRuntime({
+      appKey: 'holo-test-app-key',
       config: {
         driver: 'database',
         stores: {

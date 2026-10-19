@@ -290,6 +290,9 @@ describe('@holo-js/auth typing', () => {
       rememberMeCookie() {
         return 'remember=value'
       },
+      decryptCookie() {
+        return undefined
+      },
     }
 
     expectTypeOf(legacySession).toEqualTypeOf<AuthRuntimeBindings['session']>()
