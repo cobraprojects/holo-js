@@ -2142,7 +2142,16 @@ async function updateUserRecord(
   },
 ): Promise<AuthenticatedAuthUser> {
   const { adapter } = getProviderAdapter(providerName)
-  const user = await adapter.findById(userId)
+  return await updateLoadedUserRecord(providerName, userId, await adapter.findById(userId), input)
+}
+
+async function updateLoadedUserRecord(
+  providerName: string,
+  userId: string | number,
+  user: unknown,
+  input: Parameters<typeof updateUserRecord>[2],
+): Promise<AuthenticatedAuthUser> {
+  const { adapter } = getProviderAdapter(providerName)
   if (!user) {
     throwAuthError('auth_user_missing', `Auth user "${providerName}:${String(userId)}" no longer exists.`, {
       provider: providerName,
@@ -2182,7 +2191,7 @@ async function verifyIssuedEmail(record: EmailVerificationTokenRecord): Promise<
     }
   }
 
-  return await updateUserRecord(record.provider, record.userId, {
+  return await updateLoadedUserRecord(record.provider, record.userId, user, {
     email_verified_at: new Date(),
   })
 }
