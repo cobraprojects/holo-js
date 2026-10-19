@@ -252,6 +252,21 @@ function observeDiskReads(overrides: {
   return observed
 }
 
+function recordConversionWrites(events: string[]): void {
+  const openDisk = Storage.disk.bind(Storage)
+  vi.spyOn(Storage, 'disk').mockImplementation((diskName?: string) => {
+    const disk = openDisk(diskName)
+    return {
+      ...disk,
+      put: async (path: string, contents: Parameters<StorageDisk['put']>[1]) => {
+        events.push(`write:${path.split('/').pop()?.replace(/\.txt$/, '') ?? path}`)
+        return await disk.put(path, contents)
+      },
+    } as StorageDisk
+  })
+  onTestFinished(() => { vi.restoreAllMocks() })
+}
+
 function createAnimatedGif(frameCount: number): Buffer {
   const frame = Buffer.from([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0x00])
   return Buffer.concat([
@@ -2189,6 +2204,46 @@ describe('@holo-js/media', () => {
 
     expect(scopes).toEqual(['root'])
     expect(media.getAvailableConversions()).toEqual(['thumb'])
+  })
+
+  it('writes each conversion to disk before generating the next one', async () => {
+    const events: string[] = []
+    recordConversionWrites(events)
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        events.push(`generate:${conversion.name}`)
+        return {
+          contents: Buffer.from(conversion.name),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [
+        conversion('thumb').performOnCollections('images'),
+        conversion('card').performOnCollections('images'),
+        conversion('wide').performOnCollections('images'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Sequential conversions' })
+    await expectMediaAdded(post.addMedia(await createImageBuffer()).toMediaCollection('images'))
+
+    expect(events.filter(event => /thumb|card|wide/.test(event))).toEqual([
+      'generate:thumb',
+      'write:thumb',
+      'generate:card',
+      'write:card',
+      'generate:wide',
+      'write:wide',
+    ])
   })
 
   it('rejects image conversions whose decoded size exceeds the upload pixel limit', async () => {

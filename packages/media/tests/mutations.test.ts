@@ -156,6 +156,56 @@ it('retains committed attachment files and records when queued dispatch fails', 
   await expect(Storage.disk('public').get(items[0]!.record.path)).resolves.toBe('original')
 })
 
+it('removes every conversion already written when a later conversion fails', async () => {
+  setMediaConversionExecutor({
+    async generate({ conversion: selected }) {
+      if (selected.name === 'card') throw new Error('card generation failed')
+      return { contents: Buffer.from(selected.name), fileName: `${selected.name}.txt` }
+    },
+  })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars'), conversion('card').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Later conversion failure' })
+  setMediaPathGenerator({ originalPath: () => 'original.txt', conversionPath: ({ generatedFileName }) => generatedFileName ?? 'missing.txt' })
+
+  await expect(post.addMedia(Buffer.from('original')).toMediaCollection('avatars')).rejects.toThrow('card generation failed')
+  await expect(Storage.disk('public').exists('original.txt')).resolves.toBe(false)
+  await expect(Storage.disk('public').exists('thumb.txt')).resolves.toBe(false)
+  expect(await post.getMedia('avatars')).toEqual([])
+})
+
+it('keeps the generation failure when cleaning up a written conversion also fails', async () => {
+  const primary = new Error('card generation failed after thumb was written')
+  let thumbPath = ''
+  setMediaConversionExecutor({
+    async generate({ conversion: selected }) {
+      if (selected.name === 'card') {
+        await rm(join(directory, thumbPath), { force: true })
+        await mkdir(join(directory, thumbPath), { recursive: true })
+        throw primary
+      }
+      return { contents: Buffer.from(selected.name), fileName: `${selected.name}.txt` }
+    },
+  })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars'), conversion('card').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Cleanup failure' })
+  thumbPath = 'thumb.txt'
+  setMediaPathGenerator({ originalPath: () => 'original.txt', conversionPath: ({ generatedFileName }) => generatedFileName ?? 'missing.txt' })
+
+  const failure = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars').catch((error: unknown) => error)
+
+  expect(failure).toBeInstanceOf(AggregateError)
+  if (!(failure instanceof AggregateError)) throw new Error('Expected aggregated attachment failure')
+  expect(failure.errors[0]).toBe(primary)
+  expect(failure.errors[1]).toBeInstanceOf(Error)
+  expect(await post.getMedia('avatars')).toEqual([])
+})
+
 it('retains the outer failure and file compensation failure together', async () => {
   const post = await Post.create({ title: 'Failed compensation' })
   const primary = new Error('outer failure')

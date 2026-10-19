@@ -36,9 +36,8 @@ import type { NormalizedMediaCollectionDefinition } from '../definitions/collect
 import type { NormalizedMediaDefinition } from '../definitions/config'
 import { dispatchQueuedMediaConversionsForModel } from '../queue'
 import {
-  prepareStoredConversions,
   resolveQueuedConversionNames,
-  storePreparedConversions,
+  writeStoredConversions,
 } from './conversions'
 import { Media } from './Media'
 import { removeObsoleteFiles, runMediaMutation } from './mutation'
@@ -854,21 +853,23 @@ async function attachMedia<
   const conversionsDisk = collection.conversionsDisk ?? disk
   const path = getMediaPathGenerator().originalPath({ uuid, fileName: source.fileName, extension: source.extension, collection })
   const obsolete: MediaItem[] = []
-  const prepared = await prepareStoredConversions({
-    definition: options.definition,
-    collection,
-    conversionsDisk,
-    source: { ...source, uuid },
-  })
   return await runMediaMutation({
     committedMessage: '[Holo Media] Attachment remains committed; post-commit cleanup or conversion dispatch failed.',
     afterRollback: () => { owner.forgetRelation('media') },
-    operation: async (mutation) => {
+    write: async (mutation) => {
+      await mutation.put(disk, path, source.contents)
+      return await writeStoredConversions({
+        definition: options.definition,
+        collection,
+        conversionsDisk,
+        source: { ...source, uuid },
+        mutation,
+      })
+    },
+    operation: async (_mutation, generatedConversions) => {
       const existing = collection.singleFile
         ? await (owner as MediaOwner<TEntity>).getMedia(options.collectionName)
         : []
-      await mutation.put(disk, path, source.contents)
-      const generatedConversions = await storePreparedConversions(mutation, prepared)
       const max = await Media.query()
         .where('model_type', ownerDefinition.morphClass)
         .where('model_id', ownerId)
