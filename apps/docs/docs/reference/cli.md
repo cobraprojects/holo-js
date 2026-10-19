@@ -674,7 +674,7 @@ npx holo queue:failed-table
 
 ### cache:clear
 
-Remove every item from a [cache](/cache/) store.
+Remove every item from a [cache](/cache/) store, whatever its key prefix. For a Redis store this runs `FLUSHDB` on its database; see [Cache drivers](/cache/drivers#redis) before pointing a store at shared data.
 
 ```bash
 npx holo cache:clear [--driver <name>]

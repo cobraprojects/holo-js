@@ -26,6 +26,7 @@ import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 
 export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
 export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'
+const DATABASE_CACHE_LOCK_LOTTERY = { chances: 2, outOf: 100 }
 
 export type CacheDatabaseTableColumnKind = 'string' | 'text' | 'bigInteger'
 
@@ -74,7 +75,6 @@ export type DatabaseCacheDriverOptions = {
   readonly connectionName: string
   readonly table: string
   readonly lockTable: string
-  readonly prefix?: string
   readonly connection: HoloProjectConnectionConfig | string
   readonly now?: () => number
   readonly sleep?: (milliseconds: number) => Promise<void>
@@ -355,27 +355,52 @@ async function readLock(
   connection: DatabaseContext,
   tableName: string,
   name: string,
-  now: number,
-): Promise<DatabaseReadResult<DatabaseCacheLockRow>> {
+): Promise<DatabaseCacheLockRow | undefined> {
   const row = await new TableQueryBuilder(tableName, connection)
     .where('name', name)
     .first<Omit<DatabaseCacheLockRow, 'expires_at'> & { expires_at: number | string }>()
 
   if (!row) {
-    return { state: 'missing' }
+    return undefined
   }
 
-  const expiresAt = normalizeDatabaseTimestamp(row.expires_at)
-  if (expiresAt <= now) {
+  return { ...row, expires_at: normalizeDatabaseTimestamp(row.expires_at) }
+}
+
+function isDatabaseDeadlockError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  const errorCode = Reflect.get(error, 'code')
+  return errorCode === 'ER_LOCK_DEADLOCK' || errorCode === '40P01' || errorCode === '40001'
+}
+
+async function retryOnDeadlock<TValue>(operation: () => Promise<TValue>): Promise<TValue> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (!isDatabaseDeadlockError(error)) {
+      throw error
+    }
+
+    return operation()
+  }
+}
+
+async function pruneExpiredLocks(
+  connection: DatabaseContext,
+  tableName: string,
+  nowMs: number,
+): Promise<void> {
+  try {
     await new TableQueryBuilder(tableName, connection)
-      .where('name', name)
+      .where('expires_at', '<=', nowMs)
       .delete()
-    return { state: 'missing' }
-  }
-
-  return {
-    state: 'hit',
-    value: { ...row, expires_at: expiresAt },
+  } catch (error) {
+    if (!isDatabaseDeadlockError(error)) {
+      throw error
+    }
   }
 }
 
@@ -391,21 +416,38 @@ function createDatabaseLock(
 ): CacheLockContract {
   const owner = ownerFactory()
 
-  async function tryAcquire(): Promise<boolean> {
-    return withDatabaseCacheTableGuard(entryTableName, tableName, async () => connection.transaction(async (tx) => {
-      const locks = new TableQueryBuilder(tableName, tx)
-      const existing = await readLock(tx, tableName, name, now())
-      if (existing.state === 'hit') {
+  async function acquireInTransaction(): Promise<boolean> {
+    return connection.transaction(async (tx) => {
+      const nowMs = now()
+      const existing = await readLock(tx, tableName, name)
+      if (existing && existing.expires_at > nowMs) {
         return false
       }
 
-      const inserted = await locks.insertOrIgnore({
+      if (existing) {
+        await new TableQueryBuilder(tableName, tx)
+          .where('name', name)
+          .where('expires_at', '<=', nowMs)
+          .delete()
+      }
+
+      const inserted = await new TableQueryBuilder(tableName, tx).insertOrIgnore({
         name,
         owner,
-        expires_at: now() + (seconds * 1000),
+        expires_at: nowMs + (seconds * 1000),
       })
       return resolveExecutionResultAffectedRows(inserted) > 0
-    }))
+    })
+  }
+
+  async function tryAcquire(): Promise<boolean> {
+    return withDatabaseCacheTableGuard(entryTableName, tableName, async () => {
+      if (Math.random() * DATABASE_CACHE_LOCK_LOTTERY.outOf < DATABASE_CACHE_LOCK_LOTTERY.chances) {
+        await pruneExpiredLocks(connection, tableName, now())
+      }
+
+      return retryOnDeadlock(acquireInTransaction)
+    })
   }
 
   async function withCallback<TValue>(
@@ -432,18 +474,12 @@ function createDatabaseLock(
       return withCallback(callback)
     },
     async release(): Promise<boolean> {
-      const deleted = await withDatabaseCacheTableGuard(entryTableName, tableName, async () => connection.transaction(async (tx) => {
-        const current = await readLock(tx, tableName, name, now())
-        if (current.state === 'missing' || current.value.owner !== owner) {
-          return 0
-        }
-
-        return resolveExecutionResultAffectedRows(
-          await new TableQueryBuilder(tableName, tx)
-            .where('name', name)
-            .delete(),
-        )
-      }))
+      const deleted = await withDatabaseCacheTableGuard(entryTableName, tableName, async () => resolveExecutionResultAffectedRows(
+        await new TableQueryBuilder(tableName, connection)
+          .where('name', name)
+          .where('owner', owner)
+          .delete(),
+      ))
 
       return deleted > 0
     },
@@ -473,7 +509,6 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
   const connection = createDatabaseConnection(options.connectionName, options.connection)
   const entryTableName = options.table
   const lockTableName = options.lockTable
-  const prefix = options.prefix ?? ''
 
   async function writeEntry(
     tx: DatabaseContext,
@@ -580,37 +615,9 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
       })
     },
     async flush(): Promise<void> {
-      await withDatabaseCacheTableGuard(entryTableName, lockTableName, async () => connection.transaction(async (tx) => {
-        if (!prefix) {
-          await new TableQueryBuilder(lockTableName, tx).delete()
-          await new TableQueryBuilder(entryTableName, tx).delete()
-          return
-        }
-
-        const hasSqlWildcard = /[%_[]/.test(prefix)
-        if (hasSqlWildcard) {
-          const upperBound = `${prefix}\uFFFF`
-
-          await new TableQueryBuilder(lockTableName, tx)
-            .where('name', '>=', prefix)
-            .where('name', '<', upperBound)
-            .delete()
-          await new TableQueryBuilder(entryTableName, tx)
-            .where('key', '>=', prefix)
-            .where('key', '<', upperBound)
-            .delete()
-          return
-        }
-
-        const likePattern = `${prefix}%`
-
-        await new TableQueryBuilder(lockTableName, tx)
-          .whereLike('name', likePattern)
-          .delete()
-        await new TableQueryBuilder(entryTableName, tx)
-          .whereLike('key', likePattern)
-          .delete()
-      }))
+      await withDatabaseCacheTableGuard(entryTableName, lockTableName, async () => {
+        await new TableQueryBuilder(entryTableName, connection).delete()
+      })
     },
     async increment(key: string, amount: number): Promise<number> {
       return mutateNumericValue(key, amount)

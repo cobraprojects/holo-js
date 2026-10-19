@@ -37,7 +37,6 @@ type FileCacheLockEnvelope = {
 type CreateFileCacheDriverOptions = {
   readonly name: string
   readonly path: string
-  readonly prefix?: string
   readonly now?: () => number
   readonly sleep?: (milliseconds: number) => Promise<void>
   readonly ownerFactory?: () => string
@@ -241,26 +240,6 @@ async function readJsonFile(filePath: string): Promise<unknown | typeof MALFORME
   }
 }
 
-async function listFiles(rootPath: string): Promise<readonly string[]> {
-  try {
-    const entries = await fileSystemOperations.readdir(rootPath, { withFileTypes: true })
-    const nested = await Promise.all(entries.map(async (entry) => {
-      const entryPath = join(rootPath, entry.name)
-      if (entry.isDirectory()) return listFiles(entryPath)
-
-      return [entryPath]
-    }))
-
-    return nested.flat()
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return []
-    }
-
-    throw error
-  }
-}
-
 async function removeInvalidFileAndReadMissing<TValue>(
   filePath: string,
   decoded: unknown | typeof MALFORMED_FILE | undefined,
@@ -272,36 +251,6 @@ async function removeInvalidFileAndReadMissing<TValue>(
   return {
     state: 'missing',
     filePath,
-  }
-}
-
-async function removeScopedCacheFiles<TValue extends FileCacheEntryEnvelope | FileCacheLockEnvelope>(
-  rootPath: string,
-  prefix: string,
-  isEnvelope: (value: unknown) => value is TValue,
-  resolveName: (value: TValue) => string,
-): Promise<void> {
-  async function removeScopedFile(filePath: string): Promise<void> {
-    await removeFileIfPresent(filePath)
-    await removeEmptyDirectoryIfPresent(dirname(filePath))
-  }
-
-  if (!prefix) {
-    await rm(rootPath, { recursive: true, force: true })
-    await fileSystemOperations.mkdir(rootPath, { recursive: true })
-    return
-  }
-
-  for (const filePath of await listFiles(rootPath)) {
-    const decoded = await readJsonFile(filePath)
-    if (!decoded || decoded === MALFORMED_FILE || !isEnvelope(decoded)) {
-      await removeScopedFile(filePath)
-      continue
-    }
-
-    if (resolveName(decoded).startsWith(prefix)) {
-      await removeScopedFile(filePath)
-    }
   }
 }
 
@@ -541,7 +490,6 @@ function createFileLock(
 
 export function createFileCacheDriver(options: CreateFileCacheDriverOptions): CacheDriverContract {
   const rootPath = resolveDriverRoot(options.path)
-  const prefix = options.prefix ?? ''
   const now = options.now ?? Date.now
   const sleep = options.sleep ?? defaultSleep
   const ownerFactory = options.ownerFactory ?? randomUUID
@@ -643,18 +591,10 @@ export function createFileCacheDriver(options: CreateFileCacheDriverOptions): Ca
       return true
     },
     async flush(): Promise<void> {
-      await removeScopedCacheFiles(
-        join(rootPath, 'entries'),
-        prefix,
-        isFileCacheEntryEnvelope,
-        entry => entry.key,
-      )
-      await removeScopedCacheFiles(
-        join(rootPath, 'locks'),
-        prefix,
-        isFileCacheLockEnvelope,
-        lock => lock.name,
-      )
+      for (const directory of [join(rootPath, 'entries'), join(rootPath, 'locks')]) {
+        await rm(directory, { recursive: true, force: true })
+        await fileSystemOperations.mkdir(directory, { recursive: true })
+      }
     },
     async increment(key: string, amount: number): Promise<number> {
       return mutateNumericValue(key, amount)

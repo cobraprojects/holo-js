@@ -33,6 +33,9 @@
 
 ### Changed
 
+- Flush cache stores completely. Redis `flush()` runs `FLUSHDB` on the store's database (every primary node of a cluster), the `database` store empties its entries table and leaves locks alone, and the `file` store empties its entry and lock folders. Key prefixes no longer limit a flush, so the prefix options are removed from the Redis, database and file driver factories. The scaffold gives the Redis cache store its own `cache` connection on database `1` (`REDIS_CACHE_DB`). See [Cache drivers](apps/docs/docs/cache/drivers.md#redis).
+- Give database cache locks a single holder under contention. Acquisition replaces an expired lock only while it is still expired, and release frees only a lock the caller still owns. Expired lock rows are pruned by a lottery on about 2% of lock attempts. See [Cache drivers](apps/docs/docs/cache/drivers.md#database).
+
 - Require CI typechecks, lint and the full library suite on Node 24, plus native package loading and server lifecycle checks on Linux, Windows and macOS with Node 22.14.0, 24 and 26. Example-app, published-package, scaffold and browser-bundle acceptance run locally with `bun run test`. Monitor npm and Actions updates, block high/critical published-runtime dependency advisories, and reject new Fallow dead-code findings against a pinned baseline. Concurrent test typechecks retain their own generated configurations.
 
 - Core capability disposal and startup rollback continue cleanup after individual failures, close only Holo-owned resources, and restore prior live bindings. Multiple failures are reported together. Queue asynchronous shutdown closes all owned drivers and resets state even if closure fails.
@@ -60,6 +63,7 @@
 - Custom `EmailVerificationTokenStore` and `PasswordResetTokenStore` implementations must provide atomic `redeem<TResult>(record, operation): Promise<TResult | null>`. Custom `AuthTokenStore.deleteByUserId` implementations must honor optional `{ exceptId?: string }` to retain the current token during other-token revocation.
 - Custom session integrations must support native `rotate` with complete payload replacement and lifetime renewal; Auth rejects unsupported stores before mutation. Standalone Auth needs a durable `sessionRevocations` adapter for other-device logout; requesting it without an adapter fails explicitly.
 - With external providers or different database contexts, verification/reset claims are consumed before user mutation; a failed mutation requires a fresh token. Run these flows outside caller-owned token-storage transactions, which Core rejects with `TransactionError` before any claim or provider mutation. Proven shared native persistence retains transactional rollback behavior. See [verification](apps/docs/docs/auth/email-verification.md#single-use-redemption) and [password reset](apps/docs/docs/auth/password-reset.md#custom-token-stores).
+- Cache stores that shared a Redis database, database tables or a folder with other data lose it on `cache.flush()` or `holo cache:clear`. Move the cache to its own database, tables or folder first; see [Cache flushes clear the whole store](apps/docs/docs/getting-started/upgrading.md#cache-flushes-clear-the-whole-store).
 - Database `afterRollback` callbacks now run in reverse registration order and continue after callback failures; `afterCommit` callbacks retain registration order. Transaction and rollback-compensation failures are preserved together.
 
 These changes were merged in [#96](https://github.com/cobraprojects/holo-js/pull/96).
