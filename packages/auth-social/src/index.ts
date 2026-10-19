@@ -599,33 +599,31 @@ async function resolveLinkedUserForProviderConfig(
   }
 
   const { guard, authProvider, adapter } = resolveGuardAndProvider(provider, providerConfig)
-  const hasVerifiedEmail = profile.emailVerified === true && typeof profile.email === 'string' && profile.email.trim().length > 0
-  if (!hasVerifiedEmail && verificationRequired) {
+  const providerEmailVerified = profile.emailVerified === true && typeof profile.email === 'string' && profile.email.trim().length > 0
+  if (!providerEmailVerified && verificationRequired) {
     throw new Error(`[@holo-js/auth-social] Social sign-in with "${provider}" requires a verified email address.`)
   }
 
-  const trustedEmail = hasVerifiedEmail ? profile.email?.trim() : undefined
-  let localUser = await findUserByEmail(adapter, trustedEmail)
-  if (localUser && !authRuntimeInternals.hasVerifiedEmail(serializeLocalUser(adapter, localUser, authProvider))) {
-    throw new SocialAuthConflictError({
-      provider,
-      providerUserId: profile.id,
-      email: trustedEmail!,
-    })
-  }
-  if (!localUser) {
-    localUser = requireUserRecord(await adapter.create({
+  const trustedEmail = providerEmailVerified ? profile.email?.trim() : undefined
+  const matchedUser = await findUserByEmail(adapter, trustedEmail)
+  const localUser = matchedUser ?? requireUserRecord(await adapter.create({
       name: profile.name ?? '',
       email: resolveEmailForCreation(provider, profile, {
-        trustEmail: hasVerifiedEmail,
+        trustEmail: providerEmailVerified,
       }),
       password: null,
       avatar: profile.avatar ?? null,
-      email_verified_at: hasVerifiedEmail ? new Date() : null,
+      email_verified_at: providerEmailVerified ? new Date() : null,
     }), '[@holo-js/auth-social] Auth provider create() must return an object user.')
-  }
 
   const serialized = serializeLocalUser(adapter, localUser, authProvider)
+  if (matchedUser && trustedEmail && !authRuntimeInternals.hasVerifiedEmail(serialized)) {
+    throw new SocialAuthConflictError({
+      provider,
+      providerUserId: profile.id,
+      email: trustedEmail,
+    })
+  }
   await bindings.identityStore.save({
     provider,
     providerUserId: profile.id,

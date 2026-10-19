@@ -194,21 +194,31 @@ Your `users` table needs nullable `password` and `avatar` columns for this, whic
 
 ### Link an existing account
 
-Holo never links a social account to a user whose email isn't verified, because anyone can sign up with an address they don't own. If a provider's verified email matches such a user, `callback()` throws a `SocialAuthConflictError` with `code` (`social_identity_conflict`), `provider`, `providerUserId`, and `email`. Catch it and send the user to sign in:
+Holo never links a social account to a user whose email isn't verified, because anyone can sign up with an address they don't own. If a provider's verified email matches such a user, `callback()` throws a `SocialAuthConflictError` with `code` (`social_identity_conflict`), `provider`, `providerUserId`, and `email`. Catch it in your callback route and tell the user how to link the accounts:
 
-```ts
+```ts [app/auth/google/callback/route.ts]
+import { redirect } from 'next/navigation'
+import auth from '@holo-js/auth'
 import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
 
-try {
-  const result = await callback('google', request)
-  // ...
-} catch (error) {
-  if (error instanceof SocialAuthConflictError) {
-    // Ask the user to sign in with their password and verify their email
+export async function GET(request: Request): Promise<Response> {
+  const result = await callback('google', request).catch((error: unknown) => {
+    if (error instanceof SocialAuthConflictError) {
+      return { ok: false, status: 409, message: 'Sign in with your password and verify your email to link this account.' } as const
+    }
+    throw error
+  })
+  if (!result.ok) {
+    return Response.json({ message: result.message }, { status: result.status })
   }
-  throw error
+
+  await auth.guard(result.guard).loginUsing(result.user)
+
+  redirect('/dashboard')
 }
 ```
+
+The same `.catch()` works in Nuxt and SvelteKit callback routes.
 
 To link the accounts, the user signs in with their password and [verifies their email](/auth/email-verification). The next time they continue with the provider, Holo links the social account to them.
 
