@@ -18,6 +18,7 @@ type ServerDriver = 'mysql' | 'postgres'
 type ContentionHarness = {
   readonly control: DatabaseContext
   readonly held: DatabaseContext
+  readonly table: string
   driver(connection?: 'database' | 'held'): QueueAsyncDriver
 }
 
@@ -112,6 +113,7 @@ async function createContentionHarness(driver: ServerDriver): Promise<Contention
   return {
     control,
     held,
+    table,
     driver(name = 'database') {
       const resolved = queueRuntimeInternals.resolveConnectionDriver(name)
       if (resolved.mode !== 'async') {
@@ -142,6 +144,26 @@ async function dispatchJobs(driver: QueueAsyncDriver, count: number): Promise<re
   return ids
 }
 
+async function seedActiveReservations(harness: ContentionHarness, server: ServerDriver, count: number): Promise<void> {
+  const now = Date.now()
+  for (let offset = 0; offset < count; offset += 500) {
+    const size = Math.min(500, count - offset)
+    const rows = Array.from({ length: size }, (_, index) => {
+      const id = `active-${String(offset + index).padStart(6, '0')}`
+      return `('${id}', 'jobs.active', 'database', 'default', '{}', 1, 3, ${now - 60_000}, ${now}, '${id}', ${now - 60_000})`
+    })
+    await harness.control.executeCompiled({
+      sql: `INSERT INTO ${harness.table} (id, job, connection, queue, payload, attempts, max_attempts, available_at, reserved_at, reservation_id, created_at) VALUES ${rows.join(', ')}`,
+      source: 'test:queue:contention:seed',
+    })
+  }
+
+  await harness.control.executeCompiled({
+    sql: server === 'mysql' ? `ANALYZE TABLE ${harness.table}` : `ANALYZE ${harness.table}`,
+    source: 'test:queue:contention:seed',
+  })
+}
+
 function withinDeadline<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
   return Promise.race([
     promise,
@@ -158,8 +180,9 @@ const servers: readonly { readonly driver: ServerDriver, readonly enabled: boole
 
 for (const server of servers) {
   describe.runIf(server.enabled)(`@holo-js/queue-db ${server.driver} reservation contention`, () => {
-    it('reserves the next job while another worker holds a reservation and returns promptly when none is left', async () => {
+    it.each([0, 5_000])('reserves the next job while another worker holds a reservation alongside %i in-flight jobs and returns promptly when none is left', async (activeReservations) => {
       const harness = await createContentionHarness(server.driver)
+      await seedActiveReservations(harness, server.driver, activeReservations)
       const ids = await dispatchJobs(harness.driver(), 3)
       const reserve = async (connection: 'database' | 'held', workerId: string) => {
         const job = await withinDeadline(

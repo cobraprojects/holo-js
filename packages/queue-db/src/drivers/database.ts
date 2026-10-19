@@ -68,6 +68,8 @@ function wrapDatabaseError(
   return new DatabaseQueueDriverError(connectionName, action, error)
 }
 
+const RESERVATION_CANDIDATE_LIMIT = 100
+
 function normalizeQueueNames(
   queueNames: readonly string[] | undefined,
   fallbackQueueName: string,
@@ -127,6 +129,48 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     })
   }
 
+  private async lockNextJob(
+    tx: DatabaseContext,
+    quotedTable: string,
+    queueName: string,
+    now: number,
+  ): Promise<DatabaseQueuedJobRow | undefined> {
+    const expiredReservationCutoff = this.getExpiredReservationCutoff(now)
+    const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
+    const candidates = await tx.queryCompiled<{ id: unknown }>({
+      sql:
+        `SELECT id FROM ${quotedTable} `
+        + `WHERE queue = ${queuePlaceholder} `
+        + `AND available_at <= ${availablePlaceholder} `
+        + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
+        + 'ORDER BY available_at ASC, created_at ASC, id ASC '
+        + `LIMIT ${RESERVATION_CANDIDATE_LIMIT}`,
+      bindings: [queueName, now, expiredReservationCutoff],
+      source: `queue:${this.name}:reserve:candidates`,
+    })
+
+    const lockClause = tx.getCapabilities().lockForUpdate ? ' FOR UPDATE SKIP LOCKED' : ''
+    const [idPlaceholder, lockAvailablePlaceholder, lockExpiredPlaceholder] = createPlaceholders(tx, 3)
+    for (const candidate of candidates.rows) {
+      const locked = await tx.queryCompiled<DatabaseQueuedJobRow>({
+        sql:
+          `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
+          + `FROM ${quotedTable} `
+          + `WHERE id = ${idPlaceholder} `
+          + `AND available_at <= ${lockAvailablePlaceholder} `
+          + `AND (reserved_at IS NULL OR reserved_at <= ${lockExpiredPlaceholder})${lockClause}`,
+        bindings: [candidate.id, now, expiredReservationCutoff],
+        source: `queue:${this.name}:reserve:lock`,
+      })
+
+      if (locked.rows[0]) {
+        return locked.rows[0]
+      }
+    }
+
+    return undefined
+  }
+
   async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
     job: QueueJobEnvelope<TPayload>,
   ): Promise<QueueDriverDispatchResult<TResult>> {
@@ -169,24 +213,9 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
       const queueNames = normalizeQueueNames(input.queueNames, this.connection.queue)
 
       return await connection.transaction(async (tx: DatabaseContext) => {
-        const lockClause = tx.getCapabilities().lockForUpdate ? ' FOR UPDATE SKIP LOCKED' : ''
         for (const queueName of queueNames) {
           const now = Date.now()
-          const [queuePlaceholder, availablePlaceholder, expiredPlaceholder] = createPlaceholders(tx, 3)
-          const selected = await tx.queryCompiled<DatabaseQueuedJobRow>({
-            sql:
-              `SELECT id, job, connection, queue, payload, attempts, max_attempts, available_at, created_at `
-              + `FROM ${quotedTable} `
-              + `WHERE queue = ${queuePlaceholder} `
-              + `AND available_at <= ${availablePlaceholder} `
-              + `AND (reserved_at IS NULL OR reserved_at <= ${expiredPlaceholder}) `
-              + 'ORDER BY available_at ASC, id ASC '
-              + `LIMIT 1${lockClause}`,
-            bindings: [queueName, now, this.getExpiredReservationCutoff(now)],
-            source: `queue:${this.name}:reserve:select`,
-          })
-
-          const row = selected.rows[0]
+          const row = await this.lockNextJob(tx, quotedTable, queueName, now)
           if (!row) {
             continue
           }
