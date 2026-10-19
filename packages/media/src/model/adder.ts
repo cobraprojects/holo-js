@@ -14,6 +14,8 @@ import { inspectFileContent } from '@holo-js/kernel/file-content'
 import {
   Storage,
   StorageMetadataUnsupportedError,
+  StorageStreamingUnsupportedError,
+  type StorageByteStream,
   type StorageDisk,
   type StorageFileMetadata,
 } from '@holo-js/storage/runtime'
@@ -417,21 +419,29 @@ async function resolveStorageMediaSource(
 ): Promise<ReadMediaSource> {
   const disk = Storage.disk(input.disk)
   const fileName = sanitizeFileName(overrideFileName ?? localStoragePathInternals.splitLocalStoragePath(input.path).at(-1) ?? '')
-  if (typeof options.maxSize === 'number') {
-    await rejectOversizedStoredFile(disk, input, fileName, options.maxSize, options.collectionName)
-  }
-
-  const chunks = await disk.readStream(input.path)
-  if (!chunks) {
+  const maxSize = options.maxSize
+  const metadataAvailable = typeof maxSize === 'number'
+    && await checkStoredFileSize(disk, input, fileName, maxSize, options.collectionName)
+  const chunks = await openStoredFileStream(disk, input)
+  if (chunks === null) {
     throw missingStoredFileError(input)
   }
 
-  const contents = await readBoundedMediaContents(
-    chunks,
-    fileName,
-    options.maxSize ?? Number.POSITIVE_INFINITY,
-    options.collectionName,
-  )
+  let contents: Uint8Array
+  if (chunks) {
+    contents = await readBoundedMediaContents(chunks, fileName, maxSize ?? Number.POSITIVE_INFINITY, options.collectionName)
+  } else if (typeof maxSize !== 'number') {
+    contents = await readWholeStoredFile(disk, input)
+  } else if (!metadataAvailable) {
+    throw new Error(
+      `[@holo-js/media] Collection "${options.collectionName}" has a maxSize, so "${input.path}" on disk "${input.disk}" needs a disk that supports file metadata or streaming.`,
+    )
+  } else {
+    contents = await readWholeStoredFile(disk, input)
+    if (contents.byteLength > maxSize) {
+      throw createMaxSizeError(fileName, options.collectionName, maxSize, contents.byteLength)
+    }
+  }
 
   return {
     contents,
@@ -442,19 +452,19 @@ async function resolveStorageMediaSource(
   }
 }
 
-async function rejectOversizedStoredFile(
+async function checkStoredFileSize(
   disk: StorageDisk,
   input: StoredMediaSource,
   fileName: string,
   maxSize: number,
   collectionName: string,
-): Promise<void> {
+): Promise<boolean> {
   let metadata: StorageFileMetadata | null
   try {
     metadata = await disk.stat(input.path)
   } catch (error) {
     if (error instanceof StorageMetadataUnsupportedError) {
-      return
+      return false
     }
 
     throw error
@@ -467,6 +477,32 @@ async function rejectOversizedStoredFile(
   if (metadata.size > maxSize) {
     throw createMaxSizeError(fileName, collectionName, maxSize, metadata.size)
   }
+
+  return true
+}
+
+async function openStoredFileStream(
+  disk: StorageDisk,
+  input: StoredMediaSource,
+): Promise<StorageByteStream | null | undefined> {
+  try {
+    return await disk.readStream(input.path)
+  } catch (error) {
+    if (error instanceof StorageStreamingUnsupportedError) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
+async function readWholeStoredFile(disk: StorageDisk, input: StoredMediaSource): Promise<Uint8Array> {
+  const contents = await disk.getBytes(input.path)
+  if (!contents) {
+    throw missingStoredFileError(input)
+  }
+
+  return contents
 }
 
 function missingStoredFileError(input: StoredMediaSource): Error {

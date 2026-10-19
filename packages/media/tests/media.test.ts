@@ -10,6 +10,7 @@ import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import {
   Storage,
   StorageMetadataUnsupportedError,
+  StorageStreamingUnsupportedError,
   type StorageDisk,
   type StorageFileMetadata,
 } from '@holo-js/storage/runtime'
@@ -229,12 +230,16 @@ async function* countStreamedBytes(
 }
 
 function observeDiskReads(overrides: {
+  readonly disk?: string
   readonly stat?: (path: string) => Promise<StorageFileMetadata | null>
+  readonly streaming?: boolean
 } = {}): { streamedBytes: number, fullReads: number } {
   const observed = { streamedBytes: 0, fullReads: 0 }
+  const watched = overrides.disk ?? 'local'
   const openDisk = Storage.disk.bind(Storage)
   vi.spyOn(Storage, 'disk').mockImplementation((diskName?: string) => {
     const disk = openDisk(diskName)
+    if (diskName !== watched) return disk
     return {
       ...disk,
       stat: overrides.stat ?? (async path => await disk.stat(path)),
@@ -243,6 +248,7 @@ function observeDiskReads(overrides: {
         return await disk.getBytes(path)
       },
       readStream: async (path: string, streamOptions?: Parameters<StorageDisk['readStream']>[1]) => {
+        if (overrides.streaming === false) throw new StorageStreamingUnsupportedError()
         const chunks = await disk.readStream(path, streamOptions)
         return chunks ? countStreamedBytes(chunks, observed) : null
       },
@@ -2068,6 +2074,113 @@ describe('@holo-js/media', () => {
 
     expect(media.fileName).toBe('photo.png')
     expect(media.mimeType).toBe('image/png')
+  })
+
+  it('reads disk files through getBytes when the backend cannot stream and no maxSize is set', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const observed = observeDiskReads({
+      streaming: false,
+      stat: async () => {
+        throw new StorageMetadataUnsupportedError()
+      },
+    })
+    const post = await Post.create({ title: 'Unstreamed disk file' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads/photo.png', 'local').toMediaCollection('images'))
+
+    expect(media.fileName).toBe('photo.png')
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+    expect(observed.fullReads).toBe(1)
+  })
+
+  it('reads a disk file through getBytes after stat confirms it is within the limit when the backend cannot stream', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/small.png', pngPixel)
+    const observed = observeDiskReads({ streaming: false })
+    const post = await Post.create({ title: 'Stat-checked disk file' })
+    const media = await expectMediaAdded(post.addMediaFromDisk('uploads/small.png', 'local').toMediaCollection('images'))
+
+    expect(Buffer.from(await Storage.disk('public').getBytes(media.record.path) ?? [])).toEqual(pngPixel)
+    expect(observed.fullReads).toBe(1)
+  })
+
+  it('rejects oversize disk files from stat without reading them when the backend cannot stream', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(2 * 1024 * 1024, 1))
+    const observed = observeDiskReads({ streaming: false })
+    const post = await Post.create({ title: 'Unstreamed oversize disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(observed.fullReads).toBe(0)
+  })
+
+  it('rejects a disk file that stat understated after reading it whole when the backend cannot stream', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/large.bin', Buffer.alloc(1024 * 1024, 1))
+    const observed = observeDiskReads({
+      streaming: false,
+      stat: async () => ({ size: 512, mimeType: null }),
+    })
+    const post = await Post.create({ title: 'Stale unstreamed disk file' })
+
+    const result = await post.addMediaFromDisk('uploads/large.bin', 'local').toMediaCollection('images')
+
+    expect(result.error?.code).toBe('max_size_exceeded')
+    expect(result.error?.actualSize).toBe(1024 * 1024)
+    expect(observed.fullReads).toBe(1)
+  })
+
+  it('explains that a size-limited collection needs stat or streaming when the backend has neither', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public').maxSize(1024)],
+    })
+
+    await Storage.disk('local').put('uploads/photo.png', pngPixel)
+    const observed = observeDiskReads({
+      streaming: false,
+      stat: async () => {
+        throw new StorageMetadataUnsupportedError()
+      },
+    })
+    const post = await Post.create({ title: 'Unbounded disk file' })
+
+    await expect(post.addMediaFromDisk('uploads/photo.png', 'local').toMediaCollection('images'))
+      .rejects.toThrow('needs a disk that supports file metadata or streaming')
+    expect(observed.fullReads).toBe(0)
   })
 
   it('attaches disk files that fit the collection limit', async () => {

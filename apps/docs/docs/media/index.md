@@ -211,7 +211,7 @@ await post
   .toMediaCollection('images')
 ```
 
-Holo copies the file to the collection's disk. The original stays where it is, so you can delete it yourself once the media is saved. If the file doesn't exist on that disk, the call throws an error.
+Holo copies the file to the collection's disk. The original stays where it is, so you can delete it yourself once the media is saved. If the file doesn't exist on that disk, the call throws an error. A collection with `maxSize()` also needs the disk to report file sizes or stream files, and the call throws an error if it can do neither.
 
 ## Get media
 
