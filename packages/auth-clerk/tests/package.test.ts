@@ -138,18 +138,14 @@ async function configureRuntime(options: {
   const persistence = await createNativeHostedAuthPersistence('clerk')
   const usersProvider = persistence.providers.users as NativeProvider
   const adminsProvider = persistence.providers.admins as NativeProvider
-  const context = authRuntimeInternals.createMemoryAuthContext()
-  const authContext = options.responseCookies || options.redirectResponses
-    ? {
-        ...context,
-        appendResponseCookie(cookie: string) {
-          options.responseCookies?.push(cookie)
-        },
-        redirectResponse(url: string, status?: 301 | 302 | 303 | 307 | 308) {
-          options.redirectResponses?.push({ url, status })
-        },
-      }
-    : context
+  const authContext = Object.assign(authRuntimeInternals.createMemoryAuthContext(), {
+    appendResponseCookie(cookie: string) {
+      options.responseCookies?.push(cookie)
+    },
+    redirectResponse(url: string, status?: 301 | 302 | 303 | 307 | 308) {
+      options.redirectResponses?.push({ url, status })
+    },
+  })
 
   configureAuthRuntime({
     config: defineAuthConfig({

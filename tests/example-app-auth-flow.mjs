@@ -1006,16 +1006,14 @@ export async function assertExampleAppAuthFlow({
     assert.doesNotMatch(rememberedJar.header(), new RegExp(`(?:^|;\\s*)${escapeRegExp(rememberCookieName)}=`))
   }
 
-  const staleRememberUser = await fetchAuthJson('/api/auth/user', {
+  const copiedRememberUser = await fetchAuthJson('/api/auth/user', {
     headers: {
       cookie: rememberOnlyCookie,
     },
   })
-  if (!usesSvelteKitActions) {
-    assert.equal(staleRememberUser.json.authenticated, false)
-    assert.equal(staleRememberUser.json.user, null)
-  }
-  assert.equal(staleRememberUser.json.guard, 'web')
+  assert.equal(copiedRememberUser.json.authenticated, true)
+  assert.equal(copiedRememberUser.json.guard, 'web')
+  assert.equal(copiedRememberUser.json.user?.email, email)
 
   const loggedOut = await fetchAuthJson('/api/logout', {
     method: 'POST',
@@ -1042,6 +1040,14 @@ export async function assertExampleAppAuthFlow({
   assert.equal(staleSessionUser.json.authenticated, false)
   assert.equal(staleSessionUser.json.guard, 'web')
   assert.equal(staleSessionUser.json.user, null)
+
+  const rememberedAfterLogout = await fetchAuthJson('/api/auth/user', {
+    headers: {
+      cookie: rememberOnlyCookie,
+    },
+  })
+  assert.equal(rememberedAfterLogout.json.authenticated, false)
+  assert.equal(rememberedAfterLogout.json.user, null)
 
   if (checkPages) {
     const loggedOutHome = await fetchAuthText('/', {

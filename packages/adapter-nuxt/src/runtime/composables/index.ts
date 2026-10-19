@@ -140,11 +140,15 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
     return undefined
   }
 
-  async function appendCookie(cookie: string): Promise<void> {
+  async function resolveResponse() {
     const event = requestEvent ?? (await resolveNitroEvent())
-    const response = event?.node?.res
+    return event?.node?.res
+  }
+
+  async function appendCookie(cookie: string): Promise<void> {
+    const response = await resolveResponse()
     if (!response) {
-      return
+      throw Object.assign(new Error('Authentication cookies cannot be set outside an active Nitro request.'), { code: 'cookie_write_unavailable' })
     }
 
     const current = response.getHeader('set-cookie')
@@ -169,6 +173,10 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
     return await readHeader(name)
   }
 
+  const canAppendResponseCookie: NonNullable<CreateHoloOptions['authRequest']>['canAppendResponseCookie'] = async () => {
+    return Boolean(await resolveResponse())
+  }
+
   const appendResponseCookie: NonNullable<CreateHoloOptions['authRequest']>['appendResponseCookie'] = async (cookie) => {
     await appendCookie(cookie)
   }
@@ -188,6 +196,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   return {
     getCookie: getCookieValue,
     getHeader: getHeaderValue,
+    canAppendResponseCookie,
     appendResponseCookie,
     redirectResponse,
   } satisfies NonNullable<CreateHoloOptions['authRequest']>

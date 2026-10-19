@@ -2,6 +2,7 @@ type RequestAccessBindings = {
   readonly context: {
     getRequestCookie?(name: string): Promise<string | undefined> | string | undefined
     getRequestHeader?(name: string): Promise<string | undefined> | string | undefined
+    canAppendResponseCookie?(): Promise<boolean> | boolean
     appendResponseCookie?(cookie: string): Promise<void> | void
     redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): Promise<void> | void
   }
@@ -64,11 +65,29 @@ export async function resolveRequestHeader(
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+export const COOKIE_WRITE_UNAVAILABLE = 'cookie_write_unavailable'
+
+function createCookieWriteUnavailableError(cause?: unknown): Error {
+  return Object.assign(new Error('Authentication cookies cannot be set in this request context.', { cause }), {
+    code: COOKIE_WRITE_UNAVAILABLE,
+  })
+}
+
+export async function responseCookiesWritable(bindings: RequestAccessBindings): Promise<boolean> {
+  if (bindings.context.canAppendResponseCookie) return await bindings.context.canAppendResponseCookie()
+  return typeof bindings.context.appendResponseCookie === 'function'
+}
+
+export async function assertResponseCookiesWritable(bindings: RequestAccessBindings): Promise<void> {
+  if (!await responseCookiesWritable(bindings)) throw createCookieWriteUnavailableError()
+}
+
 export async function appendResponseCookies(
   bindings: RequestAccessBindings,
   cookies: readonly string[],
 ): Promise<void> {
   if (!bindings.context.appendResponseCookie) {
+    if (cookies.length > 0) throw createCookieWriteUnavailableError()
     return
   }
 

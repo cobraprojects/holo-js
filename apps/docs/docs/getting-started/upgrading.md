@@ -295,6 +295,55 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### Per-user remember-me tokens
+
+Remember me now works like Laravel's: each user has one `remember_token`, and the user stays signed in for `rememberMeLifetime` even after their session expires. Add the column to every table an auth provider reads from, such as `users` and `admins`:
+
+```bash
+npx holo make:migration add_remember_token_to_users
+```
+
+```ts [server/db/migrations/2026_10_19_000000_add_remember_token_to_users.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.table('users', (table) => {
+      table.string('remember_token').nullable()
+    })
+  },
+  async down({ schema }) {
+    await schema.table('users', (table) => {
+      table.dropColumn('remember_token')
+    })
+  },
+})
+```
+
+Add `remember_token` to the model's `hidden` list so it never reaches the browser:
+
+```ts [server/models/User.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', {
+  fillable: ['name', 'email', 'password', 'avatar'],
+  hidden: ['password', 'remember_token'],
+})
+```
+
+Behavior changes to expect:
+
+- `logout()` gives the user a new remember token, so remember-me cookies on every device stop working. Other devices with an active session stay signed in until that session ends. Use `logoutOtherDevices()` to end those too.
+- Changing the user's password also stops their remember-me cookies.
+- Signing in without remember me clears that browser's remember-me cookie but keeps the user's token, so a copy of the cookie keeps working until `logout()`, `logoutOtherDevices()`, or a password change.
+- With multi-factor auth, the remember-me cookie is set after the user passes the challenge, not when they enter their password.
+- A custom `AuthRuntimeContext` can report whether it can set cookies with `canAppendResponseCookie()`. Auth checks it before any side effect. Without it, Auth uses whether `appendResponseCookie` exists.
+- A custom `AuthRuntimeContext` that omits `appendResponseCookie` can no longer log users in or out. The calls throw `cookie_write_unavailable`, the same error a read-only Next.js render raises. Provide a response cookie writer in every request context that signs users in or out.
+- Confirming multi-factor enrollment ends remember-me cookies issued before it, so the user signs in with the challenge the next time. The browser that confirmed enrollment stays signed in.
+
+The sessions table no longer uses `remember_token_hash`. You can leave the column in place or drop it. `issueRememberMeToken()` and `consumeRememberMeToken()` are removed from `@holo-js/session`, and session records no longer have `rememberTokenHash`. `rememberMeCookie()` is unchanged.
+
+If you wrote a custom auth provider, add `getRememberToken(user)` and `updateRememberToken(user, token)` to it. Without `updateRememberToken`, `remember: true` and `logout()` for users who have a token throw an `AuthError` with the code `runtime_unconfigured`.
 ### Rate-limit windows are fixed in every driver
 
 Every rate-limit driver now uses the same window. A window starts with a key's first attempt and lasts `decaySeconds`. Rejected attempts count but don't extend it. Before, the Redis driver counted attempts over a sliding window that rejected attempts extended. See [How the window works](/basics/security/rate-limiting#how-the-window-works).
@@ -564,6 +613,10 @@ npm run build
 ```
 
 Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4 and `ip()` calls from step 7. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
+
+### Give custom auth contexts a request scope
+
+If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
 
 ## Next steps
 

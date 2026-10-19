@@ -92,7 +92,7 @@ await schema.createTable('users', table => { table.integer('id').primaryKey(); t
 await schema.createTable('auth_session_revocations', table => { table.string('provider'); table.string('user_id'); table.integer('generation').default(0); table.string('retained_session_id').nullable(); table.unique(['provider', 'user_id']) })
 await DB.table('users').insert({ id: 1, email: 'native@example.com' })
 const { sessionCookie } = await import('@holo-js/session')
-const result = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
+const result = await runtime.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => auth.loginUsingId(1))
 const cookie = sessionCookie(result.sessionId).split(';', 1)[0]
 await runtime.shutdown()
 console.log(JSON.stringify({ cookie }))

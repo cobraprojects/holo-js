@@ -16,7 +16,7 @@ import { createNativeSessionStore } from './support/native-session'
 
 async function nativeAuth() {
   const persistence = await createNativeAuthPersistence()
-  const context = createAsyncAuthContext()
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
   const sessionStore = createNativeSessionStore()
   configureSessionRuntime({ appKey: 'holo-test-app-key', config: persistence.loadedConfig.session, stores: { file: sessionStore } })
   type User = ReturnType<NonNullable<Awaited<ReturnType<typeof NativeUser.find>>>['toAttributes']>

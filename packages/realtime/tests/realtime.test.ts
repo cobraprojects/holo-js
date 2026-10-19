@@ -17783,7 +17783,7 @@ describe('@holo-js/realtime', () => {
   it('authorizes named and fallback guards from real users and sessions and rejects access after logout', async () => {
     const persistence = await createNativeAuthPersistence()
     const store = createNativeSessionStore()
-    const context = createAsyncAuthContext()
+    const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
     configureSessionRuntime({
       appKey: 'holo-test-app-key',
       config: { ...persistence.loadedConfig.session, driver: 'file', stores: { file: { name: 'file', driver: 'file', path: store.path } } },

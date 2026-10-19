@@ -141,9 +141,9 @@ try {
       await schema.createTable('users', table => { table.integer('id').primaryKey(); table.string('email') })
       await schema.createTable('auth_session_revocations', table => { table.string('provider'); table.string('user_id'); table.integer('generation').default(0); table.string('retained_session_id').nullable(); table.unique(['provider', 'user_id']) })
       await DB.table('users').insert({ id: 1, email: 'native@example.com' })
-      const login = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
+      const login = await runtime.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => auth.loginUsingId(1))
       assert.ok(login.sessionId)
-      await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookie(login.sessionId).split(';', 1)[0].slice('holo_session='.length) : undefined }, async () => {
+      await runtime.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined, getCookie: name => name === 'holo_session' ? sessionCookie(login.sessionId).split(';', 1)[0].slice('holo_session='.length) : undefined }, async () => {
         assert.equal(await auth.check(), true)
         assert.equal((await auth.user()).email, 'native@example.com')
         if (${Boolean(authDelivery)}) {

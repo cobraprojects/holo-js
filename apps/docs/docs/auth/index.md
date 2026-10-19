@@ -392,7 +392,7 @@ Impersonation lets an admin sign in as another user and return later. Impersonat
 
 `impersonate(user: unknown, options?: { remember?: boolean, actorGuard?: string }): Promise<AuthEstablishedSession>`
 
-Signs in as `user` on the default guard while remembering the actor. The actor must be signed in on `actorGuard` (defaults to the same guard). Throws `impersonation_actor_required`, `impersonation_nested_unsupported`, or `impersonation_already_active` when the rules aren't met.
+Signs in as `user` on the default guard while remembering the actor. The actor must be signed in on `actorGuard` (defaults to the same guard). Throws `impersonation_actor_required`, `impersonation_nested_unsupported`, or `impersonation_already_active` when the rules aren't met. `remember: true` throws `impersonation_remember_unsupported`, because an impersonation never sets a remember-me cookie.
 
 ### impersonateById()
 

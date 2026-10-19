@@ -239,7 +239,6 @@ function serializeSessionRecord(record: SessionRecord): string {
     createdAt: record.createdAt.toISOString(),
     lastActivityAt: record.lastActivityAt.toISOString(),
     expiresAt: record.expiresAt.toISOString(),
-    ...(typeof record.rememberTokenHash === 'undefined' ? {} : { rememberTokenHash: record.rememberTokenHash }),
   })
 }
 
@@ -252,7 +251,6 @@ function deserializeSessionRecord(value: string): SessionRecord | null {
       createdAt?: unknown
       lastActivityAt?: unknown
       expiresAt?: unknown
-      rememberTokenHash?: unknown
     }
 
     if (
@@ -264,10 +262,6 @@ function deserializeSessionRecord(value: string): SessionRecord | null {
       || typeof parsed.createdAt !== 'string'
       || typeof parsed.lastActivityAt !== 'string'
       || typeof parsed.expiresAt !== 'string'
-      || (
-        typeof parsed.rememberTokenHash !== 'undefined'
-        && typeof parsed.rememberTokenHash !== 'string'
-      )
     ) {
       return null
     }
@@ -291,7 +285,6 @@ function deserializeSessionRecord(value: string): SessionRecord | null {
       createdAt: new Date(createdAtMs),
       lastActivityAt: new Date(lastActivityAtMs),
       expiresAt: new Date(expiresAtMs),
-      ...(typeof parsed.rememberTokenHash === 'undefined' ? {} : { rememberTokenHash: parsed.rememberTokenHash }),
     })
   } catch {
     return null

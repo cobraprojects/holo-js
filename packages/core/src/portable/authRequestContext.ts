@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 export interface AuthRequestAccessors {
   getCookie?(name: string): string | undefined | Promise<string | undefined>
   getHeader?(name: string): string | undefined | Promise<string | undefined>
+  canAppendResponseCookie?(): boolean | Promise<boolean>
   appendResponseCookie?(cookie: string): void | Promise<void>
   redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
 }
@@ -23,6 +24,7 @@ interface AuthContext {
 type RequestAwareContext<TContext extends AuthContext> = TContext & {
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  canAppendResponseCookie?(): boolean | Promise<boolean>
   appendResponseCookie?(cookie: string): void | Promise<void>
   redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
 }
@@ -35,6 +37,7 @@ function attachAuthRequestAccessors<TContext extends AuthContext>(
     ...context,
     getRequestCookie: accessors.getCookie,
     getRequestHeader: accessors.getHeader,
+    canAppendResponseCookie: accessors.canAppendResponseCookie,
     appendResponseCookie: accessors.appendResponseCookie,
     redirectResponse: accessors.redirectResponse,
   })
@@ -66,8 +69,16 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
     getRequestHeader(name) {
       return resolveRequestContext().getRequestHeader?.(name)
     },
+    canAppendResponseCookie() {
+      const resolved = resolveRequestContext()
+      return resolved.canAppendResponseCookie ? resolved.canAppendResponseCookie() : Boolean(resolved.appendResponseCookie)
+    },
     appendResponseCookie(cookie) {
-      return resolveRequestContext().appendResponseCookie?.(cookie)
+      const resolved = resolveRequestContext()
+      if (!resolved.appendResponseCookie) {
+        throw Object.assign(new Error('Authentication cookies cannot be set in this request context.'), { code: 'cookie_write_unavailable' })
+      }
+      return resolved.appendResponseCookie(cookie)
     },
     redirectResponse(url, status) {
       return resolveRequestContext().redirectResponse?.(url, status)

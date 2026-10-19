@@ -28,7 +28,7 @@ export async function assertExampleAppAuthStorageBehavior(projectRoot, DB) {
   const email = `native-auth-${randomUUID()}@app.test`
   const sessions = new Set()
   let userId
-  auth.configureAuthRuntime({ ...bindings, config: auth.defineAuthConfig({ ...bindings.config, multiFactor: true }) })
+  auth.configureAuthRuntime({ ...bindings, context: { ...bindings.context, canAppendResponseCookie: () => true, appendResponseCookie: () => undefined }, config: auth.defineAuthConfig({ ...bindings.config, multiFactor: true }) })
   try {
     await bindings.context.run(async () => {
       const user = await bindings.providers.users.create({ name: 'Native authentication', email, password: await auth.hashPassword(password), email_verified_at: new Date() })

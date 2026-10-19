@@ -89,15 +89,9 @@ export function buildLogoutCookies(
 ): readonly string[] {
   const cookies: string[] = []
   const defaultSessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))
-  const defaultRememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
 
-  if (options.clearSessionCookies) {
-    if (defaultSessionCookie) {
-      cookies.push(forgetCookie(bindings, defaultSessionCookie.name, defaultSessionCookie.options))
-    }
-    if (defaultRememberCookie) {
-      cookies.push(forgetCookie(bindings, defaultRememberCookie.name, defaultRememberCookie.options))
-    }
+  if (options.clearSessionCookies && defaultSessionCookie) {
+    cookies.push(forgetCookie(bindings, defaultSessionCookie.name, defaultSessionCookie.options))
   }
 
   const hostedCookieOptions: CookieOptions = { path: '/', domain: '' }
