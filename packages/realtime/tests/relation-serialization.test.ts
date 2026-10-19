@@ -350,6 +350,37 @@ describe('realtime relation serialization', () => {
     expect(snapshots.at(-1)).toEqual(await handler())
   })
 
+  it('refreshes a hidden belongs-to relation when the handler also reads the foreign key directly', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    const Author = defineModel(authorsTable(), { timestamps: false, hidden: ['password'] })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: { author: belongsTo(() => Author, 'author_id') },
+    })
+    const handler = async () => {
+      await db.table('posts').where('id', 1).first()
+      return db.model(Post).query().where('id', 1).with('author').firstJson()
+    }
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').where('id', 1).update({ author_id: 2 }),
+    }))
+
+    expect(snapshots.at(-1)).toEqual(await handler())
+  })
+
   it('keeps plain belongs-to patching when a belongs-to-many relation is loaded alongside it', async () => {
     const context = await openRealtimeDatabase()
     const { db, adapter } = context

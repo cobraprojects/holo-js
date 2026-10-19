@@ -18,6 +18,7 @@ import {
 } from './predicate-matching'
 import { collectRelevantMutationTargets } from './query-relevant-mutations'
 import type {
+  DatabaseQueryObservation,
   PatchedQueryDelivery,
   PatchedQueryResult,
   QueryPatchTarget,
@@ -451,6 +452,10 @@ function hasPatchableColumnTarget(
       continue
     }
 
+    if (includeSelectedColumns && target.query.relation?.kind === 'belongsToParentKey' && !isSameParentKeyRelation(target.query, candidate.query)) {
+      continue
+    }
+
     if (candidate.query.scalarColumn === column) {
       return true
     }
@@ -464,16 +469,21 @@ function hasPatchableColumnTarget(
     }
 
     const relation = candidate.query.relation
-    if (
-      relation?.kind === 'belongsToParentKey'
-      && relation.foreignKey === column
-      && (!includeSelectedColumns || target.query.relation?.kind !== 'belongsToParentKey' || target.query.relation.relationKey === relation.relationKey)
-    ) {
+    if (relation?.kind === 'belongsToParentKey' && relation.foreignKey === column) {
       return true
     }
   }
 
   return false
+}
+
+function isSameParentKeyRelation(
+  target: DatabaseQueryObservation,
+  candidate: DatabaseQueryObservation,
+): boolean {
+  return candidate.relation?.kind === 'belongsToParentKey'
+    && target.relation?.kind === 'belongsToParentKey'
+    && candidate.relation.relationKey === target.relation.relationKey
 }
 
 function coversResultPath(
