@@ -720,6 +720,38 @@ describe('@holo-js/auth-social', () => {
     expect(await runtime.persistence.db.table('admins').count()).toBe(1)
   })
 
+  it('links a verified local user whose serialized form hides its verification timestamp', async () => {
+    const runtime = await configureRuntime()
+    const existing = await runtime.usersProvider.create({
+      name: 'Hidden Verification User',
+      email: 'hidden@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const serialize = runtime.usersProvider.serialize!.bind(runtime.usersProvider)
+    runtime.usersProvider.serialize = (user) => {
+      const { email_verified_at: _hidden, ...visible } = serialize(user)
+      return visible
+    }
+
+    const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
+    const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
+    runtime.exchangeProfiles.set('code-hidden-verified', {
+      profile: {
+        id: 'google-hidden-verified',
+        email: 'hidden@example.com',
+        emailVerified: true,
+      },
+      tokens: {
+        accessToken: 'hidden-verified-token',
+      },
+    })
+
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-hidden-verified`))
+    expect(response.ok).toBe(true)
+    expect((await runtime.identityStore.findByProviderUserId('google', 'google-hidden-verified'))?.userId).toBe(String(existing.id))
+  })
+
   it('refuses to link a verified social email onto an unverified local account', async () => {
     const runtime = await configureRuntime()
     const existing = await runtime.usersProvider.create({

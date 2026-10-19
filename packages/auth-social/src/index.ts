@@ -514,6 +514,17 @@ function serializeLocalUser(
   return Object.freeze(result)
 }
 
+function hasVerifiedLocalEmail(
+  adapter: RuntimeAuthProviderAdapter,
+  user: Record<string, unknown>,
+  serialized: AuthUserLike,
+): boolean {
+  const verifiedAt = adapter.getEmailVerifiedAt
+    ? adapter.getEmailVerifiedAt(user)
+    : serialized.email_verified_at
+  return verifiedAt instanceof Date || typeof verifiedAt === 'string'
+}
+
 async function findUserByEmail(
   adapter: RuntimeAuthProviderAdapter,
   email: string | undefined,
@@ -617,7 +628,7 @@ async function resolveLinkedUserForProviderConfig(
     }), '[@holo-js/auth-social] Auth provider create() must return an object user.')
 
   const serialized = serializeLocalUser(adapter, localUser, authProvider)
-  if (matchedUser && trustedEmail && !authRuntimeInternals.hasVerifiedEmail(serialized)) {
+  if (matchedUser && trustedEmail && !hasVerifiedLocalEmail(adapter, matchedUser, serialized)) {
     throw new SocialAuthConflictError({
       provider,
       providerUserId: profile.id,

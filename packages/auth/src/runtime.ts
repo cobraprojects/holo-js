@@ -2887,7 +2887,6 @@ export const authRuntimeInternals = {
   getProviderIdentifiers,
   getRuntimeBindings,
   hashTokenSecret,
-  hasVerifiedEmail,
   isResponseInterrupt: isAuthResponseInterrupt,
   jwt: authJwtInternals,
   normalizeRequestInput,
