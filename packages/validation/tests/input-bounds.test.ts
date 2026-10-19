@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ValidationException, field, safeParse, schema, validate, validationInternals, type ValidationSchema } from '../src'
+import { ValidationException, field, safeParse, schema, validate, validationInternals, type ValidationSchema, type SchemaInputShape } from '../src'
 
 const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
@@ -58,6 +58,31 @@ describe('Validation input bounds', () => {
 
     formData.append('attachments[]', file)
     expect(await rootErrors(input(), definition)).toEqual(['The request contains too many input variables.'])
+  })
+
+  it.each([
+    ['form', 'brackets'],
+    ['form', 'dots'],
+    ['query', 'brackets'],
+    ['query', 'dots'],
+  ])('accepts 64 nesting levels and rejects 65 in %s names with %s', async (format, notation) => {
+    let shape: SchemaInputShape = { leaf: field.string().required() }
+    for (let level = 1; level < 64; level += 1) shape = { child: shape }
+    const definition = schema({ root: shape })
+    const input = (depth: number) => {
+      const path = notation === 'dots' ? `root${'.child'.repeat(depth - 1)}.leaf` : `root${'[child]'.repeat(depth - 1)}[leaf]`
+      const entries = [[path, 'value']] as const
+      return format === 'form' ? formWith(entries) : new URLSearchParams(entries.map(([key, value]) => [key, value]))
+    }
+
+    expect((await safeParse(input(64), definition)).valid).toBe(true)
+    expect(await rootErrors(input(65), definition)).toEqual(['The request contains a field nested too deeply.'])
+  })
+
+  it('rejects 1,000 fields nested 500 levels deep', async () => {
+    const formData = formWith(Array.from({ length: 1_000 }, (_, index) => [`field${index}${'[x]'.repeat(500)}`, 'value'] as const))
+
+    expect(await rootErrors(formData)).toEqual(['The request contains a field nested too deeply.'])
   })
 
   it('requires every array index to be lower than the entries submitted for that array', async () => {

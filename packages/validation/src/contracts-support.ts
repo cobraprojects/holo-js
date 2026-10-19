@@ -21,6 +21,7 @@ const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 
 const MAX_INPUT_VARIABLES = 1_000
 const MAX_UPLOADED_FILES = 1_000
+const MAX_INPUT_NESTING_LEVEL = 64
 
 export class MalformedInputError extends Error {
   constructor(message: string) {
@@ -277,8 +278,16 @@ export function issuesToFlat(issues: ReadonlyArray<StandardSchemaV1Issue>): Reco
 }
 
 function parsePathTokens(path: string): readonly (string | number | '')[] {
-  const tokens: (string | number | '')[] = []
   const pattern = /([^[.\]]+)|\[(.*?)\]/g
+  let depth = -1
+  while (pattern.exec(path) !== null) {
+    depth += 1
+    if (depth > MAX_INPUT_NESTING_LEVEL) {
+      throw new MalformedInputError('The request contains a field nested too deeply.')
+    }
+  }
+
+  const tokens: (string | number | '')[] = []
 
   for (const match of path.matchAll(pattern)) {
     const segment = (match[1] ?? match[2])!
@@ -303,7 +312,7 @@ function parsePathTokens(path: string): readonly (string | number | '')[] {
 
 type SlotKind = 'value' | 'appended' | 'indexed' | 'object'
 
-const slotKinds = new WeakMap<object, Map<string, SlotKind>>()
+const slotKinds = new WeakMap<object, SlotKind>()
 
 function slotKindFor(next: string | number | '' | undefined): SlotKind {
   if (next === undefined) return 'value'
@@ -323,13 +332,12 @@ function joinSlotKinds(established: SlotKind, requested: SlotKind, replaceValues
   throw new MalformedInputError(INVALID_FIELD_NAME)
 }
 
-function claimSlot(container: object, key: string, requested: SlotKind, replaceValues: boolean): SlotKind {
-  const kinds = slotKinds.get(container) ?? new Map<string, SlotKind>()
-  slotKinds.set(container, kinds)
-  const established = kinds.get(key)
-  const resolved = established === undefined ? requested : joinSlotKinds(established, requested, replaceValues)
-  kinds.set(key, resolved)
-  return resolved
+function claimSlot(existing: unknown, requested: SlotKind, replaceValues: boolean): SlotKind {
+  if (existing === undefined) return requested
+  const established = typeof existing === 'object' && existing !== null
+    ? slotKinds.get(existing) ?? 'value'
+    : 'value'
+  return joinSlotKinds(established, requested, replaceValues)
 }
 
 type Container = Record<string, unknown> | unknown[]
@@ -353,6 +361,7 @@ function writeSlot(container: Container, key: string | number, value: unknown): 
 function appendedList(container: Container, key: string | number, existing: unknown): unknown[] {
   if (Array.isArray(existing)) return existing
   const list = existing === undefined ? [] : [existing]
+  slotKinds.set(list, 'appended')
   if (existing !== undefined) repeatedFormValues.add(list)
   writeSlot(container, key, list)
   return list
@@ -362,6 +371,7 @@ function openContainer(container: Container, key: string | number, kind: SlotKin
   if (kind === 'appended') return appendedList(container, key, existing)
   if (Array.isArray(existing) || isRecord(existing)) return existing
   const created: Container = kind === 'object' ? createObjectContainer() : []
+  slotKinds.set(created, kind)
   writeSlot(container, key, created)
   return created
 }
@@ -400,6 +410,7 @@ export function assignNestedValue(
       }
 
       const element: Container = requested === 'object' ? createObjectContainer() : []
+      slotKinds.set(element, requested)
       cursor.push(element)
       cursor = element
       continue
@@ -425,8 +436,8 @@ export function assignNestedValue(
       key = token
     }
 
-    const kind = claimSlot(cursor, String(key), requested, Array.isArray(cursor))
     const existing = hasOwnContainerValue(cursor, key) ? readSlot(cursor, key) : undefined
+    const kind = claimSlot(existing, requested, Array.isArray(cursor))
 
     if (last) {
       if (kind === 'value') {
