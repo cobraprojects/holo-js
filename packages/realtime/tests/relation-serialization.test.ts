@@ -316,6 +316,40 @@ describe('realtime relation serialization', () => {
     expect(reads).toBe(2)
   })
 
+  it('refreshes a hidden belongs-to relation when a plain has-many on the same row changes its foreign key', async () => {
+    const context = await openRealtimeDatabase()
+    const { db, adapter } = context
+    await seedAuthorsAndPosts(context)
+    await adapter.execute('ALTER TABLE posts ADD COLUMN parent_id INTEGER')
+    await adapter.execute('INSERT INTO posts VALUES (2, \'Child\', 1, 1)')
+    const Hidden = defineModel(authorsTable(), { timestamps: false, hidden: ['password'] })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+      parent_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: {
+        hidden: belongsTo(() => Hidden, 'author_id'),
+        children: hasMany(() => Post, 'parent_id'),
+      },
+    })
+    const handler = () => db.model(Post).query().with('hidden', 'children').orderBy('id').getJson()
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').where('id', 'in', [1, 2]).update({ author_id: 2 }),
+    }))
+
+    expect(snapshots.at(-1)).toEqual(await handler())
+  })
+
   it('keeps plain belongs-to patching when a belongs-to-many relation is loaded alongside it', async () => {
     const context = await openRealtimeDatabase()
     const { db, adapter } = context

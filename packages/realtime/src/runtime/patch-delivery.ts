@@ -447,7 +447,7 @@ function hasPatchableColumnTarget(
       continue
     }
 
-    if (includeSelectedColumns && !isResultPathPrefix(target.query.resultPath, candidate.query.resultPath)) {
+    if (includeSelectedColumns && !coversResultPath(target.query.resultPath, candidate.query.resultPath)) {
       continue
     }
 
@@ -476,13 +476,18 @@ function hasPatchableColumnTarget(
   return false
 }
 
-function isResultPathPrefix(
-  prefix: readonly unknown[] | undefined,
-  path: readonly unknown[] | undefined,
+function coversResultPath(
+  targetPath: readonly unknown[] | undefined,
+  candidatePath: readonly unknown[] | undefined,
 ): boolean {
-  const base = prefix ?? EMPTY_RESULT_PATH
-  const candidatePath = path ?? EMPTY_RESULT_PATH
-  return base.length <= candidatePath.length && base.every((segment, index) => candidatePath[index] === segment)
+  const base = targetPath ?? EMPTY_RESULT_PATH
+  const path = candidatePath ?? EMPTY_RESULT_PATH
+  const isRowOfTarget = path.length === base.length + 1 && typeof path.at(-1) === 'number'
+  if (path.length !== base.length && !isRowOfTarget) {
+    return false
+  }
+
+  return base.every((segment, index) => path[index] === segment)
 }
 
 function candidateCoversSelectedColumn(
