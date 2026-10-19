@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { startRedisService } from '../../session/tests/support/redis'
@@ -60,10 +60,18 @@ it('installs real security configuration once and reports an unchanged installat
   try {
     const { version } = JSON.parse(await readFile(join(repoRoot, 'packages/security/package.json'), 'utf8')) as { version: string }
     await write('package.json', JSON.stringify({ type: 'module', dependencies: { '@holo-js/security': `^${version}` } }))
-    const installed = await execute(process.execPath, [cli, 'install', 'security'], { cwd: root })
+    const packageManagerLog = join(root, 'package-manager.log')
+    const offlineBin = join(root, 'offline-bin')
+    await write('offline-bin/bun', `#!/bin/sh\necho "$@" >> '${packageManagerLog}'\n`)
+    await chmod(join(offlineBin, 'bun'), 0o755)
+    const installEnv = { ...process.env, PATH: [offlineBin, process.env.PATH].filter(Boolean).join(delimiter) }
+    const installed = await execute(process.execPath, [cli, 'install', 'security'], { cwd: root, env: installEnv })
     expect(installed.stdout).toContain('Installed security support.')
-    const repeated = await execute(process.execPath, [cli, 'install', 'security'], { cwd: root })
+    const logAfterFirstInstall = await readFile(packageManagerLog, 'utf8')
+    expect(logAfterFirstInstall).toMatch(/^(install\n)+$/)
+    const repeated = await execute(process.execPath, [cli, 'install', 'security'], { cwd: root, env: installEnv })
     expect(repeated.stdout).toContain('Security support is already installed.')
+    expect(await readFile(packageManagerLog, 'utf8')).toBe(logAfterFirstInstall)
     const cleared = await execute(process.execPath, [cli, 'rate-limit:clear', '--all'], { cwd: root })
     expect(cleared.stdout).toContain('Cleared 0 rate-limit bucket(s).')
     await expect(execute(process.execPath, [cli, 'rate-limit:clear'], { cwd: root })).rejects.toThrow('requires --limiter')
