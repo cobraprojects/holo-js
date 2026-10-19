@@ -860,7 +860,7 @@ Starts the login with the named provider. It returns a `302` to the provider's s
 
 `callback(provider: string, request: Request): Promise<SocialCallbackResult>`
 
-Finishes the login. It checks the state, exchanges the code, and finds or creates the local user. It returns `{ ok: true, guard, authProvider, provider, user }` on success, or `{ ok: false, status: 400, message }` when the state or code is missing or expired. Provider errors are thrown. Sign the user in with `auth.guard(result.guard).loginUsing(result.user)`.
+Finishes the login. It checks the state, exchanges the code, and finds or creates the local user. It returns `{ ok: true, guard, authProvider, provider, user }` on success, or `{ ok: false, status: 400, message }` when the state or code is missing or expired. Provider errors are thrown. If the provider's verified email matches a local user whose email isn't verified, it throws a `SocialAuthConflictError` instead of linking. See [Link an existing account](/auth/social-login#link-an-existing-account). Sign the user in with `auth.guard(result.guard).loginUsing(result.user)`.
 
 ### socialAuth
 

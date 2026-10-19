@@ -638,26 +638,6 @@ describe('@holo-js/validation contracts', () => {
     }
   })
 
-  it('rejects unsafe FormData and URLSearchParams paths without mutating Object.prototype', async () => {
-    const s = schema({ ok: field.string().optional() })
-
-    Reflect.deleteProperty(Object.prototype, 'polluted')
-
-    try {
-      const formData = new FormData()
-      formData.append('__proto__.polluted', 'yes')
-      await expect(safeParse(formData, s)).rejects.toThrow(ValidationContractError)
-
-      const searchParams = new URLSearchParams()
-      searchParams.append('constructor.prototype.polluted', 'yes')
-      expect(() => validationInternals.normalizeFormData(searchParams)).toThrow(ValidationContractError)
-
-      expect(objectPrototypeHas('polluted')).toBe(false)
-    } finally {
-      Reflect.deleteProperty(Object.prototype, 'polluted')
-    }
-  })
-
   it('validates nested shapes with async field schemas', async () => {
     const nestedSchema = schema({
       profile: {

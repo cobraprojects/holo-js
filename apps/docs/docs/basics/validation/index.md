@@ -116,9 +116,30 @@ When you pass a `Request`, Holo reads it based on the method and content type:
 | `multipart/form-data` or `application/x-www-form-urlencoded` | Form body |
 | Empty body | Treated as `{}` |
 
-Any other content type throws an error.
+A JSON or form body that can't be parsed is treated as `{}`, so required fields fail with their usual messages. Any other content type throws an error.
 
 Form fields can use dot or bracket names for nested data: `address.city`, `address[city]`, `tags[]`, and `tags[0]` all work. A repeated name such as `tags=a&tags=b` becomes an array.
+
+### Input limits
+
+Holo limits form bodies and query strings, so a small request can't make validation do a lot of work:
+
+- A request can send at most 1,000 fields, the same default as PHP's `max_input_vars`. Uploaded files don't count toward this limit; a form can separately send at most 1,000 uploaded-file entries. Repeated files count as separate entries.
+- A name can have at most 64 nesting levels after its root, matching PHP's default `max_input_nesting_level`. Both dots and brackets add levels: `address.city` and `address[city]` each have one. Holo rejects deeper names instead of silently dropping them.
+- A list index must be lower than the number of different indexes sent for that list. `tags[1]` with `tags[0]` works, but `tags[5]` on its own fails.
+- Names that use `__proto__`, `constructor`, or `prototype` fail. So do brackets that aren't closed or are closed without an opening bracket, such as `tags[0` or `tags]`.
+- A name must keep one shape. `tags[name]` can't be combined with `tags[]`, `tags[0]`, or `tags=x`, and numbered indexes (`tags[0]`) can't be combined with `tags[]` or repeated names, because the order of the fields would change the result. Repeated names and `tags[]` can be mixed, such as `tags=a&tags[]=b`, which gives `['a', 'b']`.
+
+These requests don't throw. They fail validation with one of these errors on `_root`, so `validate()` responds with a [422](/basics/validation/errors#the-422-response):
+
+| Problem | Message |
+|---|---|
+| More than 1,000 non-file fields or more than 1,000 uploaded-file entries | The request contains too many input variables. |
+| More than 64 nesting levels in a name | The request contains a field nested too deeply. |
+| List index too high | The request contains an invalid list index. |
+| Blocked or mixed name, or a name used with two shapes | The request contains an invalid field name. |
+
+JSON bodies and plain objects are not counted toward the field limit. Use `max()` on array fields to limit lists in JSON.
 
 ### Automatic type conversion
 
