@@ -25,7 +25,7 @@ function rememberCookieValue(recaller: string | undefined): string {
 let directory: string
 let database: DatabaseSync
 let reads: number
-const context = createAsyncAuthContext()
+const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
 let store: AuthSessionRevocationStore
 
 beforeEach(async () => {
@@ -172,6 +172,7 @@ it('checks remember restoration before trusting it and preserves later legitimat
     ...requestContext,
     getRequestScope: () => requestContext,
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
+    appendResponseCookie: () => undefined,
   }
   authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: rememberedContext })
   expect(await auth.check()).toBe(false)
@@ -228,6 +229,7 @@ it('restores a valid remembered identity into a session with current revocation 
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const validRemember = {
     ...authRuntimeInternals.createMemoryAuthContext(),
+    appendResponseCookie: () => undefined,
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
     appendResponseCookie: () => undefined,
   }

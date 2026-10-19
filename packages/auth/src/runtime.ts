@@ -85,6 +85,7 @@ import {
   loadOptionalSecurityModule,
 } from './runtime/optionalSecurity'
 import {
+  COOKIE_WRITE_UNAVAILABLE,
   appendResponseCookies,
   isAuthResponseInterrupt,
   parseBearerToken,
@@ -516,11 +517,10 @@ function restoreRememberedSession(
 }
 
 function isCookieWriteUnavailable(error: unknown): boolean {
-  return (error as { readonly code?: unknown } | null)?.code === 'cookie_write_unavailable'
+  return (error as { readonly code?: unknown } | null)?.code === COOKIE_WRITE_UNAVAILABLE
 }
 
 async function writeRestoredSessionCookie(bindings: RuntimeBindings, cookie: string): Promise<boolean> {
-  if (!bindings.context.appendResponseCookie) return false
   try {
     await appendResponseCookies(bindings, [cookie])
     return true

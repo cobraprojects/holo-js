@@ -16,7 +16,7 @@ const provider: AuthProviderAdapter<typeof user> = {
   async updateRememberToken(_value, token) { rememberToken = token },
   serialize(value) { return value },
 }
-const context = createAsyncAuthContext()
+const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
 let directory: string
 
 beforeEach(async () => {

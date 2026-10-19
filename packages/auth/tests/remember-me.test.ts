@@ -369,6 +369,31 @@ describe('remember me', () => {
     expect(await sessionFileCount()).toBe(recordsBefore)
   })
 
+  it('refuses explicit login and logout in a context with no response cookie writer, as in a read-only render', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.loginUsingId(1))
+    const storage = new AsyncLocalStorage<ReturnType<typeof authRuntimeInternals.createMemoryAuthContext>>()
+    const current = () => storage.getStore()!
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      context: {
+        getRequestScope: () => current(),
+        getSessionId: (guard: string) => current().getSessionId(guard),
+        setSessionId: (guard: string, id?: string) => current().setSessionId(guard, id),
+        getCachedUser: (guard: string) => current().getCachedUser(guard),
+        setCachedUser: (guard: string, user: AuthenticatedAuthUser | null) => current().setCachedUser(guard, user),
+        getRememberToken: (guard: string) => current().getRememberToken(guard),
+        setRememberToken: (guard: string, token?: string) => current().setRememberToken(guard, token),
+        getRequestCookie: (name: string) => browser.cookies.get(name),
+      },
+    })
+
+    await expect(storage.run(authRuntimeInternals.createMemoryAuthContext(), () => auth.loginUsingId(1)))
+      .rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+    await expect(storage.run(authRuntimeInternals.createMemoryAuthContext(), () => auth.logout()))
+      .rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+  })
+
   it('restores several guards checked concurrently into one session', async () => {
     const browser = new Browser()
     await browser.request(async () => {

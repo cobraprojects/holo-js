@@ -289,7 +289,7 @@ async function configureRuntime(options: {
 
   const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
   const adminsProvider = persistence.providers.admins as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
-  const context = authRuntimeInternals.createMemoryAuthContext()
+  const context = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
 
   const baseConfig = defineAuthConfig({
       defaults: {
@@ -798,6 +798,7 @@ describe('@holo-js/auth package runtime', () => {
       ...recoveryBindings,
       context: {
         ...authRuntimeInternals.createMemoryAuthContext(),
+        appendResponseCookie: () => undefined,
         getRequestCookie: name => name === 'holo_session' ? sessionCookieValue(pendingRecovery.sessionId) : undefined,
       },
     })
@@ -1260,6 +1261,7 @@ describe('@holo-js/auth package runtime', () => {
     const currentBindings = authRuntimeInternals.getRuntimeBindings()
     const createRequestContext = () => ({
       ...authRuntimeInternals.createMemoryAuthContext(),
+      appendResponseCookie: () => undefined,
       getRequestCookie(name: string) {
         return name === 'holo_session' ? sessionCookieValue(established.sessionId) : undefined
       },
@@ -1754,6 +1756,7 @@ describe('@holo-js/auth package runtime', () => {
       ...currentBindings,
       context: {
         ...requestContext,
+        appendResponseCookie: () => undefined,
         getRequestScope: () => requestContext,
         getRequestCookie(name: string) {
           return name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined
@@ -2903,6 +2906,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     const restartedContext = Object.freeze({
       ...authRuntimeInternals.createMemoryAuthContext(),
+      appendResponseCookie: () => undefined,
       getRequestCookie(name: string) {
         if (name === 'holo_session_remember') {
           return rememberCookieValue(remembered.rememberToken)
@@ -4903,7 +4907,7 @@ describe('@holo-js/auth package runtime', () => {
           },
         },
       },
-      context: authRuntimeInternals.createMemoryAuthContext(),
+      context: Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined }),
     })
 
     expect(unwrapAuthResult(await login({
@@ -5034,7 +5038,7 @@ describe('@holo-js/auth package runtime', () => {
 
   it('rotates a shared session for another guard without writing remember cookies', async () => {
     const runtime = await configureRuntime()
-    const context = authRuntimeInternals.createMemoryAuthContext()
+    const context = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
     const existingRecord = Object.freeze({
       id: 'shared-session',
       store: 'database',
@@ -5213,7 +5217,7 @@ describe('@holo-js/auth package runtime', () => {
     void phoneRuntime
   })
 
-  it('creates a default auth context when one is not provided', async () => {
+  it('creates a default auth context that refuses to set cookies without a response writer', async () => {
     const sessionStore = createNativeSessionStore()
     const persistence = await createNativeAuthPersistence()
     const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord> & Required<Pick<AuthProviderAdapter<UserRecord>, 'update' | 'delete'>>
@@ -5276,15 +5280,11 @@ describe('@holo-js/auth package runtime', () => {
       },
     })
 
-    expect(unwrapAuthResult(await login({
+    await expect(login({
       email: 'ava@example.com',
       password: 'secret-secret',
-    }))).toMatchObject({
-      user: {
-        email: 'ava@example.com',
-      },
-    })
-    expect(authRuntimeInternals.getRuntimeBindings().context.getSessionId('web')).toBeTypeOf('string')
+    })).rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+    expect(authRuntimeInternals.getRuntimeBindings().context).toBeDefined()
   })
 
   it('defaults authorization checks to false', async () => {

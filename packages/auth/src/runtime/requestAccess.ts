@@ -64,11 +64,20 @@ export async function resolveRequestHeader(
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+export const COOKIE_WRITE_UNAVAILABLE = 'cookie_write_unavailable'
+
+export function createCookieWriteUnavailableError(cause?: unknown): Error {
+  return Object.assign(new Error('Authentication cookies cannot be set in this request context.', { cause }), {
+    code: COOKIE_WRITE_UNAVAILABLE,
+  })
+}
+
 export async function appendResponseCookies(
   bindings: RequestAccessBindings,
   cookies: readonly string[],
 ): Promise<void> {
   if (!bindings.context.appendResponseCookie) {
+    if (cookies.length > 0) throw createCookieWriteUnavailableError()
     return
   }
 
