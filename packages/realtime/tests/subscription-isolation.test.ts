@@ -21,6 +21,7 @@ async function configureAuthenticatedSubscriptions(context: AuthRuntimeContext) 
   const persistence = await createNativeAuthPersistence()
   const store = createNativeSessionStore()
   configureSessionRuntime({
+    appKey: 'holo-test-app-key',
     config: { ...persistence.loadedConfig.session, driver: 'file', stores: { file: { name: 'file', driver: 'file', path: store.path } } },
     stores: { file: store },
   })
@@ -219,7 +220,7 @@ it('captures credentials resolved through request accessors before the request e
   let currentSessionId = sessions[0]
   const cookieName = getSessionRuntime().sessionCookie('').split('=')[0]
   const accessors = {
-    getCookie: async (name: string) => name === cookieName ? currentSessionId : undefined,
+    getCookie: async (name: string) => name === cookieName && currentSessionId ? getSessionRuntime().sessionCookie(currentSessionId).split(';', 1)[0]!.slice(cookieName.length + 1) : undefined,
     getHeader: async () => undefined,
     appendResponseCookie: async () => {},
     redirectResponse: async () => {},

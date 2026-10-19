@@ -10,4 +10,6 @@ Recorded departures:
 - A malformed typed environment value fails instead of returning the raw string, because a typed fallback cannot represent Laravel's string result.
 - Holo encrypts only the cookies it owns (session, remember, and `XSRF-TOKEN`), because it cannot intercept cookies written through each framework's native cookie interfaces as Laravel's `EncryptCookies` does.
 - Model primary keys and `created_at`/`updated_at` columns are guarded unless named in `fillable`, even with `fillable: ['*']` or a `guarded` list, because Holo applies mass-assignment rules to query updates and upserts that receive request payloads, where Laravel applies none.
+- Password and sensitive fields are stripped from validation failures at every depth, including arrays, because Holo echoes submitted values in 422 response bodies and exception payloads, while Laravel flashes input only into the server-side session.
+- The Nuxt form-failure cookie carries errors but no submitted values, because it is a client-readable cookie rather than Laravel's server-side session.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.

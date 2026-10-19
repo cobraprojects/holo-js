@@ -38,6 +38,7 @@ async function configureRuntime(options: {
 } = {}) {
   const sessionStore = createNativeSessionStore()
   configureSessionRuntime({
+    appKey: 'holo-test-app-key',
     config: {
       driver: 'file',
       stores: {

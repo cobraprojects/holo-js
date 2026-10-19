@@ -1,4 +1,4 @@
-import { isSecureRequest, token, csrfInternals } from './csrf'
+import { csrfInternals, encryptedToken, isSecureRequest } from './csrf'
 import {
   SECURITY_CLIENT_CONFIG_COOKIE,
   createSecurityClientConfig,
@@ -27,9 +27,9 @@ export async function prepareCsrfCookies(
     return []
   }
 
-  const existingToken = getCookie(config.csrf.cookie)
+  const existingCookie = getCookie(config.csrf.cookie)
   const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(config))
-  const shouldIssueToken = !existingToken || !csrfInternals.isValidSignedCsrfToken(existingToken)
+  const shouldIssueToken = !existingCookie || !csrfInternals.decryptCsrfToken(existingCookie)
   const shouldIssueClientConfig = getCookie(SECURITY_CLIENT_CONFIG_COOKIE) !== clientConfig
   if (!shouldIssueToken && !shouldIssueClientConfig) {
     return []
@@ -43,7 +43,7 @@ export async function prepareCsrfCookies(
   }
   const cookies: SecurityCookie[] = []
   if (shouldIssueToken) {
-    cookies.push({ name: config.csrf.cookie, value: await token(request), options })
+    cookies.push({ name: config.csrf.cookie, value: await encryptedToken(request), options })
   }
   if (shouldIssueClientConfig) {
     cookies.push({ name: SECURITY_CLIENT_CONFIG_COOKIE, value: clientConfig, options })

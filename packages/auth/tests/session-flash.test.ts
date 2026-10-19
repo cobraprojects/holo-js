@@ -104,6 +104,9 @@ function configure(context: AuthRuntimeContext = authRuntimeInternals.createMemo
       sessionCookie(value) {
         return `holo_session=${value}`
       },
+      decryptCookie(_name, value) {
+        return value
+      },
       touch,
     },
   })

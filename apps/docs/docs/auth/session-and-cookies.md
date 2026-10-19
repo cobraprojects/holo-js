@@ -76,6 +76,8 @@ With more than one server, use `database` or `redis`. File sessions live on one 
 | `partitioned` | `false` | Adds the `Partitioned` attribute |
 | `maxAge` | `absoluteLifetime` | Cookie lifetime in minutes |
 
+The session and remember-me cookies are encrypted with your app key (`APP_KEY`). The browser can't read or change the session ID. A changed cookie, or one encrypted with an old key, is treated as signed out. Changing `APP_KEY` signs everyone out.
+
 Holo rejects cookie settings that browsers would ignore:
 
 - `sameSite: 'none'` and `partitioned: true` need `secure: true`.

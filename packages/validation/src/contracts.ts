@@ -43,6 +43,7 @@ import {
 import { createFieldStandardValidate, createSchemaStandardValidate, flatToStandardIssues, summarizeErrors, validateInternal } from './contracts-runtime'
 
 import { makeCompiledFieldSchema, resolveCompiledSchema } from './contracts-compiler'
+import { clearSensitiveInput, DONT_FLASH_FIELDS, stripSensitiveInput } from './sensitive-input'
 
 export * from './contracts-types'
 
@@ -527,8 +528,9 @@ export function parseValidationExceptionDigest<TData = Record<string, unknown>>(
 function setValidationExceptionValues<TData>(
   exception: ValidationException<TData>,
   values: Partial<TData>,
+  schemaDefinition?: Pick<ValidationSchema, 'fields'>,
 ): ValidationException<TData> {
-  exception[validationValuesSymbol] = values
+  exception[validationValuesSymbol] = stripSensitiveInput(values, schemaDefinition?.fields)
   return exception
 }
 
@@ -627,6 +629,7 @@ export async function validate<TSchema extends ValidationSchema>(
         bag: options.bag,
       }),
       result.values,
+      schemaDefinition,
     ))
   }
 
@@ -653,9 +656,11 @@ export async function parse<TSchema extends ValidationSchema>(
 }
 
 export const validationInternals = {
+  DONT_FLASH_FIELDS,
   serializeValidationException,
   appendIssues,
   assignNestedValue,
+  clearSensitiveInput,
   buildErrorTree,
   coerceShapeInput,
   createField,
@@ -673,6 +678,7 @@ export const validationInternals = {
   setValidationExceptionStatus,
   setValidationExceptionThrower,
   setValidationExceptionValues,
+  stripSensitiveInput,
   throwValidationException,
   issuesToFlat,
   flatToStandardIssues,
