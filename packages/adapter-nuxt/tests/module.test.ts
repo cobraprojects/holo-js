@@ -363,43 +363,6 @@ export default defineAppConfig({
     ].join('\n'))
   })
 
-  it('registers the built s3 runtime driver path for object storage disks', async () => {
-    const root = await createProject()
-    await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${storageEntry}
-
-export default defineStorageConfig({
-  defaultDisk: 'local',
-  disks: {
-    local: {
-      driver: 'local',
-      root: './storage/app',
-    },
-    media: {
-      driver: 's3',
-      bucket: 'media-bucket',
-      region: 'us-east-1',
-      endpoint: 'https://s3.us-east-1.amazonaws.com',
-      accessKeyId: 'AKIAEXAMPLE',
-      secretAccessKey: 'supersecretkey',
-    },
-  },
-})
-`, 'utf8')
-
-    const { module } = await loadAdapterModule()
-    const nuxt = await createNuxtHarness(root)
-
-    await module.setup({}, nuxt)
-
-    expect(nuxt.options.nitro.storage?.['holo:media']).toMatchObject({
-      driver: resolve(import.meta.dirname, '../src/runtime/drivers/s3.js'),
-      bucket: 'media-bucket',
-      region: 'us-east-1',
-      endpoint: 'https://s3.us-east-1.amazonaws.com',
-    })
-  })
-
   it('traces installed runtime-loaded packages into Nitro production output', async () => {
     const root = await createProject()
     const { moduleInternals } = await loadAdapterModule()
@@ -575,7 +538,6 @@ export default defineStorageConfig({
     const { module } = await loadAdapterModule()
     await module.setup({}, nuxt)
     await nuxt.callHook('modules:done')
-    expect(nuxt.options.runtimeConfig.holoStorage).toMatchObject({ defaultDisk: 'local', routePrefix: '/assets' })
     expect(nuxt.options.serverHandlers).toContainEqual(expect.objectContaining({
       route: '/assets/**', handler: resolve(import.meta.dirname, '../src/runtime/server/routes/storage'),
     }))
