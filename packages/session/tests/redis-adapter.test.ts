@@ -119,7 +119,7 @@ describe('session Redis behavior', () => {
     await expect(adapter.get('missing')).resolves.toBeNull()
     const client = service.clients[0]
     if (!client) throw new Error('Expected Redis client')
-    for (const payload of ['{', JSON.stringify({ ...record, createdAt: 'not-a-date' }), JSON.stringify({ ...record, data: [] }), JSON.stringify({ ...record, rememberTokenHash: 42 })]) {
+    for (const payload of ['{', JSON.stringify({ ...record, createdAt: 'not-a-date' }), JSON.stringify({ ...record, data: [] }), JSON.stringify({ ...record, expiresAt: 42 })]) {
       await client.hset(`${prefix}{holo-session}:${record.id}`, 'record', payload)
       await expect(adapter.get(record.id)).resolves.toBeNull()
     }

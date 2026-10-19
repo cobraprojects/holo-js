@@ -315,6 +315,7 @@ export interface CreateHoloOptions {
   readonly authRequest?: {
     readonly getCookie?: (name: string) => string | undefined | Promise<string | undefined>
     readonly getHeader?: (name: string) => string | undefined | Promise<string | undefined>
+    readonly canAppendResponseCookie?: () => boolean | Promise<boolean>
     readonly appendResponseCookie?: (cookie: string) => void | Promise<void>
     readonly redirectResponse?: (url: string, status?: 301 | 302 | 303 | 307 | 308) => void | Promise<void>
   }

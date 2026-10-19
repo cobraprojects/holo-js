@@ -7,22 +7,25 @@ import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContex
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 
 const user = { id: 1, email: 'user@app.test' }
+let rememberToken: string | null = null
 const provider: AuthProviderAdapter<typeof user> = {
   async create() { return user },
   async findByCredentials() { return user },
   async findById(id) { return { ...user, id: Number(id) } },
   getId(value) { return value.id },
+  getRememberToken() { return rememberToken },
+  async updateRememberToken(_value, token) { rememberToken = token },
   serialize(value) { return value },
 }
-function rememberCookieValue(rememberToken: string | undefined): string {
-  const setCookie = getSessionRuntime().rememberMeCookie(rememberToken ?? '')
+function rememberCookieValue(recaller: string | undefined): string {
+  const setCookie = getSessionRuntime().rememberMeCookie(recaller ? JSON.stringify({ web: JSON.parse(recaller) }) : '')
   return parseCookieHeader(setCookie.split(';', 1)[0]).holo_session_remember ?? ''
 }
 
 let directory: string
 let database: DatabaseSync
 let reads: number
-const context = createAsyncAuthContext()
+const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
 let store: AuthSessionRevocationStore
 
 beforeEach(async () => {
@@ -30,6 +33,7 @@ beforeEach(async () => {
   database = new DatabaseSync(join(directory, 'revocations.sqlite'))
   database.exec('CREATE TABLE revocations (provider TEXT, user_id TEXT, generation INTEGER NOT NULL, retained_session_id TEXT, PRIMARY KEY (provider, user_id))')
   reads = 0
+  rememberToken = null
   store = {
     async readMany(identities) {
       reads++
@@ -163,9 +167,12 @@ it('checks remember restoration before trusting it and preserves later legitimat
     context.setSessionId('web', current.sessionId)
     await auth.logoutOtherDevices()
   })
+  const requestContext = authRuntimeInternals.createMemoryAuthContext()
   const rememberedContext = {
-    ...authRuntimeInternals.createMemoryAuthContext(),
+    ...requestContext,
+    getRequestScope: () => requestContext,
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
+    appendResponseCookie: () => undefined,
   }
   authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: rememberedContext })
   expect(await auth.check()).toBe(false)
@@ -217,24 +224,18 @@ it('propagates durable adapter failures without claiming revocation succeeded', 
   })
 })
 
-it('restores a valid remembered identity and rejects remembered payloads without revocation metadata', async () => {
+it('restores a valid remembered identity into a session with current revocation metadata', async () => {
   const remembered = await context.run(() => auth.loginUsingId(1, { remember: true }))
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const validRemember = {
     ...authRuntimeInternals.createMemoryAuthContext(),
     getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
+    appendResponseCookie: () => undefined,
   }
   authRuntimeInternals.configureRuntime({ ...bindings, context: validRemember })
   expect(await auth.check()).toBe(true)
-  const legacy = await getSessionRuntime().create({ data: { auth: { guard: 'web', provider: 'users', userId: 1, user, authenticatedAt: new Date().toISOString() } } })
-  const legacyToken = await getSessionRuntime().issueRememberMeToken(legacy.id)
-  const legacyRemember = {
-    ...authRuntimeInternals.createMemoryAuthContext(),
-    getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(legacyToken) : undefined,
-  }
-  authRuntimeInternals.configureRuntime({ ...bindings, context: legacyRemember })
-  expect(await auth.check()).toBe(false)
-  expect(legacyRemember.getCachedUser('web')).toBeNull()
+  const restored = await getSessionRuntime().read(validRemember.getSessionId('web')!)
+  expect(restored?.data.auth).toMatchObject({ guard: 'web', userId: 1, revocation: { id: expect.any(String), generation: 0 } })
 })
 
 it('preserves durable revocation after the adapter connection is reopened', async () => {

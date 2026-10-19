@@ -25,7 +25,7 @@ export default defineAuthConfig({
 })
 ```
 
-The `Admin` model needs the same auth columns as `User`: an email, a nullable `password`, and `email_verified_at` if you use [email verification](/auth/email-verification). Copy the `users` migration and model as a starting point.
+The `Admin` model needs the same auth columns as `User`: an email, a nullable `password`, `email_verified_at` if you use [email verification](/auth/email-verification), and a nullable `remember_token` if you use [remember me](/auth/session-and-cookies#remember-me). Copy the `users` migration and model as a starting point.
 
 Then sign admins in through their guard:
 

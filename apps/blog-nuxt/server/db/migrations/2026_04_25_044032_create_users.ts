@@ -9,6 +9,7 @@ export default defineMigration({
       table.string('password').nullable()
       table.string('avatar').nullable()
       table.timestamp('email_verified_at').nullable()
+      table.string('remember_token').nullable()
       table.timestamps()
     })
   },

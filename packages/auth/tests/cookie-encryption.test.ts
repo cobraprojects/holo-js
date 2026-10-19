@@ -6,14 +6,17 @@ import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContex
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 
 const user = { id: 1, email: 'user@app.test' }
+let rememberToken: string | null = null
 const provider: AuthProviderAdapter<typeof user> = {
   async create() { return user },
   async findByCredentials() { return user },
   async findById(id) { return { ...user, id: Number(id) } },
   getId(value) { return value.id },
+  getRememberToken() { return rememberToken },
+  async updateRememberToken(_value, token) { rememberToken = token },
   serialize(value) { return value },
 }
-const context = createAsyncAuthContext()
+const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
 let directory: string
 
 beforeEach(async () => {
@@ -43,9 +46,10 @@ function browserCookies(setCookies: readonly string[]): Readonly<Record<string, 
 
 async function checkWithCookies(cookies: Readonly<Record<string, string>>): Promise<boolean> {
   const bindings = authRuntimeInternals.getRuntimeBindings()
+  const requestContext = authRuntimeInternals.createMemoryAuthContext()
   authRuntimeInternals.configureRuntime({
     ...bindings,
-    context: { ...authRuntimeInternals.createMemoryAuthContext(), getRequestCookie: (name: string) => cookies[name] },
+    context: { ...requestContext, getRequestScope: () => requestContext, getRequestCookie: (name: string) => cookies[name] },
   })
   try {
     return await auth.check()
