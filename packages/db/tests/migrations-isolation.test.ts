@@ -143,6 +143,24 @@ describe('isolated migration runs', () => {
     await expect(run).resolves.toMatchObject({ kind: 'ran' })
   })
 
+  it('rethrows a unique violation on the lock insert that no held lock explains instead of skipping pending migrations', async () => {
+    const db = connect()
+    await createMigrationService(db, []).migrateIsolated()
+    await db.executeCompiled({
+      sql: "CREATE TRIGGER reject_lock_insert BEFORE INSERT ON _holo_migration_locks BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: _holo_migration_locks.id'); END",
+      bindings: [],
+    })
+    const migration = tableMigration('2026_01_01_000001_first', 'first_records')
+    try {
+      await expect(createMigrationService(db, [migration]).migrateIsolated())
+        .rejects.toThrow('UNIQUE constraint failed: _holo_migration_locks.id')
+    } finally {
+      await db.executeCompiled({ sql: 'DROP TRIGGER reject_lock_insert', bindings: [] })
+    }
+    expect(await createMigrationService(db, [migration]).migrateIsolated())
+      .toMatchObject({ kind: 'ran', executed: [expect.objectContaining({ name: migration.name })] })
+  })
+
   it('lets two concurrent first runs on a fresh database both finish, applying each migration once', async () => {
     const migration = tableMigration('2026_01_01_000001_first', 'first_records')
     const runners = [

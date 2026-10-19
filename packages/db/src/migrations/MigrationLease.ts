@@ -31,6 +31,10 @@ export class MigrationLease {
 
   async acquire(): Promise<boolean> {
     await this.ensureTable()
+    return this.tryAcquire(true)
+  }
+
+  private async tryAcquire(retryAfterRelease: boolean): Promise<boolean> {
     const current = await this.read()
     if (current) {
       if (current.expiresAt > Date.now()) {
@@ -56,8 +60,12 @@ export class MigrationLease {
       this.owner = owner
       return true
     } catch (error) {
-      if (isUniqueConstraintError(error) || await this.read()) {
+      if (await this.read()) {
         return false
+      }
+
+      if (retryAfterRelease && isUniqueConstraintError(error)) {
+        return this.tryAcquire(false)
       }
 
       throw error
