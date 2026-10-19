@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import {
   holoMailDefaults,
-  normalizeMailEnvironment,
   type HoloAppEnv,
   type NormalizedHoloMailConfig,
 } from './config'
@@ -441,7 +440,7 @@ function getResolvedConfig(): NormalizedHoloMailConfig {
 }
 
 function resolveCurrentEnvironment(): HoloAppEnv {
-  return normalizeMailEnvironment(process.env.APP_ENV)
+  return getRuntimeBindings().environment ?? 'production'
 }
 
 function createPreviewPolicy(config: NormalizedHoloMailConfig = getResolvedConfig()): MailPreviewPolicy {

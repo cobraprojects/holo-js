@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished } from 'vitest'
 import { configureMailRuntime, defineMail, MailSendError, normalizeMailConfig, previewMail, renderMailPreview, resetMailRuntime, sendMail } from '../src'
 
 async function startSmtpProvider(rejectRecipient = false) {
@@ -72,14 +72,7 @@ async function startSmtpProvider(rejectRecipient = false) {
   return { messages, commands, port: address.port }
 }
 
-beforeEach(() => {
-  vi.stubEnv('APP_ENV', 'test')
-})
-
-afterEach(() => {
-  resetMailRuntime()
-  vi.unstubAllEnvs()
-})
+afterEach(() => resetMailRuntime())
 
 async function runNativeMailWorker(port: number, operation: 'queue' | 'transaction' | 'queued-transaction' | 'storage' | 'log' | 'delayed' | 'builtins' | 'plugin' | 'broken-plugin', s3Port?: number): Promise<{ stdout: string, stderr: string }> {
   const harnessPath = resolve(import.meta.dirname, '../../queue-db/tests/support/sqlite-queue.ts')
@@ -297,7 +290,7 @@ it('escapes app-provided mail content and rejects executable markdown links in r
     subject: '<script>alert(1)</script>',
     markdown: '[safe](https://example.test) [bad](javascript:alert)\n\n<script>alert(1)</script>',
   })
-  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }) })
+  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('href="https://example.test"')
   expect(preview.html).not.toContain('href="javascript:')
@@ -333,6 +326,7 @@ it('uses app preview overrides and propagates app rendering failures', async () 
   const mail = defineMail({ to: 'ava@example.com', subject: 'App preview', text: 'Original' })
   configureMailRuntime({
     config,
+    environment: 'test',
     preview: async ({ mail }) => ({
       source: { kind: 'text' },
       from: { email: 'sender@example.com' },
@@ -350,7 +344,7 @@ it('uses app preview overrides and propagates app rendering failures', async () 
   })
   await expect(previewMail(mail)).resolves.toMatchObject({ text: 'App rendered preview' })
   await expect((await renderMailPreview(mail)).text()).resolves.toBe('App rendered page')
-  configureMailRuntime({ config, preview: async () => { throw new Error('App preview failed') } })
+  configureMailRuntime({ config, environment: 'test', preview: async () => { throw new Error('App preview failed') } })
   await expect(renderMailPreview(mail)).rejects.toThrow('App preview failed')
 })
 

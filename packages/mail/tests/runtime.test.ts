@@ -235,16 +235,14 @@ describe('@holo-js/mail runtime', () => {
   })
 
   it('renders html, json, and text preview responses and maps preview errors', async () => {
-    process.env.APP_ENV = 'test'
-    configureMailRuntime({
-      config: {
-        ...normalizeMailConfig(),
-        from: { email: 'config@example.com' },
-        preview: {
-          allowedEnvironments: ['development', 'test'],
-        },
+    const config = {
+      ...normalizeMailConfig(),
+      from: { email: 'config@example.com' },
+      preview: {
+        allowedEnvironments: ['development', 'test'] as const,
       },
-    })
+    }
+    configureMailRuntime({ config, environment: 'test' })
 
     const markdown = defineMail({
       to: 'ava@example.com',
@@ -287,7 +285,7 @@ describe('@holo-js/mail runtime', () => {
     expect(unavailableText.status).toBe(422)
     await expect(unavailableText.text()).resolves.toContain('text preview is unavailable')
 
-    process.env.APP_ENV = 'production'
+    configureMailRuntime({ config, environment: 'production' })
     const disabled = await renderMailPreview(markdown)
     expect(disabled.status).toBe(403)
     await expect(disabled.text()).resolves.toContain('preview is disabled')
@@ -296,33 +294,29 @@ describe('@holo-js/mail runtime', () => {
     })
   })
 
-  it('reads the preview environment from APP_ENV only and treats a missing value as production', async () => {
-    configureMailRuntime({
-      config: {
-        ...normalizeMailConfig(),
-        from: { email: 'config@example.com' },
-        preview: {
-          allowedEnvironments: ['development'],
-        },
+  it('reads the preview environment from the runtime bindings and treats a missing one as production', async () => {
+    const config = {
+      ...normalizeMailConfig(),
+      from: { email: 'config@example.com' },
+      preview: {
+        allowedEnvironments: ['development'] as const,
       },
-    })
+    }
     const mail = defineMail({
       to: 'ava@example.com',
       subject: 'Preview',
       markdown: '# Preview',
     })
-    Reflect.deleteProperty(process.env, 'APP_ENV')
+    process.env.APP_ENV = 'development'
     process.env.NODE_ENV = 'development'
+    configureMailRuntime({ config })
 
     const disabled = await renderMailPreview(mail)
     expect(disabled.status).toBe(403)
     await expect(disabled.text()).resolves.toContain('"production"')
 
-    process.env.APP_ENV = 'development'
+    configureMailRuntime({ config, environment: 'development' })
     expect((await renderMailPreview(mail)).status).toBe(200)
-
-    process.env.APP_ENV = 'staging'
-    await expect(renderMailPreview(mail)).rejects.toThrow('Invalid APP_ENV "staging". Use development, production, or test.')
   })
 
   it('re-normalizes overrides and preserves preview validation', async () => {

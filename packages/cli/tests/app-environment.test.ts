@@ -63,6 +63,34 @@ describe('application environment option', () => {
     await expect(readCachedEnvironmentName(root)).resolves.toBe('test')
   })
 
+  it('restores APP_ENV after each invocation so later calls do not inherit --env', async () => {
+    vi.stubEnv('APP_ENV', undefined)
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const root = await createProject()
+
+    await expect(runCli(['config:cache', '--env=test'], createIo(root).io)).resolves.toBe(0)
+    expect(process.env.APP_ENV).toBeUndefined()
+    await expect(runCli(['unknown:command', '--env=test'], createIo(root).io)).resolves.toBe(1)
+    expect(process.env.APP_ENV).toBeUndefined()
+
+    await expect(runCli(['config:cache'], createIo(root).io)).resolves.toBe(0)
+    await expect(readCachedEnvironmentName(root)).resolves.toBe('development')
+  })
+
+  it('restores a previous shell APP_ENV after an invocation with --env', async () => {
+    vi.stubEnv('APP_ENV', 'production')
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const root = await createProject()
+
+    await expect(runCli(['config:cache', '--env=test'], createIo(root).io)).resolves.toBe(0)
+
+    expect(process.env.APP_ENV).toBe('production')
+  })
+
   it('uses APP_ENV from .env when no option or shell value is given', async () => {
     vi.stubEnv('APP_ENV', undefined)
     onTestFinished(() => {

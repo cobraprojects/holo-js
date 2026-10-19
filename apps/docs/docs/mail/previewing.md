@@ -80,7 +80,7 @@ return renderMailPreview(WelcomeMail(input), undefined, 'json')
 ```
 
 ::: warning
-Browser previews only work in the environments listed in `preview.allowedEnvironments` in `config/mail.ts`, which defaults to `['development']`. In any other environment, `renderMailPreview()` returns `403`. Holo reads the environment from `APP_ENV` and treats a missing value as `production`. Don't add `'production'` unless the route is protected, because previews can expose recipient addresses.
+Browser previews only work in the environments listed in `preview.allowedEnvironments` in `config/mail.ts`, which defaults to `['development']`. In any other environment, `renderMailPreview()` returns `403`. Holo checks the [application environment](/reference/environment#env-files-and-loading-order) from `app.env`. Don't add `'production'` unless the route is protected, because previews can expose recipient addresses.
 :::
 
 ## Save every sent email

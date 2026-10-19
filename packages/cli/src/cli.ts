@@ -2196,10 +2196,13 @@ export function findCommand(
 }
 
 export async function runCli(input: readonly string[], io: IoStreams): Promise<number> {
+  const previousAppEnv = process.env.APP_ENV
+  let appEnvOverridden = false
   try {
     const { argv, envName } = extractEnvironmentOption(input)
     if (envName) {
       process.env.APP_ENV = envName
+      appEnvOverridden = true
     }
 
     const requestedCommandName = argv[0]
@@ -2328,5 +2331,13 @@ export async function runCli(input: readonly string[], io: IoStreams): Promise<n
   } catch (error) {
     writeLine(io.stderr, error instanceof Error ? error.message : String(error))
     return 1
+  } finally {
+    if (appEnvOverridden) {
+      if (previousAppEnv === undefined) {
+        Reflect.deleteProperty(process.env, 'APP_ENV')
+      } else {
+        process.env.APP_ENV = previousAppEnv
+      }
+    }
   }
 }

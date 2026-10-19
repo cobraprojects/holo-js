@@ -30,7 +30,7 @@ import {
   notify,
   resetNotificationsRuntime,
 } from '@holo-js/notifications'
-import { configureMailRuntime, listFakeSentMails, previewMail, resetFakeSentMails } from '@holo-js/mail'
+import { configureMailRuntime, listFakeSentMails, previewMail, renderMailPreview, resetFakeSentMails } from '@holo-js/mail'
 import { mailRuntimeInternals } from '../../mail/src/runtime'
 import {
   Event,
@@ -2514,6 +2514,34 @@ export default defineSessionConfig({
         title: 'Welcome',
       },
     })
+  })
+
+  it('passes the application environment from .env to mail previews without reading process.env', async () => {
+    vi.stubEnv('APP_ENV', undefined)
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  env: env('APP_ENV', 'production'),
+})
+`, 'utf8')
+    await writeFile(join(root, '.env'), 'APP_ENV=development\n', 'utf8')
+    await writeMailConfig(root)
+
+    try {
+      const runtime = await createHolo(root)
+      await runtime.initialize()
+
+      expect(process.env.APP_ENV).toBeUndefined()
+      const response = await renderMailPreview({ to: 'ava@example.com', subject: 'Preview', text: 'Hello' })
+      expect(response.status).toBe(200)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('boots auth with mail delivery when mail is configured without notifications', async () => {
