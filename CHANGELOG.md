@@ -6,7 +6,7 @@
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.
 - Generate the application key and broadcast app ID, key, and secret in `holo new`, writing them to `.env` with blank values in `.env.example`. `holo install broadcast` adds missing broadcast values to existing apps. Broadcast config no longer falls back to the literal `app-id`, `app-key`, and `app-secret`, and Flux refuses to connect without a broadcast key instead of using `app-key`.
-- `config:cache` evaluates `env()` with the real environment values and stores them in the cache file, so runtime `.env` changes don't affect cached config. The cache format is version 5; 0.3.x and earlier caches are ignored.
+- `config:cache` evaluates `env()` with the real environment values and stores them in the cache file, so runtime `.env` changes don't affect cached config. Config modules that contain functions (`app` with reporters, `security` with callbacks, and `database` when it holds functions) can't be cached and still load live, so their `env()` values come from the runtime environment. The cache format is version 5; 0.3.x and earlier caches are ignored.
 - `env()` with a boolean or number fallback throws, naming the variable, when the value doesn't convert, instead of returning the fallback.
 
 ### Added

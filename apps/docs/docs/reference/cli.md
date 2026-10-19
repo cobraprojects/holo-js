@@ -230,7 +230,7 @@ npx holo key:generate
 
 ### config:cache
 
-Compile every file in `config/` into one cached file at `.holo-js/generated/config-cache.json`. Each `env()` call is evaluated with your current env values, and the results, secrets included, are written into the file. When the app runs in production (`APP_ENV=production`) and the cache was built for production, Holo reads it instead of loading `config/*.ts` or `.env`. Other environments ignore the cache.
+Compile every file in `config/` into one cached file at `.holo-js/generated/config-cache.json`. Each `env()` call is evaluated with your current env values, and the results, secrets included, are written into the file. When the app runs in production (`APP_ENV=production`) and the cache was built for production, Holo reads it instead of loading `config/*.ts` or `.env`. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached. Holo loads them live, so their `env()` values come from the runtime environment. Other environments ignore the cache.
 
 ```bash
 APP_ENV=production npx holo config:cache

@@ -154,7 +154,7 @@ The command adds `BROADCAST_APP_*` lines that `.env` doesn't have yet. It leaves
 
 Holo also throws when a typed `env()` value doesn't convert: `APP_DEBUG=maybe` with a boolean fallback, or `APP_PORT=abc` with a number fallback. Previously Holo used the fallback. Fix or remove those values before deploying.
 
-If you use the config cache, the cache now stores the env values it was built with, secrets included. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
+If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached and still load live, so their env values come from the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
 
 ### Encrypted session, remember-me, and CSRF cookies
 
