@@ -4,7 +4,7 @@ Holo adopts Laravel's behavior, defaults, and failure semantics for equivalent c
 
 Recorded departures:
 
-- Request input is bounded at 1,000 input variables, and array indexes must fall within the submitted entries, because Node lacks PHP's `max_input_vars` and JavaScript arrays are sparse rather than hash maps.
+- Request input is bounded at 1,000 non-file input variables and, separately, 1,000 uploaded-file entries per form, and array indexes must fall within the submitted entries, because Node lacks PHP's `max_input_vars` and JavaScript arrays are sparse rather than hash maps. Names are limited to PHP's default `max_input_nesting_level` of 64 levels after the root; PHP silently drops deeper variables, while Holo rejects the request, just as it rejects excess variables instead of truncating them. A name may not mix numbered indexes with appended or repeated values; PHP accepts it order-dependently, overwriting values, so Holo rejects it to keep one name to one shape.
 - Path segments that reach object prototypes are rejected, because PHP arrays have no prototype chain.
 - Request, subscription, and capability state must be isolated per request or subscription, because a Node process outlives requests while PHP shares nothing between them.
 - A malformed typed environment value fails instead of returning the raw string, because a typed fallback cannot represent Laravel's string result.
