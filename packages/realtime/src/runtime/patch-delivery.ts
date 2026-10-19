@@ -447,6 +447,10 @@ function hasPatchableColumnTarget(
       continue
     }
 
+    if (includeSelectedColumns && readPatchPathKey(candidate.query, candidate) !== readPatchPathKey(target.query, target)) {
+      continue
+    }
+
     if (candidate.query.scalarColumn === column) {
       return true
     }
