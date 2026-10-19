@@ -26,7 +26,7 @@ const validReleaseWorkflow = [
   '    steps:',
   '      - run: bun run release',
   '        env:',
-  "          NPM_CONFIG_PROVENANCE: 'true'",
+  `          NPM_CONFIG_PROVENANCE: 'true'`,
   '      - run: git config user.name "github-actions[bot]"',
   '      - run: git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
   '      - run: git push origin --tags',
