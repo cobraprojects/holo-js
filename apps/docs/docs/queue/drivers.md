@@ -91,7 +91,7 @@ npx holo queue:work
 
 ### Run several workers
 
-You can run as many workers as you need against the same jobs table. Each job is taken by one worker only. On MySQL and PostgreSQL, a worker skips jobs another worker is taking and moves on to the next one, so workers don't wait on each other. Keep the indexes the `queue:table` migration creates: without them, a worker on MySQL holds every waiting job while it takes one. On SQLite, workers take jobs one at a time, because SQLite allows one write at a time.
+You can run as many workers as you need against the same jobs table. Two workers never take the same job at the same time. A job a worker took but didn't finish within `retryAfter` seconds can be taken again, so keep `retryAfter` longer than your slowest job. On MySQL and PostgreSQL, a worker skips jobs another worker is taking and moves on to the next one, so workers don't wait on each other. Keep the indexes the `queue:table` migration creates: without them, a worker on MySQL holds every waiting job while it takes one. On SQLite, workers take jobs one at a time, because SQLite allows one write at a time.
 
 ## Redis
 
