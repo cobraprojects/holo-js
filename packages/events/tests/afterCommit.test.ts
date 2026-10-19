@@ -218,6 +218,81 @@ describe('@holo-js/events afterCommit integration', () => {
     }))
   })
 
+  it('runs deferred sync and queued listeners interleaved in registration order after commit', async () => {
+    await configureTestDB()
+    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    }))
+
+    const order: string[] = []
+    configureEventsRuntime({
+      dispatchQueuedListener: async (dispatch) => {
+        order.push(`queued:${dispatch.listenerId}`)
+      },
+    })
+    registerListener(defineListener({
+      name: 'sync.first',
+      listensTo: ['user.registered'],
+      async handle() {
+        order.push('sync:first')
+      },
+    }))
+    registerListener(defineListener({
+      name: 'queued.second',
+      listensTo: ['user.registered'],
+      queue: true,
+      async handle() {},
+    }))
+    registerListener(defineListener({
+      name: 'sync.third',
+      listensTo: ['user.registered'],
+      async handle() {
+        order.push('sync:third')
+      },
+    }))
+
+    await DB.transaction(async () => {
+      await dispatchEvent('user.registered', {
+        userId: 'usr-1',
+      }).afterCommit()
+      expect(order).toEqual([])
+    })
+
+    expect(order).toEqual(['sync:first', 'queued:queued.second', 'sync:third'])
+  })
+
+  it('propagates the first deferred listener failure after commit and skips later listeners', async () => {
+    await configureTestDB()
+    registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    }))
+
+    const later = vi.fn(async () => {})
+    registerListener(defineListener({
+      name: 'sync.fails',
+      listensTo: ['user.registered'],
+      afterCommit: true,
+      async handle() {
+        throw new Error('deferred listener failed')
+      },
+    }))
+    registerListener(defineListener({
+      name: 'sync.after',
+      listensTo: ['user.registered'],
+      afterCommit: true,
+      async handle() {
+        await later()
+      },
+    }))
+
+    await expect(DB.transaction(async () => {
+      await dispatchEvent('user.registered', {
+        userId: 'usr-1',
+      })
+    })).rejects.toThrow('deferred listener failed')
+    expect(later).not.toHaveBeenCalled()
+  })
+
   it('keeps deferred work isolated across nested savepoints and rollbacks', async () => {
     const db = await configureTestDB()
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({

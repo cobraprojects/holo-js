@@ -95,10 +95,9 @@ await UserRegistered.dispatch({
 
 1. Holo finds every listener registered for the event.
 2. If any of those listeners is queued, it checks that the payload is JSON-serializable.
-3. Sync listeners run one at a time, in registration order.
-4. Queued listeners are sent to the queue as jobs.
+3. Listeners run one at a time, in registration order. Sync listeners run inline, and queued listeners are sent to the queue as jobs at their place in that order.
 
-If a sync listener throws, the dispatch rejects with that error and no queued listeners are sent. Dispatching an event with no listeners is fine; it does nothing.
+If a listener throws, or a queued listener can't be sent, the dispatch rejects with that error and listeners after it don't run. Dispatching an event with no listeners is fine; it does nothing.
 
 A pending dispatch runs only once. Awaiting the same value twice returns the same result.
 

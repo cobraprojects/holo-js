@@ -29,6 +29,10 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
 
+### Realtime relations honor hidden attributes
+
+Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. No code changes are required. Subscriptions to those relations run the handler more often. Relations to plain related models keep incremental patching.
+
 ### Model scope grouping
 
 Review model queries and relation constraints that use `orWhere()`. Caller conditions, each global scope, and the soft-delete filter now form separate groups joined with `AND`. Queries can no longer use `OR` to reach foreign-tenant or deleted rows, and instance writes remain limited to their target row. Existing method signatures are unchanged.
@@ -220,6 +224,12 @@ A job `timeout`, or the worker's `--timeout`, must now be less than its connecti
 New dispatch options: `.afterCommit()` on a dispatch, and `afterCommit: true` on a queue connection (default `false`), queue the job only once the surrounding database transaction commits. `@holo-js/queue` now lists `@holo-js/db` as an optional peer for this. Install `@holo-js/db` if you use it; without it, dispatch runs right away.
 
 Queued mail, notifications, and event listeners accept `tries` and `backoff`, and `queue:work` and `queue:listen` accept `--tries` and `--backoff`. These jobs still run once unless you set `tries`. The worker's `--backoff` applies only to jobs that don't set their own `backoff`.
+
+### Event listener order and after-commit notification failures
+
+Event listeners run in registration order, with sync and queued listeners interleaved. Before, every sync listener ran first and queued listeners were sent after them. If a listener depended on running after the queued listeners, move it after them or change it to a queued listener. A listener that throws stops the dispatch, so listeners registered after it don't run. See [Order and errors](/events/listeners#order-and-errors).
+
+A notification channel that fails after a transaction commits is reported through `exceptions.report` with capability `notifications` and operation `channel.afterCommit`. Before, it was dropped without a report. Configure `exceptions.report` if you want these failures in your error tracker. See [Reporting errors](/basics/errors#reporting-errors).
 
 ### Framework peer dependencies
 
