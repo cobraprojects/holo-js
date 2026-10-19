@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { mimeTypeFromFileName } from '@holo-js/kernel/file-content'
 import { Storage } from '@holo-js/storage/runtime'
 import type { Entity, TableDefinition } from '@holo-js/db'
@@ -14,7 +15,7 @@ import {
   sanitizeFileName,
   toBinaryContent,
 } from '../runtime/binary'
-import type { GeneratedMediaConversions, Media } from './Media'
+import { Media, type GeneratedMediaConversions } from './Media'
 import { type MediaMutation, runMediaMutation, removeStoredFiles } from './mutation'
 import { dispatchQueuedMediaConversionsForModel } from '../queue'
 import type {
@@ -127,6 +128,15 @@ export function resolveQueuedConversionNames(options: {
   )
 }
 
+function withUniqueSuffix(path: string): string {
+  const token = randomBytes(8).toString('hex')
+  const slash = path.lastIndexOf('/')
+  const dot = path.lastIndexOf('.')
+  return dot > slash + 1
+    ? `${path.slice(0, dot)}.${token}${path.slice(dot)}`
+    : `${path}.${token}`
+}
+
 export async function writeStoredConversions(options: {
   readonly definition: NormalizedMediaDefinition
   readonly collection: NormalizedMediaCollectionDefinition
@@ -134,7 +144,7 @@ export async function writeStoredConversions(options: {
   readonly conversionsDisk: string
   readonly requestedConversions?: string | readonly string[]
   readonly includeQueued?: boolean
-  readonly overwrite?: boolean
+  readonly unique?: boolean
   readonly mutation: MediaMutation
 }): Promise<GeneratedMediaConversions> {
   const requested = normalizeRequestedConversions(options.requestedConversions)
@@ -160,7 +170,7 @@ export async function writeStoredConversions(options: {
     }
 
     const generatedFileName = sanitizeFileName(generated.fileName ?? options.source.fileName)
-    const path = getMediaPathGenerator().conversionPath({
+    const plannedPath = getMediaPathGenerator().conversionPath({
       uuid: options.source.uuid,
       fileName: options.source.fileName,
       extension: options.source.extension,
@@ -168,13 +178,10 @@ export async function writeStoredConversions(options: {
       conversion,
       generatedFileName,
     })
+    const path = options.unique ? withUniqueSuffix(plannedPath) : plannedPath
     const disk = generated.disk ?? options.conversionsDisk
     const contents = await toBinaryContent(generated.contents)
-    if (options.overwrite) {
-      await options.mutation.overwrite(disk, path, contents)
-    } else {
-      await options.mutation.put(disk, path, contents)
-    }
+    await options.mutation.put(disk, path, contents)
     generatedConversions[conversion.name] = Object.freeze({
       path,
       disk,
@@ -187,20 +194,14 @@ export async function writeStoredConversions(options: {
   return Object.freeze(generatedConversions)
 }
 
-async function deleteObsoleteConversions(
+function obsoleteConversionFiles(
   current: GeneratedMediaConversions,
   next: GeneratedMediaConversions,
   fallbackDisk: string,
-  requested?: readonly string[],
-): Promise<void> {
-  const obsolete = Object.entries(current).filter(([name, conversion]) => {
-    if ((requested?.length && !requested.includes(name)) || !conversion?.path) return false
-    const nextConversion = next[name]
-    return nextConversion?.path !== conversion.path
-      || (nextConversion.disk ?? fallbackDisk) !== (conversion.disk ?? fallbackDisk)
-  }).map(([, conversion]) => ({ disk: conversion.disk ?? fallbackDisk, path: conversion.path }))
-  await removeStoredFiles(obsolete)
-
+): { readonly disk: string, readonly path: string }[] {
+  return Object.entries(current)
+    .filter(([name, conversion]) => conversion?.path && next[name]?.path !== conversion.path)
+    .map(([, conversion]) => ({ disk: conversion.disk ?? fallbackDisk, path: conversion.path }))
 }
 
 export async function regenerateMediaEntityConversions(options: {
@@ -217,7 +218,6 @@ export async function regenerateMediaEntityConversions(options: {
   const collectionName = String(media.get('collection_name'))
   const collection = resolveCollectionDefinition(definition, collectionName)
   const requested = normalizeRequestedConversions(options.conversions)
-  const current = (media.get('generated_conversions') ?? {}) as GeneratedMediaConversions
   const conversionsDisk = String(media.get('conversions_disk') ?? media.get('disk'))
   resolveMatchingConversions(definition, collectionName, requested, {
     includeQueued: options.includeQueued === true,
@@ -230,13 +230,8 @@ export async function regenerateMediaEntityConversions(options: {
     )
   }
 
-  const nextBase = requested?.length
-    ? Object.fromEntries(
-        Object.entries(current).filter(([name]) => !requested.includes(name)),
-      )
-    : {}
-
-  return await runMediaMutation({
+  const mediaId = media.get('id')
+  const result = await runMediaMutation({
     committedMessage: '[Holo Media] Regeneration remains committed; post-commit cleanup or conversion dispatch failed.',
     afterRollback: async () => {
       options.owner?.forgetRelation('media')
@@ -248,7 +243,7 @@ export async function regenerateMediaEntityConversions(options: {
       conversionsDisk,
       requestedConversions: requested,
       includeQueued: options.includeQueued === true,
-      overwrite: true,
+      unique: true,
       mutation,
       source: {
         uuid: String(media.get('uuid')),
@@ -260,22 +255,37 @@ export async function regenerateMediaEntityConversions(options: {
       },
     }),
     operation: async (_mutation, regenerated) => {
+      const locked = await Media.query().where('id', mediaId).lockForUpdate().first()
+      if (!locked) {
+        throw new Error(`[Holo Media] Cannot regenerate conversions for media "${media.get('uuid')}" because the media row no longer exists.`)
+      }
+
+      const current = (locked.get('generated_conversions') ?? {}) as GeneratedMediaConversions
+      const nextBase = requested?.length
+        ? Object.fromEntries(
+            Object.entries(current).filter(([name]) => !requested.includes(name)),
+          )
+        : {}
       const generatedConversions = Object.freeze({ ...nextBase, ...regenerated })
       media.forceFill({ generated_conversions: generatedConversions })
       await media.save()
       options.owner?.forgetRelation('media')
-      return generatedConversions
+      return {
+        generatedConversions,
+        obsolete: obsoleteConversionFiles(current, generatedConversions, conversionsDisk),
+      }
     },
     afterCommit: [
-      async (generatedConversions) => { await deleteObsoleteConversions(current, generatedConversions, conversionsDisk, requested) },
+      async ({ obsolete }) => { await removeStoredFiles(obsolete) },
       async () => {
         if (options.includeQueued) return
         await dispatchQueuedMediaConversionsForModel({
-          mediaId: media.get('id'),
+          mediaId,
           conversionNames: resolveQueuedConversionNames({ definition, collectionName, requestedConversions: requested }),
         }, async () => { await media.refresh() })
       },
     ],
     afterEffects: () => { options.owner?.forgetRelation('media') },
   })
+  return result.generatedConversions
 }

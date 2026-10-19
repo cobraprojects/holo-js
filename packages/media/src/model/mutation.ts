@@ -11,10 +11,6 @@ export class MediaMutation {
     await Storage.disk(disk).put(path, contents)
   }
 
-  async overwrite(disk: string, path: string, contents: StorageContent): Promise<void> {
-    await Storage.disk(disk).put(path, contents)
-  }
-
   async compensate(): Promise<void> {
     const failures: unknown[] = []
     for (const file of this.created.splice(0).reverse()) {

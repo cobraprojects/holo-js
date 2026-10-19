@@ -2459,13 +2459,13 @@ describe('@holo-js/media', () => {
       revision = 'v2'
       await media.regenerate('thumb')
 
-      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v2:thumb')
+      expect(await Storage.disk('public').get(media.record.generated_conversions.thumb!.path)).toBe('v2:thumb')
       expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v1:card')
 
       revision = 'v3'
       await post.regenerateMedia('images', 'card')
 
-      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v3:card')
+      expect(await Storage.disk('public').get((await post.getFirstMedia('images'))!.record.generated_conversions.card!.path)).toBe('v3:card')
 
       await expect(post.regenerateMedia('images', 'missing' as never)).rejects.toThrow('Unknown media conversion')
 
@@ -2495,8 +2495,8 @@ describe('@holo-js/media', () => {
       revision = 'v4'
       await media.regenerate()
 
-      expect(await Storage.disk('public').get(resolvedThumbPath)).toBe('v4:thumb')
-      expect(await Storage.disk('public').get(resolvedCardPath)).toBe('v4:card')
+      expect(await Storage.disk('public').get(media.record.generated_conversions.thumb!.path)).toBe('v4:thumb')
+      expect(await Storage.disk('public').get((await post.getFirstMedia('images'))!.record.generated_conversions.card!.path)).toBe('v4:card')
     } finally {
       vi.unstubAllGlobals()
     }
@@ -2537,17 +2537,55 @@ describe('@holo-js/media', () => {
     expect(thumbPath).toBeTruthy()
 
     revision = 'v2'
+    let regeneratedPath = ''
     await expect(DB.transaction(async () => {
       const [transactionMedia] = await post.getMedia('images')
       await transactionMedia!.regenerate('thumb')
-      expect(await Storage.disk('public').get(thumbPath!)).toBe('v2:thumb')
+      regeneratedPath = transactionMedia!.record.generated_conversions.thumb!.path
+      expect(await Storage.disk('public').get(regeneratedPath)).toBe('v2:thumb')
 
       throw new Error('rollback conversion regeneration')
     })).rejects.toThrow('rollback conversion regeneration')
 
     await media.getEntity().refresh()
     expect(media.record.generated_conversions.thumb?.path).toBe(thumbPath)
-    expect(await Storage.disk('public').get(thumbPath!)).toBe('v2:thumb')
+    expect(await Storage.disk('public').get(thumbPath!)).toBe('v1:thumb')
+    expect(await Storage.disk('public').exists(regeneratedPath)).toBe(false)
+  })
+
+  it('resolves a regenerated conversion URL to its new stored file', async () => {
+    let revision = 'v1'
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        return {
+          contents: Buffer.from(`${revision}:${conversion.name}`),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+      conversions: [conversion('thumb').performOnCollections('images')],
+    })
+
+    const post = await Post.create({ title: 'Regenerated URL' })
+    const media = await expectMediaAdded(post.addMedia(await createImageBuffer()).toMediaCollection('images'))
+    const previousUrl = media.getUrl('thumb')
+
+    revision = 'v2'
+    await media.regenerate('thumb')
+    const storedPath = media.record.generated_conversions.thumb!.path
+
+    expect(media.getUrl('thumb')).toBe(Storage.disk('public').url(storedPath))
+    expect(media.getUrl('thumb')).not.toBe(previousUrl)
+    expect(await Storage.disk('public').get(storedPath)).toBe('v2:thumb')
+    expect((await post.getFirstMedia('images'))!.getUrl('thumb')).toBe(media.getUrl('thumb'))
   })
 
   it('rejects oversized remote uploads before buffering the response body', async () => {
@@ -3377,10 +3415,12 @@ describe('@holo-js/media', () => {
       order_column: 1,
     })
 
-    await new MediaItem(legacy).regenerate('thumb')
+    const item = new MediaItem(legacy)
+    await item.regenerate('thumb')
 
+    expect(item.record.generated_conversions.thumb!.path).not.toBe('media/legacy/conversions/thumb.txt')
     expect(
-      await Storage.disk('public').get('media/legacy/conversions/thumb.txt'),
+      await Storage.disk('public').get(item.record.generated_conversions.thumb!.path),
     ).toBe('legacy-thumb')
   })
 
@@ -3526,7 +3566,7 @@ describe('@holo-js/media', () => {
     await item.regenerate()
 
     expect(item.getAvailableConversions()).toEqual(['global'])
-    expect(await Storage.disk('public').exists('media/ghost/conversions/global.txt')).toBe(true)
+    expect(await Storage.disk('public').exists(item.record.generated_conversions.global!.path)).toBe(true)
   })
 
   it('covers default disk, null metadata, and item fallback branches', async () => {

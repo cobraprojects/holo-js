@@ -137,6 +137,8 @@ await image?.regenerate('thumb')
 
 When you name conversions, only those are rebuilt and the rest are left alone. Naming a conversion that doesn't exist, or that doesn't apply to the item's collection, throws an error. Regenerating also throws if the original file is missing from its disk.
 
+Each regeneration writes its conversions to new files and points the record at them in one transaction. The files they replace are deleted after that transaction commits, so a regenerated conversion's URL changes. Read URLs from the item after you regenerate, rather than keeping the old ones.
+
 ## When something fails
 
 Adding, replacing, regenerating, and deleting media each run in a database transaction, so a failure doesn't leave half-finished state behind.
@@ -144,7 +146,7 @@ Adding, replacing, regenerating, and deleting media each run in a database trans
 - **A conversion fails during upload.** The call throws an error naming the conversion and file. Holo deletes every file it already wrote for that upload and doesn't create the `media` row. For a `singleFile()` collection, the previous file stays in place. If a cleanup delete also fails, the error includes both failures, and the conversion failure stays first.
 - **The database transaction fails after the files are written.** Holo deletes the files it wrote and doesn't keep the `media` row.
 - **The upload is inside your own transaction and that transaction rolls back.** Holo removes the files this upload created, and the previous media is kept.
-- **A regeneration fails or rolls back.** Holo doesn't restore the old conversion files or delete existing ones. A regenerated conversion keeps its new output, and the next regeneration rewrites it. The `media` row keeps its previous details.
+- **A regeneration fails or rolls back.** Holo deletes the new conversion files it wrote. The previous files and the `media` row stay as they were.
 - **Files are replaced or deleted.** Old files are removed only after the transaction commits, so a rollback never loses the previous file.
 
 ::: warning
