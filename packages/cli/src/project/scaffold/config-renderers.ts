@@ -198,6 +198,8 @@ export function renderCacheConfig(
   return lines.join('\n')
 }
 
+export const REDIS_CONFIG_ENV_IMPORT = 'import { env } from \'@holo-js/config\''
+
 export function renderRedisCacheConnectionLines(): readonly string[] {
   return [
     '    cache: {',
@@ -213,7 +215,7 @@ export function renderRedisCacheConnectionLines(): readonly string[] {
 
 export function renderRedisConfig(): string {
   return [
-    'import { env } from \'@holo-js/config\'',
+    REDIS_CONFIG_ENV_IMPORT,
     'import { defineRedisConfig } from \'@holo-js/kernel\'',
     '',
     'export default defineRedisConfig({',

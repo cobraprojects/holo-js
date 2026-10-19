@@ -62,6 +62,7 @@ import {
   renderNotificationsConfig,
   renderProjectSecurityConfig,
   renderQueueConfig,
+  REDIS_CONFIG_ENV_IMPORT,
   renderRedisCacheConnectionLines,
   renderRedisConfig,
   renderSecurityConfig,
@@ -831,12 +832,15 @@ export async function installCacheIntoProject(
     && existingRedisConfigPath
     && !('cache' in loadedConfig.redis.connections)
   ) {
+    const existingRedisConfigSource = (await readTextFile(existingRedisConfigPath)) ?? ''
+    const importsEnv = /import\s*\{[^}]*\benv\b[^}]*\}\s*from\s*['"]@holo-js\/config['"]/.test(existingRedisConfigSource)
     throw new Error(
       `config/redis.ts does not define a "cache" connection, and the Redis cache store needs one so that cache flushes `
-      + `stay on their own Redis database. Add this connection to the connections object in config/redis.ts, `
-      + `then rerun "holo install cache --driver redis":\n\n`
+      + `stay on their own Redis database. Add this connection to the connections object in config/redis.ts:\n\n`
       + `${renderRedisCacheConnectionLines().join('\n')}\n\n`
-      + `REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.`,
+      + `REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.\n\n`
+      + (importsEnv ? '' : `The connection uses env(), so also add this import at the top of config/redis.ts:\n\n${REDIS_CONFIG_ENV_IMPORT}\n\n`)
+      + `Then rerun "holo install cache --driver redis".`,
     )
   }
 

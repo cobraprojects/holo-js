@@ -9892,6 +9892,8 @@ export default defineRedisConfig({
 `)
 
     await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('does not define a "cache" connection')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('cache: {')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow("import { env } from '@holo-js/config'")
     await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).not.toContain('cache: {')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('')
