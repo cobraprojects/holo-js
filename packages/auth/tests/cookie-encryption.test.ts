@@ -64,10 +64,16 @@ it('authenticates the next request from the encrypted session and remember cooki
   await expect(checkWithCookies({ holo_session_remember: cookies.holo_session_remember! })).resolves.toBe(true)
 })
 
+function flipCiphertextBit(value: string): string {
+  const payload = Buffer.from(value, 'base64url')
+  payload[payload.length - 1] = payload[payload.length - 1]! ^ 1
+  return payload.toString('base64url')
+}
+
 it('treats tampered or plaintext Holo cookies as a guest', async () => {
   const login = await context.run(() => auth.loginUsingId(1, { remember: true }))
   const cookies = browserCookies(login.cookies)
-  const tampered = `${cookies.holo_session!.slice(0, -2)}xx`
+  const tampered = flipCiphertextBit(cookies.holo_session!)
 
   await expect(checkWithCookies({ holo_session: tampered })).resolves.toBe(false)
   await expect(checkWithCookies({ holo_session: login.sessionId })).resolves.toBe(false)
