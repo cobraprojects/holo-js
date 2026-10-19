@@ -192,6 +192,20 @@ describe('session-stored CSRF token', () => {
     expect(sessions.reads).toEqual(['browser-a'])
   })
 
+  it('keeps X-XSRF-TOKEN encrypted-only when the app configures it as the CSRF header', async () => {
+    const sessions = memorySessions()
+    sessions.tokens.set('browser-a', 'session-token-a')
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true, header: 'x-xsrf-token' } }),
+      csrfSigningKey: appKey,
+      csrfSession: sessions,
+    })
+    const encrypted = xsrfCookieOf(await csrf.cookie(post('browser-a')))
+
+    await expect(csrf.verify(post('browser-a', { xsrfHeader: 'session-token-a' }))).rejects.toBeInstanceOf(SecurityCsrfError)
+    await expect(csrf.verify(post('browser-a', { xsrfHeader: encrypted }))).resolves.toBeUndefined()
+  })
+
   it('rejects a token planted by another browser or subdomain', async () => {
     const sessions = memorySessions()
     sessions.tokens.set('victim', 'victim-token')

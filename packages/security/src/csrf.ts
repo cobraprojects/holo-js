@@ -105,6 +105,10 @@ async function getSessionToken(request: Request): Promise<string | undefined> {
 
 function getHeaderToken(request: Request): string | undefined {
   const { header } = getSecurityRuntime().config.csrf
+  if (header.toLowerCase() === SECURITY_XSRF_HEADER.toLowerCase()) {
+    return undefined
+  }
+
   return request.headers.get(header)?.trim() || undefined
 }
 
