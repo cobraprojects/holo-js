@@ -60,6 +60,7 @@ import {
   loadProjectScaffoldModule,
   loadRuntimeModule,
   loadSecurityModule,
+  loadStorageModule,
   resolveBroadcastExecutor,
   resolveCacheExecutor,
   resolveGeneratorCommand,
@@ -1429,6 +1430,24 @@ export function createInternalCommands(
         }, async stdout => {
           for (const line of stdout.split('\n').filter(Boolean)) writeLine(context.stdout, line)
         })
+      },
+    },
+    {
+      name: 'storage:decode-names',
+      description: 'Rename URL-encoded files on a local disk to their literal names.',
+      usage: 'holo storage:decode-names --disk=<name>',
+      source: 'internal',
+      async prepare(input) {
+        const disk = resolveStringFlag(input.flags, 'disk')
+        if (!disk) {
+          throw new Error('storage:decode-names requires --disk=<name>.')
+        }
+
+        return { args: [], flags: { disk } }
+      },
+      async run(commandContext) {
+        const { runStorageDecodeNamesCommand } = await loadStorageModule()
+        await runStorageDecodeNamesCommand(context, context.projectRoot, String(commandContext.flags.disk))
       },
     },
     {

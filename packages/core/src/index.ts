@@ -1,5 +1,7 @@
 export * from './adapter'
 export { report } from './report'
+export { storageRuntimeInternals } from './storageRuntime'
+export type { DecodedStorageName, SkippedStorageName, StorageNameDecodingResult } from './storageRuntime'
 export type {
   CreateHoloOptions,
   HoloAuthRuntimeBinding,
