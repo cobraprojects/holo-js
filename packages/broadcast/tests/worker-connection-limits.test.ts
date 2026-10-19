@@ -183,6 +183,24 @@ it('leaves a replacement connection with a reused socket id in place when a queu
   expect(runtime.getStats().connectionCount).toBe(2)
 })
 
+it('refuses a payload that would take buffered output past the bound, closing the connection without handing it to the transport', async () => {
+  const realtime: BroadcastRealtimeRuntimeBindings = {
+    query: async () => { throw new Error('not used') },
+    mutate: async () => { throw new Error('not used') },
+    subscribe: async (name, _args, options) => {
+      await options.onData({ name, data: 'x'.repeat(2 * 1024 * 1024), dependencies: [], version: 1 })
+      return { id: 'subscription', current: { name, data: {}, dependencies: [], version: 1 }, unsubscribe() {} }
+    },
+  }
+  const runtime = createRuntime({ realtime })
+  const client = connect(runtime, '1.1', () => 3 * 1024 * 1024)
+  await runtime.receiveWebSocketMessage('1.1', realtimeSubscribe('big'))
+
+  expect(client.sent.map(packet => packet.event)).toEqual(['pusher:connection_established'])
+  expect(client.closes).toEqual([{ code: 1008, reason: 'Slow consumer' }])
+  expect(runtime.getStats().connectionCount).toBe(0)
+})
+
 it('counts presence channels whose failed subscription is still pending cleanup toward the channel limit', async () => {
   const redisDown = (): never => { throw new Error('Redis connection lost') }
   let hashSetCalls = 0

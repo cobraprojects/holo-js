@@ -210,6 +210,10 @@ function isOverBufferedBound(connection: { readonly bufferedAmount: () => number
   return connection.bufferedAmount() > MAX_BUFFERED_BYTES_PER_CONNECTION
 }
 
+function wouldExceedBufferedBound(connection: { readonly bufferedAmount: () => number }, payload: string): boolean {
+  return connection.bufferedAmount() + Buffer.byteLength(payload) > MAX_BUFFERED_BYTES_PER_CONNECTION
+}
+
 function isAllowedWorkerOrigin(request: Request, allowedOrigins: readonly string[]): boolean {
   const origin = request.headers.get('origin')
   if (!origin) {
@@ -2007,7 +2011,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
             return false
           }
 
-          if (isOverBufferedBound(connection)) {
+          if (wouldExceedBufferedBound(connection, payload)) {
             closeSlowSocket(socket)
             return false
           }
