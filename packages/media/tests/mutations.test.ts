@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { storageRuntimeInternals } from '../../core/src/storageRuntime'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, DB, defineGeneratedTable, defineModel, resetDB } from '@holo-js/db'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { configureStorageRuntime, resetStorageRuntime, Storage } from '@holo-js/storage/runtime'
+import { configureStorageRuntime, resetStorageRuntime, Storage, type StorageDisk } from '@holo-js/storage/runtime'
 import { configureQueueRuntime, resetQueueRuntime, resetQueueRegistry } from '@holo-js/queue'
 import { createQueueDbRuntimeOptions } from '../../queue-db/src'
 import { collection, conversion, defineMediaModel, resetMediaRuntime, setMediaConversionExecutor, setMediaPathGenerator } from '../src'
@@ -222,7 +222,7 @@ it('retains the outer failure and file compensation failure together', async () 
   expect(await post.getMedia('avatars')).toEqual([])
 })
 
-it('restores regenerated files when persistence fails after generation', async () => {
+it('keeps the regenerated output in place when persistence fails after generation', async () => {
   let regenerating = false
   setMediaConversionExecutor({
     async generate() {
@@ -240,8 +240,71 @@ it('restores regenerated files when persistence fails after generation', async (
   await DB.unsafeExecute({ sql: "CREATE TRIGGER reject_media_update BEFORE UPDATE ON media BEGIN SELECT RAISE(ABORT, 'media update rejected'); END", unsafe: true })
   await expect(item.regenerate()).rejects.toThrow('media update rejected')
   await DB.unsafeExecute({ sql: 'DROP TRIGGER reject_media_update', unsafe: true })
-  await expect(Storage.disk('public').get(path)).resolves.toBe('old')
+  await expect(Storage.disk('public').get(path)).resolves.toBe('new-version')
   expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(item.record.generated_conversions)
+})
+
+it('keeps the committed output when an overlapping regeneration fails after it', async () => {
+  let output = 'output-initial'
+  let mimeType = 'text/initial'
+  setMediaConversionExecutor({
+    async generate() {
+      return { contents: Buffer.from(output), fileName: 'thumb.txt', mimeType }
+    },
+  })
+  setMediaPathGenerator({ originalPath: () => 'original.txt', conversionPath: () => 'thumb.txt' })
+  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars')],
+  })
+  const post = await ConvertedPost.create({ title: 'Overlapping regenerations' })
+  await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+
+  let releaseA: () => void = () => {}
+  const aMayCommit = new Promise<void>((resolve) => { releaseA = resolve })
+  let aWritten: () => void = () => {}
+  const aHasWritten = new Promise<void>((resolve) => { aWritten = resolve })
+  const openDisk = Storage.disk.bind(Storage)
+  vi.spyOn(Storage, 'disk').mockImplementation((diskName?: string) => {
+    const disk = openDisk(diskName)
+    return {
+      ...disk,
+      put: async (path: string, contents: Parameters<StorageDisk['put']>[1]) => {
+        const written = await disk.put(path, contents)
+        if (Buffer.from(contents as Uint8Array).toString() === 'output-A') {
+          aWritten()
+          await aMayCommit
+        }
+        return written
+      },
+    } as StorageDisk
+  })
+
+  try {
+    await DB.unsafeExecute({ sql: "CREATE TRIGGER reject_regeneration_a BEFORE UPDATE ON media WHEN NEW.generated_conversions LIKE '%text/a%' BEGIN SELECT RAISE(ABORT, 'regeneration A rejected'); END", unsafe: true })
+    const first = (await post.getFirstMedia('avatars'))!
+    const second = (await post.getFirstMedia('avatars'))!
+
+    output = 'output-A'
+    mimeType = 'text/a'
+    const regenerationA = first.regenerate().catch((error: unknown) => error)
+    await aHasWritten
+
+    output = 'output-B'
+    mimeType = 'text/b'
+    await second.regenerate()
+    releaseA()
+
+    const failureA = await regenerationA
+    expect(failureA).toBeInstanceOf(Error)
+    expect((failureA as Error).cause).toMatchObject({ message: expect.stringContaining('regeneration A rejected') })
+    await DB.unsafeExecute({ sql: 'DROP TRIGGER reject_regeneration_a', unsafe: true })
+  } finally {
+    vi.restoreAllMocks()
+  }
+
+  await expect(Storage.disk('public').get('thumb.txt')).resolves.toBe('output-B')
+  expect((await post.getFirstMedia('avatars'))!.record.generated_conversions.thumb).toMatchObject({ mimeType: 'text/b', path: 'thumb.txt' })
 })
 
 it('retains committed deletion when file cleanup fails and preserves files on outer rollback', async () => {
@@ -292,36 +355,7 @@ it('retains regenerated files and record when obsolete conversion cleanup fails 
   await expect(Storage.disk('public').get(current.record.generated_conversions.thumb!.path)).resolves.toBe('new')
 })
 
-it('exposes enclosing rollback failure together with failed conversion restoration', async () => {
-  let regenerating = false
-  const primary = new Error('outer regeneration rollback')
-  let thumbPath = ''
-  setMediaConversionExecutor({ async generate({ conversion: selected }) {
-    return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: `${selected.name}.txt` }
-  } })
-  const ConvertedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
-    collections: [collection('avatars').disk('public')],
-    conversions: [conversion('thumb').performOnCollections('avatars'), conversion('card').performOnCollections('avatars')],
-  })
-  const post = await ConvertedPost.create({ title: 'Failed restoration' })
-  const item = await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
-  const previous = item.record.generated_conversions
-  thumbPath = previous.thumb!.path
-  regenerating = true
-  const failure = await DB.transaction(async () => {
-    await item.regenerate()
-    await rm(join(directory, thumbPath), { force: true })
-    await mkdir(join(directory, thumbPath), { recursive: true })
-    throw primary
-  }).catch((error: unknown) => error)
-  expect(failure).toBeInstanceOf(AggregateError)
-  if (!(failure instanceof AggregateError)) throw new Error('Expected aggregated regeneration failure')
-  expect(failure.errors[0]).toBe(primary)
-  expect(failure.errors[1]).toBeInstanceOf(Error)
-  expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
-})
-
-it('restores conversion bytes and metadata when enclosing regeneration rolls back', async () => {
+it('keeps regenerated conversion bytes when an enclosing regeneration rolls back', async () => {
   let regenerating = false
   setMediaConversionExecutor({ async generate() {
     return { contents: Buffer.from(regenerating ? 'new' : 'old'), fileName: 'thumb.txt' }
@@ -339,12 +373,12 @@ it('restores conversion bytes and metadata when enclosing regeneration rolls bac
     await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('new')
     throw new Error('outer regeneration rollback')
   })).rejects.toThrow('outer regeneration rollback')
-  await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('old')
+  await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('new')
   expect(item.record.generated_conversions).toEqual(previous)
   expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
 })
 
-it('restores original conversion bytes after repeated regeneration and enclosing rollback', async () => {
+it('keeps the latest regenerated bytes after repeated regeneration and enclosing rollback', async () => {
   let contents = 'original conversion'
   setMediaConversionExecutor({ async generate() {
     return { contents: Buffer.from(contents), fileName: 'thumb.txt' }
@@ -366,7 +400,7 @@ it('restores original conversion bytes after repeated regeneration and enclosing
     await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('final conversion')
     throw new Error('outer repeated regeneration rollback')
   })).rejects.toThrow('outer repeated regeneration rollback')
-  await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('original conversion')
+  await expect(Storage.disk('public').get(previous.thumb!.path)).resolves.toBe('final conversion')
   expect(item.record.generated_conversions).toEqual(previous)
   expect((await post.getFirstMedia('avatars'))!.record.generated_conversions).toEqual(previous)
 })

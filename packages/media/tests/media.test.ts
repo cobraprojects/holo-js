@@ -2502,7 +2502,7 @@ describe('@holo-js/media', () => {
     }
   })
 
-  it('restores overwritten conversion storage when regeneration transaction rolls back', async () => {
+  it('keeps regenerated conversion storage when a regeneration transaction rolls back', async () => {
     let revision = 'v1'
 
     setMediaConversionExecutor({
@@ -2547,7 +2547,7 @@ describe('@holo-js/media', () => {
 
     await media.getEntity().refresh()
     expect(media.record.generated_conversions.thumb?.path).toBe(thumbPath)
-    expect(await Storage.disk('public').get(thumbPath!)).toBe('v1:thumb')
+    expect(await Storage.disk('public').get(thumbPath!)).toBe('v2:thumb')
   })
 
   it('rejects oversized remote uploads before buffering the response body', async () => {

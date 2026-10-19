@@ -134,6 +134,7 @@ export async function writeStoredConversions(options: {
   readonly conversionsDisk: string
   readonly requestedConversions?: string | readonly string[]
   readonly includeQueued?: boolean
+  readonly overwrite?: boolean
   readonly mutation: MediaMutation
 }): Promise<GeneratedMediaConversions> {
   const requested = normalizeRequestedConversions(options.requestedConversions)
@@ -169,7 +170,11 @@ export async function writeStoredConversions(options: {
     })
     const disk = generated.disk ?? options.conversionsDisk
     const contents = await toBinaryContent(generated.contents)
-    await options.mutation.put(disk, path, contents)
+    if (options.overwrite) {
+      await options.mutation.overwrite(disk, path, contents)
+    } else {
+      await options.mutation.put(disk, path, contents)
+    }
     generatedConversions[conversion.name] = Object.freeze({
       path,
       disk,
@@ -243,6 +248,7 @@ export async function regenerateMediaEntityConversions(options: {
       conversionsDisk,
       requestedConversions: requested,
       includeQueued: options.includeQueued === true,
+      overwrite: true,
       mutation,
       source: {
         uuid: String(media.get('uuid')),

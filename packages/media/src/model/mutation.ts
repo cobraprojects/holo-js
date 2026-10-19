@@ -2,26 +2,24 @@ import { DB, type Entity, type TableDefinition } from '@holo-js/db'
 import { Storage, type StorageContent } from '@holo-js/storage/runtime'
 import type { MediaItem } from './item'
 type StoredFile = { readonly disk: string, readonly path: string }
-type WrittenFile = StoredFile & { readonly previous: Uint8Array | null }
 
 export class MediaMutation {
-  private readonly written: WrittenFile[] = []
+  private readonly created: StoredFile[] = []
 
   async put(disk: string, path: string, contents: StorageContent): Promise<void> {
-    const previous = await Storage.disk(disk).getBytes(path)
-    this.written.push({ disk, path, previous })
+    this.created.push({ disk, path })
+    await Storage.disk(disk).put(path, contents)
+  }
+
+  async overwrite(disk: string, path: string, contents: StorageContent): Promise<void> {
     await Storage.disk(disk).put(path, contents)
   }
 
   async compensate(): Promise<void> {
     const failures: unknown[] = []
-    for (const file of this.written.splice(0).reverse()) {
+    for (const file of this.created.splice(0).reverse()) {
       try {
-        if (file.previous) {
-          await Storage.disk(file.disk).put(file.path, file.previous)
-        } else {
-          await Storage.disk(file.disk).delete(file.path)
-        }
+        await Storage.disk(file.disk).delete(file.path)
       } catch (error) {
         failures.push(error)
       }
