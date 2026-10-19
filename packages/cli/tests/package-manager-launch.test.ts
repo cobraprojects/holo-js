@@ -22,7 +22,9 @@ async function createInstallProject(): Promise<string> {
   return projectRoot
 }
 
-const io = { cwd: process.cwd(), stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }
+function createIo(cwd: string) {
+  return { cwd, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }
+}
 
 it('launches package-manager shims through the shell on Windows and directly elsewhere', () => {
   expect(resolvePackageManagerSpawn({ command: 'npm', args: ['exec', '--', 'nuxt', 'prepare'] }, 'win32')).toEqual({
@@ -47,7 +49,7 @@ it('does not spawn the package manager when the install is cancelled during the 
   const controller = new AbortController()
   const spawned: string[] = []
   const installation = installProjectDependencies(
-    io,
+    createIo(projectRoot),
     projectRoot,
     ((command: string) => {
       spawned.push(command)
@@ -67,7 +69,7 @@ it('removes its abort listener once each install child closes', async () => {
   const controller = new AbortController()
 
   for (let cycle = 0; cycle < 3; cycle += 1) {
-    await installProjectDependencies(io, projectRoot, (() => createClosingProcess()) as unknown as typeof spawn, controller.signal)
+    await installProjectDependencies(createIo(projectRoot), projectRoot, (() => createClosingProcess()) as unknown as typeof spawn, controller.signal)
     expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
   }
 })
