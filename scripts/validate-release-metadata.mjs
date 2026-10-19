@@ -71,6 +71,9 @@ async function collectReleaseWorkflowFailures(root) {
   if (!/NPM_CONFIG_PROVENANCE:\s*['"]?true['"]?/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must set NPM_CONFIG_PROVENANCE to 'true' so npm publishes with provenance.`)
   }
+  if (!/git config user\.name\b/.test(workflow) || !/git config user\.email\b/.test(workflow)) {
+    failures.push(`${releaseWorkflowPath} must set git user.name and user.email before publishing, because changeset publish creates annotated tags.`)
+  }
   if (!/git push origin --tags/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must push the tags that changeset publish creates with \`git push origin --tags\`.`)
   }

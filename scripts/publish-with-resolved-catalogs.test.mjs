@@ -309,3 +309,44 @@ test('catalog resolver restores the remaining package manifests when one cannot 
   assert.equal(await readFile(writablePath, 'utf8'), writableManifest)
   await chmod(lockedPath, 0o644)
 })
+
+test('catalog resolver keeps waiting for the interrupt hook when a second signal arrives', async () => {
+  const originalManifest = '{ "name": "@holo-js/example", "dependencies": { "@holo-js/core": "catalog:" } }\n'
+  const repoRoot = await createTempRepo({
+    'package.json': ['{"workspaces":{"catalog":{"@holo-js/core":"^0.3.28"}}}'],
+    'packages/example/package.json': originalManifest.split('\n'),
+  })
+  const manifestPath = join(repoRoot, 'packages/example/package.json')
+  const modulePath = fileURLToPath(new URL('./publish-with-resolved-catalogs.mjs', import.meta.url))
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', [
+    `import { withResolvedCatalogManifests } from ${JSON.stringify(modulePath)}`,
+    `await withResolvedCatalogManifests(async () => {`,
+    `  process.stdout.write('published\\n')`,
+    `  await new Promise(() => setInterval(() => {}, 1000))`,
+    `}, ${JSON.stringify(repoRoot)}, {`,
+    `  onInterrupt: async () => {`,
+    `    await new Promise(resolve => setTimeout(resolve, 300))`,
+    `    process.stdout.write('hook-finished\\n')`,
+    `  },`,
+    `})`,
+  ].join('\n')], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+  let output = ''
+  child.stdout.on('data', (chunk) => {
+    output += chunk
+  })
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', () => {
+      if (output.includes('published')) resolve()
+    })
+    child.once('exit', code => reject(new Error(`publish child exited early with code ${code}`)))
+  })
+
+  child.kill('SIGTERM')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  child.kill('SIGTERM')
+  await once(child, 'exit')
+
+  assert.match(output, /hook-finished/)
+  assert.equal(await readFile(manifestPath, 'utf8'), originalManifest)
+})

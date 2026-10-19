@@ -93,16 +93,13 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot, op
   const originalManifests = new Map()
   let callbackError
 
-  let interruptStarted = false
   let pendingWrites = Promise.resolve()
-  const restoreOnInterrupt = async (signal) => {
-    if (!interruptStarted) {
-      interruptStarted = true
-      try {
-        await options.onInterrupt?.(signal)
-      } catch (error) {
-        console.error(error)
-      }
+  let shutdown
+  const stopAndRestore = async (signal) => {
+    try {
+      await options.onInterrupt?.(signal)
+    } catch (error) {
+      console.error(error)
     }
     await pendingWrites.catch(() => {})
     for (const [manifestPath, contents] of originalManifests) {
@@ -112,6 +109,10 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot, op
         console.error(`Failed to restore ${manifestPath}: ${error.message}`)
       }
     }
+  }
+  const restoreOnInterrupt = async (signal) => {
+    shutdown ??= stopAndRestore(signal)
+    await shutdown
     for (const interruptSignal of interruptSignals) {
       process.removeListener(interruptSignal, restoreOnInterrupt)
     }

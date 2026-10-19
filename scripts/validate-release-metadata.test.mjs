@@ -27,6 +27,8 @@ const validReleaseWorkflow = [
   '      - run: bun run release',
   '        env:',
   "          NPM_CONFIG_PROVENANCE: 'true'",
+  '      - run: git config user.name "github-actions[bot]"',
+  '      - run: git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
   '      - run: git push origin --tags',
   '',
 ].join('\n')
@@ -173,6 +175,16 @@ test('release metadata requires the release workflow to push the release tags th
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
     '.github/workflows/release.yml must push the tags that changeset publish creates with `git push origin --tags`.',
+  ])
+})
+
+test('release metadata requires the release workflow to configure a git identity for the release tags', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('git config user.name "github-actions[bot]"', 'true'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must set git user.name and user.email before publishing, because changeset publish creates annotated tags.',
   ])
 })
 
