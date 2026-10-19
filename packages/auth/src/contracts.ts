@@ -630,6 +630,7 @@ export interface AuthRuntimeContext {
   setCachedUser(guardName: string, user: AuthenticatedAuthUser | null): void
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  canAppendResponseCookie?(): boolean | Promise<boolean>
   appendResponseCookie?(cookie: string): void | Promise<void>
   redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
   getAccessToken?(guardName: string): string | undefined

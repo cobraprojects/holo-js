@@ -2733,7 +2733,7 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
     expect(registered).not.toHaveProperty('password')
     const userId = registered.id
     if (userId === undefined) throw new Error('Registration did not return its generated user id')
-    const established = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(userId))
+    const established = await runtime.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => auth.loginUsingId(userId))
     await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(established.sessionId) : undefined }, async () => {
       expect(await auth.id()).toBe(registered.id)
       expect(await defaultRateLimitKey(new Request('https://runtime.test/requests'))).toBe('user:1')

@@ -87,11 +87,13 @@ import {
 import {
   COOKIE_WRITE_UNAVAILABLE,
   appendResponseCookies,
+  assertResponseCookiesWritable,
   isAuthResponseInterrupt,
   parseBearerToken,
   redirectResponse,
   resolveRequestCookie,
   resolveRequestHeader,
+  responseCookiesWritable,
 } from './runtime/requestAccess'
 import { authJwtInternals } from './runtime/jwt'
 import { normalizeRequestInput, resolveClientAddress } from './runtime/requestNormalization'
@@ -520,16 +522,6 @@ function isCookieWriteUnavailable(error: unknown): boolean {
   return (error as { readonly code?: unknown } | null)?.code === COOKIE_WRITE_UNAVAILABLE
 }
 
-async function writeRestoredSessionCookie(bindings: RuntimeBindings, cookie: string): Promise<boolean> {
-  try {
-    await appendResponseCookies(bindings, [cookie])
-    return true
-  } catch (error) {
-    if (isCookieWriteUnavailable(error)) return false
-    throw error
-  }
-}
-
 async function restoreRememberedSessionNow(
   bindings: RuntimeBindings,
   guardName: string,
@@ -549,33 +541,27 @@ async function restoreRememberedSessionNow(
     ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider, userId: user.id }, challengePending ? {} : sourcePayloads)
     : undefined
   if (!await stillCurrent()) return false
-  const payload = { ...toSessionPayload(guardName, provider, user), ...(revocation ? { revocation } : {}) }
-  if (challengePending) {
+  if (challengePending || !await responseCookiesWritable(bindings)) {
     setRequestOnlyGuard(bindings, guardName, true)
     bindings.context.setCachedUser(guardName, user)
     return true
   }
-  if (source) {
-    const merged = writeSessionPayloads(source.data, { ...sourcePayloads, [guardName]: payload })
-    await writeExistingSession(bindings, source, merged)
-    for (const name of guardNames) {
-      if (name === guardName || bindings.context.getSessionId(name) === source.id) bindings.context.setSessionId(name, source.id)
-    }
-    bindings.context.setCachedUser(guardName, user)
-    return true
+  for (const name of guardNames) {
+    const boundSessionId = bindings.context.getSessionId(name)
+    if (boundSessionId && !await bindings.session.read(boundSessionId)) bindings.context.setSessionId(name)
   }
-  const sessionId = randomUUID()
-  if (!await writeRestoredSessionCookie(bindings, bindings.session.sessionCookie(sessionId))) {
+  try {
+    await establishSessionForUser(user, {
+      guard: guardName,
+      provider,
+      preserveRemember: true,
+      ...(revocation ? { revocation } : {}),
+    })
+  } catch (error) {
+    if (!isCookieWriteUnavailable(error)) throw error
     setRequestOnlyGuard(bindings, guardName, true)
     bindings.context.setCachedUser(guardName, user)
-    return true
   }
-  await bindings.session.create({
-    id: sessionId,
-    data: writeSessionPayloads({}, { [guardName]: payload }),
-  })
-  bindings.context.setSessionId(guardName, sessionId)
-  bindings.context.setCachedUser(guardName, user)
   return true
 }
 
@@ -1115,6 +1101,7 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const state = await readGuardSessionState(guardName, true)
   const metadata = state?.payload.revocation
   if (!state || !metadata || state.payload.multiFactorChallengeExpiresAt) throwAuthError('auth_user_missing', 'Other-device logout requires valid browser authentication.')
+  if (!state.payload.impersonation && await getRememberRecaller(bindings, guardName)) await assertResponseCookiesWritable(bindings)
   const recaller = state.payload.impersonation ? undefined : await cycleRememberToken(state.payload.provider, state.payload.userId)
   const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
   clearSessionRevocationReads(bindings.context)
@@ -1161,13 +1148,15 @@ async function resolveUserFromGuard(
     if (requestOnlyUser) return requestOnlyUser
   }
 
-  const sessionId = bindings.context.getSessionId(guardName)
-  if (!sessionId) {
+  const touched = await queueRequestSession(bindings, async () => {
+    const sessionId = bindings.context.getSessionId(guardName)
+    return sessionId ? { sessionId, record: await bindings.session.touch(sessionId) } : undefined
+  })
+  if (!touched) {
     bindings.context.setCachedUser(guardName, null)
     return null
   }
-
-  const record = await queueRequestSession(bindings, () => bindings.session.touch(sessionId))
+  const { sessionId, record } = touched
   const payloads = record ? await filterRevokedSessionPayloads(bindings, record) : null
   const payload = payloads?.[guardName]
   if (!record || !payload || payload.guard !== guardName) {
@@ -1764,6 +1753,7 @@ async function completeMultiFactorChallenge(
   method: 'recovery' | 'totp',
   code: string,
 ): Promise<AuthEstablishedSession> {
+  await assertResponseCookiesWritable(getRuntimeBindings())
   await hydrateGuardContextFromRequest(guardName)
   const state = await readGuardSessionState(guardName)
   const expiresAt = state?.payload.multiFactorChallengeExpiresAt
@@ -1910,7 +1900,10 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
       const recoveryCodes = createMultiFactorRecoveryCodes(getRuntimeBindings().config.multiFactor.recoveryCodes)
       const now = new Date()
       const store = ensureMultiFactorStore()
+      const reissue = !state.payload.impersonation && Boolean(await getRememberRecaller(getRuntimeBindings(), guardName))
+      if (reissue) await assertResponseCookiesWritable(getRuntimeBindings())
       const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
+      if (!state.payload.impersonation) await reissueRememberRecaller(getRuntimeBindings(), guardName, recaller)
       try {
         await store.save(Object.freeze({
           provider: state.payload.provider,
@@ -1927,7 +1920,6 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
         }
         throw error
       }
-      if (!state.payload.impersonation) await reissueRememberRecaller(getRuntimeBindings(), guardName, recaller)
       try {
         await writeEnrollment(state, guardName)
       } catch (error) {
@@ -2091,6 +2083,13 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
 
   await checkRememberWriteScope(bindings, guardName)
   await hydrateGuardContextFromRequest(guardName)
+  if (
+    buildLogoutCookies(bindings, guardName, { clearSessionCookies: false }).length > 0
+    || bindings.context.getSessionId(guardName)
+    || await getRememberRecaller(bindings, guardName)
+  ) {
+    await assertResponseCookiesWritable(bindings)
+  }
 
   let clearSessionCookies = false
   const requestOnlyUser = isRequestOnlyGuard(bindings, guardName) ? bindings.context.getCachedUser(guardName) : undefined
@@ -2298,9 +2297,11 @@ async function establishSessionForUser(
     readonly remember?: boolean
     readonly preserveRemember?: boolean
     readonly payload?: SessionAuthPayload
+    readonly revocation?: NonNullable<SessionAuthPayload['revocation']>
   },
 ): Promise<AuthEstablishedSession> {
   const bindings = getRuntimeBindings()
+  await assertResponseCookiesWritable(bindings)
   if (!options.preserveRemember || options.remember) {
     await checkRememberWriteScope(bindings, options.guard, options.remember)
   }
@@ -2320,9 +2321,9 @@ async function establishSessionForUser(
         || bindings.context.getSessionId(name) === existingSession.id
       ))
     : []
-  const revocation = bindings.sessionRevocations
+  const revocation = options.revocation ?? (bindings.sessionRevocations
     ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider: options.provider, userId: user.id }, existingPayloads)
-    : undefined
+    : undefined)
   const sessionPayload = {
     ...(options.payload ?? toSessionPayload(options.guard, options.provider, user)),
     ...(revocation ? { revocation } : {}),
@@ -3112,7 +3113,8 @@ export async function providerForGuard(guardName: string): Promise<string | null
     return readMarkedProvider(authenticatedUser)!
   }
 
-  const sessionId = bindings.context.getSessionId(guardName)!
+  const sessionId = bindings.context.getSessionId(guardName)
+  if (!sessionId) return guard.provider
 
   const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
 

@@ -187,8 +187,6 @@ export interface RealtimeSubscribeOptions<TResult> {
 export interface RealtimeAuthRequestAccessors {
   getCookie(name: string): Promise<string | undefined>
   getHeader(name: string): Promise<string | undefined>
-  appendResponseCookie(cookie: string): Promise<void>
-  redirectResponse(url: string, status?: 301 | 302 | 303 | 307 | 308): Promise<void>
 }
 
 export interface RealtimeExecutionOptions {

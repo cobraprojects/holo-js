@@ -118,6 +118,7 @@ beforeEach(async () => {
     context: {
       ...asyncContext,
       getRequestCookie: accessors.getCookie,
+      canAppendResponseCookie: accessors.canAppendResponseCookie,
       appendResponseCookie: accessors.appendResponseCookie,
     },
   })
@@ -127,6 +128,12 @@ afterEach(async () => {
   resetAuthRuntime()
   resetSessionRuntime()
   await rm(directory, { recursive: true, force: true })
+})
+
+it('refuses sign-in outside a Next.js request scope and persists no session', async () => {
+  const before = await sessionRecordCount()
+  await expect(asyncContext.run(() => auth.guard('web').loginUsingId(1))).rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+  expect(await sessionRecordCount()).toBe(before)
 })
 
 it('restores a remembered user in Server Component renders without persisting sessions, and persists in a writable request', async () => {

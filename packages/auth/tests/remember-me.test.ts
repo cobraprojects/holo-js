@@ -324,7 +324,7 @@ describe('remember me', () => {
 
     const sessionOnly = new Browser()
     sessionOnly.cookies.set('holo_session', liveSession!)
-    await expect(sessionOnly.request(() => auth.check())).resolves.toBe(true)
+    await expect(sessionOnly.request(() => auth.check())).resolves.toBe(false)
   })
 
   it('restores several guards into one session within a request', async () => {
@@ -392,6 +392,24 @@ describe('remember me', () => {
       .rejects.toMatchObject({ code: 'cookie_write_unavailable' })
     await expect(storage.run(authRuntimeInternals.createMemoryAuthContext(), () => auth.logout()))
       .rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+  })
+
+  it('rotates a planted session ID when remember restoration persists, so the planted ID no longer authenticates', async () => {
+    const victim = new Browser()
+    await victim.request(() => auth.loginUsingId(1, { remember: true }))
+    victim.expireSession()
+    const planted = await getSessionRuntime().create({ data: {} })
+    victim.receive(getSessionRuntime().sessionCookie(planted.id))
+
+    await expect(victim.request(() => auth.check())).resolves.toBe(true)
+
+    const restoredId = victim.cookies.get('holo_session')
+    expect(restoredId).toEqual(expect.any(String))
+    expect(restoredId).not.toBe(planted.id)
+    await expect(getSessionRuntime().read(planted.id)).resolves.toBeNull()
+    const replay = new Browser()
+    replay.cookies.set('holo_session', planted.id)
+    await expect(replay.request(() => auth.check())).resolves.toBe(false)
   })
 
   it('restores several guards checked concurrently into one session', async () => {

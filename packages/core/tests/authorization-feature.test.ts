@@ -80,6 +80,8 @@ if (!draft) {
 
 const published = await Post.where('slug', 'shipping-a-real-holo-blog-on-next').firstOrFail()
 
+const scriptContext = authRuntimeInternals.getRuntimeBindings()
+configureAuthRuntime({ ...scriptContext, context: { ...scriptContext.context, canAppendResponseCookie: () => true, appendResponseCookie: () => undefined } })
 const session = await auth.loginUsingId(editorId)
 const bindings = authRuntimeInternals.getRuntimeBindings()
 const freshContext = authRuntimeInternals.createAsyncAuthContext()

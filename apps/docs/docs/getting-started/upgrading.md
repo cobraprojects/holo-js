@@ -269,6 +269,7 @@ Behavior changes to expect:
 - Changing the user's password also stops their remember-me cookies.
 - Signing in without remember me clears that browser's remember-me cookie but keeps the user's token, so a copy of the cookie keeps working until `logout()`, `logoutOtherDevices()`, or a password change.
 - With multi-factor auth, the remember-me cookie is set after the user passes the challenge, not when they enter their password.
+- A custom `AuthRuntimeContext` can report whether it can set cookies with `canAppendResponseCookie()`. Auth checks it before any side effect. Without it, Auth uses whether `appendResponseCookie` exists.
 - A custom `AuthRuntimeContext` that omits `appendResponseCookie` can no longer log users in or out. The calls throw `cookie_write_unavailable`, the same error a read-only Next.js render raises. Provide a response cookie writer in every request context that signs users in or out.
 - Confirming multi-factor enrollment ends remember-me cookies issued before it, so the user signs in with the challenge the next time. The browser that confirmed enrollment stays signed in.
 

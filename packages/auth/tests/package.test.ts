@@ -757,6 +757,58 @@ describe('@holo-js/auth package runtime', () => {
     await expect(restoreFrom(rememberCookieValue(enrollingRecaller))).resolves.toBe(true)
   })
 
+  it('refuses MFA enrollment confirmation for a remembered user in a read-only context and keeps the enrollment retryable', async () => {
+    const runtime = await configureRuntime({ multiFactor: true })
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await loginUsing(created, { remember: true })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    const readOnly = Object.assign(new Error('Authentication cookies cannot be set in this request context.'), { code: 'cookie_write_unavailable' })
+    Object.assign(runtime.context, { canAppendResponseCookie: () => false, appendResponseCookie: () => { throw readOnly } })
+
+    await expect(auth.multiFactor.confirmEnrollment({ code })).rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.toBeNull()
+
+    Object.assign(runtime.context, { canAppendResponseCookie: () => true, appendResponseCookie: () => undefined })
+    const recovery = await auth.multiFactor.confirmEnrollment({ code })
+    expect(recovery.recoveryCodes).toHaveLength(8)
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.not.toBeNull()
+  })
+
+  it('keeps the recovery codes and the enrollment retryable when the response cookie writer rejects at MFA refresh', async () => {
+    const runtime = await configureRuntime({ multiFactor: true })
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await loginUsing(created, { remember: true })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    let rejectNextWrite = true
+    Object.assign(runtime.context, {
+      appendResponseCookie: () => {
+        if (rejectNextWrite) {
+          rejectNextWrite = false
+          throw new Error('response cookies rejected')
+        }
+      },
+    })
+
+    await expect(auth.multiFactor.confirmEnrollment({ code })).rejects.toThrow('response cookies rejected')
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.toBeNull()
+
+    const recovery = await auth.multiFactor.confirmEnrollment({ code })
+    expect(recovery.recoveryCodes).toHaveLength(8)
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.not.toBeNull()
+  })
+
   it('enrolls, challenges, rejects TOTP replay, and consumes recovery codes atomically', async () => {
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
