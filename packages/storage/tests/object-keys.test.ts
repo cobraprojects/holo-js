@@ -187,6 +187,8 @@ describe('local file names', () => {
 
     await expect(disk.put('prices.json$', 'conflict')).rejects.toThrow('ending in "$" are reserved')
     await expect(disk.get('prices.json$')).rejects.toThrow('ending in "$" are reserved')
+    await expect(disk.get('prices.json$/')).rejects.toThrow('ending in "$" are reserved')
+    await expect(disk.put('/prices.json$//', 'conflict')).rejects.toThrow('ending in "$" are reserved')
     await expect(disk.getMeta?.('prices.json')).resolves.toEqual({ owner: 'billing' })
     await expect(disk.listFiles()).resolves.toEqual({ nextCursor: null, paths: ['prices.json'] })
   })

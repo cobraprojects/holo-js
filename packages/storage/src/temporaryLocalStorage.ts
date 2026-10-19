@@ -15,7 +15,7 @@ function isLocalDisk(disk: RuntimeDiskConfig | undefined): disk is LocalDisk {
 }
 
 function isSafeSegment(segment: string): boolean {
-  return segment.length > 0 && segment !== '.' && segment !== '..' && !/[\\/]/u.test(segment) && !segment.includes('\u0000')
+  return segment.length > 0 && segment !== '.' && segment !== '..' && !/[\\/]/u.test(segment) && !segment.includes('\u0000') && !(process.platform === 'win32' && segment.includes(':'))
 }
 
 export function createTemporaryLocalStorageUrl(

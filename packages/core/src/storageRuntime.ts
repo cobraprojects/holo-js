@@ -35,7 +35,7 @@ export function resolveStorageKeyPath(root: string, key: string): string {
     throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
   }
 
-  if (segments.some(segment => segment === '.' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
+  if (segments.some(segment => segment === '.' || /[\\/]/u.test(segment) || segment.includes('\u0000') || (process.platform === 'win32' && segment.includes(':')))) {
     throw new Error('[Holo Storage] Storage path segments must be file or folder names.')
   }
 
@@ -219,15 +219,19 @@ async function decodeLocalStorageNames(root: string): Promise<StorageNameDecodin
     const entries = (await readdir(resolvedDirectory, { withFileTypes: true }))
       .filter(entry => entry.isDirectory() || entry.isFile())
       .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    const skippedNames = new Set<string>()
     for (const entry of entries) {
       let name = entry.name
       const decoded = decodeLegacyStorageEntryName(entry)
       if (decoded !== null) {
         const from = [...segments, entry.name].join('/')
         const to = [...segments, decoded].join('/')
+        const isMetadata = entry.isFile() && entry.name.endsWith('$')
         const reason = storageNameDecodingSkipReason(entry, decoded)
+          ?? (isMetadata && skippedNames.has(entry.name.slice(0, -1)) ? 'its file was skipped' : null)
           ?? (await storagePathExists(join(resolvedDirectory, decoded)) ? `"${to}" already exists` : null)
         if (reason) {
+          skippedNames.add(entry.name)
           skipped.push({ path: from, reason })
         } else {
           await rename(join(resolvedDirectory, entry.name), join(resolvedDirectory, decoded))

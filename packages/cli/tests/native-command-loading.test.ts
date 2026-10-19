@@ -231,6 +231,7 @@ it('decodes URL-encoded local storage names through the actual CLI once', async 
     await write('storage/app/price%24', 'reserved')
     await write('storage/app/dup%20name.txt', 'encoded')
     await write('storage/app/dup name.txt', 'literal')
+    await write('storage/app/dup%20name.txt$', '{"owner":"encoded"}')
     await write('outside/secret%20file.txt', 'outside')
     await symlink(join(root, 'outside'), join(root, 'storage/app/escape'))
 
@@ -241,10 +242,11 @@ it('decodes URL-encoded local storage names through the actual CLI once', async 
     expect(first.stdout).toContain('[storage] Skipped "100%2520off.txt": the decoded name still looks URL-encoded, so rename it by hand.')
     expect(first.stdout).toContain('[storage] Skipped "price%24": local file names ending in "$" are reserved for metadata.')
     expect(first.stdout).toContain('[storage] Skipped "dup%20name.txt": "dup name.txt" already exists.')
+    expect(first.stdout).toContain('[storage] Skipped "dup%20name.txt$": its file was skipped.')
     expect(first.stdout).toContain('[storage] Renamed "Q1%20plan.pdf$" to "Q1 plan.pdf$".')
     expect(first.stdout).toContain('[storage] Renamed 4 names on disk "local".')
     expect((await readdir(join(root, 'storage/app'))).sort()).toEqual([
-      '100%2520off.txt', 'Already literal.txt', 'May report.csv', 'Q1 plan.pdf$', 'dup name.txt', 'dup%20name.txt', 'escape', 'nested folder', 'plain.txt', 'price%24',
+      '100%2520off.txt', 'Already literal.txt', 'May report.csv', 'Q1 plan.pdf$', 'dup name.txt', 'dup%20name.txt', 'dup%20name.txt$', 'escape', 'nested folder', 'plain.txt', 'price%24',
     ])
     expect((await readdir(join(root, 'storage/app/nested folder'))).sort()).toEqual(['café ☕.txt', 'notes.txt$'])
     await expect(readFile(join(root, 'storage/app/nested folder/café ☕.txt'), 'utf8')).resolves.toBe('coffee')

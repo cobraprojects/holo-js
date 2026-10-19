@@ -768,7 +768,7 @@ npx holo storage:decode-names --disk=local
 | --- | --- |
 | `--disk=<name>` | The local disk to rename files on. Required. |
 
-It prints every rename and every file it skips, then the total. Running it again renames nothing. It skips:
+It prints every rename and every file it skips, then the total. Running it again right away renames nothing. Run it before new uploads arrive: a file uploaded after the upgrade under a name that looks URL-encoded, such as `May%20report.csv`, would be renamed by a later run. It skips:
 
 - a name that still looks URL-encoded after decoding, such as `100%2520off.txt`, because Holo can't tell what the original name was;
 - a name whose decoded form already exists;

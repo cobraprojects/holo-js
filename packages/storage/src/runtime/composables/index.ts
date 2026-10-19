@@ -215,7 +215,7 @@ function normalizeKey(input: string): string {
 
 function normalizeFileKey(input: string, driver: RuntimeDiskConfig['driver']): string {
   const key = normalizeKey(input)
-  if (driver !== 's3' && normalizeRelativePath(input).endsWith('$')) {
+  if (driver !== 's3' && normalizeRelativePath(input).split('/').filter(Boolean).at(-1)?.endsWith('$')) {
     throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
   }
 
@@ -321,7 +321,7 @@ function joinUrl(base: string, path: string): string {
 
 function joinFilePath(base: string, path: string): string {
   const normalizedBase = base.replace(/\/+$/, '')
-  normalizeKey(path)
+  assertNoTraversal(path)
   const normalizedPath = normalizeRelativePath(path).split('/').filter(Boolean).join('/')
 
   if (!normalizedPath) {

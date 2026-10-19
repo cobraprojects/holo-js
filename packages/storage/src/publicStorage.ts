@@ -130,7 +130,7 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
 
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
-  if (!segments?.length || segments.at(-1)?.endsWith('$') || segments.some(segment => segment === '.' || segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000'))) {
+  if (!segments?.length || segments.at(-1)?.endsWith('$') || segments.some(segment => segment === '.' || segment === '..' || /[\\/]/u.test(segment) || segment.includes('\u0000') || (process.platform === 'win32' && segment.includes(':')))) {
     return null
   }
 

@@ -55,7 +55,7 @@ npx holo storage:decode-names --disk=local
 npx holo storage:decode-names --disk=public
 ```
 
-The command prints what it renamed and what it skipped, and running it again changes nothing. Rename skipped files by hand. See [storage:decode-names](/reference/cli#storage-decode-names).
+The command prints what it renamed and what it skipped, and running it again right away changes nothing. Run it once, before new uploads arrive, and rename skipped files by hand. See [storage:decode-names](/reference/cli#storage-decode-names).
 
 Low-level keys still use `:` between folders, but only `%`, `:`, and `$` are escaped inside a name, so the key for `reports/Q1 café.pdf` is `reports:Q1 café.pdf` instead of `reports:Q1%20caf%C3%A9.pdf`. Old-style keys still read the same file. On local disks, file names ending in `$` are now reserved for metadata, so `put('prices.json$', ...)` throws an error.
 

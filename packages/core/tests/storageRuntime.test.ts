@@ -161,6 +161,20 @@ describe('@holo-js/core local storage safety', () => {
     await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
   })
 
+  it('rejects low-level keys whose decoded names leave the disk root', async () => {
+    const { storage, outside } = await configureLocalDisk()
+    await writeFile(join(outside, 'private.txt'), 'private')
+    const local = useStorage('local')
+
+    for (const key of ['%2E%2E:outside:private.txt', 'reports%2F..%2F..%2Foutside:private.txt', 'private%00.txt', '%2E']) {
+      await expect(local.getItemRaw(key)).rejects.toThrow('[Holo Storage]')
+      await expect(local.setItemRaw(key, 'overwritten')).rejects.toThrow('[Holo Storage]')
+      await expect(local.removeItem(key)).rejects.toThrow('[Holo Storage]')
+    }
+    await expect(readFile(join(outside, 'private.txt'), 'utf8')).resolves.toBe('private')
+    await expect(readdir(storage)).resolves.toEqual([])
+  })
+
   it('refuses to delete a symlinked file that points outside the disk root', async () => {
     const { storage, outside } = await configureLocalDisk()
     await writeFile(join(outside, 'private.txt'), 'private')

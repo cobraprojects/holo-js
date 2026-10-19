@@ -12,3 +12,4 @@ Recorded departures:
 - Password and sensitive fields are stripped from validation failures at every depth, including arrays, because Holo echoes submitted values in 422 response bodies and exception payloads, while Laravel flashes input only into the server-side session.
 - The Nuxt form-failure cookie carries errors but no submitted values, because it is a client-readable cookie rather than Laravel's server-side session.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.
+- Local disk file names ending in `$` are reserved, because Holo keeps low-level metadata in `<name>$` sidecar files on local disks, while Flysystem has no metadata sidecars.
