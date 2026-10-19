@@ -810,7 +810,8 @@ function getSessionTokenFromRequest(request: Request, sessionCookie: string): st
 }
 
 function getHoloSessionIdFromRequest(request: Request): string | null {
-  const cookieHeader = authRuntimeInternals.getRuntimeBindings().session.sessionCookie('')
+  const { session } = authRuntimeInternals.getRuntimeBindings()
+  const cookieHeader = session.sessionCookie('')
   const separator = cookieHeader.indexOf('=')
   const cookieName = separator > 0
     ? decodeURIComponent(cookieHeader.slice(0, separator))
@@ -819,8 +820,8 @@ function getHoloSessionIdFromRequest(request: Request): string | null {
     return null
   }
 
-  const cookies = parseCookieHeader(request.headers.get('cookie'))
-  return cookies[cookieName] ?? null
+  const value = parseCookieHeader(request.headers.get('cookie'))[cookieName]
+  return value ? session.decryptCookie(cookieName, value) ?? null : null
 }
 
 async function reuseExistingHoloSession(

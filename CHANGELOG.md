@@ -22,6 +22,7 @@
 - Make email-verification and password-reset token redemption single-use under concurrent requests. Coordinate the claim and user mutation transactionally when Core proves they share the same database context. Password reset also revokes sibling tokens for the same provider, email and broker table before user mutation.
 - Fail closed after authenticated-session transition failures: invalidate the new session, clear affected request identities, keep the previous session identifier invalidated, and report cleanup failures alongside the original error. Ordinary login and rotation preserve other devices' authentication.
 - Make token-guard `logout()` revoke its verified current token before clearing request identity. A deletion failure rejects logout and preserves that request identity; other tokens and browser sessions remain valid.
+- Encrypt the cookies Holo sets (session, remember-me and `XSRF-TOKEN`) with AES-256-GCM keyed from `APP_KEY`, bound to each cookie name. Changed, swapped, plaintext or foreign-key cookies are treated as absent. CSRF tokens are random values protected by the encrypted cookie instead of an HMAC signature; the `_token` field and `X-CSRF-TOKEN` header accept the plain token or the cookie value. Application cookies are not encrypted. See [Encrypted session, remember-me, and CSRF cookies](apps/docs/docs/getting-started/upgrading.md#encrypted-session-remember-me-and-csrf-cookies).
 
 ### Changed
 
@@ -35,6 +36,8 @@
 - Default native database pools use UTC timestamp handling: MySQL defaults its timezone to `Z` and sets connection time to UTC for that default; PostgreSQL parses text timestamps without timezone as UTC unless custom type parsers are configured.
 
 ### Compatibility and upgrade requirements
+
+- **Users are signed out once when they upgrade.** Session, remember-me and `XSRF-TOKEN` cookies set by 0.3.x can't be decrypted, and the first form submitted with an old CSRF cookie gets `419`. `APP_KEY` is required wherever Holo sets these cookies.
 
 - **Migrate before deploying the updated Core Auth integration.** Existing applications must add and apply the `auth_session_revocations` migration using `npx holo migrate`. New Auth scaffolds include it. This durable table is required independently of whether sessions use database, file or Redis storage; missing-table and persistence errors propagate explicitly. The documented MySQL migration requires **MySQL 8.0.17 or later** and exact binary identity comparison.
 - **Existing browser users must sign in again on adoption.** Authenticated browser payloads without logical-session and generation metadata are rejected when revocation persistence is enabled, including old remember-cookie payloads. **Existing personal access tokens remain valid.** No session enumeration or store cleanup is required. See [existing application rollout](apps/docs/docs/auth/session-and-cookies.md#existing-application-rollout) for the migration and deployment instructions.

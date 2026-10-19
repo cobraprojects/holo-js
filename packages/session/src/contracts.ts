@@ -71,6 +71,7 @@ export interface SessionStore {
 export interface SessionRuntimeBindings {
   readonly config: NormalizedHoloSessionConfig
   readonly stores: Readonly<Record<string, SessionStore>>
+  readonly appKey?: string
 }
 
 export interface SessionRuntimeFacade {
@@ -87,6 +88,7 @@ export interface SessionRuntimeFacade {
   cookie(name: string, value: string, options?: CookieSerializeOptions): string
   sessionCookie(value: string, options?: CookieSerializeOptions): string
   rememberMeCookie(value: string, options?: CookieSerializeOptions): string
+  decryptCookie(name: string, value: string): string | undefined
 }
 
 export interface SessionCookieHelpers {
