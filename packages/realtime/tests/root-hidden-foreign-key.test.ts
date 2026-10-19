@@ -88,4 +88,43 @@ describe('realtime hidden root foreign keys', () => {
     expect(reads).toBe(1)
     expect(snapshots.at(-1)).toEqual(await handler())
   })
+
+  it('refreshes a hidden root foreign key in an offset window instead of patching it', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    await db.table('posts').insert([{ id: 2, title: 'Second', author_id: 2 }, { id: 3, title: 'Third', author_id: 2 }])
+    const Author = defineModel(defineGeneratedTable('authors', { id: column.id(), name: column.string() }), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      hidden: ['author_id'],
+      relations: { author: belongsTo(() => Author, 'author_id') },
+    })
+    let reads = 0
+    const handler = () => {
+      reads += 1
+      return db.model(Post).query().with('author').orderBy('id').offset(1).limit(1).getJson()
+    }
+    const snapshots: unknown[] = []
+    const patches: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onPatch: patch => { patches.push(patch) },
+      onError: error => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table('posts').where('id', 2).update({ author_id: 1 }),
+    }))
+
+    expect(reads).toBe(2)
+    expect(JSON.stringify(patches)).not.toContain('author_id')
+    expect(JSON.stringify(snapshots.at(-1))).not.toContain('author_id')
+    expect(snapshots.at(-1)).toEqual(await handler())
+  })
 })

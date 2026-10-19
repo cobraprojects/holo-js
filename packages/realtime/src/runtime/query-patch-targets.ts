@@ -378,6 +378,10 @@ function selectQueryPatchCapability(
   rowPatchMode: RowPatchMode | undefined,
   skipsPatching: boolean,
 ): QueryPatchCapability {
+  if (query.serialized) {
+    return 'refresh'
+  }
+
   if (skipsPatching) {
     return query.patchable && (rowPatchMode === 'rows' || rowPatchMode === 'offset-window') ? 'patchable' : 'refresh'
   }
