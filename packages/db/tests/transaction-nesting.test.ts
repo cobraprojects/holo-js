@@ -264,4 +264,43 @@ describe('transaction nesting and commit integrity', () => {
     expect(calls.first + calls.second).toBe(3)
     expect(await db.table(table).orderBy('id').pluck('id')).toEqual([1, 2])
   }, 20_000)
+
+  it.each(drivers)('runs savepoint rollback callbacks outside the savepoint queue on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.transaction(async outer => {
+      await outer.transaction(async inner => {
+        inner.afterRollback(async () => {
+          await outer.transaction(async work => {
+            await work.table(table).insert({ id: 9, name: 'Callback' })
+          })
+        })
+        throw new Error('inner abort')
+      }).catch(() => undefined)
+    })
+    expect(await db.table(table).pluck('name')).toEqual(['Callback'])
+  }, 5_000)
+
+  it.each(drivers)('joins the open transaction for work that resumes after its savepoint finished on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    const committed: string[] = []
+    let resume!: () => void
+    const gate = new Promise<void>((done) => { resume = done })
+    let late: Promise<void> | undefined
+    await db.transaction(async outer => {
+      await outer.transaction(async inner => {
+        late = (async () => {
+          await gate
+          await db.transaction(async work => {
+            work.afterCommit(() => { committed.push('late') })
+            await work.table(table).insert({ id: 2, name: 'Late' })
+          })
+        })()
+        await inner.table(table).insert({ id: 1, name: 'Inner' })
+      })
+      resume()
+      await late
+    })
+    expect(committed).toEqual(['late'])
+    expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Inner', 'Late'])
+  }, 5_000)
 })

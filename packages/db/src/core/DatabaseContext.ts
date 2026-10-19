@@ -67,6 +67,10 @@ type CommittedRootTransaction<T> = {
   entry: TransactionLog
 }
 
+type SavepointOutcome<T> =
+  | { committed: true, value: T, entry: TransactionLog }
+  | { committed: false, error: unknown, transaction: DatabaseContext, entry: TransactionLog }
+
 type ContextInternals = {
   rootContext: DatabaseContext
   contextId: number
@@ -355,6 +359,9 @@ export class DatabaseContext {
     await this.initialize()
     const active = this._findAmbientTransaction()
     const executor = active && (this._scope.kind === 'root' || active._isDescendantOf(this)) ? active : this
+    if (executor._scope.kind !== 'root' && !executor._isActiveTransaction()) {
+      throw new TransactionError('Cannot start a transaction on a transaction connection that has finished.')
+    }
     executor._assertValidOperationOptions(options)
     executor._assertValidTransactionOptions(options)
     executor._throwIfAborted(options?.signal, 'transaction')
@@ -375,11 +382,29 @@ export class DatabaseContext {
 
   private _findAmbientTransaction(): DatabaseContext | undefined {
     const active = connectionAsyncContext.getActive()?.connection
-    if (!active || active._scope.kind === 'root' || !active._transactionFrame?.open) {
+    if (!active || getRootDatabaseContext(active) !== getRootDatabaseContext(this)) {
       return undefined
     }
 
-    return getRootDatabaseContext(active) === getRootDatabaseContext(this) ? active : undefined
+    for (let current: DatabaseContext | undefined = active; current && current._scope.kind !== 'root'; current = current._parent) {
+      if (current._isActiveTransaction()) {
+        return current
+      }
+    }
+
+    return undefined
+  }
+
+  private _isActiveTransaction(): boolean {
+    if (this._scope.kind === 'root') {
+      return true
+    }
+
+    if (this._transactionFrame?.open !== true) {
+      return false
+    }
+
+    return this._parent?._isActiveTransaction() ?? true
   }
 
   private async _runRootTransactionWithAttempts<T>(
@@ -509,13 +534,20 @@ export class DatabaseContext {
       )
     }
 
-    return runSerialized(this._savepointQueue, () => this._runSavepoint(callback, options))
+    const outcome = await runSerialized(this._savepointQueue, () => this._runSavepoint(callback, options))
+    if (outcome.committed) {
+      await this._logger?.onTransactionCommit?.(outcome.entry)
+      return outcome.value
+    }
+
+    await this._settleRolledBackTransaction(outcome.transaction, outcome.entry, outcome.error)
+    throw outcome.error
   }
 
   private async _runSavepoint<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
     options?: DatabaseTransactionOptions,
-  ): Promise<T> {
+  ): Promise<SavepointOutcome<T>> {
     const savepointName = `sp_${this._runtime.savepointCounter}`
     this._runtime.savepointCounter += 1
 
@@ -532,16 +564,17 @@ export class DatabaseContext {
       options,
       savepointName,
     )
+    const frame: TransactionFrame = { open: true }
     const tx = this._createChildContext({
       kind: 'savepoint',
       depth: this._scope.depth + 1,
       savepointName,
-    }, this._createTransactionCallbackState(), this._transactionFrame)
+    }, this._createTransactionCallbackState(), frame)
     let released = false
     beginSchemaMutationScope(tx, this)
 
     try {
-      const result = await this._runTransactionCallback(tx, callback)
+      const value = await this._runTransactionCallback(tx, callback)
       await this._callTransactionHook(
         'releaseSavepoint',
         () => this._adapter.releaseSavepoint!(savepointName),
@@ -551,8 +584,7 @@ export class DatabaseContext {
       released = true
       commitSchemaMutationScope(tx)
       this._mergeCommittedTransactionCallbacks(tx)
-      await this._logger?.onTransactionCommit?.(entry)
-      return result
+      return { committed: true, value, entry }
     } catch (error) {
       if (released) {
         throw error
@@ -574,8 +606,9 @@ export class DatabaseContext {
         throw rollbackError
       }
       rollbackSchemaMutationScope(tx)
-      await this._settleRolledBackTransaction(tx, entry, error)
-      throw error
+      return { committed: false, error, transaction: tx, entry }
+    } finally {
+      frame.open = false
     }
   }
 
@@ -634,7 +667,7 @@ export class DatabaseContext {
     type: keyof TransactionCallbackState,
     callback: TransactionCallback,
   ): void {
-    if (this._scope.kind === 'root' || !this._transactionCallbacks) {
+    if (this._scope.kind === 'root' || !this._transactionCallbacks || !this._isActiveTransaction()) {
       throw new TransactionError(
         `Cannot register ${type} callbacks outside an active transaction.`,
       )
