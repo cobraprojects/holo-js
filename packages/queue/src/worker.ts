@@ -1,19 +1,20 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
-import type {
-  QueueAsyncDriver,
-  QueueClearInput,
-  QueueDriver,
-  QueueJobDefinition,
-  QueueJobEnvelope,
-  QueueJsonValue,
-  QueueReservedJob,
-  QueueWorkerJobEvent,
-  QueueWorkerOptions,
-  QueueWorkerResult,
-  QueueWorkerRunOptions,
+import {
+  QUEUE_TIMER_MAX_SECONDS,
+  queueJobInternals,
+  type QueueAsyncDriver,
+  type QueueClearInput,
+  type QueueDriver,
+  type QueueJobEnvelope,
+  type QueueJsonValue,
+  type QueueReservedJob,
+  type QueueWorkerJobEvent,
+  type QueueWorkerOptions,
+  type QueueWorkerResult,
+  type QueueWorkerRunOptions,
 } from './contracts'
-import { DEFAULT_QUEUE_NAME } from './config'
+import { DEFAULT_QUEUE_NAME, assertQueueTimeoutBelowRetryAfter } from './config'
 import { getRegisteredQueueJob } from './registry'
 import { queueRuntimeInternals } from './runtime'
 
@@ -68,6 +69,7 @@ function normalizeQueueNames(
 function normalizeNonNegativeInteger(
   value: number | undefined,
   label: string,
+  options: { maximum?: number } = {},
 ): number | undefined {
   if (typeof value === 'undefined') {
     return undefined
@@ -75,6 +77,10 @@ function normalizeNonNegativeInteger(
 
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`[Holo Queue] ${label} must be a non-negative integer.`)
+  }
+
+  if (typeof options.maximum === 'number' && value > options.maximum) {
+    throw new Error(`[Holo Queue] ${label} must be less than or equal to ${options.maximum}.`)
   }
 
   return value
@@ -110,10 +116,9 @@ function createWorkerEvent(
 }
 
 function resolveRetryDelaySeconds(
-  definition: QueueJobDefinition,
+  backoff: number | readonly number[] | undefined,
   attempt: number,
 ): number | undefined {
-  const { backoff } = definition
   if (typeof backoff === 'undefined') {
     return undefined
   }
@@ -191,7 +196,7 @@ async function failReservedJob(
 async function processReservedJob(
   driver: QueueAsyncDriver,
   reserved: QueueReservedJob<QueueJsonValue>,
-  options: Pick<QueueWorkerRunOptions, 'timeout' | 'tries' | 'onJobFailed' | 'onJobProcessed' | 'onJobReleased'>,
+  options: Pick<QueueWorkerRunOptions, 'timeout' | 'tries' | 'backoff' | 'onJobFailed' | 'onJobProcessed' | 'onJobReleased'>,
 ): Promise<QueueWorkerProcessingOutcome> {
   const envelope = reserved.envelope
   const registered = getRegisteredQueueJob(envelope.name)
@@ -212,6 +217,20 @@ async function processReservedJob(
   }
 
   const definition = registered.definition
+  const timeoutSeconds = options.timeout ?? definition.timeout
+  try {
+    assertQueueTimeoutBelowRetryAfter(
+      `Queue job "${envelope.name}"`,
+      timeoutSeconds,
+      queueRuntimeInternals.resolveConnectionConfig(queueRuntimeInternals.getQueueRuntimeState().config, envelope.connection),
+    )
+  } catch (error) {
+    return await failReservedJob(driver, reserved, event, options, {
+      error: normalizeHandlerError(error),
+      runJobFailedHook: true,
+    })
+  }
+
   const executionState = {
     timedOut: false,
   }
@@ -243,7 +262,7 @@ async function processReservedJob(
         },
       }),
       envelope.name,
-      options.timeout ?? definition.timeout,
+      timeoutSeconds,
       () => {
         executionState.timedOut = true
       },
@@ -252,14 +271,20 @@ async function processReservedJob(
     handlerError = normalizeHandlerError(error)
   }
 
-  const failure = handlerError instanceof QueueWorkerTimeoutError
-    ? handlerError
-    : requestedFailure ?? handlerError
+  // Decide from the worker's own timer, not the error class: a handler can throw a QueueWorkerTimeoutError itself.
+  if (executionState.timedOut && handlerError) {
+    if (definition.failOnTimeout === true) {
+      await failReservedJob(driver, reserved, event, options, { error: handlerError, runJobFailedHook: true })
+    }
+
+    throw handlerError
+  }
+
+  const failure = requestedFailure ?? handlerError
+  const backoff = definition.backoff ?? options.backoff
   let outcome: QueueWorkerProcessingOutcome
 
-  if (handlerError instanceof QueueWorkerTimeoutError) {
-    outcome = { kind: 'failed', error: handlerError }
-  } else if (action === 'release') {
+  if (action === 'release') {
     outcome = {
       kind: 'released',
       ...(typeof requestedReleaseDelay === 'number' ? { delaySeconds: requestedReleaseDelay } : {}),
@@ -270,7 +295,7 @@ async function processReservedJob(
       ? { kind: 'failed', error: failure }
       : {
           kind: 'released',
-          delaySeconds: resolveRetryDelaySeconds(definition, event.attempt),
+          delaySeconds: resolveRetryDelaySeconds(backoff, event.attempt),
           error: failure,
         }
   } else {
@@ -337,8 +362,11 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
     connectionName,
   )
   const queueNames = normalizeQueueNames(options.queueNames, connection.queue)
-  const sleepSeconds = normalizeNonNegativeInteger(options.sleep, 'Queue worker sleep')
+  const sleepSeconds = normalizeNonNegativeInteger(options.sleep, 'Queue worker sleep', { maximum: QUEUE_TIMER_MAX_SECONDS })
     ?? ('sleep' in connection && typeof connection.sleep === 'number' ? connection.sleep : 1)
+  const timeout = normalizeNonNegativeInteger(options.timeout, 'Queue worker timeout', { maximum: QUEUE_TIMER_MAX_SECONDS })
+  assertQueueTimeoutBelowRetryAfter('Queue worker', timeout, connection)
+  const backoff = queueJobInternals.normalizeBackoff(options.backoff)
   const maxJobs = normalizePositiveInteger(options.maxJobs, 'Queue worker maxJobs')
   const maxTime = normalizePositiveInteger(options.maxTime, 'Queue worker maxTime')
   const workerId = options.workerId?.trim() || randomUUID()
@@ -355,6 +383,7 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
     maxJobs,
     maxTime,
   }
+  const jobOptions = { ...options, timeout, backoff }
 
   while (true) {
     if (await options.shouldStop?.()) {
@@ -414,7 +443,7 @@ export async function runQueueWorker(options: QueueWorkerRunOptions = {}): Promi
       continue
     }
 
-    const outcome = await processReservedJob(driver, reserved as QueueReservedJob<QueueJsonValue>, options)
+    const outcome = await processReservedJob(driver, reserved as QueueReservedJob<QueueJsonValue>, jobOptions)
       .catch((error: unknown) => {
         abandonReservation(driver, reserved)
         throw error

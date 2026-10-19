@@ -86,6 +86,7 @@ import {
   type MailStorageAttachmentHelperOptions,
   type ResolvedMailAttachment,
 } from './contracts-types'
+import { normalizeOptionalMailBackoff, normalizeOptionalMailTries } from './config'
 import { mimeTypeFromFileName } from '@holo-js/kernel/file-content'
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -585,6 +586,8 @@ function normalizeQueueOptions(value: boolean | MailQueueOptions | undefined): b
     return value
   }
 
+  const tries = normalizeOptionalMailTries(value.tries)
+  const backoff = normalizeOptionalMailBackoff(value.backoff)
   return Object.freeze({
     ...(typeof value.queued === 'boolean' ? { queued: value.queued } : {}),
     ...(typeof value.connection === 'string'
@@ -594,6 +597,8 @@ function normalizeQueueOptions(value: boolean | MailQueueOptions | undefined): b
       ? { queue: normalizeRequiredString(value.queue, 'Mail queue name') }
       : {}),
     ...(typeof value.afterCommit === 'boolean' ? { afterCommit: value.afterCommit } : {}),
+    ...(typeof tries === 'undefined' ? {} : { tries }),
+    ...(typeof backoff === 'undefined' ? {} : { backoff }),
   })
 }
 

@@ -5,7 +5,9 @@ import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/k
 import {
   clearQueueConnection,
   configureQueueRuntime,
+  dispatch,
   listFailedQueueJobs,
+  QueueWorkerTimeoutError,
   registerQueueJob,
   resetQueueRegistry,
   runQueueWorker,
@@ -205,16 +207,16 @@ describe('@holo-js/queue native worker behavior', () => {
     expect(await runQueueWorker({ once: true })).toMatchObject({ stoppedBecause: 'once' })
   })
 
-  it('uses the timeout override, persists the timeout, and ignores late completion', async () => {
+  it('uses the timeout override, leaves the reservation for recovery, and ignores late completion', async () => {
     const harness = await openWorker()
     let complete = 0
     let release: () => void = () => {}
     const pending = new Promise<void>(resolve => { release = resolve })
     registerQueueJob({ timeout: 5, handle: () => pending, onCompleted: () => { complete += 1 } }, { name: 'timeout' })
     await harness.enqueue('timeout')
-    expect(await runQueueWorker({ once: true, timeout: 0 })).toMatchObject({ failed: 1 })
-    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ exception: expect.stringContaining('exceeded timeout') })])
-    expect(await harness.readJobRows()).toEqual([])
+    await expect(runQueueWorker({ once: true, timeout: 0 })).rejects.toThrow('exceeded timeout of 0 seconds')
+    expect(await listFailedQueueJobs()).toEqual([])
+    expect(await harness.readJobRows()).toEqual([expect.objectContaining({ reservation_id: expect.any(String) })])
     release()
     await setTimeout(20)
     expect(complete).toBe(0)
@@ -271,11 +273,120 @@ describe('@holo-js/queue native worker behavior', () => {
     expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: job.id, exception: expect.stringContaining('attempted too many times') })])
   })
 
-  it.each([{ queueNames: [' '] }, { sleep: -1 }, { maxJobs: 0 }, { maxTime: 0 }])('rejects invalid worker options %j before reserving a real job', async options => {
+  it.each([{ queueNames: [' '] }, { sleep: -1 }, { sleep: 2_147_484 }, { maxJobs: 0 }, { maxTime: 0 }])('rejects invalid worker options %j before reserving a real job', async options => {
     const harness = await openWorker()
     await harness.enqueue('unreserved')
     await expect(runQueueWorker(options)).rejects.toThrow()
     expect((await harness.readJobRows())[0]?.reservation_id).toBeNull()
+  })
+
+  it('exits the worker on a job timeout and leaves the reservation to recovery, which runs the next attempt', async () => {
+    const harness = await openWorker({ retryAfter: 2 })
+    const attempts: number[] = []
+    registerQueueJob({
+      timeout: 1,
+      handle(_payload, context) {
+        attempts.push(context.attempt)
+        if (context.attempt === 1) return new Promise<void>(() => {})
+        return undefined
+      },
+    }, { name: 'hung' })
+    const job = await harness.enqueue('hung', { maxAttempts: 2 })
+    await expect(runQueueWorker({ once: true })).rejects.toThrow('[Holo Queue] Queue job "hung" exceeded timeout of 1 seconds.')
+    expect(await harness.readJobRows()).toEqual([expect.objectContaining({ id: job.id, reservation_id: expect.any(String) })])
+    expect(await listFailedQueueJobs()).toEqual([])
+    await setTimeout(2_050)
+    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1, failed: 0 })
+    expect(attempts).toEqual([1, 2])
+    expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it('fails a timed-out job terminally once its attempts are used up by recovery', async () => {
+    const harness = await openWorker({ retryAfter: 2 })
+    registerQueueJob({
+      timeout: 1,
+      handle: () => new Promise<void>(() => {}),
+    }, { name: 'hung-once' })
+    const job = await harness.enqueue('hung-once', { maxAttempts: 1 })
+    await expect(runQueueWorker({ once: true })).rejects.toThrow('exceeded timeout of 1 seconds')
+    await setTimeout(2_050)
+    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 0, failed: 1 })
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: job.id, exception: expect.stringContaining('attempted too many times') })])
+  })
+
+  it('fails a timed-out job immediately when failOnTimeout is set, then exits the worker', async () => {
+    const harness = await openWorker({ retryAfter: 2 })
+    const events: string[] = []
+    registerQueueJob({
+      timeout: 1,
+      failOnTimeout: true,
+      handle: () => new Promise<void>(() => {}),
+      onFailed: (_payload, error) => { events.push(`failed:${error.message}`) },
+    }, { name: 'fail-on-timeout' })
+    const job = await harness.enqueue('fail-on-timeout', { maxAttempts: 3 })
+    await expect(runQueueWorker({
+      once: true,
+      onJobFailed: event => { events.push(`worker-failed:${event.attempt}/${event.maxAttempts}`) },
+    })).rejects.toThrow('exceeded timeout of 1 seconds')
+    expect(events).toEqual([
+      'failed:[Holo Queue] Queue job "fail-on-timeout" exceeded timeout of 1 seconds.',
+      'worker-failed:1/3',
+    ])
+    expect(await harness.readJobRows()).toEqual([])
+    expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: job.id })])
+  })
+
+  it('rejects a worker timeout that is not below the connection retryAfter before reserving', async () => {
+    const harness = await openWorker({ retryAfter: 2 })
+    await harness.enqueue('unreserved')
+    await expect(runQueueWorker({ once: true, timeout: 2 }))
+      .rejects.toThrow('[Holo Queue] Queue worker timeout of 2 seconds must be less than connection "database" retryAfter of 2 seconds.')
+    expect((await harness.readJobRows())[0]?.reservation_id).toBeNull()
+  })
+
+  it('rejects dispatching a job whose timeout is not below the connection retryAfter', async () => {
+    const harness = await openWorker({ retryAfter: 2 })
+    registerQueueJob({ timeout: 2, handle() {} }, { name: 'too-slow' })
+    await expect(dispatch('too-slow', {}).dispatch())
+      .rejects.toThrow('[Holo Queue] Queue job "too-slow" timeout of 2 seconds must be less than connection "database" retryAfter of 2 seconds.')
+    expect(await harness.readJobRows()).toEqual([])
+  })
+
+  it('treats a handler that throws a QueueWorkerTimeoutError as an ordinary failure, even with failOnTimeout', async () => {
+    await openWorker()
+    registerQueueJob({
+      tries: 2,
+      failOnTimeout: true,
+      handle() {
+        throw new QueueWorkerTimeoutError('thrown-timeout', 1)
+      },
+    }, { name: 'thrown-timeout' })
+    await dispatch('thrown-timeout', {}).dispatch()
+
+    expect(await runQueueWorker({ once: true })).toMatchObject({ released: 1, failed: 0 })
+    expect(await listFailedQueueJobs()).toEqual([])
+  })
+
+  it('retries with the worker backoff only for a failed job that sets none of its own', async () => {
+    await openWorker()
+    const delays: Record<string, number | undefined> = {}
+    registerQueueJob({ tries: 2, handle: () => { throw new Error('transient') } }, { name: 'worker-backoff' })
+    registerQueueJob({ tries: 2, backoff: 5, handle: () => { throw new Error('transient') } }, { name: 'job-backoff' })
+    await dispatch('worker-backoff', {}).dispatch()
+    await dispatch('job-backoff', {}).dispatch()
+    expect(await runQueueWorker({
+      stopWhenEmpty: true,
+      backoff: 7,
+      onJobReleased: event => { delays[event.jobName] = event.delaySeconds },
+    })).toMatchObject({ released: 2, failed: 0 })
+    expect(delays).toEqual({ 'worker-backoff': 7, 'job-backoff': 5 })
+  })
+
+  it('applies dispatch tries to the queued attempt limit', async () => {
+    const harness = await openWorker()
+    registerQueueJob({ handle() {} }, { name: 'dispatch-tries' })
+    await dispatch('dispatch-tries', {}, { tries: 4 }).dispatch()
+    expect((await harness.readJobRows())[0]?.max_attempts).toBe(4)
   })
 
   it('rejects the actual synchronous driver', async () => {

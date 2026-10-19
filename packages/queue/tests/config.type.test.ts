@@ -88,6 +88,7 @@ describe('@holo-js/queue typing', () => {
       name: 'custom',
       driver: 'custom-driver',
       queue: 'custom-jobs',
+      afterCommit: false,
       retryAfter: 90,
       blockFor: 5,
     }
