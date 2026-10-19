@@ -112,6 +112,8 @@ For each dispatch, Holo runs the listeners in registration order, one after anot
 
 If a listener throws, or a queued listener can't be sent, the dispatch rejects with that error. Listeners after it don't run, including queued listeners that would have been sent. Listeners before it have already run.
 
+Listeners with `afterCommit` are the exception: they run after the surrounding transaction commits, so they run after the immediate listeners. Registration order holds within each group, not across them. See [After-commit events](/events/after-commit).
+
 ## Listener options
 
 | Option | Type | Description |
