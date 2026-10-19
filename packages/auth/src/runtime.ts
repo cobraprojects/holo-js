@@ -115,6 +115,15 @@ import {
 } from './runtime/secrets'
 import { parseSetCookieDefinition } from './runtime/setCookieParser'
 import {
+  createRememberToken,
+  decodeRememberRecaller,
+  encodeRememberRecaller,
+  hashPasswordForRemember,
+  parseRememberCookie,
+  rememberSecretsMatch,
+  serializeRememberCookie,
+} from './runtime/rememberMe'
+import {
   readSessionPayload,
   readSessionPayloads,
   resolveSessionPayloadProvider,
@@ -154,6 +163,8 @@ type ErasedAuthProviderAdapter = {
   matchesUser?(user: unknown): boolean
   getId(user: unknown): string | number
   getPasswordHash?(user: unknown): string | null | undefined
+  getRememberToken?(user: unknown): string | null | undefined
+  updateRememberToken?(user: unknown, token: string): Promise<void>
   getEmailVerifiedAt?(user: unknown): Date | string | null | undefined
   serialize?(user: unknown): Record<string, unknown>
 }
@@ -346,7 +357,102 @@ async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: stri
   return value ? bindings.session.decryptCookie(name, value) : undefined
 }
 
-async function hydrateGuardContextFromRequest(guardName: string): Promise<void> {
+async function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
+  return parseRememberCookie(await resolveHoloCookie(bindings, bindings.session.rememberMeCookie('')))
+}
+
+function sessionGuardNames(bindings: RuntimeBindings): readonly string[] {
+  return Object.entries(bindings.config.guards)
+    .filter(([, guard]) => guard.driver === 'session')
+    .map(([name]) => name)
+}
+
+async function rememberCookieFor(bindings: RuntimeBindings, guardName: string, recaller?: string): Promise<string | undefined> {
+  const entries = await readRememberCookieEntries(bindings)
+  for (const name of sessionGuardNames(bindings)) {
+    const current = name === guardName ? recaller : bindings.context.getRememberToken?.(name)
+    if (current) entries.set(name, current)
+    else if (name === guardName) entries.delete(name)
+  }
+  const value = serializeRememberCookie(entries)
+  return value ? bindings.session.rememberMeCookie(value) : forgetDefaultRememberCookie(bindings)
+}
+
+function requireRememberTokenUpdates(
+  adapter: ErasedAuthProviderAdapter,
+  providerName: string,
+): NonNullable<ErasedAuthProviderAdapter['updateRememberToken']> {
+  if (!adapter.updateRememberToken) {
+    throwAuthError('runtime_unconfigured', `Auth provider "${providerName}" cannot store remember tokens.`)
+  }
+  return adapter.updateRememberToken.bind(adapter)
+}
+
+function getRememberToken(adapter: ErasedAuthProviderAdapter, user: unknown): string | null {
+  const value = adapter.getRememberToken
+    ? adapter.getRememberToken(user)
+    : requireRecordValue(user, '[@holo-js/auth] Auth provider users must be objects.').remember_token
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function rememberRecallerFor(adapter: ErasedAuthProviderAdapter, user: unknown, token: string): string {
+  return encodeRememberRecaller([adapter.getId(user), token, hashPasswordForRemember(getPasswordHash(adapter, user))])
+}
+
+async function ensureRememberRecaller(providerName: string, userId: string | number): Promise<string> {
+  const { adapter } = getProviderAdapter(providerName)
+  const updateRememberToken = requireRememberTokenUpdates(adapter, providerName)
+  const user = await adapter.findById(userId)
+  if (!user) throwAuthError('auth_user_missing', 'The authenticated user no longer exists.')
+  let token = getRememberToken(adapter, user)
+  if (!token) {
+    token = createRememberToken()
+    await updateRememberToken(user, token)
+  }
+  return rememberRecallerFor(adapter, user, token)
+}
+
+async function cycleRememberToken(providerName: string, userId: string | number): Promise<string | undefined> {
+  const { adapter } = getProviderAdapter(providerName)
+  const user = await adapter.findById(userId)
+  if (!user || !getRememberToken(adapter, user)) return undefined
+  const token = createRememberToken()
+  await requireRememberTokenUpdates(adapter, providerName)(user, token)
+  return rememberRecallerFor(adapter, user, token)
+}
+
+async function guardHasSessionPayload(bindings: RuntimeBindings, guardName: string): Promise<boolean> {
+  const sessionId = bindings.context.getSessionId(guardName)
+  return Boolean(sessionId && readSessionPayloads(await bindings.session.read(sessionId))?.[guardName])
+}
+
+async function restoreFromRememberRecaller(guardName: string, encoded: string): Promise<boolean> {
+  const recaller = decodeRememberRecaller(encoded)
+  if (!recaller) return false
+  const guard = getGuardConfig(guardName)
+  const { adapter } = getProviderAdapter(guard.provider)
+  const user = await adapter.findById(recaller[0])
+  const token = user ? getRememberToken(adapter, user) : null
+  if (
+    !user
+    || !token
+    || !rememberSecretsMatch(token, recaller[1])
+    || !rememberSecretsMatch(hashPasswordForRemember(getPasswordHash(adapter, user)), recaller[2])
+  ) {
+    return false
+  }
+  await establishSessionForUser(serializeUser(adapter, user, guard.provider), {
+    guard: guardName,
+    provider: guard.provider,
+    preserveRemember: true,
+  })
+  return true
+}
+
+async function hydrateGuardContextFromRequest(
+  guardName: string,
+  options: { readonly restoreRemembered?: boolean } = {},
+): Promise<void> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
 
@@ -369,22 +475,15 @@ async function hydrateGuardContextFromRequest(guardName: string): Promise<void> 
   }
 
   if (!bindings.context.getRememberToken?.(guardName)) {
-    const rememberToken = await resolveHoloCookie(bindings, bindings.session.rememberMeCookie(''))
-    if (rememberToken) {
-      bindings.context.setRememberToken?.(guardName, rememberToken)
-      if (!bindings.context.getSessionId(guardName)) {
-        const rememberedSession = await bindings.session.consumeRememberMeToken?.(rememberToken)
-        const payloads = rememberedSession ? await filterRevokedSessionPayloads(bindings, rememberedSession) : null
-        const payload = payloads?.[guardName]
-        if (rememberedSession && payload?.guard === guardName) {
-          bindings.context.setSessionId(guardName, rememberedSession.id)
-          bindings.context.setCachedUser(
-            guardName,
-            rehydrateSerializedUser(payload.user, payload.provider),
-          )
-        } else if (!rememberedSession) {
-          bindings.context.setRememberToken?.(guardName)
-        }
+    const recaller = (await readRememberCookieEntries(bindings)).get(guardName)
+    if (recaller) {
+      bindings.context.setRememberToken?.(guardName, recaller)
+      if (
+        options.restoreRemembered !== false
+        && !await guardHasSessionPayload(bindings, guardName)
+        && !await restoreFromRememberRecaller(guardName, recaller)
+      ) {
+        bindings.context.setRememberToken?.(guardName)
       }
     }
   }
@@ -851,6 +950,12 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const retained = await bindings.sessionRevocations.revokeOthers(state.payload, metadata)
   clearSessionRevocationReads(bindings.context)
   if (!retained) throwAuthError('auth_user_missing', 'This browser authentication has already been revoked.')
+  const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
+  if (recaller && bindings.context.getRememberToken?.(guardName)) {
+    bindings.context.setRememberToken?.(guardName, recaller)
+    const cookie = await rememberCookieFor(bindings, guardName, recaller)
+    if (cookie) await appendResponseCookies(bindings, [cookie])
+  }
 }
 
 async function resolveUserFromGuard(
@@ -1047,8 +1152,10 @@ async function establishLoginSessionForUser(
   await multiFactorRateLimit(options.provider, user.id)
   const expiresAt = new Date(Date.now() + bindings.config.multiFactor.challengeTtl * 1000)
   const established = await establishSessionForUser(user, {
-    ...options,
-    payload: toSessionPayload(options.guard, options.provider, user, undefined, expiresAt.toISOString()),
+    guard: options.guard,
+    provider: options.provider,
+    preserveRemember: options.remember,
+    payload: toSessionPayload(options.guard, options.provider, user, undefined, expiresAt.toISOString(), options.remember),
   })
   try {
     await challengeSession.flash(established.sessionId, multiFactorChallengeLeaseKey(options.guard), true)
@@ -1078,7 +1185,7 @@ async function loginForSessionGuard(guardName: string, credentials: AuthCredenti
   }
 
   const serialized = serializeUser(adapter, user, guard.provider)
-  await hydrateGuardContextFromRequest(guardName)
+  await hydrateGuardContextFromRequest(guardName, { restoreRemembered: false })
   return establishLoginSessionForUser(serialized, {
     guard: guardName,
     provider: guard.provider,
@@ -1321,7 +1428,7 @@ async function loginUsingForGuard(
   const resolved = await resolveTrustedUserForGuard(guardName, user)
   const serialized = serializeUser(resolved.adapter, resolved.user, resolved.provider)
 
-  await hydrateGuardContextFromRequest(guardName)
+  await hydrateGuardContextFromRequest(guardName, { restoreRemembered: false })
   return establishLoginSessionForUser(serialized, {
     guard: guardName,
     provider: resolved.provider,
@@ -1538,6 +1645,7 @@ async function completeMultiFactorChallenge(
     return await establishSessionForUser(state.payload.user, {
       guard: guardName,
       provider: state.payload.provider,
+      remember: state.payload.multiFactorRemember === true,
       preserveRemember: true,
       payload: toSessionPayload(guardName, state.payload.provider, state.payload.user),
     })
@@ -1811,6 +1919,10 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     const payloads = {
       ...(readSessionPayloads(record) ?? {}),
     }
+    const payload = payloads[guardName]
+    if (payload && !payload.impersonation && !payload.multiFactorChallengeExpiresAt) {
+      await cycleRememberToken(payload.provider, payload.userId)
+    }
     if (!(guardName in payloads)) {
       await bindings.session.invalidate(sessionId)
       clearSessionCookies = true
@@ -1825,11 +1937,17 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     }
   }
 
+  const forgetRemember = Boolean(bindings.context.getRememberToken?.(guardName))
+    || (await readRememberCookieEntries(bindings)).has(guardName)
   bindings.context.setSessionId(guardName)
   bindings.context.setCachedUser(guardName, null)
   bindings.context.setRememberToken?.(guardName)
 
-  const cookies = buildLogoutCookies(bindings, guardName, { clearSessionCookies })
+  const rememberCookie = forgetRemember ? await rememberCookieFor(bindings, guardName) : undefined
+  const cookies = Object.freeze([
+    ...buildLogoutCookies(bindings, guardName, { clearSessionCookies }),
+    ...(rememberCookie ? [rememberCookie] : []),
+  ])
   await appendResponseCookies(bindings, cookies)
 
   return Object.freeze({
@@ -1998,12 +2116,9 @@ async function establishSessionForUser(
   },
 ): Promise<AuthEstablishedSession> {
   const bindings = getRuntimeBindings()
-  const sessionGuardNames = Object.entries(bindings.config.guards)
-    .filter(([, guard]) => guard.driver === 'session')
-    .map(([name]) => name)
   const currentGuardSessionId = bindings.context.getSessionId(options.guard)
   const sharedSessionId = currentGuardSessionId
-    ?? sessionGuardNames
+    ?? sessionGuardNames(bindings)
       .filter(name => name !== options.guard)
       .map(name => bindings.context.getSessionId(name))
       .find((value): value is string => typeof value === 'string' && value.length > 0)
@@ -2011,9 +2126,8 @@ async function establishSessionForUser(
     ? await bindings.session.read(sharedSessionId)
     : null
   const existingPayloads = readSessionPayloads(existingSession) ?? {}
-  const rotateExistingSession = existingSession !== null
   const sharedGuardNames = existingSession
-    ? sessionGuardNames.filter(name => (
+    ? sessionGuardNames(bindings).filter(name => (
         name in existingPayloads
         || bindings.context.getSessionId(name) === existingSession.id
       ))
@@ -2030,21 +2144,9 @@ async function establishSessionForUser(
     [options.guard]: sessionPayload,
   }
   const nextSessionData = writeSessionPayloads(existingSession?.data ?? {}, sessionPayloads)
-  const preserveRememberSession = Boolean(
-    rotateExistingSession
-    && existingPayloads[options.guard]
-    && existingSession?.rememberTokenHash
-    && options.preserveRemember
-    && !options.remember
-  )
-  const shouldClearRememberCookie = Boolean(
-    !options.remember
-    && !preserveRememberSession
-    && (
-      existingSession?.rememberTokenHash
-      || bindings.context.getRememberToken?.(options.guard)
-    )
-  )
+  const forgetRemember = !options.remember
+    && !options.preserveRemember
+    && Boolean(bindings.context.getRememberToken?.(options.guard))
   const session = existingSession
     ? await rotateSessionWithData(bindings, existingSession, nextSessionData)
     : await bindings.session.create({ data: nextSessionData })
@@ -2058,23 +2160,19 @@ async function establishSessionForUser(
 
     bindings.context.setSessionId(options.guard, session.id)
     bindings.context.setCachedUser(options.guard, user)
-    let rememberToken: string | undefined
-    if (options.remember) {
-      rememberToken = await bindings.session.issueRememberMeToken(session.id)
+    const rememberToken = options.remember
+      ? await ensureRememberRecaller(options.provider, user.id)
+      : undefined
+    const rememberCookie = rememberToken || forgetRemember
+      ? await rememberCookieFor(bindings, options.guard, rememberToken)
+      : undefined
+    if (rememberToken || forgetRemember) {
       bindings.context.setRememberToken?.(options.guard, rememberToken)
-    } else if (preserveRememberSession) {
-      rememberToken = await bindings.session.issueRememberMeToken(session.id)
-      bindings.context.setRememberToken?.(options.guard, rememberToken)
-    } else {
-      bindings.context.setRememberToken?.(options.guard)
     }
 
     const cookies = [
       bindings.session.sessionCookie(session.id),
-      ...(rememberToken ? [bindings.session.rememberMeCookie(rememberToken)] : []),
-      ...(!rememberToken && shouldClearRememberCookie
-        ? [forgetDefaultRememberCookie(bindings)].filter((cookie): cookie is string => typeof cookie === 'string')
-        : []),
+      ...(rememberCookie ? [rememberCookie] : []),
     ]
     await appendResponseCookies(bindings, cookies)
 

@@ -92,9 +92,6 @@ function configure(context: AuthRuntimeContext = authRuntimeInternals.createMemo
       },
       ...(atomic ? { flash: flashAtomic, take: takeValue } : {}),
       async invalidate() {},
-      async issueRememberMeToken() {
-        return 'remember-token'
-      },
       async read(sessionId) {
         return records.get(sessionId) ?? null
       },

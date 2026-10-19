@@ -6,11 +6,14 @@ import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContex
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 
 const user = { id: 1, email: 'user@app.test' }
+let rememberToken: string | null = null
 const provider: AuthProviderAdapter<typeof user> = {
   async create() { return user },
   async findByCredentials() { return user },
   async findById(id) { return { ...user, id: Number(id) } },
   getId(value) { return value.id },
+  getRememberToken() { return rememberToken },
+  async updateRememberToken(_value, token) { rememberToken = token },
   serialize(value) { return value },
 }
 const context = createAsyncAuthContext()

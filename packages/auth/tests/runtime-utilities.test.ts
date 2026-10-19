@@ -296,7 +296,7 @@ describe('auth runtime utilities', () => {
       },
     }
     const cookies = buildLogoutCookies(bindings, 'web', { clearSessionCookies: true })
-    expect(cookies).toHaveLength(4)
+    expect(cookies).toHaveLength(3)
     expect(cookies).toContainEqual(expect.stringContaining('workos_session='))
     expect(cookies).toContainEqual(expect.stringContaining('clerk_session='))
     expect(forgetDefaultRememberCookie(bindings)).toContain('holo_remember=')

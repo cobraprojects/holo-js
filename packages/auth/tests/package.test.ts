@@ -105,8 +105,8 @@ function sessionCookieValue(sessionId: string | undefined): string {
   return cookieValue(getSessionRuntime().sessionCookie(sessionId ?? ''))
 }
 
-function rememberCookieValue(rememberToken: string | undefined): string {
-  return cookieValue(getSessionRuntime().rememberMeCookie(rememberToken ?? ''))
+function rememberCookieValue(rememberToken: string | undefined, guard = 'web'): string {
+  return cookieValue(getSessionRuntime().rememberMeCookie(rememberToken ? JSON.stringify({ [guard]: JSON.parse(rememberToken) }) : ''))
 }
 
 function isAuthResult<TData>(result: AuthResult<TData> | TData): result is AuthResult<TData> {
@@ -528,7 +528,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(established).toMatchObject({
       guard: 'web',
       sessionId: expect.any(String),
-      rememberToken: expect.stringMatching(/\./),
+      rememberToken: expect.any(String),
       user: {
         id: 1,
         email: 'ava@example.com',
@@ -538,7 +538,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(getSessionRuntime().decryptCookie('holo_session', cookieValue(established.cookies?.[0] ?? ''))).toBe(established.sessionId)
     expect(established.cookies?.[1]).toContain('holo_session_remember=')
     expect(runtime.context.getSessionId('web')).toBeTypeOf('string')
-    expect(runtime.context.getRememberToken?.('web')).toMatch(/\./)
+    expect(runtime.context.getRememberToken?.('web')).toBe(established.rememberToken)
     expect((await runtime.sessionStore.countRecords())).toBe(1)
 
     const loggedOut = await logout()
@@ -600,7 +600,7 @@ describe('@holo-js/auth package runtime', () => {
     const failure = new Error('transition delivery failed')
     authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
-      ...(failurePoint === 'remember' ? { session: { ...getSessionRuntime(), async issueRememberMeToken() { throw failure } } } : {}),
+      ...(failurePoint === 'remember' ? { providers: { users: { ...runtime.usersProvider, async updateRememberToken() { throw failure } }, admins: runtime.adminsProvider } } : {}),
       ...(failurePoint === 'cookie' ? { context: { ...runtime.context, async appendResponseCookie() { throw failure } } } : {}),
     })
     await expect(auth.guard('web').loginUsing(created, { remember: true })).rejects.toBe(failure)
@@ -621,11 +621,11 @@ describe('@holo-js/auth package runtime', () => {
     const initial = await auth.loginUsing(created)
     const delivery = new Error('remember unavailable')
     const cleanup = new Error('delete unavailable')
-    authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), session: {
-      ...getSessionRuntime(),
-      async issueRememberMeToken() { throw delivery },
-      async invalidate() { throw cleanup },
-    } })
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      providers: { users: { ...runtime.usersProvider, async updateRememberToken() { throw delivery } }, admins: runtime.adminsProvider },
+      session: { ...getSessionRuntime(), async invalidate() { throw cleanup } },
+    })
     await expect(auth.loginUsing(created, { remember: true })).rejects.toMatchObject({ errors: [delivery, cleanup] })
     await expect(getSessionRuntime().read(initial.sessionId)).resolves.toBeNull()
     expect(runtime.context.getSessionId('web')).toBeUndefined()
@@ -734,6 +734,8 @@ describe('@holo-js/auth package runtime', () => {
 
     const pending = await login({ email: 'ava@example.com', password: 'secret-secret', remember: true })
     expect(pending.multiFactorChallenge).toMatchObject({ recoveryAllowed: true, route: '/mfa-challenge' })
+    expect(pending.rememberToken).toBeUndefined()
+    expect(pending.cookies).not.toContainEqual(expect.stringContaining('holo_session_remember='))
     await expect(user()).resolves.toBeNull()
     const challengeCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter)
     const established = await auth.multiFactor.challenge({ code: challengeCode })
@@ -1296,7 +1298,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(establishedByUser).toMatchObject({
       guard: 'web',
       sessionId: expect.any(String),
-      rememberToken: expect.stringMatching(/\./),
+      rememberToken: expect.any(String),
       user: {
         id: created.id,
         email: created.email,
@@ -1366,7 +1368,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(established).toMatchObject({
       guard: 'admin',
       sessionId: expect.any(String),
-      rememberToken: expect.stringMatching(/\./),
+      rememberToken: expect.any(String),
       user: {
         id: admin.id,
         email: admin.email,
@@ -1617,7 +1619,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(await impersonation()).toBeNull()
   })
 
-  it('preserves remember-me session state when impersonation stops', async () => {
+  it('keeps the actor remember-me cookie while impersonating', async () => {
     const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({
       name: 'Ava',
@@ -1632,27 +1634,16 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: new Date(),
     })
 
-    await loginUsing(actor, {
+    const remembered = await loginUsing(actor, {
       remember: true,
     })
-
-    const originalSessionId = runtime.context.getSessionId('web')
-    const originalRecord = originalSessionId
-      ? (await runtime.sessionStore.read(originalSessionId))
-      : null
-    expect(originalRecord?.rememberTokenHash).toBeTypeOf('string')
 
     const impersonated = await impersonate(target)
 
     const duringImpersonation = (await runtime.sessionStore.read(impersonated.sessionId))
-    expect(duringImpersonation).toMatchObject({
-      id: impersonated.sessionId,
-    })
-    expect(duringImpersonation?.rememberTokenHash).toBeTypeOf('string')
-    expect(duringImpersonation?.rememberTokenHash).not.toBe(originalRecord?.rememberTokenHash)
-    expect(impersonated.rememberToken).toMatch(/\./)
-    expect(impersonated.cookies).toContainEqual(expect.stringContaining('holo_session_remember='))
-    expect(impersonated.cookies).toHaveLength(2)
+    expect(impersonated.rememberToken).toBeUndefined()
+    expect(impersonated.cookies).toHaveLength(1)
+    expect(runtime.context.getRememberToken?.('web')).toBe(remembered.rememberToken)
 
     await stopImpersonating()
 
@@ -1660,7 +1651,6 @@ describe('@holo-js/auth package runtime', () => {
     expect(afterStop).toMatchObject({
       id: impersonated.sessionId,
     })
-    expect(afterStop?.rememberTokenHash).toBe(duringImpersonation?.rememberTokenHash)
     expect(afterStop?.createdAt).toEqual(duringImpersonation?.createdAt)
     expect(afterStop?.expiresAt).toEqual(duringImpersonation?.expiresAt)
   })
@@ -1681,20 +1671,19 @@ describe('@holo-js/auth package runtime', () => {
       remember: true,
     }))
 
-    const rememberedRecord = (await runtime.sessionStore.read(remembered.sessionId))
-    expect(rememberedRecord?.rememberTokenHash).toBeTypeOf('string')
+    const storedToken = runtime.usersProvider.getRememberToken?.((await runtime.usersProvider.findById(remembered.user.id!))!)
+    expect(storedToken).toEqual(expect.any(String))
 
     const loggedInAgain = unwrapAuthResult(await login({
       email: 'ava@example.com',
       password: 'secret-secret',
     }))
 
-    const nextRecord = (await runtime.sessionStore.read(loggedInAgain.sessionId))
     expect(loggedInAgain.cookies).toHaveLength(2)
     expect(loggedInAgain.rememberToken).toBeUndefined()
     expect(loggedInAgain.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
     expect(runtime.context.getRememberToken?.('web')).toBeUndefined()
-    expect(nextRecord?.rememberTokenHash).toBeUndefined()
+    expect(runtime.usersProvider.getRememberToken?.((await runtime.usersProvider.findById(remembered.user.id!))!)).toBe(storedToken)
   })
 
   it('hydrates remember-me cookies before normal login and clears remembered state when opting out', async () => {
@@ -1730,8 +1719,6 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     }))
 
-    expect(((await runtime.sessionStore.read(remembered.sessionId)) !== null)).toBe(false)
-    expect((await runtime.sessionStore.read(loggedInAgain.sessionId))?.rememberTokenHash).toBeUndefined()
     expect(loggedInAgain.rememberToken).toBeUndefined()
     expect(loggedInAgain.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
   })
@@ -2820,7 +2807,6 @@ describe('@holo-js/auth package runtime', () => {
       read: session.read,
       touch: session.touch,
       invalidate: session.invalidate,
-      issueRememberMeToken: session.issueRememberMeToken,
       sessionCookie: session.sessionCookie,
       rememberMeCookie: session.rememberMeCookie,
       decryptCookie: session.decryptCookie,
@@ -2909,7 +2895,8 @@ describe('@holo-js/auth package runtime', () => {
       id: created.id,
       email: created.email,
     })
-    expect(restartedContext.getSessionId('web')).toBe(remembered.sessionId)
+    expect(restartedContext.getSessionId('web')).toEqual(expect.any(String))
+    expect(restartedContext.getSessionId('web')).not.toBe(remembered.sessionId)
     expect(restartedContext.getRememberToken?.('web')).toBe(remembered.rememberToken)
   })
 
@@ -3135,7 +3122,6 @@ describe('@holo-js/auth package runtime', () => {
         guard: 'admin',
         cookies: [
           expect.stringContaining('holo_session=;'),
-          expect.stringContaining('holo_session_remember=;'),
         ],
       },
       {
@@ -3241,7 +3227,6 @@ describe('@holo-js/auth package runtime', () => {
       rotate: session.rotate,
       touch: session.touch,
       invalidate: session.invalidate,
-      issueRememberMeToken: session.issueRememberMeToken,
       cookie: session.cookie,
       sessionCookie: session.sessionCookie,
       rememberMeCookie: session.rememberMeCookie,
@@ -4983,7 +4968,7 @@ describe('@holo-js/auth package runtime', () => {
     )
   })
 
-  it('clears stale remember state when rotating a shared session', async () => {
+  it('rotates a shared session for another guard without writing remember cookies', async () => {
     const runtime = await configureRuntime()
     const context = authRuntimeInternals.createMemoryAuthContext()
     const existingRecord = Object.freeze({
@@ -5003,7 +4988,6 @@ describe('@holo-js/auth package runtime', () => {
       createdAt: new Date(),
       lastActivityAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
-      rememberTokenHash: 'remember-hash',
     })
     const rotatedSessions: string[] = []
 
@@ -5052,9 +5036,6 @@ describe('@holo-js/auth package runtime', () => {
           return sessionId === existingRecord.id ? existingRecord : null
         },
         async invalidate() {},
-        async issueRememberMeToken(sessionId) {
-          return `${sessionId}.remember`
-        },
         sessionCookie(value) {
           return `holo_session=${value}; Path=/`
         },
@@ -5084,7 +5065,7 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     expect(established.sessionId).toBe('new-session')
-    expect(established.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
+    expect(established.cookies).toEqual(['holo_session=new-session; Path=/'])
     expect(context.getSessionId('admin')).toBe('new-session')
     expect(rotatedSessions).toEqual([existingRecord.id])
   })
@@ -5340,10 +5321,6 @@ describe('@holo-js/auth package runtime', () => {
     const rememberCookie = authRuntimeInternals.parseSetCookieDefinition(current.session.rememberMeCookie(''))
     authRuntimeInternals.configureRuntime({
       ...current,
-      session: {
-        ...current.session,
-        consumeRememberMeToken: async () => null,
-      },
       context: {
         ...current.context,
         getRequestCookie: name => name === rememberCookie?.name ? 'invalid-remember-token' : undefined,
@@ -5352,33 +5329,16 @@ describe('@holo-js/auth package runtime', () => {
     await expect(getAuthRuntime().guard('web').user()).resolves.toBeNull()
     expect(authRuntimeInternals.getRuntimeBindings().context.getRememberToken?.('web')).toBeUndefined()
 
-    const now = new Date()
-    const wrongGuardSession = {
-      id: 'wrong-guard-session',
-      store: 'database',
-      data: {
-        auth: {
-          guard: 'admin',
-          provider: 'admins',
-          userId: 1,
-          user: { id: 1, email: 'admin@app.test', name: 'Admin', can: () => false },
-        },
-      },
-      createdAt: now,
-      lastActivityAt: now,
-      expiresAt: new Date(now.getTime() + 60_000),
-    }
     const refreshed = authRuntimeInternals.getRuntimeBindings()
-    refreshed.context.setRememberToken?.('web')
     authRuntimeInternals.configureRuntime({
       ...refreshed,
-      session: { ...refreshed.session, consumeRememberMeToken: async () => wrongGuardSession },
       context: {
         ...refreshed.context,
-        getRequestCookie: name => name === rememberCookie?.name ? 'wrong-guard-token' : undefined,
+        getRequestCookie: name => name === rememberCookie?.name ? rememberCookieValue(JSON.stringify([created.id, 'admin-token', 'a'.repeat(64)]), 'admin') : undefined,
       },
     })
     await expect(getAuthRuntime().guard('web').user()).resolves.toBeNull()
+    expect(authRuntimeInternals.getRuntimeBindings().context.getRememberToken?.('web')).toBeUndefined()
   })
 
   it('rejects trusted token-guard login, invalid user ids, and unverified users without email', async () => {

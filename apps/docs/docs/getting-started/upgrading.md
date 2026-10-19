@@ -66,6 +66,51 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### Per-user remember-me tokens
+
+Remember me now works like Laravel's: each user has one `remember_token`, and the user stays signed in for `rememberMeLifetime` even after their session expires. Add the column to every table an auth provider reads from, such as `users` and `admins`:
+
+```bash
+npx holo make:migration add_remember_token_to_users
+```
+
+```ts [server/db/migrations/2026_10_19_000000_add_remember_token_to_users.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.table('users', (table) => {
+      table.string('remember_token').nullable()
+    })
+  },
+  async down({ schema }) {
+    await schema.table('users', (table) => {
+      table.dropColumn('remember_token')
+    })
+  },
+})
+```
+
+Add `remember_token` to the model's `hidden` list so it never reaches the browser:
+
+```ts [server/models/User.ts]
+export default defineModel('users', {
+  fillable: ['name', 'email', 'password', 'avatar'],
+  hidden: ['password', 'remember_token'],
+})
+```
+
+Behavior changes to expect:
+
+- `logout()` gives the user a new remember token, so remember-me cookies on every device stop working. Other devices with an active session stay signed in until that session ends. Use `logoutOtherDevices()` to end those too.
+- Changing the user's password also stops their remember-me cookies.
+- Signing in without remember me clears that browser's remember-me cookie but keeps the user's token, so a copy of the cookie keeps working until `logout()`, `logoutOtherDevices()`, or a password change.
+- With multi-factor auth, the remember-me cookie is set after the user passes the challenge, not when they enter their password.
+
+The sessions table no longer uses `remember_token_hash`. You can leave the column in place or drop it. `issueRememberMeToken()` and `consumeRememberMeToken()` are removed from `@holo-js/session`, and session records no longer have `rememberTokenHash`. `rememberMeCookie()` is unchanged.
+
+If you wrote a custom auth provider, add `getRememberToken(user)` and `updateRememberToken(user, token)` to it. Without `updateRememberToken`, `remember: true` and `logout()` for users who have a token throw an `AuthError` with the code `runtime_unconfigured`.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

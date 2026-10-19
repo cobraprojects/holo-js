@@ -77,14 +77,14 @@ import { defineModel, hasMany } from '@holo-js/db'
 
 export default defineModel('users', {
   fillable: ['name', 'email', 'password', 'avatar'],
-  hidden: ['password'],
+  hidden: ['password', 'remember_token'],
   relations: {
     posts: hasMany('Post', { foreignKey: 'user_id' }),
   },
 })
 ```
 
-`hidden: ['password']` keeps the password hash out of JSON output, so it never reaches the browser.
+`hidden` keeps the password hash and the remember-me token out of JSON output, so they never reach the browser.
 
 ## Step 5: Add sample data with a seeder
 

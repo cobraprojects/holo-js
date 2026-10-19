@@ -36,7 +36,6 @@ type VerificationTokenLike = {
 type SessionRecordLike = {
   readonly id: string
   readonly store: string
-  readonly rememberTokenHash?: string
 }
 
 type AuthSuccessResult<TData> = {
@@ -93,7 +92,7 @@ async function createProject(options: {
   if (options.auth) {
     const database = new DatabaseSync(join(root, 'database.sqlite'))
     database.exec(revocationsSchema)
-    database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT NOT NULL UNIQUE, password TEXT, email_verified_at TEXT)')
+    database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT NOT NULL UNIQUE, password TEXT, email_verified_at TEXT, remember_token TEXT)')
     database.close()
   }
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
@@ -240,11 +239,12 @@ const users = defineGeneratedTable('users', {
   email: column.string(),
   password: column.string().nullable(),
   email_verified_at: column.timestamp().nullable(),
+  remember_token: column.string().nullable(),
 })
 export default defineModel(users, {
   timestamps: false,
   fillable: ['name', 'email', 'password', 'email_verified_at'],
-  hidden: ['password'],
+  hidden: ['password', 'remember_token'],
 })
 `, 'utf8')
   }
@@ -677,6 +677,38 @@ describe('@holo-js/core auth/session boot', () => {
     await expect(runtime.auth?.user()).resolves.not.toHaveProperty('password')
   })
 
+  it('stores a hidden per-user remember token through the model provider and cycles it on logout', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+
+    unwrapAuthResult(await runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    }))
+    await runtime.auth?.login({
+      email: 'ava@example.com',
+      password: 'supersecret',
+      remember: true,
+    })
+    const remembered = await DB.table('users').where('email', 'ava@example.com').first<Record<string, unknown>>()
+    expect(remembered?.remember_token).toEqual(expect.any(String))
+    await expect(runtime.auth?.user()).resolves.not.toHaveProperty('remember_token')
+
+    await runtime.auth?.logout()
+    const cycled = await DB.table('users').where('email', 'ava@example.com').first<Record<string, unknown>>()
+    expect(cycled?.remember_token).toEqual(expect.any(String))
+    expect(cycled?.remember_token).not.toBe(remembered?.remember_token)
+  })
+
   it('accepts trusted login for normal model instances on named guards', async () => {
     const root = await createProject({
       auth: true,
@@ -1088,7 +1120,6 @@ export default defineSessionConfig({
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
     })
 
     const createdSession = await runtime.session?.create({
@@ -1998,7 +2029,6 @@ export default {
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
     })
 
     const createdSession = await runtime.session?.create({
@@ -2058,11 +2088,6 @@ export default {
     await expect(runtime.session?.flash(expiredSessionId, 'panels.notice', true)).rejects.toThrow('was not found')
     await expect(runtime.session?.take(expiredSessionId, 'panels.notice')).resolves.toBeUndefined()
     await expect(DB.table('sessions').where('id', expiredSessionId).first()).resolves.toBeUndefined()
-    await runtime.session?.issueRememberMeToken(String(createdSession?.id))
-    expect(await runtime.session?.read(String(createdSession?.id))).toMatchObject({
-      id: createdSession?.id,
-      rememberTokenHash: expect.any(String),
-    })
     await runtime.session?.touch(String(createdSession?.id))
     await runtime.session?.invalidate(String(createdSession?.id))
     await expect(runtime.session?.read(String(createdSession?.id))).resolves.toBeNull()
@@ -2127,7 +2152,6 @@ export default defineAuthConfig({
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
     })
     await createSchemaService(DB.connection()).createTable('admin_password_reset_tokens', (table) => {
       table.uuid('id').primaryKey()
@@ -2793,7 +2817,6 @@ export default {
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
     })
     await schema.createTable('personal_access_tokens', (table) => {
       table.uuid('id').primaryKey()
@@ -3487,7 +3510,6 @@ it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? [
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
     })
   }
   if (!runtime.auth) throw new Error('Auth unavailable')
@@ -3519,7 +3541,7 @@ it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? [
   await restarted.session?.invalidate(rotated.sessionId)
 })
 
-it('requires fresh browser login on adapter adoption while remembered legacy payloads reject and tokens remain valid', async () => {
+it('requires fresh browser login on adapter adoption while tokens remain valid', async () => {
   const root = await createProject({ auth: true })
 
   const runtime = await createHolo(root, { preferCache: false })
@@ -3542,10 +3564,7 @@ it('requires fresh browser login on adapter adoption while remembered legacy pay
   const token = await auth.tokens.create(user, { name: 'independent-client', abilities: ['*'] })
   const legacyPayload = { auth: { guard: 'web', provider: 'users', userId: 1, user, authenticatedAt: new Date().toISOString() } }
   const ordinary = await runtime.session.create({ data: legacyPayload }) as SessionRecordLike
-  const remembered = await runtime.session.create({ data: legacyPayload }) as SessionRecordLike
-  const rememberToken = await runtime.session.issueRememberMeToken(remembered.id)
   await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(ordinary.id) : undefined }, () => auth.check())).resolves.toBe(false)
-  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session_remember' ? holoCookieValue(getSessionRuntime().rememberMeCookie(rememberToken)) : undefined }, () => auth.check())).resolves.toBe(false)
   const fresh = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
   await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(fresh.sessionId) : undefined }, async () => {
     await auth.logoutOtherDevices()

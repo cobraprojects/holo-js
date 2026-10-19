@@ -28,7 +28,6 @@ export function normalizeSessionRecordFromRow(row: Record<string, unknown>): {
   readonly createdAt: Date
   readonly lastActivityAt: Date
   readonly expiresAt: Date
-  readonly rememberTokenHash?: string
 } {
   const decodedData = (() => {
     if (row.data && typeof row.data === 'object') return row.data as Record<string, unknown>
@@ -52,7 +51,6 @@ export function normalizeSessionRecordFromRow(row: Record<string, unknown>): {
     createdAt: normalizeDateLike(row.created_at),
     lastActivityAt: normalizeDateLike(row.last_activity_at),
     expiresAt: normalizeDateLike(row.expires_at),
-    rememberTokenHash: typeof row.remember_token_hash === 'string' ? row.remember_token_hash : undefined,
   })
 }
 
@@ -63,7 +61,6 @@ export function serializeSessionRecordForRow(record: {
   readonly createdAt: Date
   readonly lastActivityAt: Date
   readonly expiresAt: Date
-  readonly rememberTokenHash?: string
 }, driver: string): Record<string, unknown> {
   return {
     id: record.id,
@@ -73,7 +70,6 @@ export function serializeSessionRecordForRow(record: {
     last_activity_at: serializeAuthTimestamp(record.lastActivityAt, driver),
     expires_at: serializeAuthTimestamp(record.expiresAt, driver),
     invalidated_at: null,
-    remember_token_hash: record.rememberTokenHash ?? null,
   }
 }
 

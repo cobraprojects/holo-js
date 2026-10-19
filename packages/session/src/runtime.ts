@@ -1,10 +1,9 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { decryptCookieValue, encryptCookieValue } from '@holo-js/kernel'
 import type {
   CookieSerializeOptions,
   CreateSessionInput,
   ReadSessionOptions,
-  RememberTokenOptions,
   RotateSessionOptions,
   SessionRecord,
   SessionRuntimeBindings,
@@ -61,10 +60,6 @@ function now(): Date {
 
 function createExpiryDate(minutes: number): Date {
   return new Date(Date.now() + (minutes * 60_000))
-}
-
-function hashRememberToken(secret: string): string {
-  return createHash('sha256').update(secret).digest('hex')
 }
 
 function createSessionId(): string {
@@ -135,55 +130,6 @@ function normalizeFlashValue(value: unknown): unknown {
     throw new Error('[@holo-js/session] Flash values cannot exceed 64 KiB.')
   }
   return JSON.parse(encoded) as unknown
-}
-
-function createRememberSecret(): string {
-  return randomBytes(24).toString('base64url')
-}
-
-function createRememberTokenIssuedAt(): string {
-  return Date.now().toString(36)
-}
-
-function parseRememberTokenIssuedAt(value: string): number | null {
-  const parsed = Number.parseInt(value, 36)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function parseRememberMeToken(
-  token: string,
-): {
-  readonly sessionId: string
-  readonly secretPayload: string
-  readonly issuedAt?: number
-} | null {
-  const firstSeparator = token.indexOf('.')
-  if (firstSeparator <= 0) {
-    return null
-  }
-
-  const secondSeparator = token.indexOf('.', firstSeparator + 1)
-  if (secondSeparator <= firstSeparator + 1) {
-    const sessionId = token.slice(0, firstSeparator)
-    const secret = token.slice(firstSeparator + 1)
-    return sessionId && secret
-      ? { sessionId, secretPayload: secret }
-      : null
-  }
-
-  const sessionId = token.slice(0, firstSeparator)
-  const issuedAtRaw = token.slice(firstSeparator + 1, secondSeparator)
-  const secret = token.slice(secondSeparator + 1)
-  const issuedAt = parseRememberTokenIssuedAt(issuedAtRaw)
-  if (!sessionId || !issuedAtRaw || !secret || issuedAt === null) {
-    return null
-  }
-
-  return {
-    sessionId,
-    secretPayload: `${issuedAtRaw}.${secret}`,
-    issuedAt,
-  }
 }
 
 function decodeCookiePart(value: string): string | null {
@@ -418,7 +364,6 @@ export async function rotateSession(sessionId: string, options: RotateSessionOpt
       createdAt: currentTime,
       lastActivityAt: currentTime,
       expiresAt: renewedExpiry,
-      rememberTokenHash: undefined,
     } : {}),
   })
   if (located.store !== store) {
@@ -462,52 +407,6 @@ export async function takeSession<TValue = unknown>(sessionId: string, key: stri
   const result = await store.take(sessionId, normalizeFlashKey(key))
   if (!result.found) return undefined
   return normalizeFlashValue(result.value) as TValue
-}
-
-export async function issueRememberMeToken(sessionId: string, options?: RememberTokenOptions): Promise<string> {
-  const record = await readRecord(sessionId, options)
-  if (!record) {
-    throw new Error(`[@holo-js/session] Session "${sessionId}" was not found.`)
-  }
-
-  const { store } = getStore(options?.store ?? record.store)
-  const issuedAt = createRememberTokenIssuedAt()
-  const secret = createRememberSecret()
-  const updated: SessionRecord = Object.freeze({
-    ...record,
-    rememberTokenHash: hashRememberToken(`${issuedAt}.${secret}`),
-  })
-  await store.write(updated)
-  return `${record.id}.${issuedAt}.${secret}`
-}
-
-export async function consumeRememberMeToken(token: string, options?: RememberTokenOptions): Promise<SessionRecord | null> {
-  const parsed = parseRememberMeToken(token)
-  if (!parsed) {
-    return null
-  }
-
-  const bindings = getSessionRuntimeBindings()
-  const stores = options?.store
-    ? [getStore(options.store).store]
-    : Object.values(bindings.stores)
-
-  if (parsed.issuedAt) {
-    const rememberExpiry = parsed.issuedAt + (getSessionRuntimeBindings().config.rememberMeLifetime * 60_000)
-    if (rememberExpiry <= Date.now()) {
-      return null
-    }
-  }
-
-  const tokenHash = hashRememberToken(parsed.secretPayload)
-  for (const store of stores) {
-    const record = await readRecordFromStore(parsed.sessionId, store)
-    if (record?.rememberTokenHash === tokenHash) {
-      return record
-    }
-  }
-
-  return null
 }
 
 export const cookies = Object.freeze({
@@ -563,8 +462,6 @@ export function getSessionRuntime(): SessionRuntimeFacade {
     rotate: rotateSession,
     invalidate: invalidateSession,
     touch: touchSession,
-    issueRememberMeToken,
-    consumeRememberMeToken,
     flash: flashSession,
     take: takeSession,
     cookie,
@@ -579,10 +476,8 @@ export function resetSessionRuntime(): void {
 }
 
 export const sessionRuntimeInternals = {
-  createRememberSecret,
   createSessionId,
   getSessionRuntimeBindings,
-  hashRememberToken,
   isExpired,
   normalizeFlashKey,
   normalizeFlashValue,

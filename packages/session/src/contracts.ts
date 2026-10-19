@@ -29,10 +29,6 @@ export interface RotateSessionOptions {
   readonly renewLifetime?: boolean
 }
 
-export interface RememberTokenOptions {
-  readonly store?: string
-}
-
 export interface SessionRecord {
   readonly id: string
   readonly store: string
@@ -40,7 +36,6 @@ export interface SessionRecord {
   readonly createdAt: Date
   readonly lastActivityAt: Date
   readonly expiresAt: Date
-  readonly rememberTokenHash?: string
 }
 
 export interface SessionStoreTakeResult {
@@ -81,8 +76,6 @@ export interface SessionRuntimeFacade {
   rotate(sessionId: string, options?: RotateSessionOptions): Promise<SessionRecord>
   invalidate(sessionId: string, options?: ReadSessionOptions): Promise<void>
   touch(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null>
-  issueRememberMeToken(sessionId: string, options?: RememberTokenOptions): Promise<string>
-  consumeRememberMeToken(token: string, options?: RememberTokenOptions): Promise<SessionRecord | null>
   flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>
   take<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined>
   cookie(name: string, value: string, options?: CookieSerializeOptions): string
@@ -104,8 +97,6 @@ export interface SessionFacade {
   rotate(sessionId: string, options?: RotateSessionOptions): Promise<SessionRecord>
   invalidate(sessionId: string, options?: ReadSessionOptions): Promise<void>
   touch(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null>
-  issueRememberMeToken(sessionId: string, options?: RememberTokenOptions): Promise<string>
-  consumeRememberMeToken(token: string, options?: RememberTokenOptions): Promise<SessionRecord | null>
   flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>
   take<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined>
   cookie(name: string, value: string, options?: CookieSerializeOptions): string

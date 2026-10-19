@@ -94,7 +94,7 @@ All lifetimes are in minutes.
 | --- | --- | --- |
 | `idleTimeout` | `120` | The session ends after this long without a request |
 | `absoluteLifetime` | `120` | The session ends this long after it started, even if active |
-| `rememberMeLifetime` | `43200` (30 days) | How long a remember-me cookie can restore a session |
+| `rememberMeLifetime` | `43200` (30 days) | How long the remember-me cookie keeps the user signed in |
 
 Holo extends the idle window on each request, up to the absolute lifetime.
 
@@ -106,7 +106,20 @@ When you pass `remember: true` to `login()` or `loginUsing()`, Holo also sets a 
 await login({ email, password, remember: true })
 ```
 
-`logout()` clears both cookies.
+Each user has one remember token, stored in the `remember_token` column of the `users` table. The auth migrations add it. Keep it out of JSON output with the model's `hidden` list:
+
+```ts [server/models/User.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', {
+  fillable: ['name', 'email', 'password', 'avatar'],
+  hidden: ['password', 'remember_token'],
+})
+```
+
+The encrypted cookie holds the user's ID, the token, and a hash of the password hash. Holo restores the user only when the token and password still match, so changing the password ends remember me.
+
+`logout()` clears the cookies and gives the user a new remember token. Remember-me cookies on every other device stop working, but browsers that still have an active session stay signed in until that session ends. With [multi-factor auth](/auth/multi-factor), the remember-me cookie is set only after the user passes the challenge.
 
 ## Log out other devices
 
@@ -119,7 +132,7 @@ await logoutOtherDevices()
 await auth.guard('admin').logoutOtherDevices()
 ```
 
-The current browser stays signed in. Every other browser signed in as this user loses the session on its next request, including remember-me cookies.
+The current browser stays signed in. Every other browser signed in as this user loses the session on its next request. Holo also gives the user a new remember token, so remember-me cookies on other devices stop working, and resends the current browser's remember-me cookie with the new token.
 
 - Only session guards have this method. To revoke API tokens, use `tokens.revokeOthers()` from [API Tokens](/auth/api-tokens#revoke-tokens).
 - For [WorkOS](/auth/workos) and [Clerk](/auth/clerk) users, it ends their Holo sessions but not their session at the hosted provider.

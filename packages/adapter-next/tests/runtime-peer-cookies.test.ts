@@ -43,3 +43,41 @@ it('writes authentication cookies into the consuming Next request scope', async 
     process.env.NODE_ENV = previousEnvironment
   }
 })
+
+it('skips authentication cookie writes while a server component renders', async () => {
+  const projectRoot = process.env.HOLO_NEXT_PEER_PROJECT ?? resolve(import.meta.dirname, '..')
+  const requireHost = createRequire(resolve(projectRoot, 'package.json'))
+  const nativeGlobals = globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }
+  nativeGlobals.AsyncLocalStorage ??= AsyncLocalStorage
+  const { workAsyncStorage } = requireHost('next/dist/server/app-render/work-async-storage.external.js') as {
+    workAsyncStorage: AsyncLocalStorage<{ route: string, isStaticGeneration: boolean }>
+  }
+  const { workUnitAsyncStorage } = requireHost('next/dist/server/app-render/work-unit-async-storage.external.js') as {
+    workUnitAsyncStorage: AsyncLocalStorage<typeof requestStore>
+  }
+  const { RequestCookies } = requireHost('next/dist/server/web/spec-extension/cookies.js') as {
+    RequestCookies: typeof NextRequestCookies
+  }
+  const { RequestCookiesAdapter } = requireHost('next/dist/server/web/spec-extension/adapters/request-cookies.js') as {
+    RequestCookiesAdapter: { seal(cookies: NextRequestCookies): NextRequestCookies }
+  }
+  const cookies = RequestCookiesAdapter.seal(new RequestCookies(new Headers()))
+  const headers = new Headers()
+  const requestStore = {
+    type: 'request' as const,
+    phase: 'render' as const,
+    cookies,
+    headers,
+    asyncApiPromises: { cookies: Promise.resolve(cookies), headers: Promise.resolve(headers) },
+  }
+  const previousEnvironment = process.env.NODE_ENV
+  process.env.NODE_ENV = 'production'
+  try {
+    await workAsyncStorage.run({ route: '/admin', isStaticGeneration: false }, () => workUnitAsyncStorage.run(requestStore, async () => {
+      await expect(adapterNextRuntimeInternals.resolveNextAuthRequestAccessors(projectRoot).appendResponseCookie?.('holo_session=synthetic; Path=/; HttpOnly; SameSite=Lax')).resolves.toBeUndefined()
+    }))
+    expect(cookies.get('holo_session')).toBeUndefined()
+  } finally {
+    process.env.NODE_ENV = previousEnvironment
+  }
+})

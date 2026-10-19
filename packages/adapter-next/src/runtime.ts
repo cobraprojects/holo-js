@@ -153,6 +153,10 @@ function isMissingNextRequestScope(error: unknown): boolean {
   return error instanceof Error && error.message.includes('outside a request scope')
 }
 
+function isReadonlyNextCookieStore(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Cookies can only be modified in a Server Action or Route Handler')
+}
+
 export function createNextRequestContext(request: Request): NextRequestLike {
   const nextRequest = request as NextRequestWithCookies
   const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
@@ -218,7 +222,7 @@ function resolveNextAuthRequestAccessors(projectRoot = process.cwd()): NonNullab
         const store = await cookies() as MutableNextCookieStore
         store.set(parsed.name, parsed.value, parsed.options)
       } catch (error) {
-        if (!isMissingNextRequestScope(error)) throw error
+        if (!isMissingNextRequestScope(error) && !isReadonlyNextCookieStore(error)) throw error
       }
     },
     async redirectResponse(url: string) {

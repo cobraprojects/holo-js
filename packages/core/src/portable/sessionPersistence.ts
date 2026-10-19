@@ -10,7 +10,6 @@ export interface CoreSessionRecord {
   readonly createdAt: Date
   readonly lastActivityAt: Date
   readonly expiresAt: Date
-  readonly rememberTokenHash?: string
 }
 
 export interface CoreSessionStoreTakeResult {

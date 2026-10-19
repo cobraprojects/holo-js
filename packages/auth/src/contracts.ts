@@ -409,6 +409,8 @@ type AuthProviderAdapterBase<TUser> = {
   matchesUser?(user: unknown): boolean
   getId(user: TUser): string | number
   getPasswordHash?(user: TUser): string | null | undefined
+  getRememberToken?(user: TUser): string | null | undefined
+  updateRememberToken?(user: TUser, token: string): Promise<void>
   getEmailVerifiedAt?(user: TUser): Date | string | null | undefined
 }
 
@@ -577,7 +579,6 @@ export interface AuthSessionRecord {
   readonly createdAt: Date
   readonly lastActivityAt: Date
   readonly expiresAt: Date
-  readonly rememberTokenHash?: string
 }
 
 export interface AuthSessionRuntime {
@@ -603,14 +604,6 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<void>
-  issueRememberMeToken(
-    sessionId: string,
-    options?: { readonly store?: string },
-  ): Promise<string>
-  consumeRememberMeToken?(
-    token: string,
-    options?: { readonly store?: string },
-  ): Promise<AuthSessionRecord | null>
   flash?(sessionId: string, key: string, value: unknown, options?: { readonly store?: string }): Promise<void>
   take?<TValue = unknown>(sessionId: string, key: string, options?: { readonly store?: string }): Promise<TValue | undefined>
   cookie?(

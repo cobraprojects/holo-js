@@ -281,9 +281,6 @@ describe('@holo-js/auth typing', () => {
         return null
       },
       async invalidate() {},
-      async issueRememberMeToken() {
-        return 'remember-token'
-      },
       sessionCookie() {
         return 'session=value'
       },

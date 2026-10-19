@@ -22,6 +22,7 @@ export type SessionAuthPayload = SessionIdentityPayload & {
   readonly authenticatedAt: string
   readonly impersonation?: SessionImpersonationPayload
   readonly multiFactorChallengeExpiresAt?: string
+  readonly multiFactorRemember?: true
 }
 
 export type SessionAuthPayloadMap = Readonly<Record<string, SessionAuthPayload>>
@@ -40,12 +41,14 @@ export function toSessionPayload(
   user: SerializedAuthUser,
   impersonation?: SessionImpersonationPayload,
   multiFactorChallengeExpiresAt?: string,
+  multiFactorRemember?: boolean,
 ): SessionAuthPayload {
   return Object.freeze({
     ...toSessionIdentityPayload(guard, provider, user),
     authenticatedAt: new Date().toISOString(),
     ...(impersonation ? { impersonation } : {}),
     ...(multiFactorChallengeExpiresAt ? { multiFactorChallengeExpiresAt } : {}),
+    ...(multiFactorChallengeExpiresAt && multiFactorRemember ? { multiFactorRemember: true as const } : {}),
   })
 }
 
