@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
+import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthEmailVerificationSendOptions, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
 import clientAuth, { type provider as clientProvider, type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
@@ -239,9 +239,9 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf(auth.logout).returns.toEqualTypeOf<Promise<AuthLogoutResult>>()
     expectTypeOf(auth.verifyEmail).parameter(0).toEqualTypeOf<string>()
     expectTypeOf(auth.verifyEmail).returns.toEqualTypeOf<Promise<AppAuthenticatedUser>>()
-    expectTypeOf(auth.sendEmailVerification).parameter(0).toEqualTypeOf<string | undefined>()
+    expectTypeOf(auth.sendEmailVerification).parameter(0).toEqualTypeOf<AuthEmailVerificationSendOptions | undefined>()
     expectTypeOf(auth.sendEmailVerification).returns.toEqualTypeOf<Promise<EmailVerificationTokenResult>>()
-    expectTypeOf(auth.resendEmailVerification).parameter(0).toEqualTypeOf<string | undefined>()
+    expectTypeOf(auth.resendEmailVerification).parameter(0).toEqualTypeOf<AuthEmailVerificationSendOptions | undefined>()
     expectTypeOf(auth.resendEmailVerification).returns.toEqualTypeOf<Promise<EmailVerificationTokenResult>>()
     expectTypeOf(clientAuth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
     expectTypeOf(clientAuth.provider).returns.toEqualTypeOf<Promise<string | null>>()

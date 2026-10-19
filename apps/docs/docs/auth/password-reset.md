@@ -82,7 +82,7 @@ export const resetPasswordForm = schema({
 })
 ```
 
-`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time.
+`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time. Every call also takes at least 200 ms, as in Laravel's timebox, whether or not an account exists, so timing doesn't reveal it either. Send reset emails through a queue (see [Customize the email](#customize-the-email)) so that a slow mail server doesn't make a real account's request take longer than an unknown one.
 
 When a user is found, Holo deletes their older reset links, creates a new one, and emails it.
 
@@ -143,6 +143,8 @@ export async function POST({ request }: { request: Request }) {
 `resetPassword()` hashes and saves the new password and returns the user. It doesn't sign the user in; send them to the login page, or call [`loginUsing()`](/auth/local-auth#sign-in-a-user-you-already-trust) with the returned user if you want to.
 
 A link works once. After a successful reset, every other reset link for that email stops working too.
+
+The reset also cycles the user's remember token, the way Laravel does on password reset. A browser that was signed in with "remember me" can no longer restore its session from the old remember cookie. Browsers that are still signed in keep their sessions until those sessions expire or sign out.
 
 ## Configure the broker
 

@@ -259,7 +259,7 @@ if (!(await check())) {
 
 `user(): Promise<AuthenticatedAuthUser | null>`
 
-Returns the signed-in user on the default guard, or `null`. The user also has `can()` for [authorization checks](#user-can).
+Returns the signed-in user on the default guard, or `null`. Holo loads the user from your provider the first time it's asked in a request and reuses that result for the rest of the request, so a user who was banned, demoted, or deleted since the last request loses access on the next one. Session data never stands in for the user record. The user also has `can()` for [authorization checks](#user-can).
 
 ### id()
 
@@ -318,7 +318,7 @@ if (session.multiFactorChallenge) {
 }
 ```
 
-Wrong credentials throw a validation exception with field errors, so your form shows them like any other validation error. If [multi-factor auth](/auth/multi-factor) is enabled for the user, the session has a `multiFactorChallenge` and the user isn't fully signed in until they pass it. The result also includes `guard`, `provider`, `user`, `sessionId`, `rememberToken`, `cookies`, and `emailVerificationRequired`.
+Wrong credentials throw a validation exception with field errors, so your form shows them like any other validation error. A failed attempt takes at least 200 ms whether or not the account exists, as in Laravel's login timebox, so response timing doesn't reveal which emails have accounts. If [multi-factor auth](/auth/multi-factor) is enabled for the user, the session has a `multiFactorChallenge` and the user isn't fully signed in until they pass it. The result also includes `guard`, `provider`, `user`, `sessionId`, `rememberToken`, `cookies`, and `emailVerificationRequired`.
 
 ### loginUsing()
 
@@ -418,13 +418,13 @@ Returns to the original user and returns that user. Returns `null` when no imper
 
 `requestPasswordReset(input: { email: string }, options?: { broker?: string, expiresAt?: Date }): Promise<void>`
 
-Creates a reset token and emails it. It doesn't reveal whether the email exists: unknown emails return normally. A blank email throws a validation exception. A second request inside the broker's `throttle` window is ignored. See [Password Reset](/auth/password-reset).
+Creates a reset token and emails it. It doesn't reveal whether the email exists: unknown emails return normally, and every call takes at least 200 ms whether or not the account exists. A blank email throws a validation exception. A second request inside the broker's `throttle` window is ignored. See [Password Reset](/auth/password-reset).
 
 ### resetPassword()
 
 `resetPassword(input: { token: string, password: string, passwordConfirmation: string }): Promise<AuthenticatedAuthUser>`
 
-Checks the token, saves the new password, deletes the email's other reset tokens, and returns the user. An invalid or expired token, or mismatched passwords, throw a validation exception.
+Checks the token, saves the new password, cycles the user's remember token, deletes the email's other reset tokens, and returns the user. Browsers that are still signed in keep their sessions. An invalid or expired token, or mismatched passwords, throw a validation exception.
 
 **Email verification**
 
@@ -436,13 +436,13 @@ Marks the user's email as verified and returns the user. An invalid or expired t
 
 ### sendEmailVerification()
 
-`sendEmailVerification(email?: string, options?: { guard?: string, expiresAt?: Date }): Promise<EmailVerificationTokenResult>`
+`sendEmailVerification(options?: { guard?: string, expiresAt?: Date }): Promise<EmailVerificationTokenResult>`
 
-Creates a new verification link and emails it. With no `email`, it uses the signed-in user. With an `email`, it finds the user by that address, so guests can request a link too. Throws `email_verification_user_missing` (401) when there's no user, and `email_already_verified` (409) when the email is already verified.
+Creates a new verification link for the signed-in user and emails it. It never takes an address, so a guest can't use it to send mail. Throws `email_verification_user_missing` (401) when there's no signed-in user, and `email_already_verified` (409) when the email is already verified. Rate limit the route that calls it; see [Resend the email](/auth/email-verification#resend-the-email).
 
 ### resendEmailVerification()
 
-`resendEmailVerification(email?: string, options?: { guard?: string, expiresAt?: Date }): Promise<EmailVerificationTokenResult>`
+`resendEmailVerification(options?: { guard?: string, expiresAt?: Date }): Promise<EmailVerificationTokenResult>`
 
 The same function as `sendEmailVerification()`, with the name you'd use in a "resend" button.
 
@@ -454,9 +454,9 @@ Creates a link for a user object and emails it. It replaces the user's previous 
 
 ### verification.resend()
 
-`verification.resend(options?: { guard?: string, expiresAt?: Date, email?: string }): Promise<EmailVerificationTokenResult>`
+`verification.resend(options?: { guard?: string, expiresAt?: Date }): Promise<EmailVerificationTokenResult>`
 
-Creates and emails a new link, taking the same options as `sendEmailVerification()` in one object.
+Creates and emails a new link for the signed-in user, taking the same options as `sendEmailVerification()` in one object.
 
 ### verification.consume()
 
@@ -662,7 +662,7 @@ Every code an `AuthError` can have. Form failures from `login()`, `register()`, 
 | `provider_resolution_required` | Holo can't tell which provider a user belongs to. Pass a `guard` |
 | `provider_update_unsupported` | The provider doesn't implement `update()`, which verification and reset need |
 | `email_required_for_verification` | The user has no email to verify |
-| `email_verification_user_missing` | Resend without a signed-in user or a matching email |
+| `email_verification_user_missing` | Resend without a signed-in user |
 | `email_already_verified` | The email is already verified |
 | `email_verification_token_invalid` | The verification token is malformed |
 | `email_verification_token_expired` | The verification token is unknown, expired, or already used |

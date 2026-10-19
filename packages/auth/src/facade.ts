@@ -163,7 +163,7 @@ export const verification: AuthEmailVerificationFacade = Object.freeze({
   create(authenticatedUser: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }) {
     return getAuthRuntime().verification.create(authenticatedUser, options)
   },
-  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }) {
+  resend(options?: { readonly guard?: string, readonly expiresAt?: Date }) {
     return getAuthRuntime().verification.resend(options)
   },
   consume(plainTextToken: string) {

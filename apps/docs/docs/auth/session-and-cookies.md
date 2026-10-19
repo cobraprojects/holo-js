@@ -1,6 +1,6 @@
 # Sessions and Cookies
 
-Browser login uses a session: Holo stores the signed-in user in a session store and gives the browser a cookie with the session ID. This page covers the session settings that matter for auth: where sessions live, cookie options, lifetimes, remember me, and signing out other devices.
+Browser login uses a session: Holo stores the signed-in user's ID in a session store and gives the browser a cookie with the session ID. The user record itself is read from your provider on each request. This page covers the session settings that matter for auth: where sessions live, cookie options, lifetimes, remember me, and signing out other devices.
 
 ## Default setup
 
@@ -106,7 +106,7 @@ When you pass `remember: true` to `login()` or `loginUsing()`, Holo also sets a 
 await login({ email, password, remember: true })
 ```
 
-Each user has one remember token, stored in the `remember_token` column of the `users` table. The auth migrations add it. Keep it out of JSON output with the model's `hidden` list:
+Each user has one remember token, stored in the `remember_token` column of the `users` table. The auth migrations add it. Logging out, logging out other devices, and resetting the password each replace it, so remember-me cookies issued before then stop restoring. Keep it out of JSON output with the model's `hidden` list:
 
 ```ts [server/models/User.ts]
 import { defineModel } from '@holo-js/db'

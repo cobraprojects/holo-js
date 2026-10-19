@@ -171,6 +171,7 @@ type UserRecord = {
   password?: string | null
   avatar?: string | null
   email_verified_at?: Date | null
+  remember_token?: string | null
 }
 
 const resetBrokerConfig = { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 60 } } } as const
@@ -1742,6 +1743,29 @@ describe('@holo-js/auth package runtime', () => {
     expect(await impersonation()).toBeNull()
   })
 
+  it('signs the impersonating guard out instead of restoring an original user the provider no longer has', async () => {
+    const runtime = await configureRuntime()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await loginUsing(actor)
+    await impersonate(target)
+
+    await runtime.usersProvider.delete!(actor.id)
+
+    await expect(stopImpersonating()).resolves.toBeNull()
+    await expect(user()).resolves.toBeNull()
+  })
+
   it('refuses to impersonate with remember and changes nothing', async () => {
     const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
@@ -2220,6 +2244,26 @@ describe('@holo-js/auth package runtime', () => {
     expect(verify).toHaveBeenCalledWith('secret-secret', '')
   })
 
+  it('pads failed login attempts to the same minimum time whether or not the account exists', async () => {
+    const runtime = await configureRuntime()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hashPassword('secret-secret'),
+    })
+    const timedFailedLogin = async (email: string, password: string) => {
+      const started = performance.now()
+      await expect(auth.login({ email, password })).rejects.toThrow('These credentials do not match our records.')
+      return performance.now() - started
+    }
+
+    const unknownAccount = await timedFailedLogin('missing@example.com', 'secret-secret')
+    const wrongPassword = await timedFailedLogin('ava@example.com', 'wrong-secret')
+
+    expect(unknownAccount).toBeGreaterThanOrEqual(190)
+    expect(wrongPassword).toBeGreaterThanOrEqual(190)
+  })
+
   it('creates, expires, rejects, and consumes email verification tokens', async () => {
     const runtime = await configureRuntime()
     const created = unwrapAuthResult(await register({
@@ -2297,12 +2341,12 @@ describe('@holo-js/auth package runtime', () => {
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
   })
 
-  it('resends verification tokens by email without requiring an active session', async () => {
+  it('resends verification only for the signed-in user and never sends to a submitted address', async () => {
     const runtime = await configureRuntime({
       emailVerificationRequired: true,
     })
 
-    await register({
+    const created = await register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'secret-secret',
@@ -2311,12 +2355,15 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(runtime.deliveries).toHaveLength(1)
 
-    const sent = unwrapAuthResult(await getAuthRuntime().sendEmailVerification('ava@example.com'))
-    const resent = unwrapAuthResult(await getAuthRuntime().resendEmailVerification('ava@example.com'))
-    const topLevelSent = unwrapAuthResult(await sendEmailVerification('ava@example.com'))
-    const legacyResent = unwrapAuthResult(await verification.resend({
-      email: 'ava@example.com',
-    }))
+    await expectAuthValidationError(() => resendEmailVerification(), 'email_verification_user_missing', 401)
+    await expectAuthValidationError(() => sendEmailVerification('ava@example.com' as never), 'email_verification_user_missing', 401)
+    expect(runtime.deliveries).toHaveLength(1)
+
+    unwrapAuthResult(await loginUsing(created))
+    const sent = unwrapAuthResult(await getAuthRuntime().sendEmailVerification())
+    const resent = unwrapAuthResult(await getAuthRuntime().resendEmailVerification())
+    const topLevelSent = unwrapAuthResult(await sendEmailVerification())
+    const legacyResent = unwrapAuthResult(await verification.resend())
     expect(sent.plainTextToken).toContain('.')
     expect(resent.plainTextToken).toContain('.')
     expect(topLevelSent.plainTextToken).toContain('.')
@@ -2329,10 +2376,8 @@ describe('@holo-js/auth package runtime', () => {
       tokenValue: legacyResent.plainTextToken,
     })
 
-    await expectAuthValidationError(() => resendEmailVerification('missing@example.com'), 'email_verification_user_missing', 401)
-
     await verifyEmail(legacyResent.plainTextToken)
-    await expectAuthValidationError(() => resendEmailVerification('ava@example.com'), 'email_already_verified', 409)
+    await expectAuthValidationError(() => resendEmailVerification(), 'email_already_verified', 409)
   })
 
   it('preserves verification and password reset tokens when native user updates fail', async () => {
@@ -2455,6 +2500,46 @@ describe('@holo-js/auth package runtime', () => {
       expect(await verifyPassword(passwords[1 - index]!, persisted?.password ?? '')).toBe(false)
       expect(await runtime.passwordResetTokenStore.findById(delivery.tokenId)).toBeNull()
     }
+  })
+
+  it('pads reset-link requests to the same minimum time for unknown and known accounts', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const timedResetRequest = async (email: string) => {
+      const started = performance.now()
+      await requestPasswordReset({ email })
+      return performance.now() - started
+    }
+
+    const unknownAccount = await timedResetRequest('missing@example.com')
+    const knownAccount = await timedResetRequest('ava@example.com')
+
+    expect(unknownAccount).toBeGreaterThanOrEqual(190)
+    expect(knownAccount).toBeGreaterThanOrEqual(190)
+    expect(runtime.deliveries).toHaveLength(1)
+  })
+
+  it('cycles the remember token on password reset and leaves other browser sessions signed in', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(created).toBeTruthy()
+    const otherBrowser = unwrapAuthResult(await loginUsing(created!))
+    await runtime.usersProvider.updateRememberToken!(created!, 'remember-before-reset')
+
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await resetPassword({
+      token: runtime.deliveries[0]!.tokenValue,
+      password: 'new-secret',
+      passwordConfirmation: 'new-secret',
+    })
+
+    const reset = await runtime.usersProvider.findById(created!.id as number)
+    expect(reset?.remember_token).toEqual(expect.any(String))
+    expect(reset?.remember_token).not.toBe('remember-before-reset')
+
+    const otherBrowserContext = authRuntimeInternals.createMemoryAuthContext()
+    otherBrowserContext.setSessionId('web', otherBrowser.sessionId)
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
+    await expect(check()).resolves.toBe(true)
   })
 
   it('creates, invalidates, and consumes password reset tokens', async () => {
@@ -2860,6 +2945,23 @@ describe('@holo-js/auth package runtime', () => {
     expect(await refreshUser()).toMatchObject({
       name: 'Ava Updated',
     })
+  })
+
+  it('loads the session user from the provider on the next request instead of trusting a stored snapshot', async () => {
+    const runtime = await configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hashPassword('secret-secret'),
+    })
+    const established = unwrapAuthResult(await loginUsing(created))
+    await runtime.usersProvider.update!((await runtime.usersProvider.findById(created.id as number))!, { name: 'Ava Renamed' })
+
+    const nextRequest = authRuntimeInternals.createMemoryAuthContext()
+    nextRequest.setSessionId('web', established.sessionId)
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: nextRequest })
+
+    await expect(user()).resolves.toMatchObject({ name: 'Ava Renamed' })
   })
 
   it('loads a fresh user through the selected guard provider without a session', async () => {
@@ -5132,10 +5234,6 @@ describe('@holo-js/auth package runtime', () => {
       guard: 'admin',
       provider: 'admins',
       userId: admin.id,
-      user: expect.objectContaining({
-        id: admin.id,
-        email: admin.email,
-      }),
     })
   })
 
@@ -5705,7 +5803,9 @@ describe('@holo-js/auth package runtime', () => {
       email: 'primitive-verification@app.test',
       password: null,
     })
-    const sent = unwrapAuthResult(await sendEmailVerification('primitive-verification@app.test'))
+    const created = await runtime.usersProvider.findByCredentials({ email: 'primitive-verification@app.test' })
+    unwrapAuthResult(await loginUsing(created!))
+    const sent = unwrapAuthResult(await sendEmailVerification())
     const bindings = authRuntimeInternals.getRuntimeBindings()
     const primitiveProvider = {
       findById: async () => 1 as never,

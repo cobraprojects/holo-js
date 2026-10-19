@@ -1,14 +1,12 @@
-import { resendEmailVerification } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { resendEmailVerification, user } from '@holo-js/auth'
+import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 import { serializeValidationException } from '@holo-js/validation'
-
-import { resendEmailVerificationForm } from '#shared/schemas/auth'
 
 const resendSuccessMessage = 'A fresh verification email has been sent.'
 
 function resendSuccessResponse() {
   return {
-    ok: true,
+    ok: true as const,
     status: 200,
     data: {
       message: resendSuccessMessage,
@@ -17,16 +15,36 @@ function resendSuccessResponse() {
 }
 
 export default defineEventHandler(async (event) => {
-  const input = await validate(event, resendEmailVerificationForm, {
-    throttle: 'emailVerificationResend',
-  })
+  const current = await user()
+  if (!current) {
+    setResponseStatus(event, 401)
+    return {
+      ok: false as const,
+      status: 401,
+      errors: { _root: ['Sign in before requesting another verification email.'] },
+    }
+  }
 
   try {
-    await resendEmailVerification(input.email)
+    await rateLimit('emailVerificationResend', { key: `user:${String(current.id)}` })
+    await resendEmailVerification()
   } catch (error) {
-    if (!serializeValidationException(error)) {
+    if (error instanceof SecurityRateLimitError) {
+      setResponseStatus(event, 429)
+      return {
+        ok: false as const,
+        status: 429,
+        errors: { _root: [error.message] },
+      }
+    }
+
+    const payload = serializeValidationException(error)
+    if (!payload) {
       throw error
     }
+
+    setResponseStatus(event, payload.status)
+    return payload
   }
 
   return resendSuccessResponse()
