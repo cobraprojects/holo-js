@@ -28,6 +28,12 @@ A refused channel subscription no longer closes the WebSocket. The worker sends 
 
 The worker also stops sending internal error messages. Unexpected realtime errors reach clients as `Realtime request failed.`, failed publishes return `Broadcast publish failed.`, and the original errors go to your [error reporter](/basics/errors#reporting-errors). See [Errors](/broadcasting/production#errors).
 
+### Sensitive input in validation failures
+
+Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) are now left out of every validation failure, including inside nested objects and arrays. This covers the 422 response in Next.js, Nuxt, and SvelteKit, `ValidationException` `values` and `toJSON()`, and `submission.fail()` and `submission.serialize()`. If your code reads a password back from a caught `ValidationException`, read it from the request instead.
+
+In Nuxt, the cookie that flashes errors after a native form post no longer contains the submitted values, and it is marked `Secure` on HTTPS requests. `useValidationErrors()` works as before.
+
 ### S3 file names with special characters
 
 S3 disks now store files under their exact names. Before 0.4.0, a name with characters other than letters, digits, and `-_.!~*'()` was stored under its URL-encoded form: `reports/Q1 café.pdf` became the object `reports/Q1%20caf%C3%A9.pdf`, and its `url()` returned access denied or not found. After upgrading, Holo looks for `reports/Q1 café.pdf`, so rename those objects before you deploy. With the AWS CLI:
