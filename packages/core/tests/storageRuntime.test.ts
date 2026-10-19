@@ -583,13 +583,28 @@ describe('local storage name decoding collisions', () => {
     expect(result.renamed).toEqual([{ from: 'plain%20file.txt', to: 'plain file.txt' }])
     expect(result.skipped).toEqual(expect.arrayContaining(['caf%C3%89.txt', 'caf%C3%A9.txt', 'cafe%CC%81.txt'].map(path => ({
       path,
-      reason: expect.stringContaining('another decoded name'),
+      reason: expect.stringContaining('matches another name'),
     }))))
     expect(result.skipped).toHaveLength(3)
     for (const [name, contents] of Object.entries(files)) {
       if (name === 'plain%20file.txt') continue
       await expect(readFile(join(root, name), 'utf8')).resolves.toBe(contents)
     }
+  })
+
+  it('skips a unit whose decoded name matches an unchanged name when case is ignored', async () => {
+    const root = await createCollisionDisk()
+    await writeFile(join(root, 'report one.txt'), 'existing')
+    await writeFile(join(root, 'REPORT%20ONE.txt'), 'encoded')
+    await writeFile(join(root, 'REPORT%20ONE.txt$'), '{"owner":"ops"}')
+
+    const result = await storageRuntimeInternals.decodeLocalStorageNames(root, { platform: 'linux' })
+
+    expect(result.renamed).toEqual([])
+    expect(result.skipped.map(item => item.path)).toEqual(['REPORT%20ONE.txt', 'REPORT%20ONE.txt$'])
+    expect(result.skipped[0]?.reason).toMatch(/matches another name|already exists/u)
+    await expect(readFile(join(root, 'report one.txt'), 'utf8')).resolves.toBe('existing')
+    await expect(readFile(join(root, 'REPORT%20ONE.txt'), 'utf8')).resolves.toBe('encoded')
   })
 
   it('checks destinations again right before renaming each unit', async () => {

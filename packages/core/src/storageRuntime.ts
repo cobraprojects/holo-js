@@ -313,6 +313,15 @@ async function decodeLocalStorageNames(
       if (members.length > 0) plans.push(members)
     }
 
+    const collisionReason = 'its decoded name matches another name when case or Unicode normalization is ignored'
+    const plannedNames = new Set(plans.flat().map(member => member.entry.name))
+    const unchangedNames = new Set(entries.filter(entry => !plannedNames.has(entry.name)).map(entry => decodedNameCollisionKey(entry.name)))
+    for (const members of plans) {
+      if (members.some(member => unchangedNames.has(decodedNameCollisionKey(member.decodedName)))) {
+        for (const member of members) member.reason ??= collisionReason
+      }
+    }
+
     const plansByTarget = new Map<string, Set<DecodeRename[]>>()
     for (const members of plans) {
       for (const member of members) {
@@ -324,7 +333,7 @@ async function decodeLocalStorageNames(
       if (colliding.size < 2) continue
       for (const members of colliding) {
         for (const member of members) {
-          member.reason ??= 'its decoded name matches another decoded name when case or Unicode normalization is ignored'
+          member.reason ??= collisionReason
         }
       }
     }

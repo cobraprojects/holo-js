@@ -149,6 +149,18 @@ describe('private local storage URLs', () => {
   })
 })
 
+describe('private local storage URLs for metadata names', () => {
+  it('refuses to sign a path ending in the reserved $ suffix', async () => {
+    const { runtime, disk } = await fixture()
+    const config = { ...runtime, appKey, appUrl: 'https://app.test' }
+
+    for (const path of ['prices.json$', 'reports/prices.json$']) {
+      expect(() => createTemporaryLocalStorageUrl(disk, path, config, 60)).toThrow('ending in "$" are reserved')
+    }
+    expect(createTemporaryLocalStorageUrl(disk, 'prices$.json', config, 60)).toContain('/__holo_private/local/prices%24.json')
+  })
+})
+
 describe('private local storage URLs on Windows', () => {
   it('refuses signed URLs that Windows would resolve to a metadata sidecar, and still serves normal files', async () => {
     const { root, runtime, disk, response } = await fixture()

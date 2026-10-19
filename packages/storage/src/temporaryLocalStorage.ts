@@ -29,6 +29,9 @@ export function createTemporaryLocalStorageUrl(
   if (!config.appKey) throw new Error('[Holo Storage] Temporary local URLs require the configured application key.')
   if (!config.appUrl) throw new Error('[Holo Storage] Temporary local URLs require the configured application URL.')
   const fileSegments = path.split('/')
+  if (fileSegments.filter(Boolean).at(-1)?.endsWith('$')) {
+    throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
+  }
   if (!fileSegments.every(isSafeSegment)) throw new Error('[Holo Storage] Invalid temporary local storage path.')
   const segments = [disk.name, ...fileSegments]
   const url = new URL(config.appUrl)
