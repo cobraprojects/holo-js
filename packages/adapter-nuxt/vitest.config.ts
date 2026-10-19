@@ -12,6 +12,7 @@ export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {
     name: '@holo-js/adapter-nuxt',
     environment: 'node',
+    env: { APP_ENV: 'test' },
     include: ['tests/**/*.test.ts'],
     maxWorkers: 2,
     coverage: {

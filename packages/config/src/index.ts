@@ -26,6 +26,7 @@ export {
   loadEnvironment,
   resolveAppEnvironment,
   resolveEnvironmentFileOrder,
+  resolveProjectAppEnvironmentSync,
 } from './env'
 export {
   clearConfigCache,
