@@ -354,6 +354,16 @@ redis: {
 
 Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
 
+### Transaction nesting and commit errors
+
+Check three behaviors when you upgrade:
+
+- A `transaction()` call on a connection object made while a transaction is open on that connection now becomes a savepoint. Before, it started a second transaction that could commit the outer work early. If you relied on that early commit, move the work out of the outer callback.
+- When an `afterCommit` callback throws, `DB.transaction()` rejects with that same error. It used to reject with a `TransactionError` wrapping it. Update any `catch` that checked for `TransactionError` in that case.
+- `timeoutMs` and `signal` on a transaction only limit how long it takes to start. Commit and rollback are never interrupted. If you relied on a timeout to abandon a slow commit, the commit now finishes. See [Timeouts and cancellation](/database/transactions#timeouts-and-cancellation).
+
+To retry a transaction after a deadlock or lock timeout, pass `attempts`. See [Retry deadlocks](/database/transactions#retry-deadlocks).
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

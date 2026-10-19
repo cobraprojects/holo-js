@@ -1,4 +1,10 @@
 const DEADLOCK_DRIVER_CODES: ReadonlySet<string> = new Set(['ER_LOCK_DEADLOCK', '40P01', '40001'])
+const CONCURRENCY_DRIVER_CODES: ReadonlySet<string> = new Set([
+  ...DEADLOCK_DRIVER_CODES,
+  'ER_LOCK_WAIT_TIMEOUT',
+  'SQLITE_BUSY',
+  'SQLITE_LOCKED',
+])
 const MAX_ERROR_CHAIN_DEPTH = 8
 
 export function driverErrorCodes(error: unknown): readonly string[] {
@@ -23,4 +29,8 @@ export function driverErrorCodes(error: unknown): readonly string[] {
 
 export function isDatabaseDeadlockError(error: unknown): boolean {
   return driverErrorCodes(error).some(code => DEADLOCK_DRIVER_CODES.has(code))
+}
+
+export function isDatabaseConcurrencyError(error: unknown): boolean {
+  return driverErrorCodes(error).some(code => CONCURRENCY_DRIVER_CODES.has(code))
 }
