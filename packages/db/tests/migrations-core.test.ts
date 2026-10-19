@@ -127,6 +127,7 @@ describe('native migration workflows', () => {
     await expect(migrator.rollback({ step: 1 })).resolves.toEqual([])
     expect((await migrator.rollback({ step: 2 })).map(migration => migration.name)).toEqual([irreversible.name])
     expect(await createSchemaService(db).hasTable('irreversible_records')).toBe(true)
+    expect(await migrator.hasRan(irreversible.name!)).toBe(false)
     expect(await migrator.hasRan('2026_01_01_000003_unavailable')).toBe(true)
     expect(await migrator.hasRan(migration.name!)).toBe(true)
   })
