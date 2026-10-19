@@ -325,14 +325,14 @@ describe('public storage names on Windows', () => {
     const { projectRoot, publicRoot } = await createProject()
     await writeFile(join(publicRoot, 'report.txt'), 'report')
     await writeFile(join(publicRoot, 'report.txt$'), '{"owner":"ops"}')
-    for (const alias of ['report.txt$.', 'report.txt$ ', 'nul.txt', 'CON']) {
+    for (const alias of ['report.txt$.', 'report.txt$ ', 'nul.txt', 'CON', 'COM¹.txt', 'lpt³', 'Com² .log']) {
       await writeFile(join(publicRoot, alias), 'metadata alias')
     }
     const config = storageConfig('./storage/app/public')
     const request = (path: string) => createPublicStorageResponse(projectRoot, config, new Request(`https://app.test/storage/${path}`))
 
     await withPlatform('win32', async () => {
-      for (const path of ['report.txt%24.', 'report.txt%24%20', 'nul.txt', 'CON', 'report.txt%24']) {
+      for (const path of ['report.txt%24.', 'report.txt%24%20', 'nul.txt', 'CON', 'report.txt%24', encodeURIComponent('COM¹.txt'), encodeURIComponent('lpt³'), encodeURIComponent('Com² .log')]) {
         expect((await request(path)).status, path).toBe(404)
       }
       const served = await request('report.txt')

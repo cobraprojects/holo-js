@@ -6,7 +6,7 @@ import { normalizeModuleOptions } from '../src/config'
 import { configureStorageRuntime, resetStorageRuntime, Storage, useStorage } from '../src/runtime/composables'
 
 const root = join(tmpdir(), 'holo-storage-path')
-const invalidWindowsNames = ['report.txt:payload', 'what?.txt', 'file<name.txt', 'a|b.txt', 'a*b.txt', 'a"b.txt', 'a>b.txt', 'a\u0001b.txt', 'report.txt.', 'folder /report.txt', 'CON', 'nul.txt', 'COM1.log', 'LPT9']
+const invalidWindowsNames = ['report.txt:payload', 'what?.txt', 'file<name.txt', 'a|b.txt', 'a*b.txt', 'a"b.txt', 'a>b.txt', 'a\u0001b.txt', 'report.txt.', 'folder /report.txt', 'CON', 'nul.txt', 'COM1.log', 'LPT9', 'COM¹.txt', 'com².log', 'COM³', 'LPT¹.txt', 'lpt²', 'LPT³ .txt']
 
 afterEach(() => resetStorageRuntime())
 

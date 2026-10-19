@@ -3,8 +3,7 @@ const WINDOWS_DEVICE_NAMES = new Set([
   'PRN',
   'AUX',
   'NUL',
-  ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
-  ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`),
+  ...['COM', 'LPT'].flatMap(device => ['1', '2', '3', '4', '5', '6', '7', '8', '9', '¹', '²', '³'].map(digit => `${device}${digit}`)),
 ])
 
 function windowsStorageNameProblem(name: string): string | null {
