@@ -774,7 +774,7 @@ It prints every rename and every file it skips, then the total. Running it again
 - a name whose decoded form already exists;
 - a file whose decoded name ends in `$`, because local disks use that ending for metadata.
 
-It doesn't follow symlinks, so files outside the disk root are never renamed. Rename skipped files by hand. S3 disks are not supported; see [S3 file names with special characters](/getting-started/upgrading#s3-file-names-with-special-characters).
+It never follows a symlink inside the disk, so files outside the disk root are never renamed. The disk's `root` in `config/storage.ts` is used as the disk, including when that path is itself a symlink, as the rest of the disk does. Rename skipped files by hand. S3 disks are not supported; see [S3 file names with special characters](/getting-started/upgrading#s3-file-names-with-special-characters).
 
 ## Broadcast commands
 
