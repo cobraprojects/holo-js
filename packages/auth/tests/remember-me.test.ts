@@ -39,12 +39,12 @@ let directory: string
 class Browser {
   readonly cookies = new Map<string, string>()
 
-  async request<TValue>(callback: () => Promise<TValue>, bindings: Partial<Parameters<typeof configureAuthRuntime>[0]> = {}): Promise<TValue> {
+  async request<TValue>(callback: () => Promise<TValue>, bindings: Partial<Parameters<typeof configureAuthRuntime>[0]> = {}, scoped = true): Promise<TValue> {
     const current = authRuntimeInternals.getRuntimeBindings()
     const requestCookies = new Map(this.cookies)
     const requestContext = createAsyncAuthContext()
     const context = {
-      ...requestContext,
+      ...(scoped ? requestContext : authRuntimeInternals.createMemoryAuthContext()),
       getRequestCookie: (name: string) => requestCookies.get(name),
       appendResponseCookie: (setCookie: string) => this.receive(setCookie),
     }
@@ -291,7 +291,7 @@ describe('remember me', () => {
     await expect(getSessionRuntime().take(challenge.id, 'challenge')).resolves.toBe(true)
   })
 
-  it('keeps the browser on a pending multi-factor challenge when the restored guard logs out', async () => {
+  it.each([true, false])('keeps the browser on a pending multi-factor challenge when the restored guard logs out (request scoped: %s)', async (scoped) => {
     const browser = new Browser()
     await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
     browser.expireSession()
@@ -310,7 +310,7 @@ describe('remember me', () => {
     browser.receive(getSessionRuntime().sessionCookie(challenge.id))
     const challengeCookie = browser.cookies.get('holo_session')
 
-    await browser.request(() => auth.guard('admin').logout())
+    await browser.request(() => auth.guard('admin').logout(), {}, scoped)
 
     expect(browser.cookies.get('holo_session')).toBe(challengeCookie)
     await expect(getSessionRuntime().read(challenge.id)).resolves.toMatchObject({ id: challenge.id })

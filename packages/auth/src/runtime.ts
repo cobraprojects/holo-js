@@ -361,11 +361,10 @@ async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: stri
 const requestRememberEntries = new WeakMap<object, Promise<Map<string, string>>>()
 const requestRememberHydrations = new WeakMap<object, Map<string, Promise<void>>>()
 const requestRememberRestorations = new WeakMap<object, Promise<unknown>>()
-const requestOnlySessions = new WeakMap<object, Set<string>>()
 
-function isRequestOnlySession(bindings: RuntimeBindings, sessionId: string): boolean {
-  const scope = authRequestScope(bindings.context)
-  return Boolean(scope && requestOnlySessions.get(scope)?.has(sessionId))
+async function browserKeepsOtherSession(bindings: RuntimeBindings, sessionId: string): Promise<boolean> {
+  const browserSessionId = await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
+  return Boolean(browserSessionId && browserSessionId !== sessionId && await bindings.session.read(browserSessionId))
 }
 
 function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
@@ -481,8 +480,6 @@ async function restoreRememberedSessionNow(
     }),
   })
   if (challengePending) {
-    const scope = authRequestScope(bindings.context)
-    if (scope) requestOnlySessions.set(scope, (requestOnlySessions.get(scope) ?? new Set()).add(session.id))
     bindings.context.setSessionId(guardName, session.id)
     bindings.context.setCachedUser(guardName, user)
     return
@@ -2027,7 +2024,7 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     }
   }
 
-  if (sessionId && isRequestOnlySession(bindings, sessionId)) clearSessionCookies = false
+  if (clearSessionCookies && sessionId && await browserKeepsOtherSession(bindings, sessionId)) clearSessionCookies = false
   const forgetRemember = Boolean(bindings.context.getRememberToken?.(guardName))
     || (await readRememberCookieEntries(bindings)).has(guardName)
   bindings.context.setSessionId(guardName)
