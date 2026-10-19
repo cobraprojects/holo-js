@@ -10,9 +10,9 @@ export default defineBroadcastConfig({
   connections: {
     holo: {
       driver: 'holo',
-      appId: env('BROADCAST_APP_ID', 'app-id'),
-      key: env('BROADCAST_APP_KEY', 'app-key'),
-      secret: env('BROADCAST_APP_SECRET', 'app-secret'),
+      appId: env('BROADCAST_APP_ID'),
+      key: env('BROADCAST_APP_KEY'),
+      secret: env('BROADCAST_APP_SECRET'),
       options: {
         host: env('BROADCAST_HOST', '127.0.0.1'),
         port: env('BROADCAST_PORT', 8080),

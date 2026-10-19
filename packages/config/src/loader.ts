@@ -12,7 +12,6 @@ import {
 } from './defaults'
 import {
   configEvaluationInternals,
-  resolveEnvPlaceholders,
 } from './env'
 import { composeRegisteredConfig, configRegistryInternals } from './registry'
 import type {
@@ -27,7 +26,7 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 4
+const HOLO_CONFIG_CACHE_VERSION = 5
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
@@ -198,16 +197,15 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     loadedFiles: readonly string[]
   },
 ): LoadedHoloConfig<TCustom> {
-  const resolvedRawConfig = resolveEnvPlaceholders(rawConfig, options.environment.values)
-  const rawApp = resolvedRawConfig.app as HoloAppConfig | undefined
+  const rawApp = rawConfig.app as HoloAppConfig | undefined
   const app = normalizeAppConfig({ ...rawApp, env: rawApp?.env ?? options.environment.name })
-  const redis = normalizeRedisConfig(resolvedRawConfig.redis as HoloRedisConfig | undefined)
-  const firstPartyConfig = composeRegisteredConfig(resolvedRawConfig, {
+  const redis = normalizeRedisConfig(rawConfig.redis as HoloRedisConfig | undefined)
+  const firstPartyConfig = composeRegisteredConfig(rawConfig, {
     app,
     redis,
   }) as HoloConfigValues<TCustom>
   const firstPartyConfigKeys = new Set(Object.keys(firstPartyConfig))
-  const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
+  const customEntries = Object.entries(rawConfig).filter(([key]) => {
     return !firstPartyConfigKeys.has(key)
   })
   const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
@@ -241,7 +239,7 @@ function isSerializableConfigValue(value: unknown): boolean {
   }
 
   if (isObject(value)) {
-    return Object.values(value).every(entry => isSerializableConfigValue(entry))
+    return Object.values(value).every(entry => entry === undefined || isSerializableConfigValue(entry))
   }
 
   return false
@@ -325,7 +323,6 @@ export async function writeConfigCache(
   const { environment, rawConfig, loadedFiles } = await configEvaluationInternals.evaluate({
     cwd: root,
     ...options,
-    captureEnvPlaceholders: true,
   }, async (environment) => {
     return { environment, ...await collectRawConfig(configDir) }
   })

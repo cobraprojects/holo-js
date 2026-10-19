@@ -230,14 +230,14 @@ npx holo key:generate
 
 ### config:cache
 
-Compile every file in `config/` (with your env values applied) into one cached file at `.holo-js/generated/config-cache.json`. When the app runs in production (`APP_ENV=production`) and the cache was built for production, Holo reads it instead of loading `config/*.ts`. Other environments ignore the cache.
+Compile every file in `config/` into one cached file at `.holo-js/generated/config-cache.json`. Each `env()` call is evaluated with your current env values, and the results, secrets included, are written into the file. When the app runs in production (`APP_ENV=production`) and the cache was built for production, Holo reads it instead of loading `config/*.ts` or `.env`. Other environments ignore the cache.
 
 ```bash
 APP_ENV=production npx holo config:cache
 ```
 
 ::: warning
-In production, changes to `config/*.ts` or `.env` have no effect after you cache config until you run `config:cache` again or `config:clear`. Rebuild the cache on every deploy.
+In production, changes to `config/*.ts` or `.env` have no effect after you cache config until you run `config:cache` again or `config:clear`. Rebuild the cache on every deploy, after your env variables are in place. The cache file contains your secrets, so keep it out of version control.
 :::
 
 ### config:clear

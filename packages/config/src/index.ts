@@ -23,11 +23,9 @@ export {
   configEvaluationInternals,
   configureEnvRuntime,
   env,
-  isEnvPlaceholder,
   loadEnvironment,
   resolveAppEnvironment,
   resolveEnvironmentFileOrder,
-  resolveEnvPlaceholders,
 } from './env'
 export {
   clearConfigCache,

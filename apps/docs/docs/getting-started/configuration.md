@@ -100,7 +100,7 @@ export default defineDatabaseConfig({
 
 - `env('KEY')` returns the value as a string, or `''` if it isn't set.
 - `env('KEY', fallback)` returns the fallback when the value is missing or empty.
-- When the fallback is a number or boolean, the value is converted to that type. `env('DB_PORT', 5432)` returns a number. `env('APP_DEBUG', true)` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
+- When the fallback is a number or boolean, the value is converted to that type. `env('DB_PORT', 5432)` returns a number. `env('APP_DEBUG', true)` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`. See [`env()`](#available-functions) for what happens to a value that doesn't convert.
 
 Use `env()` in `config/` files, and read config values everywhere else. That keeps every setting in one place.
 
@@ -264,7 +264,7 @@ npx holo config:clear
 How the cache behaves:
 
 - It is used only when the app runs in the `production` environment, and only if the cache was built for that same environment.
-- It stores which env variable each value reads, not the value itself. Secrets are not written to the cache, and you can change env values without rebuilding it.
+- It stores the values your `env()` calls returned when you built it, including secrets such as `APP_KEY`. Changing `.env` has no effect until you run `config:cache` again. That's why the cache file must stay out of version control. The scaffolded `.gitignore` already ignores `.holo-js/generated`.
 - It does not notice edits to `config/` files. Run `config:cache` again after changing config, or `config:clear` to go back to reading the files.
 
 Build the cache as a deploy step, after `npm run build`. New projects include `config:cache` and `config:clear` package scripts for this.
@@ -344,7 +344,7 @@ See [CORS and proxies](/basics/security/cors-and-proxies).
 
 ### env() {#env}
 
-Reads an environment variable. Without a fallback, a missing variable returns an empty string. With a fallback, the value is converted to the fallback's type: booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`, and numbers use `Number()`. An empty or unrecognized value returns the fallback.
+Reads an environment variable. Without a fallback, a missing variable returns an empty string. With a fallback, the value is converted to the fallback's type: booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`, and numbers use `Number()`. An empty value returns the fallback. A value that doesn't convert throws an error that names the variable.
 
 ```ts
 const port = env('REDIS_PORT', 6379)

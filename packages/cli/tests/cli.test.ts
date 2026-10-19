@@ -4945,7 +4945,7 @@ export default defineCacheConfig({
     expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/cache/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
   }, 60000)
 
-  it('caches config placeholders and clears the cache through the CLI', async () => {
+  it('caches evaluated config values and clears the cache through the CLI', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
 
@@ -4970,8 +4970,9 @@ export default defineAppConfig({
 
     const cachePath = join(projectRoot, '.holo-js/generated/config-cache.json')
     const cacheContents = await readFile(cachePath, 'utf8')
-    expect(cacheContents).toContain('"APP_KEY"')
-    expect(cacheContents).not.toContain('super-secret')
+    expect(cacheContents).toContain('"key": "super-secret"')
+    expect(cacheContents).toContain('"name": "Cached App"')
+    expect(cacheContents).not.toContain('__holoEnv')
 
     await writeProjectFile(projectRoot, 'config/app.ts', 'export default (() => { throw new Error("live config should not load") })()')
 

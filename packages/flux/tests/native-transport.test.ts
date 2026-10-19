@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import flux, { configureFluxClient, createFluxClient, getFluxClient } from '../src'
+import flux, { configureFluxClient, createFluxClient, fluxInternals, getFluxClient } from '../src'
 import { startNativeTransport } from './support/native-transport'
 
 it('delivers authorized whispers to other subscribers without echoing to the sender', async () => {
@@ -73,6 +73,14 @@ it('rejects connection attempts when the real worker is unavailable', async () =
   await transport.stop()
   await expect(transport.client.connect()).rejects.toThrow('WebSocket connection failed')
   expect(transport.client.getStatus()).toBe('disconnected')
+})
+
+it('rejects connection attempts when no broadcast app key is configured', async () => {
+  const client = createFluxClient({
+    connector: fluxInternals.createHoloWebSocketConnector({ host: '127.0.0.1', port: 9, key: '' }),
+  })
+  await expect(client.connect()).rejects.toThrow('Broadcast app key is not configured')
+  expect(client.getStatus()).toBe('disconnected')
 })
 
 it('does not deliver private broadcasts when the real worker rejects channel authorization', async () => {

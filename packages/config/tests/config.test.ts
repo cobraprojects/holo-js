@@ -12,7 +12,6 @@ import {
   configureEnvRuntime,
   defineConfig,
   env,
-  isEnvPlaceholder,
   loaderInternals,
   loadConfigDirectory,
   loadEnvironment,
@@ -20,7 +19,6 @@ import {
   normalizeAppEnv,
   resetConfigRuntime,
   resolveConfigCachePath,
-  resolveEnvPlaceholders,
   resolveEnvironmentFileOrder,
   useConfig,
   writeConfigCache,
@@ -1732,22 +1730,20 @@ export default defineAppConfig({
     expect(Object.isFrozen(storage)).toBe(true)
   })
 
-  it('resolves env values from runtime state, process env, capture mode, and empty fallbacks', () => {
+  it('resolves env values from runtime state, process env, and empty fallbacks', () => {
     configureEnvRuntime({
       RUNTIME_MAILER: 'ses',
       APP_DEBUG: 'false',
       APP_PORT: '4000',
-      APP_BAD_PORT: 'not-a-number',
       BOOL_ENABLED: 'yes',
-      BOOL_INVALID: 'sometimes',
+      BLANK_PORT: '   ',
     })
 
     expect(env('RUNTIME_MAILER', 'smtp')).toBe('ses')
     expect(env<boolean>('APP_DEBUG', true)).toBe(false)
     expect(env<number>('APP_PORT', 3000)).toBe(4000)
-    expect(env<number>('APP_BAD_PORT', 3000)).toBe(3000)
     expect(env<boolean>('BOOL_ENABLED', false)).toBe(true)
-    expect(env<boolean>('BOOL_INVALID', true)).toBe(true)
+    expect(env<number>('BLANK_PORT', 3000)).toBe(3000)
 
     process.env.PROCESS_MAILER = 'postmark'
     process.env.PROCESS_DEBUG = 'off'
@@ -1759,19 +1755,27 @@ export default defineAppConfig({
     expect(env('MISSING_WITH_FALLBACK', 'log')).toBe('log')
     expect(env('MISSING_WITHOUT_FALLBACK')).toBe('')
 
-    configureEnvRuntime(undefined, { mode: 'capture' })
-    const captured = env('CAPTURED_MAILER', 'smtp') as unknown
-    const capturedBoolean = env<boolean>('CAPTURED_DEBUG', true) as unknown
-    const uncaptured = env('CAPTURED_NO_FALLBACK') as unknown
+    configureEnvRuntime(undefined)
+  })
 
-    expect(isEnvPlaceholder(captured)).toBe(true)
-    expect(isEnvPlaceholder(capturedBoolean)).toBe(true)
-    expect(isEnvPlaceholder(uncaptured)).toBe(true)
-    expect(resolveEnvPlaceholders(captured, {})).toBe('smtp')
-    expect(resolveEnvPlaceholders(capturedBoolean, { CAPTURED_DEBUG: 'false' })).toBe(false)
-    expect(resolveEnvPlaceholders(uncaptured, {})).toBe('')
+  it('throws on malformed typed env values instead of returning the fallback', () => {
+    configureEnvRuntime({
+      APP_BAD_PORT: 'not-a-number',
+      APP_INFINITE_PORT: 'Infinity',
+      BOOL_INVALID: 'sometimes',
+    })
+
+    expect(() => env<number>('APP_BAD_PORT', 3000)).toThrow('Environment variable "APP_BAD_PORT" must be a number, got "not-a-number".')
+    expect(() => env<number>('APP_INFINITE_PORT', 3000)).toThrow('Environment variable "APP_INFINITE_PORT" must be a number')
+    expect(() => env<boolean>('BOOL_INVALID', true)).toThrow('Environment variable "BOOL_INVALID" must be a boolean')
 
     configureEnvRuntime(undefined)
+    process.env.PROCESS_BAD_DEBUG = 'maybe'
+    try {
+      expect(() => env<boolean>('PROCESS_BAD_DEBUG', false)).toThrow('Environment variable "PROCESS_BAD_DEBUG" must be a boolean')
+    } finally {
+      delete process.env.PROCESS_BAD_DEBUG
+    }
   })
 
   it('returns undefined for missing config paths and throws when the runtime is not configured', async () => {
@@ -1785,31 +1789,6 @@ export default defineAppConfig({
     expect(config('app.missing.value' as never)).toBeUndefined()
     resetConfigRuntime()
     expect(() => useConfig('app' as never)).toThrow('Holo config runtime is not configured.')
-  })
-
-  it('captures env placeholders and resolves nested arrays and objects', () => {
-    configureEnvRuntime(undefined, { mode: 'capture' })
-
-    const placeholderConfig = {
-      mail: {
-        primary: env('MAIL_DRIVER', 'smtp'),
-        fallbacks: [env('MAIL_FALLBACK', 'log')],
-      },
-    }
-
-    const resolved = resolveEnvPlaceholders(placeholderConfig, {
-      MAIL_DRIVER: 'ses',
-    })
-
-    expect(resolved).toEqual({
-      mail: {
-        primary: 'ses',
-        fallbacks: ['log'],
-      },
-    })
-
-    resetConfigRuntime()
-    configureEnvRuntime(undefined)
   })
 
   it('loads canonical app environments and parses exported env file syntax', async () => {
@@ -2096,7 +2075,7 @@ export default defineAppConfig({
     expect(loaderInternals.getConfigExtensionPriority('services.custom')).toBe(Number.MAX_SAFE_INTEGER)
   })
 
-  it('writes and clears a cache artifact without persisting resolved env values', async () => {
+  it('writes and clears a cache artifact with the environment values evaluated at cache time', async () => {
     const root = await createProject()
 
     await writeFile(join(root, '.env.production'), 'APP_NAME=Production App\nMAILGUN_SECRET=top-secret\n', 'utf8')
@@ -2124,15 +2103,16 @@ export default defineConfig({
 
     expect(cachePath).toBe(resolveConfigCachePath(root))
     const cacheContents = await readFile(cachePath, 'utf8')
-    expect(cacheContents).toContain('"__holoEnv": true')
-    expect(cacheContents).toContain('"MAILGUN_SECRET"')
-    expect(cacheContents).not.toContain('top-secret')
+    expect(cacheContents).toContain('"secret": "top-secret"')
+    expect(cacheContents).toContain('"name": "Production App"')
+    expect(cacheContents).not.toContain('__holoEnv')
+    expect(cacheContents).not.toContain('MAILGUN_SECRET')
 
     await writeFile(join(root, 'config/services.ts'), 'export default (() => { throw new Error("live import should not run") })()', 'utf8')
 
     const loaded = await loadConfigDirectory(root, {
       envName: 'production',
-      processEnv: {},
+      processEnv: { MAILGUN_SECRET: 'runtime-secret', APP_NAME: 'Runtime App' },
     })
 
     expect(loaded.app.name).toBe('Production App')

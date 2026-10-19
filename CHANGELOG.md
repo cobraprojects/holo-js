@@ -5,6 +5,9 @@
 - Make `@holo-js/validation` the only public schema-builder package. Remove schema builders from `@holo-js/forms` and remove the `@holo-js/forms/schema` entry.
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.
+- Generate the application key and broadcast app ID, key, and secret in `holo new`, writing them to `.env` with blank values in `.env.example`. `holo install broadcast` adds missing broadcast values to existing apps. Broadcast config no longer falls back to the literal `app-id`, `app-key`, and `app-secret`, and Flux refuses to connect without a broadcast key instead of using `app-key`.
+- `config:cache` evaluates `env()` with the real environment values and stores them in the cache file, so runtime `.env` changes don't affect cached config. The cache format is version 5; 0.3.x and earlier caches are ignored.
+- `env()` with a boolean or number fallback throws, naming the variable, when the value doesn't convert, instead of returning the fallback.
 
 ### Added
 
@@ -51,7 +54,8 @@
 
 ### Compatibility and upgrade requirements
 
-- **Run `npx holo config:cache` again after upgrading** if you use the config cache. 0.3.x caches are ignored, and the app loads `config/*.ts` until the cache is rebuilt.
+- **Run `npx holo config:cache` again after upgrading** if you use the config cache. Caches from 0.3.x and earlier are ignored, and the app loads `config/*.ts` until the cache is rebuilt. The cache now holds secrets, so keep it out of version control.
+- **Set broadcast credentials before deploying.** Run `npx holo install broadcast` for apps that use broadcasting, and set `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, and `BROADCAST_APP_SECRET` for your web app and worker. Typed env values that don't convert, such as `APP_DEBUG=maybe`, now fail instead of using the fallback.
 - **Set `APP_ENV=development` in local `.env` files.** A missing `APP_ENV` now means `production` instead of `development`. `HOLO_ENV` is removed, `NODE_ENV` no longer selects the environment, and values other than `development`, `production`, or `test` fail instead of counting as `development`. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#application-environment-from-app-env).
 - **Users are signed out once when they upgrade.** Session, remember-me and `XSRF-TOKEN` cookies set by 0.3.x can't be decrypted, and the first form submitted with an old CSRF cookie gets `419`. `APP_KEY` is required wherever Holo sets these cookies.
 - **Rename S3 objects with special characters before deploying.** Objects written by 0.3.x under URL-encoded names, such as `Q1%20report.pdf`, are no longer found by their original path. See [S3 file names with special characters](apps/docs/docs/getting-started/upgrading.md#s3-file-names-with-special-characters).

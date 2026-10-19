@@ -104,7 +104,7 @@ describe('generated config selectors', () => {
         MAIL_USERNAME: 'mailer',
         MAIL_PASSWORD: 'secret',
       },
-      preferCache: cached,
+      preferCache: false,
     })
     const configuredStorage = normalizeModuleOptions(configured.storage)
     expect(configuredStorage.disks.s3).toMatchObject({
@@ -313,6 +313,7 @@ console.log(JSON.stringify({ defaults: defaults.auth.defaults, overridden: overr
       processEnv: {
         STORAGE_DEFAULT_DISK: 'public', MAIL_MAILER: 'log',
         BROADCAST_CONNECTION: 'log', SESSION_DRIVER: 'database',
+        BROADCAST_APP_ID: 'app-id', BROADCAST_APP_KEY: 'app-key', BROADCAST_APP_SECRET: 'app-secret',
       },
       preferCache: false,
     })
