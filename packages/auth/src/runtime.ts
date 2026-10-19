@@ -1,7 +1,7 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
-import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
 import { isAuthError } from './contracts'
 import type {
