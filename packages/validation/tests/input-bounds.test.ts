@@ -55,6 +55,12 @@ describe('Validation input bounds', () => {
     expect(ordered.valid).toBe(true)
     if (ordered.valid) expect(ordered.data.tags).toEqual(['a', 'b'])
 
+    for (const query of ['tags=a&tags=b&tags[]=c', 'tags[]=a&tags=b&tags[]=c']) {
+      const repeated = await safeParse(new URLSearchParams(query), definition)
+      expect(repeated.valid, query).toBe(true)
+      if (repeated.valid) expect(repeated.data.tags).toEqual(['a', 'b', 'c'])
+    }
+
     expect(await rootErrors(formWith([['tags[999999999]', 'x']]), definition))
       .toEqual(['The request contains an invalid list index.'])
     expect(await rootErrors(formWith([['tags[0]', 'a'], ['tags[2]', 'c']]), definition))

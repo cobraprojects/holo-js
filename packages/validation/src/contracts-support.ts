@@ -373,9 +373,12 @@ export function assignNestedValue(
       if (typeof existing === 'undefined') {
         cursor[token] = value
       } else if (Array.isArray(existing)) {
+        recordArrayIndex(indexes, existing, existing.length)
         existing.push(value)
       } else {
         const values = [existing, value]
+        recordArrayIndex(indexes, values, 0)
+        recordArrayIndex(indexes, values, 1)
         repeatedFormValues.add(values)
         cursor[token] = values
       }
