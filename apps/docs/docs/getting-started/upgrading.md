@@ -55,6 +55,14 @@ Saving or deleting a loaded model now targets the row it was loaded from, even a
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Broadcast subscription errors and channel authorization
+
+A refused channel subscription no longer closes the WebSocket. The worker sends `pusher:subscription_error` for that channel and keeps the connection open, so Flux keeps the browser's other channels and tries the refused channel again the next time you subscribe to it. If your own client waited for close code `4001` after a refused subscription, listen for `pusher:subscription_error` instead.
+
+`holo broadcast:work` now checks unsigned private and presence subscriptions with the user from the connection's session cookie or `Authorization` header, and refuses them when nobody is signed in. Before, those rules received `null`. Subscriptions signed by `/broadcasting/auth` are unchanged.
+
+The worker also stops sending internal error messages. Unexpected realtime errors reach clients as `Realtime request failed.`, failed publishes return `Broadcast publish failed.`, and the original errors go to your [error reporter](/basics/errors#reporting-errors). See [Errors](/broadcasting/production#errors).
+
 ### Queue jobs interrupted by a stopped worker
 
 Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up once at least the connection's `retryAfter` seconds have passed; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.

@@ -557,6 +557,11 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       return
     }
 
+    if (eventName === 'pusher:subscription_error') {
+      state.subscribed = false
+      return
+    }
+
     if (eventName === 'pusher_internal:subscription_succeeded') {
       const presence = payload.presence
       if (presence && typeof presence === 'object' && !Array.isArray(presence)) {
