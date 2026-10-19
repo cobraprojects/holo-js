@@ -1874,7 +1874,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         throw new Error(`[@holo-js/broadcast] Socket id "${connection.socketId}" is already connected.`)
       }
 
-      connectedSockets.set(connection.socketId, {
+      const socket: SocketState = {
         socketId: connection.socketId,
         app: connection.app,
         headers: connection.headers,
@@ -1885,12 +1885,21 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         realtimeSubscriptionTokens: new Map(),
         active: true,
         pendingMessage: Promise.resolve(),
-      })
+      }
+      connectedSockets.set(connection.socketId, socket)
 
-      connection.send(pusherEvent('pusher:connection_established', {
-        socket_id: connection.socketId,
-        activity_timeout: 120,
-      }))
+      try {
+        connection.send(pusherEvent('pusher:connection_established', {
+          socket_id: connection.socketId,
+          activity_timeout: 120,
+        }))
+      } catch (error) {
+        socket.active = false
+        if (connectedSockets.get(connection.socketId) === socket) {
+          connectedSockets.delete(connection.socketId)
+        }
+        throw error
+      }
     },
     async receiveWebSocketMessage(socketId: string, rawMessage: string): Promise<void> {
       const socket = connectedSockets.get(socketId)

@@ -293,6 +293,21 @@ it('rejects a socket identifier that is already connected without disturbing the
   expect(runtime.getStats().connectionCount).toBe(1)
 })
 
+it('removes a socket whose connection_established send fails so its identifier can be reused', async () => {
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+  })
+  onTestFinished(() => runtime.close())
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  const failure = new Error('socket closed during handshake')
+  expect(() => runtime.connectWebSocket({ socketId: '2.2', app, headers: new Headers(), send: () => { throw failure }, close: () => {} })).toThrow(failure)
+  expect(runtime.getStats().connectionCount).toBe(0)
+  const sent: string[] = []
+  runtime.connectWebSocket({ socketId: '2.2', app, headers: new Headers(), send: payload => sent.push(payload), close: () => {} })
+  expect(sent.map(payload => JSON.parse(payload).event)).toEqual(['pusher:connection_established'])
+  expect(runtime.getStats().connectionCount).toBe(1)
+})
+
 it('assigns every native socket a distinct Pusher socket identifier', async () => {
   const worker = await startNativeWorker()
   const clients = await Promise.all(Array.from({ length: 20 }, async () => await worker.connect()))
