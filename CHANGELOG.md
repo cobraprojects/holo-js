@@ -17,6 +17,8 @@
 
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 
+- Close model mass assignment by default. A model without `fillable` or `guarded` rejects every column, and the primary key and `created_at`/`updated_at` columns are guarded unless named in `fillable`. `forceFill()` lets the next save write guarded columns. Saves, deletes, restores and force deletes target the row's original primary key, so changing a loaded model's key can't redirect the write to another row. See [mass assignment](apps/docs/docs/orm/index.md#mass-assignment).
+
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.
 
 - Make email-verification and password-reset token redemption single-use under concurrent requests. Coordinate the claim and user mutation transactionally when Core proves they share the same database context. Password reset also revokes sibling tokens for the same provider, email and broker table before user mutation.

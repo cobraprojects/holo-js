@@ -9,4 +9,5 @@ Recorded departures:
 - Request, subscription, and capability state must be isolated per request or subscription, because a Node process outlives requests while PHP shares nothing between them.
 - A malformed typed environment value fails instead of returning the raw string, because a typed fallback cannot represent Laravel's string result.
 - Holo encrypts only the cookies it owns (session, remember, and `XSRF-TOKEN`), because it cannot intercept cookies written through each framework's native cookie interfaces as Laravel's `EncryptCookies` does.
+- Model primary keys and `created_at`/`updated_at` columns are guarded unless named in `fillable`, even with `fillable: ['*']` or a `guarded` list, because Holo applies mass-assignment rules to query updates and upserts that receive request payloads, where Laravel applies none.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.

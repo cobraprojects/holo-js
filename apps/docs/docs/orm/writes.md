@@ -350,7 +350,16 @@ await User.create({ name: 'Ada', is_admin: true })
 // SecurityError: Column "is_admin" is not writable on model "User".
 ```
 
-When trusted server code must set a protected column, wrap the write in `unguarded()`:
+When trusted server code must set a protected column on one model, use `forceFill()`:
+
+```ts
+const user = User.make({ name: 'Ada', email: 'ada@example.com' })
+await user.forceFill({ is_admin: true }).save()
+```
+
+`forceFill()` only opens the columns you pass it. Assigning one of those columns again with `fill()` or `set()` makes it guarded again.
+
+To turn the rules off for a whole block of writes, wrap them in `unguarded()`:
 
 ```ts
 const admin = await User.unguarded(() => User.create({
@@ -479,7 +488,7 @@ await Product.where('id', productId).decrement('stock', 1)
 
 ### fill()
 
-Assigns several attributes on an instance without saving. Mass assignment rules are checked when you save.
+Assigns several attributes on an instance without saving. [Mass assignment](/orm/#mass-assignment) rules are checked when you save.
 
 ```ts
 post.fill({ title: 'New title', excerpt: 'Short summary' })
@@ -488,10 +497,11 @@ await post.save()
 
 ### forceFill()
 
-Assigns attributes the same way as `fill()`. Holo still checks writable columns when you save, so this doesn't bypass guards.
+Assigns attributes and lets the next save write them even when they're guarded. Use it only for trusted values. See [write guarded columns](#write-guarded-columns).
 
 ```ts
 post.forceFill({ views: 0 })
+await post.save()
 ```
 
 ### set()
@@ -505,6 +515,8 @@ post.set('status', 'review')
 ### save()
 
 Saves an instance. A new instance is inserted. A loaded instance updates only its changed columns, and does nothing when nothing changed. Events fire for inserts and updates, not for an empty save.
+
+A loaded instance always updates the row it was loaded from. Changing its primary key changes that row's key; it never writes to another row.
 
 ```ts
 post.title = 'Renamed'

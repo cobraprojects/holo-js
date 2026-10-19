@@ -140,7 +140,7 @@ See [multiple connections](/database/connections) for configuring named connecti
 
 ## Mass assignment
 
-`create()`, `update()`, `make()`, and `save()` only write columns you allow. Writing any other column throws a `SecurityError`, so unexpected request fields never reach the database.
+`create()`, `update()`, `make()`, and `save()` only write columns you allow. Writing any other column throws a `SecurityError`, so unexpected request fields never reach the database. A model without `fillable` or `guarded` allows no columns.
 
 List allowed columns with `fillable`:
 
@@ -160,14 +160,17 @@ export default defineModel('users', {
 
 | Setting | What can be written |
 | --- | --- |
-| No `fillable` or `guarded` | Every column |
+| No `fillable` or `guarded` | Nothing |
 | `fillable: ['name', 'email']` | Only `name` and `email` |
 | `fillable: []` | Nothing |
 | `fillable: ['*']` | Every column except `guarded` ones |
 | `guarded: ['is_admin']` | Every column except `is_admin` |
+| `guarded: []` | Every column except the primary key and timestamps |
 | `guarded: ['*']` | Nothing |
 
-Timestamp and generated ID columns are always written by Holo, even when they aren't fillable. To write a protected column from trusted code, see [writing guarded columns](/orm/writes#write-guarded-columns).
+The primary key and the `created_at` and `updated_at` columns are guarded unless you name them in `fillable`. `fillable: ['*']` and `guarded` lists don't open them. Holo still fills in generated IDs and timestamps itself.
+
+To write a protected column from trusted code, see [writing guarded columns](/orm/writes#write-guarded-columns).
 
 ## Soft deletes
 
@@ -187,12 +190,13 @@ See [querying soft-deleted models](/orm/querying#soft-deleted-models) and [delet
 
 ## UUID, ULID, and Snowflake keys
 
-Give the model a unique ID trait and Holo generates the key when you create a record. If you pass a key yourself, Holo keeps it.
+Give the model a unique ID trait and Holo generates the key when you create a record. To pass a key yourself, add the key column to `fillable`; Holo keeps the key you pass.
 
 ```ts [server/models/Order.ts]
 import { defineModel, HasUuids } from '@holo-js/db'
 
 export default defineModel('orders', {
+  fillable: ['total'],
   traits: [HasUuids()],
 })
 ```

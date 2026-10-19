@@ -18,7 +18,7 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
 import { withPredicate, type SelectQueryPlan } from '../query/ast'
-import { Entity } from './Entity'
+import { Entity, getEntityKeyForSave, getForceFilledColumns } from './Entity'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
@@ -1605,15 +1605,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     internalColumns: ReadonlySet<string> = new Set(),
   ): Promise<Entity<TTable>> {
     return this.runWriteUnit(async () => {
-      const generatedColumns = new Set<string>()
-      for (const column of internalColumns) {
-        generatedColumns.add(column)
-      }
-      if (this.definition.createdAtColumn) {
-        generatedColumns.add(this.definition.createdAtColumn)
-      }
-      if (this.definition.updatedAtColumn) {
-        generatedColumns.add(this.definition.updatedAtColumn)
+      const generatedColumns = new Set<string>(internalColumns)
+      for (const column of [this.definition.createdAtColumn, this.definition.updatedAtColumn]) {
+        if (column && typeof values[column as keyof typeof values] === 'undefined') {
+          generatedColumns.add(column)
+        }
       }
       const payload = this.sanitizeWritePayload(
         this.applyTimestampDefaults(
@@ -1742,25 +1738,25 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entity: Entity<TTable>,
     internalColumns: ReadonlySet<string> = new Set(),
   ): Promise<Entity<TTable>> {
+    const trustedColumns = new Set<string>([...internalColumns, ...getForceFilledColumns(entity)])
     if (!entity.exists()) {
-      return this.createRecord(entity.toAttributes(), internalColumns)
+      return this.createRecord(entity.toAttributes(), trustedColumns)
     }
 
     return this.runWriteUnit(async () => {
       const primaryKey = this.definition.primaryKey
-      const id = entity.get(primaryKey)
+      const id = getEntityKeyForSave(entity, primaryKey)
       if (typeof id === 'undefined' || id === null) {
         throw new HydrationError(`Cannot persist ${this.definition.name} without a primary key value.`)
       }
 
-      const writableInternalColumns = new Set<string>(internalColumns)
-      if (this.definition.updatedAtColumn) {
-        writableInternalColumns.add(this.definition.updatedAtColumn)
+      if (this.definition.updatedAtColumn && !entity.isDirty(this.definition.updatedAtColumn as never)) {
+        trustedColumns.add(this.definition.updatedAtColumn)
       }
       const dirty = this.sanitizeWritePayload(
         this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'),
         'update',
-        writableInternalColumns,
+        trustedColumns,
       )
       if (Object.keys(dirty).length === 0) {
         return entity
@@ -1788,7 +1784,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   async deleteEntity(entity: Entity<TTable>): Promise<void> {
     await this.runWriteUnit(async () => {
       const primaryKey = this.definition.primaryKey
-      const id = entity.get(primaryKey)
+      const id = getEntityKeyForSave(entity, primaryKey)
       if (typeof id === 'undefined' || id === null) {
         throw new HydrationError(`Cannot delete ${this.definition.name} without a primary key value.`)
       }
@@ -1827,7 +1823,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       const primaryKey = this.definition.primaryKey
-      const id = entity.get(primaryKey)
+      const id = getEntityKeyForSave(entity, primaryKey)
       if (typeof id === 'undefined' || id === null) {
         throw new HydrationError(`Cannot restore ${this.definition.name} without a primary key value.`)
       }
@@ -1852,7 +1848,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   async forceDeleteEntity(entity: Entity<TTable>): Promise<void> {
     await this.runWriteUnit(async () => {
       const primaryKey = this.definition.primaryKey
-      const id = entity.get(primaryKey)
+      const id = getEntityKeyForSave(entity, primaryKey)
       if (typeof id === 'undefined' || id === null) {
         throw new HydrationError(`Cannot force-delete ${this.definition.name} without a primary key value.`)
       }
@@ -3555,11 +3551,17 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const fillable = new Set(this.definition.fillable)
     const guarded = new Set(this.definition.guarded)
 
-    if (guarded.has('*')) return false
-    if (fillable.has('*')) return !guarded.has(column)
-    if (this.definition.hasExplicitFillable === true) return fillable.has(column) && !guarded.has(column)
-    if (fillable.size > 0) return fillable.has(column) && !guarded.has(column)
-    return !guarded.has(column)
+    if (guarded.has('*') || guarded.has(column)) return false
+    if (fillable.has(column)) return true
+    if (this.isAutomaticallyGuardedColumn(column)) return false
+    if (fillable.has('*')) return true
+    return this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true
+  }
+
+  private isAutomaticallyGuardedColumn(column: string): boolean {
+    return column === this.definition.primaryKey
+      || column === this.definition.createdAtColumn
+      || column === this.definition.updatedAtColumn
   }
 
   private assertPersistedParentForRelation(

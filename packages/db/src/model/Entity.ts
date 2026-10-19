@@ -63,6 +63,7 @@ class EntityBase<
 > {
   private attributes: Record<string, unknown>
   private original: Record<string, unknown>
+  private forceFilledColumns = new Set<string>()
   private changes: Record<string, unknown>
   private persisted: boolean
   private relations: Record<string, unknown>
@@ -152,11 +153,15 @@ class EntityBase<
 
   set<TKey extends Extract<keyof ModelRecord<TTable>, string>>(key: TKey, value: ModelRecord<TTable>[TKey]): this {
     this.attributes[key] = value
+    this.forceFilledColumns.delete(key)
     return this
   }
 
   fill(values: Partial<ModelRecord<TTable>>): this {
     Object.assign(this.attributes, values)
+    for (const key of Object.keys(values)) {
+      this.forceFilledColumns.delete(key)
+    }
     return this
   }
 
@@ -167,6 +172,9 @@ class EntityBase<
 
   forceFill(values: Partial<ModelRecord<TTable>>): this {
     Object.assign(this.attributes, values)
+    for (const key of Object.keys(values)) {
+      this.forceFilledColumns.add(key)
+    }
     return this
   }
 
@@ -202,6 +210,7 @@ class EntityBase<
 
   syncOriginal(): this {
     this.original = { ...this.attributes }
+    this.forceFilledColumns.clear()
     return this
   }
 
@@ -216,6 +225,7 @@ class EntityBase<
   ): this {
     this.attributes = { ...entity.toAttributes() }
     this.original = { ...entity.toAttributes() }
+    this.forceFilledColumns.clear()
     this.changes = { ...changes }
     this.persisted = true
     return this
@@ -440,6 +450,7 @@ class EntityBase<
   private applyPersistedEntity(persisted: EntityBase<TTable, TRelations>, changes: Record<string, unknown>): void {
     this.attributes = { ...persisted.toAttributes() }
     this.original = { ...persisted.toAttributes() }
+    this.forceFilledColumns.clear()
     this.changes = { ...changes }
     this.persisted = true
   }
@@ -623,6 +634,7 @@ class EntityBase<
     const refreshed = await repo.refreshEntity(this)
     this.attributes = { ...refreshed.toAttributes() }
     this.original = { ...refreshed.toAttributes() }
+    this.forceFilledColumns.clear()
     this.changes = {}
     this.relations = {}
     this.persisted = true
@@ -920,3 +932,16 @@ export type Model<
 > = Entity<TTable, TRelations>
 
 export const Entity = EntityBase as unknown as EntityConstructor
+
+export function getForceFilledColumns<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entity: EntityBase<TTable, TRelations>,
+): ReadonlySet<string> {
+  return entity['forceFilledColumns']
+}
+
+export function getEntityKeyForSave<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entity: EntityBase<TTable, TRelations>,
+  primaryKey: string,
+): unknown {
+  return entity['original'][primaryKey] ?? entity.get(primaryKey as never)
+}
