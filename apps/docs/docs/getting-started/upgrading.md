@@ -30,6 +30,12 @@ A `redis` or `database` connection's `retryAfter` must now be at least `1`. Befo
 
 A job whose name isn't registered now fails into the failed jobs table and the worker keeps going. Before, the worker stopped with an error and left the job reserved. If you rename or delete jobs, drain their queued jobs first or retry them later with `npx holo queue:retry`. See [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly).
 
+### Sensitive input in validation failures
+
+Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) are now left out of every validation failure, including inside nested objects and arrays. This covers the 422 response in Next.js, Nuxt, and SvelteKit, `ValidationException` `values` and `toJSON()`, and `submission.fail()` and `submission.serialize()`. If your code reads a password back from a caught `ValidationException`, read it from the request instead.
+
+In Nuxt, the cookie that flashes errors after a native form post no longer contains the submitted values, and it is marked `Secure` on HTTPS requests. `useValidationErrors()` works as before.
+
 ### S3 file names with special characters
 
 S3 disks now store files under their exact names. Before 0.4.0, a name with characters other than letters, digits, and `-_.!~*'()` was stored under its URL-encoded form: `reports/Q1 café.pdf` became the object `reports/Q1%20caf%C3%A9.pdf`, and its `url()` returned access denied or not found. After upgrading, Holo looks for `reports/Q1 café.pdf`, so rename those objects before you deploy. With the AWS CLI:
@@ -65,6 +71,16 @@ Holo adapters now use your app's framework packages as peer dependencies instead
 `@holo-js/adapter-nuxt` no longer installs `h3` or `nitropack`. Its server routes and plugins use the h3 and Nitro that come with your Nuxt version. `@holo-js/adapter-sveltekit` no longer installs Svelte. It accepts any Svelte 5 release from 5.56.8 instead of one exact version.
 
 Holo's own dependencies now require patched releases too: `ws` 8.21.0, `sharp` 0.35.5, and `mysql2` 3.22.0 or newer. Your package manager installs these for you. If your lockfile pins older versions, refresh it after upgrading.
+
+### Encrypted session, remember-me, and CSRF cookies
+
+Holo now encrypts the cookies it sets: the session cookie, the remember-me cookie, and `XSRF-TOKEN`. It uses AES-256-GCM with a key derived from `APP_KEY`, and rejects any cookie that was changed. Your own cookies, including ones written with `cookie()` or `cookies.make()`, are not encrypted.
+
+Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out once, remember-me cookies stop working, and the first form each browser submits with an old `XSRF-TOKEN` gets a `419` response. The next page load issues new cookies.
+
+`APP_KEY` must be set wherever Holo sets these cookies. Without it, signing in and issuing the CSRF cookie throw an error. Run `npx holo key:generate` if your `.env` has no key. Changing `APP_KEY` later signs everyone out again.
+
+If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
 ## Earlier 0.3.x releases
 

@@ -25,7 +25,7 @@ When `validate()` throws inside a route handler, Holo responds with status 422 a
 ```
 
 - `errors` maps each field path to its messages. Nested fields use dots (`address.city`) and array items use their index (`tags.0`).
-- `values` echoes the submitted input so a form can show it again. Uploaded files are left out.
+- `values` echoes the submitted input so a form can show it again. Uploaded files, passwords, and [sensitive](/basics/validation/rules#sensitive) fields are left out, including inside nested objects and lists.
 - `message` is the first error, prefixed with its field path.
 - `bag` names the error bag. It is `default` unless you choose another one.
 

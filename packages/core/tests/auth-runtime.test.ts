@@ -6,11 +6,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { DatabaseContext, TransactionError, createDialect, ModelRepository, TableQueryBuilder, column, defineGeneratedTable, defineModel, createSchemaService, connectionAsyncContext, DB } from '@holo-js/db'
 import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig, authRuntimeInternals } from '../../auth/src'
-import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig } from '@holo-js/session'
+import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader } from '@holo-js/session'
 import { createCoreSessionRevocationStore } from '../src/portable/authSessionRevocations'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
+
+function holoCookieValue(setCookie: string): string {
+  return Object.values(parseCookieHeader(setCookie.split(';', 1)[0]))[0] ?? ''
+}
+
+function sessionCookieValue(sessionId: string | undefined): string {
+  return holoCookieValue(getSessionRuntime().sessionCookie(sessionId ?? ''))
+}
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
@@ -3487,7 +3495,7 @@ it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? [
   const first = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
   const second = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
   expect(first.sessionId).not.toBe(second.sessionId)
-  await runtime.runWithAuthRequestAccessors({ getCookie: () => second.sessionId }, async () => {
+  await runtime.runWithAuthRequestAccessors({ getCookie: () => sessionCookieValue(second.sessionId) }, async () => {
     await auth.logoutOtherDevices()
     expect(await auth.check()).toBe(true)
   })
@@ -3496,15 +3504,15 @@ it.each(['file', 'database', ...(process.env.HOLO_SESSION_REAL_REDIS === '1' ? [
   await restarted.initialize()
   if (!restarted.auth) throw new Error('Auth unavailable after restart')
   const restoredAuth = restarted.auth
-  const rotated = await restarted.runWithAuthRequestAccessors({ getCookie: () => second.sessionId }, async () => {
+  const rotated = await restarted.runWithAuthRequestAccessors({ getCookie: () => sessionCookieValue(second.sessionId) }, async () => {
     expect(await restoredAuth.check()).toBe(true)
     return restoredAuth.loginUsingId(1)
   })
   expect(rotated.sessionId).not.toBe(second.sessionId)
-  await restarted.runWithAuthRequestAccessors({ getCookie: () => first.sessionId }, async () => {
+  await restarted.runWithAuthRequestAccessors({ getCookie: () => sessionCookieValue(first.sessionId) }, async () => {
     expect(await restoredAuth.check()).toBe(false)
   })
-  await restarted.runWithAuthRequestAccessors({ getCookie: () => rotated.sessionId }, async () => {
+  await restarted.runWithAuthRequestAccessors({ getCookie: () => sessionCookieValue(rotated.sessionId) }, async () => {
     expect(await restoredAuth.check()).toBe(true)
   })
   await restarted.session?.invalidate(first.sessionId)
@@ -3536,10 +3544,10 @@ it('requires fresh browser login on adapter adoption while remembered legacy pay
   const ordinary = await runtime.session.create({ data: legacyPayload }) as SessionRecordLike
   const remembered = await runtime.session.create({ data: legacyPayload }) as SessionRecordLike
   const rememberToken = await runtime.session.issueRememberMeToken(remembered.id)
-  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? ordinary.id : undefined }, () => auth.check())).resolves.toBe(false)
-  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session_remember' ? rememberToken : undefined }, () => auth.check())).resolves.toBe(false)
+  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(ordinary.id) : undefined }, () => auth.check())).resolves.toBe(false)
+  await expect(runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session_remember' ? holoCookieValue(getSessionRuntime().rememberMeCookie(rememberToken)) : undefined }, () => auth.check())).resolves.toBe(false)
   const fresh = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(1))
-  await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? fresh.sessionId : undefined }, async () => {
+  await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(fresh.sessionId) : undefined }, async () => {
     await auth.logoutOtherDevices()
     expect(await auth.check()).toBe(true)
   })
@@ -3570,7 +3578,7 @@ it.each(['shutdown', 'rollback'] as const)('restores the actual borrowed durable
   }
   const context = createAsyncAuthContext()
   const user = { id: 1, email: 'borrowed@app.test' }
-  configureSessionRuntime({ config: normalizeSessionConfig(), stores: { file: createFileSessionStore(join(root, 'borrowed-sessions')) } })
+  configureSessionRuntime({ appKey: 'holo-test-app-key', config: normalizeSessionConfig(), stores: { file: createFileSessionStore(join(root, 'borrowed-sessions')) } })
   configureAuthRuntime({
     config: normalizeAuthConfig(), session: getSessionRuntime(), sessionRevocations: borrowedStore, context,
     providers: { users: { async create() { return user }, async findByCredentials() { return user }, async findById() { return user }, getId() { return user.id }, serialize() { return user } } },

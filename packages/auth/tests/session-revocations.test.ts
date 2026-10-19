@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import auth, { authRuntimeInternals, configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthProviderAdapter, type AuthSessionRevocationStore, type AuthTokenStore, type PersonalAccessTokenRecord } from '../src'
-import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, resetSessionRuntime } from '../../session/src'
+import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 
 const user = { id: 1, email: 'user@app.test' }
 const provider: AuthProviderAdapter<typeof user> = {
@@ -14,6 +14,11 @@ const provider: AuthProviderAdapter<typeof user> = {
   getId(value) { return value.id },
   serialize(value) { return value },
 }
+function rememberCookieValue(rememberToken: string | undefined): string {
+  const setCookie = getSessionRuntime().rememberMeCookie(rememberToken ?? '')
+  return parseCookieHeader(setCookie.split(';', 1)[0]).holo_session_remember ?? ''
+}
+
 let directory: string
 let database: DatabaseSync
 let reads: number
@@ -40,7 +45,7 @@ beforeEach(async () => {
       return result.changes === 1
     },
   }
-  configureSessionRuntime({ config: normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: directory } } }), stores: { file: createFileSessionStore(directory) } })
+  configureSessionRuntime({ appKey: 'holo-test-app-key', config: normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: directory } } }), stores: { file: createFileSessionStore(directory) } })
   configureAuthRuntime({
     config: { defaults: { guard: 'web' }, guards: { web: { driver: 'session', provider: 'users' }, admin: { driver: 'session', provider: 'users' }, other: { driver: 'session', provider: 'otherUsers' }, api: { driver: 'token', provider: 'users' } }, providers: { users: { model: 'User' }, otherUsers: { model: 'OtherUser' } } },
     providers: { users: provider, otherUsers: provider }, context, session: getSessionRuntime(), sessionRevocations: store,
@@ -160,7 +165,7 @@ it('checks remember restoration before trusting it and preserves later legitimat
   })
   const rememberedContext = {
     ...authRuntimeInternals.createMemoryAuthContext(),
-    getRequestCookie: (name: string) => name === 'holo_session_remember' ? remembered.rememberToken : undefined,
+    getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
   }
   authRuntimeInternals.configureRuntime({ ...authRuntimeInternals.getRuntimeBindings(), context: rememberedContext })
   expect(await auth.check()).toBe(false)
@@ -217,7 +222,7 @@ it('restores a valid remembered identity and rejects remembered payloads without
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const validRemember = {
     ...authRuntimeInternals.createMemoryAuthContext(),
-    getRequestCookie: (name: string) => name === 'holo_session_remember' ? remembered.rememberToken : undefined,
+    getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(remembered.rememberToken) : undefined,
   }
   authRuntimeInternals.configureRuntime({ ...bindings, context: validRemember })
   expect(await auth.check()).toBe(true)
@@ -225,7 +230,7 @@ it('restores a valid remembered identity and rejects remembered payloads without
   const legacyToken = await getSessionRuntime().issueRememberMeToken(legacy.id)
   const legacyRemember = {
     ...authRuntimeInternals.createMemoryAuthContext(),
-    getRequestCookie: (name: string) => name === 'holo_session_remember' ? legacyToken : undefined,
+    getRequestCookie: (name: string) => name === 'holo_session_remember' ? rememberCookieValue(legacyToken) : undefined,
   }
   authRuntimeInternals.configureRuntime({ ...bindings, context: legacyRemember })
   expect(await auth.check()).toBe(false)
