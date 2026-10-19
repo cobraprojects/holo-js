@@ -4,6 +4,11 @@
   "description": "Holo-JS Framework - session contracts, cookie helpers, and session config helpers",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobraprojects/holo-js.git",
+    "directory": "packages/session"
+  },
   "exports": {
     ".": {
       "@holo-js/source": "./src/index.ts",
@@ -27,7 +32,8 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",

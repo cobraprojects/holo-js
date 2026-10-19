@@ -1,4 +1,5 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +9,7 @@ import { collectPackageManifestFailures } from './validate-dependency-version-po
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const interruptSignals = ['SIGINT', 'SIGTERM', 'SIGHUP']
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -89,6 +91,16 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
   const originalManifests = new Map()
   let callbackError
 
+  const restoreOnInterrupt = (signal) => {
+    for (const [manifestPath, contents] of originalManifests) {
+      writeFileSync(manifestPath, contents)
+    }
+    process.kill(process.pid, signal)
+  }
+  for (const signal of interruptSignals) {
+    process.once(signal, restoreOnInterrupt)
+  }
+
   try {
     for (const manifestPath of packageManifestPaths) {
       const original = await readFile(manifestPath, 'utf8')
@@ -102,25 +114,45 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
     callbackError = error
   }
 
-  const manifestEntries = [...originalManifests]
-  const restoreResults = await Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
-    writeFile(manifestPath, contents)
-  )))
-  const restoreFailures = restoreResults.flatMap((result, index) => {
-    if (result.status === 'fulfilled') {
-      return []
-    }
+  try {
+    const manifestEntries = [...originalManifests]
+    const restoreResults = await Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
+      writeFile(manifestPath, contents)
+    )))
+    const restoreFailures = restoreResults.flatMap((result, index) => {
+      if (result.status === 'fulfilled') {
+        return []
+      }
 
-    const manifestPath = manifestEntries[index]?.[0] ?? '<unknown>'
-    const reason = result.reason instanceof Error ? result.reason.message : String(result.reason)
-    return [`${manifestPath}: ${reason}`]
-  })
-  if (restoreFailures.length > 0) {
-    throw new Error(`Failed to restore ${restoreFailures.length} package manifest(s): ${restoreFailures.join('; ')}`)
+      const manifestPath = manifestEntries[index]?.[0] ?? '<unknown>'
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason)
+      return [`${manifestPath}: ${reason}`]
+    })
+    if (restoreFailures.length > 0) {
+      throw new Error(`Failed to restore ${restoreFailures.length} package manifest(s): ${restoreFailures.join('; ')}`)
+    }
+  } finally {
+    for (const signal of interruptSignals) {
+      process.removeListener(signal, restoreOnInterrupt)
+    }
   }
   if (callbackError) {
     throw callbackError
   }
+}
+
+function runChangesetPublish() {
+  const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
+
+  return new Promise((resolvePublish, rejectPublish) => {
+    const child = spawn(changesetBinary, ['publish'], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    })
+
+    child.on('error', rejectPublish)
+    child.on('close', code => resolvePublish(code ?? 1))
+  })
 }
 
 async function publishWithResolvedCatalogs() {
@@ -128,17 +160,7 @@ async function publishWithResolvedCatalogs() {
   validateNpmPublishAuthentication()
 
   await withResolvedCatalogManifests(async () => {
-    const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
-    const result = spawnSync(changesetBinary, ['publish'], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    })
-
-    if (result.error) {
-      throw result.error
-    }
-
-    publishStatus = result.status ?? 1
+    publishStatus = await runChangesetPublish()
   })
 
   return publishStatus

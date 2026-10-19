@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, test } from 'node:test'
 import {
   validateNpmPublishAuthentication,
@@ -199,3 +202,34 @@ test('publishing restores every source manifest when preparation fails partway',
   assert.equal(await readFile(join(root, 'packages/a-core/package.json'), 'utf8'), core)
   assert.equal(await readFile(join(root, 'packages/z-consumer/package.json'), 'utf8'), consumer)
 })
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  test(`catalog resolver restores package manifests when publishing receives ${signal}`, async () => {
+    const originalManifest = '{ "name": "@holo-js/example", "dependencies": { "@holo-js/core": "catalog:" } }\n'
+    const repoRoot = await createTempRepo({
+      'package.json': ['{"workspaces":{"catalog":{"@holo-js/core":"^0.3.28"}}}'],
+      'packages/example/package.json': originalManifest.split('\n'),
+    })
+    const modulePath = fileURLToPath(new URL('./publish-with-resolved-catalogs.mjs', import.meta.url))
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', [
+      `import { withResolvedCatalogManifests } from ${JSON.stringify(modulePath)}`,
+      `await withResolvedCatalogManifests(async () => {`,
+      `  process.stdout.write('published\\n')`,
+      `  await new Promise(() => setInterval(() => {}, 1000))`,
+      `}, ${JSON.stringify(repoRoot)})`,
+    ].join('\n')], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+    await new Promise((resolve, reject) => {
+      child.stdout.on('data', (chunk) => {
+        if (String(chunk).includes('published')) resolve()
+      })
+      child.once('exit', code => reject(new Error(`publish child exited early with code ${code}`)))
+    })
+    assert.match(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), /"@holo-js\/core": "\^0\.3\.28"/)
+
+    child.kill(signal)
+    await once(child, 'exit')
+
+    assert.equal(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), originalManifest)
+  })
+}

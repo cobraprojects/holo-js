@@ -24,6 +24,7 @@ const gettingStarted: DefaultTheme.SidebarItem[] = [
     items: [
       { text: 'Coding with AI Agents', link: '/getting-started/ai-agents' },
       { text: 'Upgrade Guide', link: '/getting-started/upgrading' },
+      { text: 'Versioning', link: '/getting-started/versioning' },
     ],
   },
 ]

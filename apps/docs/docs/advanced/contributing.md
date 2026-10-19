@@ -99,6 +99,12 @@ The framework versions that `holo new` installs are set in `packages/cli/src/met
 
 Keep the example apps in `apps/` in line with what new projects get.
 
+## Releases
+
+Merging to `main` runs the Release workflow in `.github/workflows/release.yml`. It runs `bun run release`, which builds the packages, publishes every package whose version is not on npm yet with npm provenance, and creates a git tag for each published version. The workflow needs an `NPM_TOKEN` repository secret with publish access to the `@holo-js` scope.
+
+`bun run release` replaces `catalog:` and `workspace:*` ranges in the package manifests for the publish and restores the original manifests afterwards, including when the run is interrupted with SIGINT, SIGTERM, or SIGHUP. The versioning rules that releases follow are in [Versioning](/getting-started/versioning).
+
 ## Issues and pull requests
 
 Issues and feature requests are tracked in [GitHub Issues](https://github.com/cobraprojects/holo-js/issues). For a bug, include the framework, database, a minimal reproduction, and what you expected. For a larger change, open an issue first so the design can be agreed before you write code.
