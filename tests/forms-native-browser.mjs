@@ -208,7 +208,7 @@ try {
             await context.addCookies([{ name: cookie.slice(0, separator), value: cookie.slice(separator + 1), url: apiUrl, httpOnly: true }])
             const page = await context.newPage()
             await page.goto(url)
-            assert.equal(await page.evaluate(() => document.cookie), '')
+            assert.equal(await page.evaluate(() => globalThis.document.cookie), '')
             const result = await page.evaluate(apiUrl => globalThis.submitEndpointForm(apiUrl), apiUrl)
             assert.deepEqual(result, { ok: true, status: 201, data: { submitted: true } }, metadata ? 'Custom API field metadata must work across origins.' : 'Legacy token-only responses must retain their transport.')
           } finally {
