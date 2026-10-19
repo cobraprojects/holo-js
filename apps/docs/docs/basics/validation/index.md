@@ -126,7 +126,7 @@ Holo limits form bodies and query strings, so a small request can't make validat
 
 - A request can send at most 1,000 fields, the same default as PHP's `max_input_vars`. Uploaded files don't count toward this limit.
 - A list index must be lower than the number of different indexes sent for that list. `tags[1]` with `tags[0]` works, but `tags[5]` on its own fails.
-- Names that use `__proto__`, `constructor`, or `prototype` fail. So does a name that treats a list as an object, such as sending both `tags[0]` and `tags[name]`.
+- Names that use `__proto__`, `constructor`, or `prototype` fail. So does a name sent both as an object and as a list or single value, such as `tags[name]` together with `tags[0]` or `tags=x`, in any order.
 
 These requests don't throw. They fail validation with one of these errors on `_root`, so `validate()` responds with a [422](/basics/validation/errors#the-422-response):
 

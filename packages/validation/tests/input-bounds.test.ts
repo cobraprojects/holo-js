@@ -135,6 +135,30 @@ describe('Validation input bounds', () => {
     if (!result.valid) expect(result.errors.flatten()).toEqual({ name: ['This field is required.'] })
   })
 
+  it('rejects a name used both as an object and as a list or value, in any order', async () => {
+    const permutations = <T>(items: readonly T[]): T[][] => items.length <= 1
+      ? [[...items]]
+      : items.flatMap((item, index) => permutations([...items.slice(0, index), ...items.slice(index + 1)]).map(rest => [item, ...rest]))
+    const keyed = (name: string) => `${name}[name]=a`
+    const scalar = (name: string) => `${name}=x`
+    const indexed = (name: string) => `${name}[0]=b`
+    const queries = ['tags', 'rows[0]'].flatMap(name => [
+      ...permutations([keyed(name), scalar(name), indexed(name)]),
+      ...permutations([keyed(name), scalar(name)]),
+      ...permutations([keyed(name), indexed(name)]),
+    ].map(parts => parts.join('&')))
+
+    for (const query of queries) {
+      const result = await safeParse(new URLSearchParams(query), schema({ name: field.string().optional() }))
+      expect(result.valid ? [] : result.errors.get('_root'), query).toEqual(['The request contains an invalid field name.'])
+    }
+
+    const upload = new FormData()
+    upload.append('avatar', new File(['image'], 'avatar.png'))
+    upload.append('avatar[name]', 'a')
+    expect(await rootErrors(upload)).toEqual(['The request contains an invalid field name.'])
+  })
+
   it('reports prototype and mixed index/key paths as validation failures', async () => {
     expect(await rootErrors(formWith([['__proto__.polluted', 'yes']]))).toEqual(['The request contains an invalid field name.'])
     expect(await rootErrors(new URLSearchParams('constructor[prototype][polluted]=yes'))).toEqual(['The request contains an invalid field name.'])

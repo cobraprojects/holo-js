@@ -304,6 +304,18 @@ function createContainer(next: string | number | '' | undefined): Record<string,
   return typeof next === 'number' || next === '' ? [] : createObjectContainer()
 }
 
+function isObjectContainer(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === null
+}
+
+function nestedContainer(existing: unknown, next: string | number | '' | undefined): Record<string, unknown> | unknown[] | undefined {
+  if (Array.isArray(existing) || isObjectContainer(existing)) return undefined
+  if (existing !== undefined && typeof next === 'string' && next !== '') {
+    throw new MalformedInputError(INVALID_FIELD_NAME)
+  }
+  return createContainer(next)
+}
+
 function recordArrayIndex(indexes: ArrayIndexes, array: unknown[], index: number): void {
   const recorded = indexes.get(array) ?? new Set<number>()
   recorded.add(index)
@@ -350,16 +362,14 @@ export function assignNestedValue(
         throw new MalformedInputError(INVALID_FIELD_NAME)
       }
 
+      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
       if (last) {
+        if (isObjectContainer(existing)) throw new MalformedInputError(INVALID_FIELD_NAME)
         cursor[token] = value
         return
       }
 
-      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-      if (!existing || /* v8 ignore next */ typeof existing !== 'object') {
-        cursor[token] = createContainer(next)
-      }
-
+      cursor[token] = nestedContainer(existing, next) ?? existing
       cursor = cursor[token] as Record<string, unknown> | unknown[]
       continue
     }
@@ -372,6 +382,8 @@ export function assignNestedValue(
       const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
       if (typeof existing === 'undefined') {
         cursor[token] = value
+      } else if (isObjectContainer(existing)) {
+        throw new MalformedInputError(INVALID_FIELD_NAME)
       } else if (Array.isArray(existing)) {
         recordArrayIndex(indexes, existing, existing.length)
         existing.push(value)
@@ -386,10 +398,7 @@ export function assignNestedValue(
     }
 
     const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
-    if (!existing || typeof existing !== 'object') {
-      cursor[token] = createContainer(next)
-    }
-
+    cursor[token] = nestedContainer(existing, next) ?? existing
     cursor = cursor[token] as Record<string, unknown> | unknown[]
   /* v8 ignore next 2 */
   }
