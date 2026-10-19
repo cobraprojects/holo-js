@@ -203,6 +203,15 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 `holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
+### Destructive commands confirm in production
+
+`migrate:fresh`, `migrate:rollback`, and `seed` now ask you to confirm when the application environment is `production`. The prompt appears only in a terminal. Without one, the command stops with an error unless you pass `--force`. `migrate:rollback` accepts `--force` now; before, it ignored the flag. `--force` skips the prompt for all three commands.
+
+Before upgrading, check every deploy script, CI job, and cron entry that runs these commands with `APP_ENV=production`, and add `--force` to them. Otherwise they stop instead of running. The `npx holo seed --only roles --force` example in the seeding guide shows the flag in use.
+
+### Migration runs can be isolated
+
+`npx holo migrate --isolated` takes a database lock, so replicas that migrate at deploy time don't apply the same migrations. A replica that finds the lock held skips the migrations and exits successfully. Holo creates a `_holo_migration_locks` table the first time an isolated run starts. The lock expires an hour after it was last renewed, and a single migration that runs longer than an hour can let another runner in. Plain `migrate` doesn't use the lock. Use `--isolated` in your deploy step if more than one replica runs it.
 ### Generated broadcast credentials and strict env values
 
 Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. Without them, your config still loads and `holo prepare` still runs. The broadcast worker, publishing, and channel authorization fail with an error that names the variables. `holo new` writes generated values into `.env`, and existing apps get them the same way:
@@ -215,7 +224,7 @@ The command adds `BROADCAST_APP_*` lines that `.env` doesn't have yet. It leaves
 
 Holo also throws when a typed `env()` value doesn't convert: `APP_DEBUG=maybe` with a boolean fallback, or `APP_PORT=abc` with a number fallback. Previously Holo used the fallback. Fix or remove those values before deploying.
 
-If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached and still load live, so their env values come from the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
+If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, still load from their files, and the `env()` values they read while loading are frozen in the cache as well. Code that calls `env()` after startup, such as a reporter's body, reads the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
 
 ### Encrypted session, remember-me, and CSRF cookies
 
