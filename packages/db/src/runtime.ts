@@ -16,8 +16,6 @@ export interface RuntimeDatabaseConfig {
 }
 
 export interface RuntimeHoloConfig {
-  appEnv?: 'production' | 'development' | 'test'
-  appDebug?: boolean
   appUrl?: string
 }
 

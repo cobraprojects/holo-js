@@ -1,7 +1,7 @@
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { clearConfigCache, resolveConfigCachePath } from '@holo-js/config'
+import { clearConfigCache, loadEnvironment, resolveConfigCachePath } from '@holo-js/config'
 import {
   parseTokens,
   isInteractive,
@@ -16,6 +16,7 @@ import {
   resolveBooleanFlag,
   parseNumberFlag,
   splitCsv,
+  extractEnvironmentOption,
   SUPPORTED_INSTALL_TARGETS,
   SUPPORTED_CACHE_INSTALL_DRIVERS,
   SUPPORTED_QUEUE_INSTALL_DRIVERS,
@@ -380,6 +381,10 @@ async function cleanupDirectorySnapshot(snapshot: DirectorySnapshot): Promise<vo
   if (snapshot.snapshotPath) {
     await rm(snapshot.snapshotPath, { recursive: true, force: true })
   }
+}
+
+async function resolveApplicationEnvironment(projectRoot: string): Promise<string> {
+  return (await loadEnvironment({ cwd: projectRoot, processEnv: process.env })).name
 }
 
 export function createInternalCommands(
@@ -2044,7 +2049,7 @@ export function createInternalCommands(
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
             force: commandContext.flags.force === true,
-            environment: process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development',
+            environment: await resolveApplicationEnvironment(context.projectRoot),
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No seeders were executed.')
@@ -2109,7 +2114,7 @@ export function createInternalCommands(
             ...(Array.isArray(commandContext.flags.only) ? { only: commandContext.flags.only } : {}),
             quietly: commandContext.flags.quietly === true,
             force: commandContext.flags.force === true,
-            environment: process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development',
+            environment: await resolveApplicationEnvironment(context.projectRoot),
           },
           async (stdout) => {
             writeLine(context.stdout, stdout || 'No seeders were executed.')
@@ -2190,8 +2195,16 @@ export function findCommand(
   return registry.find(command => command.name === name || command.aliases?.includes(name))
 }
 
-export async function runCli(argv: readonly string[], io: IoStreams): Promise<number> {
+export async function runCli(input: readonly string[], io: IoStreams): Promise<number> {
+  const previousAppEnv = process.env.APP_ENV
+  let appEnvOverridden = false
   try {
+    const { argv, envName } = extractEnvironmentOption(input)
+    if (envName) {
+      process.env.APP_ENV = envName
+      appEnvOverridden = true
+    }
+
     const requestedCommandName = argv[0]
     if (requestedCommandName === '--version' || requestedCommandName === '-v') {
       writeLine(io.stdout, HOLO_PACKAGE_VERSION)
@@ -2318,5 +2331,13 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
   } catch (error) {
     writeLine(io.stderr, error instanceof Error ? error.message : String(error))
     return 1
+  } finally {
+    if (appEnvOverridden) {
+      if (previousAppEnv === undefined) {
+        Reflect.deleteProperty(process.env, 'APP_ENV')
+      } else {
+        process.env.APP_ENV = previousAppEnv
+      }
+    }
   }
 }

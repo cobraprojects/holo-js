@@ -188,6 +188,32 @@ export function parseTokens(tokens: readonly string[]): RawParsedInput {
   return { args, flags }
 }
 
+export function extractEnvironmentOption(argv: readonly string[]): { argv: readonly string[], envName?: string } {
+  const separator = argv.indexOf('--')
+  const options = separator >= 0 ? argv.slice(0, separator) : argv
+  const remaining: string[] = []
+  let envName: string | undefined
+
+  for (let index = 0; index < options.length; index += 1) {
+    const token = options[index] ?? ''
+    if (token !== '--env' && !token.startsWith('--env=')) {
+      remaining.push(token)
+      continue
+    }
+
+    const value = token === '--env' ? options[++index] : token.slice('--env='.length)
+    if (!value || value.startsWith('-')) {
+      throw new Error('The --env option requires a value.')
+    }
+    envName = value
+  }
+
+  return {
+    argv: separator >= 0 ? [...remaining, ...argv.slice(separator)] : remaining,
+    ...(envName ? { envName } : {}),
+  }
+}
+
 export function isInteractive(io: IoStreams, flags: Record<string, string | boolean | readonly string[]>): boolean {
   const disabled = flags['no-interactive'] === true
   return io.stdin.isTTY === true && io.stdout.isTTY === true && !disabled

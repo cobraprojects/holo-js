@@ -5689,7 +5689,7 @@ export default defineSeeder({
     expect(registry?.models).toEqual([expect.objectContaining({ tableName: 'choices' })])
     expect(registry?.seeders).toEqual([expect.objectContaining({ name: 'ChoiceSeeder' })])
 
-    const seeded = runCliProcess(projectRoot, ['seed'])
+    const seeded = runCliProcess(projectRoot, ['seed'], { env: { APP_ENV: 'development' } })
     expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0)
     const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
     try {
@@ -5818,7 +5818,7 @@ export default defineMigration({
 })
 `)
 
-    const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'])
+    const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'], { env: { APP_ENV: 'development' } })
     expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
     expect(fresh.stdout).toContain('Seeders executed:')
     expect(fresh.stdout).toContain('UserSeeder')
@@ -5868,7 +5868,7 @@ export default defineSeeder({
 `)
 
     const result = runCliProcess(projectRoot, ['seed', '--only', 'fixtures'], {
-      env: { NODE_NO_WARNINGS: '1' },
+      env: { NODE_NO_WARNINGS: '1', APP_ENV: 'development' },
     })
 
     expect(result.status, result.stdout + result.stderr).toBe(0)
@@ -6019,7 +6019,7 @@ try {
     const primed = runNodeScript(projectRoot, join(projectRoot, 'cache-fixture.mjs'), ['prime'])
     expect(primed.status, primed.stderr || primed.stdout).toBe(0)
 
-    const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'])
+    const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'], { env: { APP_ENV: 'development' } })
     const verified = runNodeScript(projectRoot, join(projectRoot, 'cache-fixture.mjs'), ['verify'])
 
     expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)

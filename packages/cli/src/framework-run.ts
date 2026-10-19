@@ -104,7 +104,11 @@ export function createFrameworkSession(
   onShutdown?: () => void,
 ): {
   readonly signal: AbortSignal
-  launch(invocation: PackageManagerCommand, serverArgs: readonly string[]): Promise<ReturnType<typeof launchFrameworkRun>>
+  launch(
+    invocation: PackageManagerCommand,
+    serverArgs: readonly string[],
+    environmentOverrides?: NodeJS.ProcessEnv,
+  ): Promise<ReturnType<typeof launchFrameworkRun>>
   dispose(): void
 } {
   const controller = new AbortController()
@@ -128,10 +132,13 @@ export function createFrameworkSession(
 
   return {
     signal: controller.signal,
-    async launch(invocation: PackageManagerCommand, serverArgs: readonly string[]) {
+    async launch(invocation: PackageManagerCommand, serverArgs: readonly string[], environmentOverrides = {}) {
       const environment = await loadEnvironment({ cwd: projectRoot, processEnv: process.env })
       controller.signal.throwIfAborted()
-      activeRun = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess, environment.values)
+      activeRun = launchFrameworkRun(io, projectRoot, invocation, serverArgs, spawnProcess, {
+        ...environment.values,
+        ...environmentOverrides,
+      })
       if (shutdownSignal) activeRun.shutdown(shutdownSignal)
       return activeRun
     },

@@ -276,6 +276,7 @@ export interface MailViewRenderer {
 
 export interface MailRuntimeBindings {
   readonly config?: NormalizedHoloMailConfig
+  readonly environment?: HoloAppEnv
   readonly renderView?: MailViewRenderer
   send?(input: MailSendInput): MailSendResult | Promise<MailSendResult>
   preview?(input: MailPreviewInput): MailPreviewResult | Promise<MailPreviewResult>
