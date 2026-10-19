@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { describe, expect, it } from 'vitest'
 import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
+import { createRedisRateLimitStore } from '../src'
 import { createSecurityRedisAdapter } from '../src/drivers/redis-adapter'
+import { runRateLimitDriverContractSuite } from './support/driver-contract'
 
 async function createAdapter(options: { cluster?: boolean; socket?: boolean; url?: boolean; db?: number; prefix?: string; tls?: boolean } = {}) {
   const service = await startRedisService(options)
@@ -18,6 +20,26 @@ async function createAdapter(options: { cluster?: boolean; socket?: boolean; url
 }
 
 describe('Redis rate-limit behavior', () => {
+  let currentAdapter: Awaited<ReturnType<typeof createAdapter>>['adapter'] | undefined
+
+  runRateLimitDriverContractSuite({
+    label: 'redis adapter',
+    decaySeconds: 3,
+    async createStore() {
+      const { adapter } = await createAdapter()
+      await adapter.connect()
+      currentAdapter = adapter
+      return createRedisRateLimitStore(adapter)
+    },
+    advanceSeconds(seconds) {
+      return setTimeout(seconds * 1000)
+    },
+    async cleanup() {
+      await currentAdapter?.close()
+      currentAdapter = undefined
+    },
+  })
+
   it.each([{}, { url: true, db: 2 }, { socket: true, db: 3 }])('counts hits and clears buckets through %j', async options => {
     const { adapter } = await createAdapter(options)
     try {
@@ -44,21 +66,23 @@ describe('Redis rate-limit behavior', () => {
     }
   })
 
-  it('expires old hits while retaining later hits in the sliding window', async () => {
-    const { adapter } = await createAdapter()
+  it('keeps one counter per bucket however many hits the store records', async () => {
+    const { adapter, service, prefix } = await createAdapter()
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected Redis client')
     try {
       await adapter.connect()
-      expect((await adapter.increment('login', { decaySeconds: 2 })).attempts).toBe(1)
-      await setTimeout(1200)
-      expect(await adapter.increment('login', { decaySeconds: 2 })).toEqual({ attempts: 2, ttlSeconds: 1 })
-      await setTimeout(1000)
-      expect((await adapter.increment('login', { decaySeconds: 2 })).attempts).toBe(2)
-      await setTimeout(2100)
-      expect(await adapter.increment('login', { decaySeconds: 2 })).toEqual({ attempts: 1, ttlSeconds: 2 })
+      const store = createRedisRateLimitStore(adapter)
+      for (let index = 0; index < 500; index += 1) {
+        await store.hit('login', { maxAttempts: 1, decaySeconds: 60 })
+      }
+
+      expect(await client.type(`${prefix}login`)).toBe('string')
+      expect(await client.get(`${prefix}login`)).toBe('500')
     } finally {
       await adapter.close()
     }
-  }, 10_000)
+  })
 
   it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('clears every matching bucket and preserves unrelated keys through %j', async options => {
     const { adapter, service } = await createAdapter(options)
@@ -107,9 +131,9 @@ describe('Redis rate-limit behavior', () => {
     if (!client) throw new Error('Expected Redis client')
     try {
       await adapter.connect()
-      await client.set(`${prefix}login`, 'corrupted')
+      await client.hset(`${prefix}login`, 'field', 'value')
       await expect(adapter.increment('login', { decaySeconds: 60 })).rejects.toThrow(/WRONGTYPE/)
-      expect(await client.get(`${prefix}login`)).toBe('corrupted')
+      expect(await client.hget(`${prefix}login`, 'field')).toBe('value')
       expect(await adapter.del('login')).toBe(1)
       expect((await adapter.increment('login', { decaySeconds: 60 })).attempts).toBe(1)
     } finally {

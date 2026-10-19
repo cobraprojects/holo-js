@@ -18,9 +18,11 @@ describe('@holo-js/security client typing', () => {
 
     const fieldName: string = config.csrf.field
     const cookieName: string = config.csrf.cookie
+    const headerName: string = config.csrf.header
 
     void fieldName
     void cookieName
+    void headerName
     void (0 as unknown as ConfigAssertion)
   })
 })

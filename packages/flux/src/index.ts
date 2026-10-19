@@ -557,6 +557,11 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       return
     }
 
+    if (eventName === 'pusher:subscription_error') {
+      state.subscribed = false
+      return
+    }
+
     if (eventName === 'pusher_internal:subscription_succeeded') {
       const presence = payload.presence
       if (presence && typeof presence === 'object' && !Array.isArray(presence)) {
@@ -624,18 +629,25 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       WebSocket: WebSocketConstructor,
       failureMessage: '[@holo-js/flux] WebSocket connection failed.',
       resolveUrl() {
-        const format = (config: HoloWebSocketConnectorOptions) => ({
-          url: broadcastBrowserInternals.formatUrl({
-            scheme: resolveWebSocketScheme(config.scheme, globals),
-            host: resolveBrowserHost(config.host, globals),
-            port: config.port ?? 8080,
-            path: config.path?.trim() || '/app',
-            key: config.key?.trim() || 'app-key',
-          }),
-          activate() {
-            resolvedOptions = config
-          },
-        })
+        const format = (config: HoloWebSocketConnectorOptions) => {
+          const key = config.key?.trim()
+          if (!key) {
+            throw new Error('[@holo-js/flux] Broadcast app key is not configured.')
+          }
+
+          return {
+            url: broadcastBrowserInternals.formatUrl({
+              scheme: resolveWebSocketScheme(config.scheme, globals),
+              host: resolveBrowserHost(config.host, globals),
+              port: config.port ?? 8080,
+              path: config.path?.trim() || '/app',
+              key,
+            }),
+            activate() {
+              resolvedOptions = config
+            },
+          }
+        }
         return canDiscoverHoloWebSocketConnectorOptions(globals)
           ? resolveHoloWebSocketConnectorOptions(options, globals).then(format)
           : format(options)
@@ -654,7 +666,12 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       },
     })
     setStatus('connecting')
-    await connection.connect()
+    try {
+      await connection.connect()
+    } catch (error) {
+      setStatus('disconnected')
+      throw error
+    }
   }
 
   const ensureChannel = (name: string, kind: FluxChannelKind): HoloConnectorChannelState => {

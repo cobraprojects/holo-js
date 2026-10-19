@@ -160,7 +160,7 @@ export interface NormalizedHoloSecurityConfig {
 
 export const DEFAULT_CORS_PATHS = Object.freeze(['/api/*'] as const)
 export const DEFAULT_CORS_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const)
-export const DEFAULT_CORS_HEADERS = Object.freeze(['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-Requested-With'] as const)
+export const DEFAULT_CORS_HEADERS = Object.freeze(['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-XSRF-TOKEN', 'X-Requested-With'] as const)
 export const DEFAULT_CORS_MAX_AGE = 7200
 
 export const holoCorsDefaults: Readonly<NormalizedHoloCorsConfig> = Object.freeze({
@@ -289,12 +289,18 @@ function normalizeCorsMaxAge(value: number | string | undefined): number {
 }
 
 export function normalizeCorsConfig(config: HoloCorsConfig = {}): NormalizedHoloCorsConfig {
+  const origins = normalizeCorsStringList(config.origins, holoCorsDefaults.origins, 'origins')
+  const credentials = config.credentials ?? holoCorsDefaults.credentials
+  if (credentials && origins.includes('*')) {
+    throw new Error('[Holo CORS] Wildcard origins cannot be combined with credentials.')
+  }
+
   return Object.freeze({
     paths: normalizeCorsStringList(config.paths, DEFAULT_CORS_PATHS, 'paths'),
-    origins: normalizeCorsStringList(config.origins, holoCorsDefaults.origins, 'origins'),
+    origins,
     methods: normalizeCorsMethods(config.methods),
     headers: normalizeCorsStringList(config.headers, DEFAULT_CORS_HEADERS, 'headers'),
-    credentials: config.credentials ?? holoCorsDefaults.credentials,
+    credentials,
     maxAge: normalizeCorsMaxAge(config.maxAge),
     statefulDomains: normalizeCorsStringList(config.statefulDomains, holoCorsDefaults.statefulDomains, 'statefulDomains'),
   })

@@ -81,7 +81,18 @@ async function readRealtimeRequest(request: Request): Promise<{
   }
 }
 
+class RealtimeDefinitionNotFoundError extends Error {
+  constructor(name: string) {
+    super(`Realtime definition "${name}" was not found.`)
+    this.name = 'RealtimeDefinitionNotFoundError'
+  }
+}
+
 function errorStatus(error: unknown): number {
+  if (error instanceof RealtimeDefinitionNotFoundError) {
+    return 404
+  }
+
   if (error instanceof RealtimeUnauthorizedError) {
     return 401
   }
@@ -302,10 +313,14 @@ export async function resolveRealtimeDefinition(
   name: string,
   options: RealtimeServerOptions,
 ): Promise<RealtimeResolvedDefinition> {
-  for (const definition of options.definitions ?? []) {
-    if (isRealtimeDefinition(definition) && definition.name === name) {
-      return definition
+  if (options.definitions) {
+    for (const definition of options.definitions) {
+      if (isRealtimeDefinition(definition) && definition.name === name) {
+        return definition
+      }
     }
+
+    throw new RealtimeDefinitionNotFoundError(name)
   }
 
   const root = resolveRealtimeRoot(options)
@@ -317,7 +332,7 @@ export async function resolveRealtimeDefinition(
     }
   }
 
-  throw new Error(`Realtime definition "${name}" was not found.`)
+  throw new RealtimeDefinitionNotFoundError(name)
 }
 
 export async function handleRealtimeQueryRequest(

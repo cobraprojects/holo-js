@@ -281,16 +281,16 @@ describe('@holo-js/config broadcast normalization', () => {
       },
     })
 
-    expect(() => normalizeBroadcastConfig({
+    expect(normalizeBroadcastConfig({
       connections: {
         broken: {
           driver: 'holo',
         },
       },
       default: 'broken',
-    })).toThrow('must define a key')
+    }).connections.broken).toMatchObject({ key: '', secret: '', appId: '' })
 
-    expect(() => normalizeBroadcastConfig({
+    expect(normalizeBroadcastConfig({
       connections: {
         broken: {
           driver: 'holo',
@@ -298,9 +298,9 @@ describe('@holo-js/config broadcast normalization', () => {
         },
       },
       default: 'broken',
-    })).toThrow('must define a secret')
+    }).connections.broken).toMatchObject({ key: 'key', secret: '', appId: '' })
 
-    expect(() => normalizeBroadcastConfig({
+    expect(normalizeBroadcastConfig({
       connections: {
         broken: {
           driver: 'holo',
@@ -309,7 +309,7 @@ describe('@holo-js/config broadcast normalization', () => {
         },
       },
       default: 'broken',
-    })).toThrow('must define an appId')
+    }).connections.broken).toMatchObject({ key: 'key', secret: 'secret', appId: '' })
 
     expect(() => normalizeBroadcastConfig({
       connections: {
@@ -445,35 +445,15 @@ describe('@holo-js/config broadcast normalization', () => {
       default: 'broken',
     })).toThrow('Broadcast connections must define a name and driver')
 
-    expect(() => normalizeBroadcastConfig({
+    expect(normalizeBroadcastConfig({
       connections: {
         broken: {
           driver: 'pusher',
         },
       },
       default: 'broken',
-    })).toThrow('must define a key')
+    }).connections.broken).toMatchObject({ key: '', secret: '', appId: '' })
 
-    expect(() => normalizeBroadcastConfig({
-      connections: {
-        broken: {
-          driver: 'pusher',
-          key: 'key',
-        },
-      },
-      default: 'broken',
-    })).toThrow('must define a secret')
-
-    expect(() => normalizeBroadcastConfig({
-      connections: {
-        broken: {
-          driver: 'pusher',
-          key: 'key',
-          secret: 'secret',
-        },
-      },
-      default: 'broken',
-    })).toThrow('must define an appId')
 
     expect(normalizeBroadcastConfig({
       connections: {

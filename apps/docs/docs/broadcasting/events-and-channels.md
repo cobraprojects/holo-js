@@ -281,6 +281,18 @@ The endpoint answers before your rule runs in these cases:
 Private and presence channels need [authentication](/auth/) installed. Without it, Holo doesn't create the `/broadcasting/auth` endpoint and no browser can join them. Public channels work without auth.
 :::
 
+### Refused subscriptions
+
+When a rule refuses a browser, the worker sends a `pusher:subscription_error` event on that channel and keeps the connection open. The browser's other channels keep working. A subscription beyond the [connection limit](/broadcasting/production#connection-limits) gets the same event with status `429`.
+
+```json
+{ "type": "AuthError", "error": "Unable to authorize the channel subscription.", "status": 403 }
+```
+
+If the check itself fails, for example because the database is down, the worker sends the same event with status `500` and passes the error to your [error reporter](/basics/errors#reporting-errors).
+
+A client can also subscribe to a private or presence channel without a signature from `/broadcasting/auth`. Then `holo broadcast:work` runs the rule itself, with the user from the connection's session cookie or `Authorization` header. If nobody is signed in, the worker refuses the subscription, just like the endpoint.
+
 ### Use a specific guard
 
 By default, the rule checks the user from the default auth guard in `config/auth.ts`. Set `guard` to use another one:

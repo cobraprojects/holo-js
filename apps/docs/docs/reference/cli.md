@@ -230,14 +230,14 @@ npx holo key:generate
 
 ### config:cache
 
-Compile every file in `config/` (with your env values applied) into one cached file at `.holo-js/generated/config-cache.json`. When the app runs in production (`APP_ENV=production`) and the cache was built for production, Holo reads it instead of loading `config/*.ts`. Other environments ignore the cache.
+Compile every file in `config/` into one cached file at `.holo-js/generated/config-cache.json`. Each `env()` call is evaluated with your current env values, and the results, secrets included, are written into the file. Holo still reads `.env` to choose the environment. When the app runs in production (`APP_ENV=production`, from your shell or from `.env`) and the cache was built for production, Holo reads the cache instead of loading `config/*.ts`. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached. Holo loads them live, so their `env()` values come from the runtime environment. Other environments ignore the cache.
 
 ```bash
 APP_ENV=production npx holo config:cache
 ```
 
 ::: warning
-In production, changes to `config/*.ts` or `.env` have no effect after you cache config until you run `config:cache` again or `config:clear`. Rebuild the cache on every deploy.
+In production, changes to `config/*.ts` or `.env` have no effect after you cache config until you run `config:cache` again or `config:clear`. Rebuild the cache on every deploy, after your env variables are in place. The cache file contains your secrets, so keep it out of version control.
 :::
 
 ### config:clear
@@ -761,6 +761,33 @@ npx holo media:regenerate [ModelName ...] [--ids=<ids>] [--only=<names>] [--only
 ```bash
 npx holo media:regenerate Post --only=thumb
 ```
+
+## Storage commands
+
+### storage:decode-names
+
+Rename files that Holo 0.3 stored under URL-encoded names on a local disk, such as `May%20report.csv`, to their real names, such as `May report.csv`. Run it once for each local disk after upgrading to 0.4.0.
+
+```bash
+npx holo storage:decode-names --disk=local
+```
+
+| Flag | Description |
+| --- | --- |
+| `--disk=<name>` | The local disk to rename files on. Required. |
+
+It prints every rename and every file it skips, then the total. Running it again right away renames nothing. Run it before new uploads arrive: a file uploaded after the upgrade under a name that looks URL-encoded, such as `May%20report.csv`, would be renamed by a later run. It skips:
+
+- a name that still looks URL-encoded after decoding, such as `100%2520off.txt`, because Holo can't tell what the original name was;
+- a name whose decoded form already exists, checked again right before each rename;
+- a name whose decoded form differs only by letter case or Unicode normalization from another decoded name or an existing name in the same folder, such as `cafÉ.txt` and `café.txt`, because some filesystems treat them as the same file;
+- a file whose decoded name ends in `$`, because local disks use that ending for metadata;
+- on Windows, a name Windows can't store, such as one with `:` or `?`, one ending in a dot or space, or a device name such as `CON`;
+- a symbolic link, which is never followed, along with its metadata file.
+
+A file and its metadata are checked together before either is renamed. If either name must be skipped, both are skipped. If the second rename fails, the command attempts to restore the first name and reports any failure.
+
+It never follows a symlink inside the disk, so files outside the disk root are never renamed. The disk's `root` in `config/storage.ts` is used as the disk, including when that path is itself a symlink, as the rest of the disk does. Rename skipped files by hand. S3 disks are not supported; see [S3 file names with special characters](/getting-started/upgrading#s3-file-names-with-special-characters).
 
 ## Broadcast commands
 

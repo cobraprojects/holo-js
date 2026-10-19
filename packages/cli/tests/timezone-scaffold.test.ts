@@ -33,11 +33,11 @@ describe('application timezone scaffold', () => {
 
       await writeConfigCache(root, { processEnv: {} })
       const cached = await loadConfigDirectory(root, { processEnv: { APP_TIMEZONE: 'Asia/Riyadh' }, preferCache: true })
-      expect(cached.app.timezone).toBe('Asia/Riyadh')
+      expect(cached.app.timezone).toBe('Africa/Cairo')
 
       await expect(loadConfigDirectory(root, {
         processEnv: { APP_TIMEZONE: 'Invalid/Timezone' },
-        preferCache: true,
+        preferCache: false,
       })).rejects.toThrow('Invalid application timezone: Invalid/Timezone')
     },
   )

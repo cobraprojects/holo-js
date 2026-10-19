@@ -63,6 +63,20 @@ Factories and `holo seed` now run without mass-assignment guards, as in Laravel.
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Broadcast subscription errors and channel authorization
+
+A refused channel subscription no longer closes the WebSocket. The worker sends `pusher:subscription_error` for that channel and keeps the connection open, so Flux keeps the browser's other channels and tries the refused channel again the next time you subscribe to it. If your own client waited for close code `4001` after a refused subscription, listen for `pusher:subscription_error` instead.
+
+`holo broadcast:work` now checks unsigned private and presence subscriptions with the user from the connection's session cookie or `Authorization` header, and refuses them when nobody is signed in. Before, those rules received `null`. Subscriptions signed by `/broadcasting/auth` are unchanged.
+
+The worker also stops sending internal error messages. Unexpected realtime errors reach clients as `Realtime request failed.`, failed publishes return `Broadcast publish failed.`, and the original errors go to your [error reporter](/basics/errors#reporting-errors). See [Errors](/broadcasting/production#errors).
+
+### Broadcast connection limits
+
+Each [Broadcast browser connection](/broadcasting/production#connection-limits) can hold 100 channels and 100 realtime query subscriptions, and can send 200 messages in each one-second window. Clients within these limits need no change.
+
+A subscription beyond the channel or realtime limit fails with status `429`, and the socket stays open. A connection that exceeds the message rate, or that has more than 4 MB of output waiting for it, is closed with code `1008`. If a page needs more live queries than one connection allows, split them across pages.
+
 ### Queue jobs interrupted by a stopped worker
 
 Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up once at least the connection's `retryAfter` seconds have passed; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.
@@ -101,9 +115,46 @@ aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%
     done
 ```
 
-Files on local disks keep their names. For those, `path()` now returns the file Holo actually wrote, such as `<root>/reports/Q1%20caf%C3%A9.pdf`. If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys with URL-encoded names, the same as local disks.
+Local disks also change to exact names; see [Local file names](#local-file-names). If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys in the same format as local disks.
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
+
+### Local file names
+
+Local disks now store files under their exact names, like Laravel. Before 0.4.0, Holo stored `reports/Q1 café.pdf` as `reports/Q1%20caf%C3%A9.pdf` on disk. After upgrading, Holo looks for `reports/Q1 café.pdf`, and `path()` returns that location.
+
+After you deploy 0.4.0, rename the existing files once for each local disk:
+
+```bash
+npx holo storage:decode-names --disk=local
+npx holo storage:decode-names --disk=public
+```
+
+The command prints what it renamed and what it skipped, and running it again right away changes nothing. Run it once, before new uploads arrive, and rename skipped files by hand. See [storage:decode-names](/reference/cli#storage-decode-names).
+
+Low-level keys still use `:` between folders, but only `%`, `:`, and `$` are escaped inside a name, so the key for `reports/Q1 café.pdf` is `reports:Q1 café.pdf` instead of `reports:Q1%20caf%C3%A9.pdf`. Old-style keys still read the same file. On local disks, file names ending in `$` are now reserved for metadata, so `put('prices.json$', ...)` throws an error.
+
+### Local storage on Nuxt and symlinks
+
+Nuxt apps now use the same local disk code as Next.js, SvelteKit, and plain Node. On Nuxt, `stat()`, `listFiles()`, `readStream()`, and `writeStream()` now work on local disks instead of throwing an unsupported-operation error. Files keep their names and locations, so no data moves.
+
+The Nuxt adapter no longer adds `holo:<disk>` entries to Nitro's `storage` option or a `holoStorage` key to `runtimeConfig`. If your server code calls Nitro's `useStorage('holo:local')`, switch to Holo's disk:
+
+```ts [server/api/report.get.ts]
+import { useStorage } from '@holo-js/storage/runtime'
+
+export default defineEventHandler(async () => {
+  return await useStorage('local').get('reports/daily.txt')
+})
+```
+
+`@holo-js/storage` no longer exports the Nitro helpers `applyNitroStorageConfig()`, `buildStorageConfig()`, `buildStorageConfigWithDriver()`, or the `StorageConfig`, `NitroStorageLike`, and `StorageAdapterOptionsLike` types.
+
+On every framework, local disks now refuse to delete through symlinks that lead outside the disk root. `delete()`, `removeItem()`, and `clear(base)` throw instead of deleting the outside file, and `clear()` with no base empties the disk root without replacing a symlinked root folder. `exists()` returns `false` for a folder instead of throwing. If your app keeps files outside the disk root and links them in, delete them through a disk whose root contains them.
+
+### Local disk permissions
+
+New files and folders on local disks use Laravel's permissions: `0600` files and `0700` folders on private disks, and `0644` files and `0755` folders on public disks. Existing files and folders keep their permissions. If another OS user serves your public files, check that it can still read them.
 
 ### Database queue workers on MySQL
 
@@ -150,6 +201,20 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 `holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
+### Generated broadcast credentials and strict env values
+
+Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. Without them, your config still loads and `holo prepare` still runs. The broadcast worker, publishing, and channel authorization fail with an error that names the variables. `holo new` writes generated values into `.env`, and existing apps get them the same way:
+
+```bash
+npx holo install broadcast
+```
+
+The command adds `BROADCAST_APP_*` lines that `.env` doesn't have yet. It leaves existing lines alone, so if a line is present but empty, fill it in or delete the line and run the command again. Use the same three values for your web app and your broadcast worker, and set them in your hosting provider's environment rather than copying your development `.env`.
+
+Holo also throws when a typed `env()` value doesn't convert: `APP_DEBUG=maybe` with a boolean fallback, or `APP_PORT=abc` with a number fallback. Previously Holo used the fallback. Fix or remove those values before deploying.
+
+If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached and still load live, so their env values come from the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
+
 ### Encrypted session, remember-me, and CSRF cookies
 
 Holo now encrypts the cookies it sets: the session cookie, the remember-me cookie, and `XSRF-TOKEN`. It uses AES-256-GCM with a key derived from `APP_KEY`, and rejects any cookie that was changed. Your own cookies, including ones written with `cookie()` or `cookies.make()`, are not encrypted.
@@ -159,6 +224,37 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 `APP_KEY` must be set wherever Holo sets these cookies. Without it, signing in and issuing the CSRF cookie throw an error. Run `npx holo key:generate` if your `.env` has no key. Changing `APP_KEY` later signs everyone out again.
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
+
+### Rate-limit windows are fixed in every driver
+
+Every rate-limit driver now uses the same window. A window starts with a key's first attempt and lasts `decaySeconds`. Rejected attempts count but don't extend it. Before, the Redis driver counted attempts over a sliding window that rejected attempts extended. See [How the window works](/basics/security/rate-limiting#how-the-window-works).
+
+Redis stores each key as a counter instead of a sorted set. Buckets left by 0.3.x are sorted sets, and an attempt on a key that still holds one fails with a Redis `WRONGTYPE` error until that bucket expires. Clear them once after the upgrade:
+
+```bash
+npx holo rate-limit:clear --all
+```
+
+The `memory` driver keeps at most 10,000 keys per process and never evicts a live key. When it is full, new keys are limited until one expires. The `file` driver deletes expired keys in the background at most once a minute. The low-level `createSecurityRedisAdapter()` no longer takes a `now` option.
+
+### CSRF tokens stored in the session
+
+The CSRF token now lives in the visitor's [session](/basics/session), as in Laravel. The `XSRF-TOKEN` cookie carries that session token encrypted, and a token copied from another browser or planted by a subdomain no longer matches.
+
+- **Tokens reissue after upgrading.** The first unsafe request each browser sends after the upgrade gets `419`, because its session has no token yet. The next page load stores a token in the session and issues a new `XSRF-TOKEN` cookie.
+- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf` without Auth, add `@holo-js/session` to your dependencies. Without a `config/session.ts`, Holo uses the default file session store.
+- **Send the session cookie.** Visitors without a session get one on their first page load. Scripts and tests that post with only the `XSRF-TOKEN` cookie must also send the `holo_session` cookie (or your `session.cookie.name`).
+- **`X-XSRF-TOKEN` is also accepted.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value, so existing `fetch` calls keep working. The new `X-XSRF-TOKEN` header accepts the cookie value, as in Laravel.
+- **Custom session stores need `setDataIfAbsent`.** The token is written with one atomic store call, so a rotation or logout that runs at the same moment can't bring back the old session. Built-in file, database and Redis stores support it. A custom store must add `setDataIfAbsent(sessionId, key, value)` before CSRF-protected pages load. Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, preserve an existing key or insert the value if absent, then return `{ found: true, value: storedValue }`. For the reserved `_token` key, treat a non-string or empty value as absent and replace it atomically; preserve a valid token initialized by another request. Keep the session's other data and expiry unchanged.
+- **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`, and the cookie value is no longer added as `_token`. If the configured header is `X-XSRF-TOKEN`, the fetched token goes in `csrf.field` instead; that header accepts only encrypted cookie values.
+
+### CSRF endpoints for separate frontends
+
+For a separate frontend using `useForm({ csrf: { endpoint } })`, your token endpoint can now return `{ token, field }`. Use `const { name: field, value: token } = await csrf.field(request)`. The client sends the token in that field, so custom API CSRF names work without reading API cookies. Existing `{ token }` responses keep their current behavior.
+
+### CORS wildcard origins with credentials
+
+`config/cors.ts` can no longer combine `origins: ['*']` with `credentials: true`. Holo throws at startup instead of echoing every origin with credentials. List your frontend origins in `origins`, or set `credentials: false`. A wildcard origin now always answers `Access-Control-Allow-Origin: *`.
 
 ### Social sign-in links only verified accounts
 

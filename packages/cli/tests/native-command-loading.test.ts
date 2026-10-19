@@ -216,3 +216,71 @@ try {
     await rm(root, { recursive: true, force: true })
   }
 }, 15000)
+
+it('decodes URL-encoded local storage names through the actual CLI once', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/storage.ts', "import { defineStorageConfig } from '@holo-js/storage'; export default defineStorageConfig({ defaultDisk: 'local', disks: { local: { driver: 'local', root: './storage/app' }, media: { driver: 's3', bucket: 'media', region: 'us-east-1' } } })")
+    await write('storage/app/May%20report.csv', 'report')
+    await write('storage/app/nested%20folder/caf%C3%A9%20%E2%98%95.txt', 'coffee')
+    await write('storage/app/nested%20folder/notes.txt$', '{"owner":"ops"}')
+    await write('storage/app/Q1%20plan.pdf$', '{"owner":"finance"}')
+    await write('storage/app/plain.txt', 'plain')
+    await write('storage/app/Already literal.txt', 'literal')
+    await write('storage/app/100%2520off.txt', 'ambiguous')
+    await write('storage/app/price%24', 'reserved')
+    await write('storage/app/dup%20name.txt', 'encoded')
+    await write('storage/app/dup name.txt', 'literal')
+    await write('storage/app/dup%20name.txt$', '{"owner":"encoded"}')
+    await write('outside/secret%20file.txt', 'outside')
+    await symlink(join(root, 'outside'), join(root, 'storage/app/escape'))
+
+    const first = await execute(process.execPath, [cli, 'storage:decode-names', '--disk=local'], { cwd: root })
+    expect(first.stdout).toContain('[storage] Renamed "May%20report.csv" to "May report.csv".')
+    expect(first.stdout).toContain('[storage] Renamed "nested%20folder" to "nested folder".')
+    expect(first.stdout).toContain('[storage] Renamed "nested folder/caf%C3%A9%20%E2%98%95.txt" to "nested folder/café ☕.txt".')
+    expect(first.stdout).toContain('[storage] Skipped "100%2520off.txt": the decoded name still looks URL-encoded, so rename it by hand.')
+    expect(first.stdout).toContain('[storage] Skipped "price%24": local file names ending in "$" are reserved for metadata.')
+    expect(first.stdout).toContain('[storage] Skipped "dup%20name.txt": "dup name.txt" already exists.')
+    expect(first.stdout).toContain('[storage] Skipped "dup%20name.txt$": its file was skipped.')
+    expect(first.stdout).toContain('[storage] Renamed "Q1%20plan.pdf$" to "Q1 plan.pdf$".')
+    expect(first.stdout).toContain('[storage] Renamed 4 names on disk "local".')
+    expect((await readdir(join(root, 'storage/app'))).sort()).toEqual([
+      '100%2520off.txt', 'Already literal.txt', 'May report.csv', 'Q1 plan.pdf$', 'dup name.txt', 'dup%20name.txt', 'dup%20name.txt$', 'escape', 'nested folder', 'plain.txt', 'price%24',
+    ])
+    expect((await readdir(join(root, 'storage/app/nested folder'))).sort()).toEqual(['café ☕.txt', 'notes.txt$'])
+    await expect(readFile(join(root, 'storage/app/nested folder/café ☕.txt'), 'utf8')).resolves.toBe('coffee')
+    await expect(readdir(join(root, 'outside'))).resolves.toEqual(['secret%20file.txt'])
+
+    const second = await execute(process.execPath, [cli, 'storage:decode-names', '--disk=local'], { cwd: root })
+    expect(second.stdout).not.toContain('Renamed "')
+    expect(second.stdout).toContain('[storage] Renamed 0 names on disk "local".')
+
+    await expect(execute(process.execPath, [cli, 'storage:decode-names', '--disk=media'], { cwd: root })).rejects.toThrow('only renames files on local disks')
+    await expect(execute(process.execPath, [cli, 'storage:decode-names', '--disk=missing'], { cwd: root })).rejects.toThrow('Disk "missing" is not configured')
+    await expect(execute(process.execPath, [cli, 'storage:decode-names'], { cwd: root })).rejects.toThrow('requires --disk')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
+it('leaves a symbolic link and its metadata sidecar in place through the actual CLI', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/storage.ts', "import { defineStorageConfig } from '@holo-js/storage'; export default defineStorageConfig({ defaultDisk: 'local', disks: { local: { driver: 'local', root: './storage/app' } } })")
+    await write('outside/secret.txt', 'private')
+    await mkdir(join(root, 'storage/app'), { recursive: true })
+    await symlink(join(root, 'outside/secret.txt'), join(root, 'storage/app/link%20name.txt'))
+    await write('storage/app/link%20name.txt$', '{"owner":"ops"}')
+
+    const { stdout } = await execute(process.execPath, [cli, 'storage:decode-names', '--disk=local'], { cwd: root })
+
+    expect(stdout).toContain('[storage] Skipped "link%20name.txt": symbolic links are never followed.')
+    expect(stdout).toContain('[storage] Skipped "link%20name.txt$": its file is a symbolic link.')
+    expect(stdout).toContain('[storage] Renamed 0 names on disk "local".')
+    expect((await readdir(join(root, 'storage/app'))).sort()).toEqual(['link%20name.txt', 'link%20name.txt$'])
+    await expect(readFile(join(root, 'outside/secret.txt'), 'utf8')).resolves.toBe('private')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
