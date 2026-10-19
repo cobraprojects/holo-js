@@ -131,16 +131,18 @@ async function createLocalStorageFileResponse(projectRoot: string, disk: Runtime
 
 function resolveRouteSegments(routePath: string): string[] | null {
   const segments = normalizeRequestPath(routePath)
-  if (!segments?.length || segments.at(-1)?.endsWith('$') || segments.some(segment => localStoragePathInternals.segmentProblem(segment) !== null)) {
-    return null
-  }
+  return segments?.length ? segments : null
+}
 
-  return segments
+function areValidFileSegments(segments: readonly string[]): boolean {
+  return segments.length > 0
+    && !segments.at(-1)?.endsWith('$')
+    && segments.every(segment => localStoragePathInternals.segmentProblem(segment) === null)
 }
 
 function resolveDefaultPublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, segments: string[]): ResolvedPublicStorageRequest | null {
   const disk = isPublicLocalDisk(config.disks.public) ? config.disks.public : undefined
-  if (!disk) {
+  if (!disk || !areValidFileSegments(segments)) {
     return null
   }
 
@@ -162,7 +164,7 @@ function resolveNamedPublicStorageRequest(projectRoot: string, config: HoloStora
   }
 
   const fileSegments = usesReservedNamespace ? segments.slice(2) : segments.slice(1)
-  if (fileSegments.length === 0) {
+  if (!areValidFileSegments(fileSegments)) {
     return null
   }
 

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NormalizedHoloStorageConfig } from '../src/config'
-import { createPublicStorageResponse } from '../src'
+import { createPublicStorageResponse, normalizeModuleOptions } from '../src'
+import { createTemporaryLocalStorageUrl } from '../src/temporaryLocalStorage'
 
 const tempRoots = new Set<string>()
 
@@ -319,6 +320,38 @@ describe('public storage names on Windows', () => {
   afterEach(async () => {
     await Promise.all(Array.from(tempRoots, root => rm(root, { recursive: true, force: true })))
     tempRoots.clear()
+  })
+
+  it('serves a public disk whose name is not a Windows file name, and still refuses its sidecar aliases', async () => {
+    const { projectRoot } = await createProject()
+    const conRoot = join(projectRoot, 'storage/app/con-disk')
+    await mkdir(conRoot, { recursive: true })
+    await writeFile(join(conRoot, 'report.txt'), 'report')
+    await writeFile(join(conRoot, 'report.txt$'), '{"owner":"ops"}')
+    await writeFile(join(conRoot, 'report.txt$.'), 'metadata alias')
+    const config: NormalizedHoloStorageConfig = {
+      defaultDisk: 'CON',
+      routePrefix: '/storage',
+      disks: { CON: { driver: 'public', visibility: 'public', root: './storage/app/con-disk' } },
+    }
+    const runtime = normalizeModuleOptions(config)
+    const appKey = 'windows-disk-name-test-key'
+    const request = (url: string) => createPublicStorageResponse(projectRoot, config, new Request(url), appKey)
+
+    await withPlatform('win32', async () => {
+      const served = await request('https://app.test/storage/__holo/CON/report.txt')
+      expect(served.status).toBe(200)
+      await expect(served.text()).resolves.toBe('report')
+      for (const path of ['report.txt%24', 'report.txt%24.', 'nul.txt']) {
+        expect((await request(`https://app.test/storage/__holo/CON/${path}`)).status, path).toBe(404)
+      }
+
+      const temporary = createTemporaryLocalStorageUrl(runtime.disks.CON!, 'report.txt', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)
+      const signed = await request(temporary)
+      expect(signed.status).toBe(200)
+      await expect(signed.text()).resolves.toBe('report')
+      expect(() => createTemporaryLocalStorageUrl(runtime.disks.CON!, 'report.txt$.', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)).toThrow()
+    })
   })
 
   it('refuses requests that Windows would resolve to a metadata sidecar or device, and still serves normal files', async () => {
