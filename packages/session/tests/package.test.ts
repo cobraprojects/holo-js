@@ -83,6 +83,7 @@ describe('@holo-js/session package surface', () => {
       stores: {
         database: storeMap,
       },
+      appKey: 'session-package-test-key',
     })
 
     expect(defineSessionConfig({
@@ -143,9 +144,11 @@ describe('@holo-js/session package surface', () => {
     })
 
     expect(cookie('custom', 'value', { httpOnly: false })).toContain('custom=value')
-    expect(sessionCookie('session_2')).toContain('holo_session=session_2')
+    const encryptedSession = parseCookieHeader(sessionCookie('session_2').split(';', 1)[0]).holo_session
+    expect(getSessionRuntime().decryptCookie('holo_session', encryptedSession ?? '')).toBe('session_2')
     expect(sessionCookie('session_2')).toContain('Max-Age=7200')
-    expect(rememberMeCookie('remember_1')).toContain('holo_session_remember=remember_1')
+    const encryptedRemember = parseCookieHeader(rememberMeCookie('remember_1').split(';', 1)[0]).holo_session_remember
+    expect(getSessionRuntime().decryptCookie('holo_session_remember', encryptedRemember ?? '')).toBe('remember_1')
     expect(rememberMeCookie('remember_1')).toContain('Max-Age=86400')
     expect(cookies.forget('custom')).toContain('Expires=')
     expect(cookies.forget('custom')).toContain('Max-Age=0')
@@ -188,6 +191,7 @@ describe('@holo-js/session package surface', () => {
       stores: {
         database: storeMap,
       },
+      appKey: 'session-package-test-key',
     })
 
     expect(await readSession('expired')).toBeNull()
@@ -220,9 +224,9 @@ describe('@holo-js/session package surface', () => {
   it('keeps cookie helpers explicit and tolerant of malformed request headers', () => {
     expect(cookie('plain', 'value')).not.toContain('Max-Age=')
     expect(cookie('scoped', 'value', { domain: 'example.com' })).toContain('Domain=example.com')
-    expect(sessionCookie('fallback')).toContain('holo_session=fallback')
-    expect(rememberMeCookie('fallback')).toContain('holo_session_remember=fallback')
-    expect(rememberMeCookie('fallback', { maxAge: 5 })).toContain('Max-Age=5')
+    expect(sessionCookie('')).toContain('holo_session=;')
+    expect(rememberMeCookie('')).toContain('holo_session_remember=;')
+    expect(rememberMeCookie('', { maxAge: 5 })).toContain('Max-Age=5')
     expect(cookies.forget('plain')).toContain('Max-Age=0')
     expect(parseCookieHeader(null)).toEqual({})
     expect(parseCookieHeader('lonely; ok=1')).toEqual({ ok: '1' })
