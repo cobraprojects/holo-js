@@ -462,16 +462,23 @@ async function restoreRememberedSessionNow(
     source = sessionId ? await bindings.session.read(sessionId) : null
     if (source) break
   }
-  const payloads = readSessionPayloads(source) ?? {}
+  const sourcePayloads = readSessionPayloads(source) ?? {}
+  const challengePending = Object.values(sourcePayloads).some(payload => payload.multiFactorChallengeExpiresAt)
+  const payloads = challengePending ? {} : sourcePayloads
   const revocation = bindings.sessionRevocations
     ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider, userId: user.id }, payloads)
     : undefined
   const session = await bindings.session.create({
-    data: writeSessionPayloads(source?.data ?? {}, {
+    data: writeSessionPayloads(challengePending ? {} : source?.data ?? {}, {
       ...payloads,
       [guardName]: { ...toSessionPayload(guardName, provider, user), ...(revocation ? { revocation } : {}) },
     }),
   })
+  if (challengePending) {
+    bindings.context.setSessionId(guardName, session.id)
+    bindings.context.setCachedUser(guardName, user)
+    return
+  }
   try {
     await appendResponseCookies(bindings, [bindings.session.sessionCookie(session.id)])
   } catch (error) {

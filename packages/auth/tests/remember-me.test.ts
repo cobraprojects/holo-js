@@ -265,6 +265,32 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
+  it('keeps a pending multi-factor challenge session when another guard is restored', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    const challenge = await getSessionRuntime().create({
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          userId: 1,
+          user: { id: 1, email: 'ava@app.test' },
+          authenticatedAt: new Date().toISOString(),
+          multiFactorChallengeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+    })
+    await getSessionRuntime().flash(challenge.id, 'challenge', true)
+    browser.receive(getSessionRuntime().sessionCookie(challenge.id))
+    const challengeCookie = browser.cookies.get('holo_session')
+
+    await expect(browser.request(() => auth.guard('admin').check())).resolves.toBe(true)
+
+    expect(browser.cookies.get('holo_session')).toBe(challengeCookie)
+    await expect(getSessionRuntime().take(challenge.id, 'challenge')).resolves.toBe(true)
+  })
+
   it('cycles the token on logout so every device loses remember-me while other active sessions remain', async () => {
     const laptop = new Browser()
     const phone = new Browser()
