@@ -3,6 +3,10 @@ import { initializeEntityModelProperties, type EntityConstructor, valuesAreEqual
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
+function rootColumnOf(key: string): string {
+  return key.split('->')[0]!
+}
+
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
 }
@@ -153,14 +157,14 @@ class EntityBase<
 
   set<TKey extends Extract<keyof ModelRecord<TTable>, string>>(key: TKey, value: ModelRecord<TTable>[TKey]): this {
     this.attributes[key] = value
-    this.forceFilledColumns.delete(key)
+    this.forceFilledColumns.delete(rootColumnOf(key))
     return this
   }
 
   fill(values: Partial<ModelRecord<TTable>>): this {
     Object.assign(this.attributes, values)
     for (const key of Object.keys(values)) {
-      this.forceFilledColumns.delete(key)
+      this.forceFilledColumns.delete(rootColumnOf(key))
     }
     return this
   }
@@ -173,7 +177,7 @@ class EntityBase<
   forceFill(values: Partial<ModelRecord<TTable>>): this {
     Object.assign(this.attributes, values)
     for (const key of Object.keys(values)) {
-      this.forceFilledColumns.add(key)
+      this.forceFilledColumns.add(rootColumnOf(key))
     }
     return this
   }
@@ -468,6 +472,7 @@ class EntityBase<
     const pendingChanges = this.persisted ? this.getDirty() : this.toAttributes()
     const persisted = await method.call(repo, this)
     this.applyPersistedEntity(persisted, pendingChanges)
+    this.forceFilledColumns.clear()
     return this
   }
 

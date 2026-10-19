@@ -10,6 +10,7 @@ import {
   resetDB,
   type DatabaseContext,
 } from '../src'
+import { getForceFilledColumns } from '../src/model/Entity'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
 
@@ -119,6 +120,37 @@ describe('model mass assignment', () => {
     refilled.fill({ role: 'guest' })
     await expect(refilled.save()).rejects.toThrow('Column "role" is not writable on model "Account".')
     await expect(db.table('accounts').where('code', 'a').first()).resolves.toMatchObject({ role: 'owner' })
+  })
+
+  it('guards nested JSON writes by their root column after forceFill', async () => {
+    const db = await openDatabase()
+    const profiles = defineTable('profiles', {
+      id: column.id(),
+      name: column.string(),
+      settings: column.json().nullable(),
+    })
+    await createTestTable(db, profiles)
+    await db.table('profiles').insert({ name: 'Ada', settings: JSON.stringify({ role: 'member' }) })
+
+    const Profile = defineModelFromTable(profiles, { fillable: ['name'], timestamps: false })
+
+    const profile = await Profile.findOrFail(1)
+    profile.forceFill({ settings: profile.get('settings') })
+    const request = { 'settings->role': 'admin' } as Record<string, unknown>
+    profile.fill(request as never)
+    await expect(profile.save()).rejects.toThrow('Column "settings" is not writable on model "Profile".')
+    await expect(db.table('profiles').where('id', 1).first()).resolves.toMatchObject({ settings: JSON.stringify({ role: 'member' }) })
+
+    const trusted = await Profile.findOrFail(1)
+    trusted.forceFill({ 'settings->role': 'owner' } as never)
+    expect([...getForceFilledColumns(trusted)]).toEqual(['settings'])
+    await trusted.save()
+    expect(getForceFilledColumns(trusted).size).toBe(0)
+
+    const unchanged = await Profile.findOrFail(1)
+    unchanged.forceFill({ settings: unchanged.get('settings') })
+    await unchanged.save()
+    expect(getForceFilledColumns(unchanged).size).toBe(0)
   })
 
   it('saves and deletes the row the model was loaded from after its key changes', async () => {
