@@ -3070,7 +3070,7 @@ describe('model relation slice', () => {
     expect(unmappedImage.getRelation<Entity<TableDefinition>>('imageable')?.getRelation<Entity<TableDefinition>[]>('posts') ?? []).toEqual([])
 
     const fallbackTypedImage = await Image.findOrFail(100)
-    fallbackTypedImage.set('imageableType' as never, null as never)
+    fallbackTypedImage.forceFill({ imageableType: null } as never)
     fallbackTypedImage.setRelation('imageable', loadedUsers[0])
     await expect(fallbackTypedImage.loadMorph('imageable', { User: '' })).resolves.toBe(fallbackTypedImage)
     expect(fallbackTypedImage.getRelation<Entity<TableDefinition>>('imageable')?.get('name')).toBe('Mohamed')
@@ -3151,7 +3151,7 @@ describe('model relation slice', () => {
       'whereMorphedTo targets must be persisted entities.',
     )
     const brokenTarget = User.getRepository().hydrate({ id: 9, name: 'Broken' })
-    brokenTarget.set('id', undefined as never)
+    brokenTarget.forceFill({ id: undefined } as never)
     expect(() => Image.query().whereMorphedTo('imageable', brokenTarget)).toThrow(
       'whereMorphedTo targets must have a defined primary key value.',
     )
@@ -3500,6 +3500,7 @@ describe('model relation slice', () => {
       relations: {
         author: belongsTo(() => User, 'userId') } })
     User = defineModelFromTable(users, {
+      guarded: [],
       relations: {
         posts: hasMany(() => Post, 'userId') } })
 

@@ -18,7 +18,7 @@ Use the existing `withoutGlobalScope()` / `withoutGlobalScopes()` and `withTrash
 
 ### Mass assignment is closed by default
 
-A model without `fillable` or `guarded` now rejects every column in `create()`, `update()`, `make()`, `save()`, and query `update()`, `upsert()`, `increment()`, and `decrement()` extra values. Before, it allowed every column. Add a `fillable` list to each such model, or `guarded: []` to allow every column except the primary key and timestamps:
+A model without `fillable` or `guarded` now rejects every column in `create()`, `update()`, `make()`, `fill()`, `set()`, property assignment, and query `update()`, `upsert()`, `increment()`, and `decrement()` extra values. Before, it allowed every column. Add a `fillable` list to each such model, or `guarded: []` to allow every column except the primary key and timestamps:
 
 ```ts [server/models/Post.ts]
 export default defineModel('posts', {
@@ -28,7 +28,7 @@ export default defineModel('posts', {
 
 The primary key and the `created_at` and `updated_at` columns are now guarded unless you name them in `fillable`. `fillable: ['*']` and `guarded` lists no longer let request data write them. Holo still generates IDs and timestamps itself. Query `upsert()` rows that include `created_at` or `updated_at` now need those columns in `fillable`.
 
-`forceFill()` now lets the next `save()` write the columns you pass it, even when they're guarded. Code that relied on `forceFill()` failing for guarded columns should use `fill()` instead.
+Mass assignment rules are now checked when you assign attributes, not when you save. `fill()`, `set()`, and property assignment throw the `SecurityError` immediately, and `save()` writes every changed column. A JSON path such as `settings->role` follows its column's rules. `forceFill()` assigns without checking, so the next `save()` writes the columns you pass it, even when they're guarded. Code that relied on `forceFill()` failing for guarded columns should use `fill()` instead.
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 

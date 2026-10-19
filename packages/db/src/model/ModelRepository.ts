@@ -18,7 +18,7 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
 import { withPredicate, type SelectQueryPlan } from '../query/ast'
-import { Entity, getEntityKeyForSave, getForceFilledColumns } from './Entity'
+import { Entity, getEntityKeyForSave } from './Entity'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
@@ -1261,11 +1261,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   async create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+    this.assertMassAssignable(applyPendingModelAttributes(this.definition, values))
     return this.createRecord(values)
   }
 
   async createQuietly(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
-    return withoutModelEvents(() => this.createRecord(values))
+    return withoutModelEvents(() => this.create(values))
   }
 
   async createMany(
@@ -1273,7 +1274,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   ): Promise<ModelCollection<TTable>> {
     const created: Entity<TTable>[] = []
     for (const value of values) {
-      created.push(await this.createRecord(value))
+      created.push(await this.create(value))
     }
     return this.createCollection(created)
   }
@@ -1361,7 +1362,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     switch (relation.kind) {
       case 'belongsTo': {
         if (relatedEntity === null) {
-          entity.set(relation.foreignKey as never, null as never)
+          entity.forceFill({ [relation.foreignKey]: null } as never)
           entity.setRelation(relationName, null)
           return entity
         }
@@ -1372,14 +1373,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           throw new HydrationError(`Cannot associate relation "${relationName}" with an unsaved ${related.definition.name}.`)
         }
 
-        entity.set(relation.foreignKey as never, ownerKey as never)
+        entity.forceFill({ [relation.foreignKey]: ownerKey } as never)
         entity.setRelation(relationName, relatedEntity)
         return entity
       }
       case 'morphTo': {
         if (relatedEntity === null) {
-          entity.set(relation.morphTypeColumn as never, null as never)
-          entity.set(relation.morphIdColumn as never, null as never)
+          entity.forceFill({ [relation.morphTypeColumn]: null, [relation.morphIdColumn]: null } as never)
           entity.setRelation(relationName, null)
           return entity
         }
@@ -1390,8 +1390,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           throw new HydrationError(`Cannot associate relation "${relationName}" with an unsaved ${relatedRepository.definition.name}.`)
         }
 
-        entity.set(relation.morphTypeColumn as never, relatedRepository.definition.morphClass as never)
-        entity.set(relation.morphIdColumn as never, relatedKey as never)
+        entity.forceFill({
+          [relation.morphTypeColumn]: relatedRepository.definition.morphClass,
+          [relation.morphIdColumn]: relatedKey,
+        } as never)
         entity.setRelation(relationName, relatedEntity)
         return entity
       }
@@ -1419,14 +1421,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         const related = this.resolveCompatibleRelatedRepository(relation.related, relationName, relatedEntity)
         const savedRelated = await related.saveEntity(relatedEntity)
         this.associateRelation(entity, relationName, savedRelated)
-        entity.syncPersisted(await this.saveEntity(entity, new Set([relation.foreignKey])))
+        entity.syncPersisted(await this.saveEntity(entity))
         return savedRelated
       }
       case 'morphTo': {
         const related = relatedEntity.getRepository() as ModelRepository
         const savedRelated = await related.saveEntity(relatedEntity)
         this.associateRelation(entity, relationName, savedRelated)
-        entity.syncPersisted(await this.saveEntity(entity, new Set([relation.morphTypeColumn, relation.morphIdColumn])))
+        entity.syncPersisted(await this.saveEntity(entity))
         return savedRelated
       }
       case 'hasMany':
@@ -1435,8 +1437,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         this.assertPersistedParentForRelation(entity, relationName)
         const parentKey = entity.get(relation.localKey as never)
         const related = this.resolveCompatibleRelatedRepository(relation.related, relationName, relatedEntity)
-        relatedEntity.set(relation.foreignKey as never, parentKey as never)
-        const savedRelated = await related.saveEntity(relatedEntity, new Set([relation.foreignKey]))
+        relatedEntity.forceFill({ [relation.foreignKey]: parentKey } as never)
+        const savedRelated = await related.saveEntity(relatedEntity)
         this.syncRelationAfterPersistence(entity, relationName, relation, savedRelated)
         return savedRelated
       }
@@ -1446,12 +1448,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         this.assertPersistedParentForRelation(entity, relationName)
         const parentKey = entity.get(relation.localKey as never)
         const related = this.resolveCompatibleRelatedRepository(relation.related, relationName, relatedEntity)
-        relatedEntity.set(relation.morphTypeColumn as never, this.getMorphTypeValue() as never)
-        relatedEntity.set(relation.morphIdColumn as never, parentKey as never)
-        const savedRelated = await related.saveEntity(
-          relatedEntity,
-          new Set([relation.morphTypeColumn, relation.morphIdColumn]),
-        )
+        relatedEntity.forceFill({
+          [relation.morphTypeColumn]: this.getMorphTypeValue(),
+          [relation.morphIdColumn]: parentKey,
+        } as never)
+        const savedRelated = await related.saveEntity(relatedEntity)
         this.syncRelationAfterPersistence(entity, relationName, relation, savedRelated)
         return savedRelated
       }
@@ -1512,9 +1513,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     switch (relation.kind) {
       case 'belongsTo': {
         const related = this.resolveRelatedRepository(relation.related)
-        const created = await related.createRecord(values as Partial<ModelRecord<typeof related.definition.table>>)
+        const created = await related.create(values as Partial<ModelRecord<typeof related.definition.table>>)
         this.associateRelation(entity, relationName, created)
-        entity.syncPersisted(await this.saveEntity(entity, new Set([relation.foreignKey])))
+        entity.syncPersisted(await this.saveEntity(entity))
         return created
       }
       case 'morphTo': {
@@ -1526,13 +1527,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         this.assertPersistedParentForRelation(entity, relationName)
         const parentKey = entity.get(relation.localKey as never)
         const related = this.resolveRelatedRepository(relation.related)
-        const created = await related.createRecord(
-          {
-            ...values,
-            [relation.foreignKey]: parentKey,
-          } as Partial<ModelRecord<typeof related.definition.table>>,
-          new Set([relation.foreignKey]),
-        )
+        const created = await related.createRecord({
+          ...related.assertMassAssignable(applyPendingModelAttributes(related.definition, values as Partial<ModelRecord<typeof related.definition.table>>)),
+          [relation.foreignKey]: parentKey,
+        } as Partial<ModelRecord<typeof related.definition.table>>)
         this.syncRelationAfterPersistence(entity, relationName, relation, created)
         return created
       }
@@ -1542,14 +1540,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         this.assertPersistedParentForRelation(entity, relationName)
         const parentKey = entity.get(relation.localKey as never)
         const related = this.resolveRelatedRepository(relation.related)
-        const created = await related.createRecord(
-          {
-            ...values,
-            [relation.morphTypeColumn]: this.getMorphTypeValue(),
-            [relation.morphIdColumn]: parentKey,
-          } as Partial<ModelRecord<typeof related.definition.table>>,
-          new Set([relation.morphTypeColumn, relation.morphIdColumn]),
-        )
+        const created = await related.createRecord({
+          ...related.assertMassAssignable(applyPendingModelAttributes(related.definition, values as Partial<ModelRecord<typeof related.definition.table>>)),
+          [relation.morphTypeColumn]: this.getMorphTypeValue(),
+          [relation.morphIdColumn]: parentKey,
+        } as Partial<ModelRecord<typeof related.definition.table>>)
         this.syncRelationAfterPersistence(entity, relationName, relation, created)
         return created
       }
@@ -1558,7 +1553,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       case 'morphedByMany': {
         this.assertPersistedParentForRelation(entity, relationName)
         const related = this.resolveRelatedRepository(relation.related)
-        const created = await related.createRecord(values as Partial<ModelRecord<typeof related.definition.table>>)
+        const created = await related.create(values as Partial<ModelRecord<typeof related.definition.table>>)
         const relatedId = created.get(related.definition.primaryKey as never)
         await this.attachRelation(entity, relationName, relatedId)
         this.syncRelationAfterPersistence(entity, relationName, relation, created)
@@ -1600,28 +1595,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return withoutModelEvents(() => this.createManyRelatedEntities(entity, relationName, values))
   }
 
-  private async createRecord(
-    values: Partial<ModelRecord<TTable>>,
-    internalColumns: ReadonlySet<string> = new Set(),
-  ): Promise<Entity<TTable>> {
+  private async createRecord(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
     return this.runWriteUnit(async () => {
-      const generatedColumns = new Set<string>(internalColumns)
-      for (const column of [this.definition.createdAtColumn, this.definition.updatedAtColumn]) {
-        if (column && typeof values[column as keyof typeof values] === 'undefined') {
-          generatedColumns.add(column)
-        }
-      }
       const payload = this.sanitizeWritePayload(
         this.applyTimestampDefaults(
           applyGeneratedUniqueIds(
             this.definition,
             applyPendingModelAttributes(this.definition, values),
-            generatedColumns,
           ),
           'create',
         ),
         'create',
-        generatedColumns,
+        false,
       )
       const entity = new Entity(this, payload, false)
       await this.dispatchCancelableEvent('saving', entity)
@@ -1693,7 +1678,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   sanitizeWritePayload(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
-    internalColumns: ReadonlySet<string> = new Set(),
+    enforceGuards = true,
   ): Partial<ModelUpdatePayload<TTable>> {
     const entries = Object.entries(values)
 
@@ -1716,8 +1701,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
-      if (!internalColumns.has(columnName) && !this.isWritableColumn(columnName)) {
-        throw new SecurityError(`Column "${columnName}" is not writable on model "${this.definition.name}".`)
+      if (enforceGuards) {
+        this.assertWritableColumn(columnName)
       }
 
       if (key.includes('->')) {
@@ -1734,13 +1719,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return sanitized as Partial<ModelUpdatePayload<TTable>>
   }
 
-  async saveEntity(
-    entity: Entity<TTable>,
-    internalColumns: ReadonlySet<string> = new Set(),
-  ): Promise<Entity<TTable>> {
-    const trustedColumns = new Set<string>([...internalColumns, ...getForceFilledColumns(entity)])
+  async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
     if (!entity.exists()) {
-      return this.createRecord(entity.toAttributes(), trustedColumns)
+      return this.createRecord(entity.toAttributes())
     }
 
     return this.runWriteUnit(async () => {
@@ -1750,13 +1731,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         throw new HydrationError(`Cannot persist ${this.definition.name} without a primary key value.`)
       }
 
-      if (this.definition.updatedAtColumn && !entity.isDirty(this.definition.updatedAtColumn as never)) {
-        trustedColumns.add(this.definition.updatedAtColumn)
-      }
       const dirty = this.sanitizeWritePayload(
         this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'),
         'update',
-        trustedColumns,
+        false,
       )
       if (Object.keys(dirty).length === 0) {
         return entity
@@ -1774,11 +1752,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     })
   }
 
-  async saveEntityQuietly(
-    entity: Entity<TTable>,
-    internalColumns: ReadonlySet<string> = new Set(),
-  ): Promise<Entity<TTable>> {
-    return withoutModelEvents(() => this.saveEntity(entity, internalColumns))
+  async saveEntityQuietly(entity: Entity<TTable>): Promise<Entity<TTable>> {
+    return withoutModelEvents(() => this.saveEntity(entity))
   }
 
   async deleteEntity(entity: Entity<TTable>): Promise<void> {
@@ -1796,7 +1771,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update({
           [deletedAtColumn]: deletedAt,
         })
-        entity.set(deletedAtColumn as never, this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) as never)
+        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) } as never)
         await this.dispatchEvent('trashed', entity)
       } else {
         await this.query().where(primaryKey, id).delete()
@@ -1832,14 +1807,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update({
         [deletedAtColumn]: null,
       })
-      entity.set(deletedAtColumn as never, null as never)
+      entity.forceFill({ [deletedAtColumn]: null } as never)
       const restored = this.hydrate({ ...entity.toAttributes(), [primaryKey]: id })
-      const key = { [primaryKey]: entity.get(primaryKey) } as never
-      if (getForceFilledColumns(entity).has(primaryKey)) {
-        restored.forceFill(key)
-      } else {
-        restored.fill(key)
-      }
+      restored.forceFill({ [primaryKey]: entity.get(primaryKey) } as never)
       await this.dispatchEvent('restored', restored)
       await this.touchOwners(restored)
       return restored
@@ -3546,6 +3516,30 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     return { relation, parentId }
+  }
+
+  assertMassAssignable<TValues extends Partial<ModelRecord<TTable>> | Record<string, unknown>>(values: TValues): TValues {
+    for (const key of Object.keys(values)) {
+      const columnName = key.includes('->') ? key.split('->')[0]! : key
+      const column = this.definition.table.columns[columnName]
+      if (!column) {
+        throw new SecurityError(`Column "${columnName}" is not defined on model "${this.definition.name}".`)
+      }
+
+      if (column.generated) {
+        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
+      }
+
+      this.assertWritableColumn(columnName)
+    }
+
+    return values
+  }
+
+  private assertWritableColumn(column: string): void {
+    if (!this.isWritableColumn(column)) {
+      throw new SecurityError(`Column "${column}" is not writable on model "${this.definition.name}".`)
+    }
   }
 
   private isWritableColumn(column: string): boolean {

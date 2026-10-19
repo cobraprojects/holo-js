@@ -343,7 +343,7 @@ await Post.withoutEvents(async () => {
 
 ## Write guarded columns
 
-Mass assignment rules from `fillable` and `guarded` apply to every write. Writing a blocked column throws a `SecurityError`:
+Mass assignment rules from `fillable` and `guarded` apply whenever you assign attributes. Assigning a blocked column throws a `SecurityError`:
 
 ```ts
 await User.create({ name: 'Ada', is_admin: true })
@@ -356,8 +356,6 @@ When trusted server code must set a protected column on one model, use `forceFil
 const user = User.make({ name: 'Ada', email: 'ada@example.com' })
 await user.forceFill({ is_admin: true }).save()
 ```
-
-`forceFill()` only opens the columns you pass it. Assigning one of those columns again with `fill()` or `set()` makes it guarded again.
 
 To turn the rules off for a whole block of writes, wrap them in `unguarded()`:
 
@@ -488,7 +486,7 @@ await Product.where('id', productId).decrement('stock', 1)
 
 ### fill()
 
-Assigns several attributes on an instance without saving. [Mass assignment](/orm/#mass-assignment) rules are checked when you save.
+Assigns several attributes on an instance without saving. It throws a `SecurityError` for any column that [mass assignment](/orm/#mass-assignment) rules block.
 
 ```ts
 post.fill({ title: 'New title', excerpt: 'Short summary' })
@@ -497,7 +495,7 @@ await post.save()
 
 ### forceFill()
 
-Assigns attributes and lets the next save write them even when they're guarded. Use it only for trusted values. See [write guarded columns](#write-guarded-columns).
+Assigns attributes without checking mass assignment rules, so the next save writes them even when they're guarded. Use it only for trusted values. See [write guarded columns](#write-guarded-columns).
 
 ```ts
 post.forceFill({ views: 0 })
@@ -506,7 +504,7 @@ await post.save()
 
 ### set()
 
-Assigns one attribute on an instance. It's the same as assigning the property directly.
+Assigns one attribute on an instance. It's the same as assigning the property directly, and it throws a `SecurityError` for a guarded column.
 
 ```ts
 post.set('status', 'review')

@@ -10,7 +10,6 @@ import {
   resetDB,
   type DatabaseContext,
 } from '../src'
-import { getForceFilledColumns } from '../src/model/Entity'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
 
@@ -117,12 +116,13 @@ describe('model mass assignment', () => {
 
     const refilled = await Account.findOrFail('a')
     refilled.forceFill({ role: 'admin' })
-    refilled.fill({ role: 'guest' })
-    await expect(refilled.save()).rejects.toThrow('Column "role" is not writable on model "Account".')
-    await expect(db.table('accounts').where('code', 'a').first()).resolves.toMatchObject({ role: 'owner' })
+    expect(() => refilled.fill({ role: 'guest' })).toThrow('Column "role" is not writable on model "Account".')
+    expect(() => refilled.set('role', 'guest')).toThrow('Column "role" is not writable on model "Account".')
+    await refilled.save()
+    await expect(db.table('accounts').where('code', 'a').first()).resolves.toMatchObject({ role: 'admin' })
   })
 
-  it('guards nested JSON writes by their root column after forceFill', async () => {
+  it('rejects a guarded JSON path at fill even when a sibling path is force-filled', async () => {
     const db = await openDatabase()
     const profiles = defineTable('profiles', {
       id: column.id(),
@@ -135,22 +135,14 @@ describe('model mass assignment', () => {
     const Profile = defineModelFromTable(profiles, { fillable: ['name'], timestamps: false })
 
     const profile = await Profile.findOrFail(1)
-    profile.forceFill({ settings: profile.get('settings') })
-    const request = { 'settings->role': 'admin' } as Record<string, unknown>
-    profile.fill(request as never)
-    await expect(profile.save()).rejects.toThrow('Column "settings" is not writable on model "Profile".')
-    await expect(db.table('profiles').where('id', 1).first()).resolves.toMatchObject({ settings: JSON.stringify({ role: 'member' }) })
-
-    const trusted = await Profile.findOrFail(1)
-    trusted.forceFill({ 'settings->role': 'owner' } as never)
-    expect([...getForceFilledColumns(trusted)]).toEqual(['settings'])
-    await trusted.save()
-    expect(getForceFilledColumns(trusted).size).toBe(0)
-
-    const unchanged = await Profile.findOrFail(1)
-    unchanged.forceFill({ settings: unchanged.get('settings') })
-    await unchanged.save()
-    expect(getForceFilledColumns(unchanged).size).toBe(0)
+    const request = { 'settings->is_admin': true } as Record<string, unknown>
+    expect(() => profile.fill(request as never)).toThrow('Column "settings" is not writable on model "Profile".')
+    expect(() => profile.set('settings->is_admin' as never, true as never)).toThrow('Column "settings" is not writable on model "Profile".')
+    profile.forceFill({ 'settings->last_seen': '2026-01-01' } as never)
+    await profile.save()
+    await expect(db.table('profiles').where('id', 1).first()).resolves.toMatchObject({
+      settings: JSON.stringify({ role: 'member', last_seen: '2026-01-01' }),
+    })
   })
 
   it('saves and deletes the row the model was loaded from after its key changes', async () => {

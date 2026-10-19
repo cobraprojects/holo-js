@@ -140,7 +140,9 @@ See [multiple connections](/database/connections) for configuring named connecti
 
 ## Mass assignment
 
-`create()`, `update()`, `make()`, and `save()` only write columns you allow. Writing any other column throws a `SecurityError`, so unexpected request fields never reach the database. A model without `fillable` or `guarded` allows no columns.
+`create()`, `update()`, `make()`, `fill()`, `set()`, and property assignment only accept columns you allow. Assigning any other column throws a `SecurityError` right away, so unexpected request fields never reach the database. A model without `fillable` or `guarded` allows no columns.
+
+A JSON path such as `settings->theme` follows the rules of its column, `settings`.
 
 List allowed columns with `fillable`:
 

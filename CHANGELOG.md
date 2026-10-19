@@ -17,7 +17,7 @@
 
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 
-- Close model mass assignment by default. A model without `fillable` or `guarded` rejects every column, and the primary key and `created_at`/`updated_at` columns are guarded unless named in `fillable`. `forceFill()` lets the next save write guarded columns. Saves, deletes, restores and force deletes target the row's original primary key, so changing a loaded model's key can't redirect the write to another row. See [mass assignment](apps/docs/docs/orm/index.md#mass-assignment).
+- Close model mass assignment by default. A model without `fillable` or `guarded` rejects every column, and the primary key and `created_at`/`updated_at` columns are guarded unless named in `fillable`. Mass assignment rules are checked when attributes are assigned: `fill()`, `set()` and property assignment reject guarded columns, judging `column->path` keys by their column, and `forceFill()` assigns without checking. Saves, deletes, restores and force deletes target the row's original primary key, so changing a loaded model's key can't redirect the write to another row. See [mass assignment](apps/docs/docs/orm/index.md#mass-assignment).
 
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.
 
