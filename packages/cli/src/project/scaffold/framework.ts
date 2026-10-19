@@ -177,7 +177,9 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     packageManager: resolvePackageManagerVersion(options.packageManager),
     scripts: {
       ...framework.scaffold.scripts,
-      prepare: 'holo key:generate && holo prepare',
+      prepare: optionalPackages.includes('broadcast')
+        ? 'holo key:generate && holo install broadcast && holo prepare'
+        : 'holo key:generate && holo prepare',
       dev: 'holo dev',
       build: 'holo build',
       start: 'holo start',

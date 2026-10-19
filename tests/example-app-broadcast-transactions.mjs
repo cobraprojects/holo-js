@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 
 export async function assertExampleAppBroadcastTransactions(DB, broadcastRaw, runMaintenance) {
-  const socket = new WebSocket(`ws://${process.env.BROADCAST_HOST}:${process.env.BROADCAST_PORT}/app/${process.env.BROADCAST_APP_KEY ?? 'app-key'}`)
+  const socket = new WebSocket(`ws://${process.env.BROADCAST_HOST}:${process.env.BROADCAST_PORT}/app/${process.env.BROADCAST_APP_KEY}`)
   const messages = []
   socket.addEventListener('message', event => messages.push(JSON.parse(String(event.data))))
   const receive = async event => {

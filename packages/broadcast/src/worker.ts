@@ -1,8 +1,9 @@
 import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import type {
-  NormalizedHoloBroadcastConfig,
+import {
+  requireBroadcastCredentials,
+  type NormalizedHoloBroadcastConfig,
 } from './config'
 import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
 import { captureErrorReporter, type HoloErrorReporter } from '@holo-js/kernel/error-reporting'
@@ -839,6 +840,7 @@ function buildWorkerApps(config: NormalizedHoloBroadcastConfig): Readonly<Record
     }
 
     const holoConnection = connection as Extract<NormalizedHoloBroadcastConfig['connections'][string], { readonly driver: 'holo' }>
+    requireBroadcastCredentials(holoConnection, 'run the broadcast worker', name)
     const authEndpoint = typeof holoConnection.clientOptions.authEndpoint === 'string'
       ? normalizeRequiredString(holoConnection.clientOptions.authEndpoint, `Broadcast connection "${name}" authEndpoint`)
       : undefined

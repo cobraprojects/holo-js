@@ -2,7 +2,6 @@ import { resolve } from 'node:path'
 import {
   configEvaluationInternals,
   loadConfigDirectory,
-  resolveEnvPlaceholders,
 } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type {} from '@holo-js/broadcast/config'
@@ -95,9 +94,8 @@ async function loadQueueConfigFile(
   projectRoot: string,
   queueConfigPath: string,
 ): Promise<HoloQueueConfig | undefined> {
-  return configEvaluationInternals.evaluate({ cwd: projectRoot }, async (environment) => {
-    const rawQueueConfig = resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
-    return rawQueueConfig ? resolveEnvPlaceholders(rawQueueConfig, environment.values) : undefined
+  return configEvaluationInternals.evaluate({ cwd: projectRoot }, async () => {
+    return resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
   })
 }
 

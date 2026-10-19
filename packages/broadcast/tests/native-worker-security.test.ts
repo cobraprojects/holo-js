@@ -392,6 +392,8 @@ it('forwards real socket credentials to HTTP authorization and isolates whisper 
       method: 'POST', headers: { 'content-type': incoming.headers['content-type'] ?? '' }, body: Buffer.concat(chunks),
     }), {
       user: { id: second ? 'second' : 'first' },
+      appKey: 'main-key',
+      appSecret: 'main-secret',
       channelAuth: { definitions: [defineChannel('orders.1', {
         type: 'private', authorize: () => true,
         whispers: { [second ? 'typing.stop' : 'typing.start']: defineSchema({ editing: field.boolean().required() }) },

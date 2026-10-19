@@ -150,6 +150,20 @@ If you use the config cache, run `npx holo config:cache` again on every server a
 
 `holo start` now runs your framework server with `NODE_ENV=production`, even when your shell sets another value. Nuxt servers now pick their `.env` files from `APP_ENV` when they start, not from the environment the app was built in. In Nuxt, `useHoloEnv()`, `useHoloDebug()` and `useHoloDb()` now return the running app's values, and throw if called before Holo starts, so call them inside server routes or handlers. If you call `configureMailRuntime()` yourself without Holo, pass `environment`, or previews treat the app as `production`. See [Which `.env` files load](/getting-started/configuration#which-env-files-load).
 
+### Generated broadcast credentials and strict env values
+
+Holo no longer uses `app-id`, `app-key`, or `app-secret` when `BROADCAST_APP_ID`, `BROADCAST_APP_KEY`, or `BROADCAST_APP_SECRET` are unset. Without them, your config still loads and `holo prepare` still runs. The broadcast worker, publishing, and channel authorization fail with an error that names the variables. `holo new` writes generated values into `.env`, and existing apps get them the same way:
+
+```bash
+npx holo install broadcast
+```
+
+The command adds `BROADCAST_APP_*` lines that `.env` doesn't have yet. It leaves existing lines alone, so if a line is present but empty, fill it in or delete the line and run the command again. Use the same three values for your web app and your broadcast worker, and set them in your hosting provider's environment rather than copying your development `.env`.
+
+Holo also throws when a typed `env()` value doesn't convert: `APP_DEBUG=maybe` with a boolean fallback, or `APP_PORT=abc` with a number fallback. Previously Holo used the fallback. Fix or remove those values before deploying.
+
+If you use the config cache, the cache now stores the env values it was built with, secrets included. Config modules that contain functions, such as `app` with an exception reporter or `security` with rate-limit callbacks, can't be cached and still load live, so their env values come from the runtime environment. Holo ignores 0.3.x caches, so rebuild it after upgrading. Keep `.holo-js/generated/config-cache.json` out of version control; the scaffolded `.gitignore` already does.
+
 ### Encrypted session, remember-me, and CSRF cookies
 
 Holo now encrypts the cookies it sets: the session cookie, the remember-me cookie, and `XSRF-TOKEN`. It uses AES-256-GCM with a key derived from `APP_KEY`, and rejects any cookie that was changed. Your own cookies, including ones written with `cookie()` or `cookies.make()`, are not encrypted.
