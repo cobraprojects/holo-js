@@ -1146,8 +1146,8 @@ describe('@holo-js/security rate-limit drivers', () => {
         now: () => memoryNow,
       })
     },
-    advancePastExpiry() {
-      memoryNow = new Date('2026-04-16T12:02:00.000Z')
+    advanceSeconds(seconds) {
+      memoryNow = new Date(memoryNow.getTime() + seconds * 1000)
     },
     cleanup() {
       memoryNow = new Date('2026-04-16T12:00:00.000Z')
@@ -1174,7 +1174,7 @@ describe('@holo-js/security rate-limit drivers', () => {
     expect(isolated.snapshot.attempts).toBe(1)
   })
 
-  it('clones snapshot expiry dates, evicts oldest buckets, and closes the pruning timer', async () => {
+  it('clones snapshot expiry dates, fails closed when full, and closes the pruning timer', async () => {
     const now = new Date('2026-04-16T12:00:00.000Z')
     const store = createMemoryRateLimitStore({
       now: () => now,
@@ -1192,17 +1192,17 @@ describe('@holo-js/security rate-limit drivers', () => {
       maxAttempts: 2,
       decaySeconds: 60,
     })
-    await store.hit('limiter:login|user:third', {
+    await expect(store.hit('limiter:login|user:third', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({ limited: true })
+
+    const repeated = await store.hit('limiter:login|user:first', {
       maxAttempts: 2,
       decaySeconds: 60,
     })
 
-    const recycled = await store.hit('limiter:login|user:first', {
-      maxAttempts: 2,
-      decaySeconds: 60,
-    })
-
-    expect(recycled.snapshot.attempts).toBe(1)
+    expect(repeated.snapshot.attempts).toBe(2)
     expect(first.snapshot.expiresAt.getFullYear()).toBe(2000)
     await store.close?.()
   })
@@ -1224,6 +1224,231 @@ describe('@holo-js/security rate-limit drivers', () => {
 
     expect(repeated.snapshot.attempts).toBe(2)
     await store.close?.()
+  })
+
+  it('keeps a live victim counter when distinct keys fill the default memory store', async () => {
+    let now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+    })
+    const victim = 'limiter:login|user:victim'
+
+    await store.hit(victim, {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+    await store.hit(victim, {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+    for (let index = 0; index < 9_999; index += 1) {
+      await store.hit(`limiter:login|user:${index}`, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+    }
+
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({ limited: true })
+    await expect(store.hit(victim, {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({
+      limited: true,
+      snapshot: { attempts: 3 },
+    })
+
+    now = new Date(now.getTime() + 61_000)
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({
+      limited: false,
+      snapshot: { attempts: 1 },
+    })
+    await store.close?.()
+  })
+
+  it('derives Retry-After at capacity from when the soonest live bucket frees a slot', async () => {
+    const now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 1,
+    })
+    await store.hit('limiter:login|user:held', {
+      maxAttempts: 2,
+      decaySeconds: 3_600,
+    })
+
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 1,
+    })).resolves.toMatchObject({
+      limited: true,
+      retryAfterSeconds: 3_600,
+      snapshot: { expiresAt: new Date(now.getTime() + 3_600_000) },
+    })
+    await store.close?.()
+  })
+
+  it('derives a short Retry-After at capacity when the soonest live bucket expires soon', async () => {
+    const now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 1,
+    })
+    await store.hit('limiter:login|user:held', {
+      maxAttempts: 2,
+      decaySeconds: 1,
+    })
+
+    await expect(store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 3_600,
+    })).resolves.toMatchObject({
+      limited: true,
+      retryAfterSeconds: 1,
+      snapshot: { expiresAt: new Date(now.getTime() + 1_000) },
+    })
+    await store.close?.()
+  })
+
+  it('reports a full memory store once until a slot frees, whatever the rejected window is', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 2,
+      })
+      await store.hit('limiter:login|user:held-a', {
+        maxAttempts: 2,
+        decaySeconds: 3_600,
+      })
+      await store.hit('limiter:login|user:held-b', {
+        maxAttempts: 2,
+        decaySeconds: 3_600,
+      })
+
+      for (let second = 0; second < 10; second += 1) {
+        now = new Date(new Date('2026-04-16T12:00:00.000Z').getTime() + second * 1_000)
+        await expect(store.hit('limiter:ping|user:fast', {
+          maxAttempts: 1,
+          decaySeconds: 1,
+        })).resolves.toMatchObject({ limited: true })
+      }
+
+      expect(consoleError).toHaveBeenCalledTimes(1)
+      expect(consoleError.mock.calls[0]?.[0]).toContain('rate-limit memory store at capacity')
+      await store.close?.()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('reports a full memory store again after a slot frees and the store fills once more', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 1,
+      })
+      await store.hit('limiter:login|user:held', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      await store.hit('limiter:login|user:first-rejected', { maxAttempts: 2, decaySeconds: 60 })
+      expect(consoleError).toHaveBeenCalledTimes(1)
+
+      now = new Date(now.getTime() + 61_000)
+      await store.hit('limiter:login|user:admitted', { maxAttempts: 2, decaySeconds: 3_600 })
+      await store.hit('limiter:login|user:second-rejected', { maxAttempts: 2, decaySeconds: 60 })
+      expect(consoleError).toHaveBeenCalledTimes(2)
+      await store.close?.()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('reports a full memory store once per window', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 1,
+      })
+      await store.hit('limiter:login|user:held', {
+        maxAttempts: 2,
+        decaySeconds: 600,
+      })
+
+      await store.hit('limiter:login|user:a', { maxAttempts: 2, decaySeconds: 60 })
+      await store.hit('limiter:login|user:b', { maxAttempts: 2, decaySeconds: 60 })
+      expect(consoleError).toHaveBeenCalledTimes(1)
+      expect(consoleError.mock.calls[0]?.[0]).toContain('rate-limit memory store at capacity')
+
+      now = new Date(now.getTime() + 61_000)
+      await store.hit('limiter:login|user:c', { maxAttempts: 2, decaySeconds: 600 })
+      await store.hit('limiter:login|user:d', { maxAttempts: 2, decaySeconds: 600 })
+      expect(consoleError).toHaveBeenCalledTimes(1)
+      await store.close?.()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('evicts expired memory buckets before evicting active ones when full', async () => {
+    let now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 2,
+      pruneIntervalMs: 60_000,
+    })
+
+    await store.hit('limiter:login|user:active', {
+      maxAttempts: 2,
+      decaySeconds: 600,
+    })
+    await store.hit('limiter:login|user:short', {
+      maxAttempts: 2,
+      decaySeconds: 10,
+    })
+    now = new Date('2026-04-16T12:00:20.000Z')
+
+    await store.hit('limiter:login|user:newcomer', {
+      maxAttempts: 2,
+      decaySeconds: 600,
+    })
+
+    await expect(store.clear('limiter:login|user:active')).resolves.toBe(true)
+    await expect(store.clear('limiter:login|user:short')).resolves.toBe(false)
+    await store.close?.()
+  })
+
+  it('preserves live memory limits when another bucket expires between capacity sweeps', async () => {
+    let now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({ now: () => now, maxBuckets: 2 })
+    try {
+      await store.hit('short', { maxAttempts: 1, decaySeconds: 1 })
+      await store.hit('live', { maxAttempts: 1, decaySeconds: 600 })
+      now = new Date('2026-04-16T12:00:02.000Z')
+      await store.hit('next-short', { maxAttempts: 1, decaySeconds: 1 })
+      now = new Date('2026-04-16T12:00:04.000Z')
+      await store.hit('new', { maxAttempts: 1, decaySeconds: 60 })
+      await expect(store.hit('live', { maxAttempts: 1, decaySeconds: 600 })).resolves.toMatchObject({
+        limited: true,
+        snapshot: { attempts: 2 },
+      })
+    } finally {
+      await store.close?.()
+    }
   })
 
   it('prunes expired memory buckets on a timer', async () => {
@@ -1284,6 +1509,7 @@ describe('@holo-js/security rate-limit drivers', () => {
       | {
           root: string
           setNow(value: Date): void
+          advanceSeconds(seconds: number): void
           createStore(): SecurityRateLimitStore
         }
       | undefined
@@ -1297,6 +1523,9 @@ describe('@holo-js/security rate-limit drivers', () => {
         root,
         setNow(value: Date) {
           now = value
+        },
+        advanceSeconds(seconds: number) {
+          now = new Date(now.getTime() + seconds * 1000)
         },
         createStore() {
           return createFileRateLimitStore(root, {
@@ -1312,8 +1541,8 @@ describe('@holo-js/security rate-limit drivers', () => {
         harness = await createHarness()
         return harness.createStore()
       },
-      advancePastExpiry() {
-        harness?.setNow(new Date('2026-04-16T12:02:00.000Z'))
+      advanceSeconds(seconds) {
+        harness?.advanceSeconds(seconds)
       },
       supportsPersistence: true,
       recreateStore() {
@@ -1440,6 +1669,388 @@ describe('@holo-js/security rate-limit drivers', () => {
 
       expect(alpha.snapshot.attempts).toBe(1)
       expect(beta.snapshot.attempts).toBe(2)
+    })
+
+    it('keeps hitting healthy keys when the sweep meets an unreadable bucket file', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+      const brokenPath = join(harness.root, 'buckets', 'aa', 'bb', 'broken.json')
+      await mkdir(dirname(brokenPath), { recursive: true })
+      await writeFile(brokenPath, '{bad json', 'utf8')
+
+      await expect(store.hit('limiter:login|user:healthy', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).resolves.toMatchObject({
+        limited: false,
+        snapshot: { attempts: 1 },
+      })
+    })
+
+    it('starts a file window after waiting for its bucket lock', async () => {
+      const harness = await createHarness()
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      let signalStarted!: () => void
+      const started = new Promise<void>((resolve) => { signalStarted = resolve })
+      const store = createFileRateLimitStore(harness.root, {
+        now: () => { signalStarted(); return now },
+        lockTimeoutMs: 2000,
+      })
+      const path = fileRateLimitDriverInternals.getBucketPath(harness.root, 'waiting')
+      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(path)
+      await mkdir(lockPath, { recursive: true })
+      const hit = store.hit('waiting', { maxAttempts: 1, decaySeconds: 60 })
+      await started
+      now = new Date('2026-04-16T12:02:00.000Z')
+      await rm(lockPath, { recursive: true })
+      const result = await hit
+      expect(result.snapshot.expiresAt).toEqual(new Date('2026-04-16T12:03:00.000Z'))
+      await expect(store.hit('waiting', { maxAttempts: 1, decaySeconds: 60 })).resolves.toMatchObject({ limited: true })
+    })
+
+    it('removes expired bucket files on a sweep even when their keys are never hit again', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+      tempDirs.push(root)
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createFileRateLimitStore(root, {
+        now: () => now,
+      })
+
+      await store.hit('limiter:login|user:abandoned', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      const abandonedPath = fileRateLimitDriverInternals.getBucketPath(root, 'limiter:login|user:abandoned')
+
+      now = new Date('2026-04-16T12:02:00.000Z')
+      await store.hit('limiter:login|user:fresh', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+
+      await vi.waitFor(async () => {
+        await expect(readFile(abandonedPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      }, { timeout: 15_000, interval: 10 })
+      await expect(store.clear('limiter:login|user:fresh')).resolves.toBe(true)
+    })
+
+    describe('background expiry sweep', () => {
+      const sweepStart = new Date('2026-04-16T12:00:00.000Z')
+
+      async function createSweepRoot() {
+        const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+        tempDirs.push(root)
+        return root
+      }
+
+      async function writeExpiredBucket(root: string, key: string) {
+        const path = fileRateLimitDriverInternals.getBucketPath(root, key)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, JSON.stringify({
+          namespaceHash: 'namespace',
+          keyHash: fileRateLimitDriverInternals.createBucketHash(key),
+          prefixHashes: ['prefix'],
+          attempts: 1,
+          expiresAt: '2026-04-16T11:59:00.000Z',
+        }), 'utf8')
+      }
+
+      async function writeExpiredBuckets(root: string, count: number, prefix: string) {
+        for (let index = 0; index < count; index += 1) {
+          await writeExpiredBucket(root, `limiter:login|${prefix}:${index}`)
+        }
+      }
+
+      async function bucketFileCount(root: string) {
+        return (await fileRateLimitDriverInternals.listBucketPaths(join(root, 'buckets'))).length
+      }
+
+      async function waitUntil(predicate: () => Promise<boolean>) {
+        const deadline = Date.now() + 60_000
+        while (!(await predicate())) {
+          if (Date.now() > deadline) {
+            throw new Error('Timed out waiting for the background sweep.')
+          }
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      }
+
+      it('returns from hit promptly while the sweep meets a locked expired bucket', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+          lockTimeoutMs: 5_000,
+        })
+        const heldKey = 'limiter:login|user:held'
+        await writeExpiredBucket(root, heldKey)
+        const heldKeyPath = fileRateLimitDriverInternals.getBucketPath(root, heldKey)
+        const heldLockPath = fileRateLimitDriverInternals.getBucketLockPath(heldKeyPath)
+        await mkdir(heldLockPath)
+
+        const startedAt = performance.now()
+        await store.hit('limiter:login|user:other', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        expect(performance.now() - startedAt).toBeLessThan(1_000)
+
+        await store.close?.()
+        await rm(heldLockPath, { recursive: true, force: true })
+        await rm(heldKeyPath, { force: true })
+      }, 30_000)
+
+      it('starts at most one sweep while one is in flight', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 1_500, 'flight')
+
+        await store.hit('limiter:login|user:first', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        now = new Date(now.getTime() + 61_000)
+        await store.hit('limiter:login|user:second', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+
+        expect(fileRateLimitDriverInternals.sweepInFlight(store)).toBe(true)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBe(1)
+        await store.close?.()
+      }, 30_000)
+
+      it('removes abandoned buckets across batches and later sweep cycles', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 1_500, 'first')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        await writeExpiredBuckets(root, 1_200, 'second')
+        now = new Date(now.getTime() + 61_000)
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        await expect(store.clear('limiter:login|user:kicker')).resolves.toBe(true)
+        await store.close?.()
+      }, 60_000)
+
+      it('holds at most one batch of sweep entries per run across several thousand buckets', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 3_000, 'bounded')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
+        await store.close?.()
+      }, 120_000)
+
+      it('streams a single shard holding several thousand files without holding it in memory', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const seedKey = 'limiter:login|user:shard-seed'
+        await writeExpiredBucket(root, seedKey)
+        const shard = dirname(fileRateLimitDriverInternals.getBucketPath(root, seedKey))
+        for (let index = 0; index < 3_000; index += 1) {
+          await writeFile(join(shard, `stale-${index}.json`), JSON.stringify({
+            namespaceHash: 'namespace',
+            keyHash: 'stale',
+            prefixHashes: ['prefix'],
+            attempts: 1,
+            expiresAt: '2026-04-16T11:59:00.000Z',
+          }), 'utf8')
+        }
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
+        await store.close?.()
+      }, 120_000)
+
+      it('charges empty shard directories against each run so the walk stays bounded', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const hex = (value: number) => value.toString(16).padStart(2, '0')
+        for (let index = 0; index < 4_096; index += 1) {
+          await mkdir(join(root, 'buckets', hex(index % 256), hex(Math.floor(index / 256))), { recursive: true })
+        }
+        await writeFile(join(root, 'buckets', 'ff', '0f', 'z-expired.json'), JSON.stringify({
+          namespaceHash: 'namespace',
+          keyHash: 'expired',
+          prefixHashes: ['prefix'],
+          attempts: 1,
+          expiresAt: '2026-04-16T11:59:00.000Z',
+        }), 'utf8')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(8)
+        await store.close?.()
+      }, 120_000)
+
+      it('charges non-JSON entries against each run so a shard of them cannot run unbounded', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const noisy = join(root, 'buckets', 'aa', 'bb')
+        await mkdir(noisy, { recursive: true })
+        for (let index = 0; index < 3_000; index += 1) {
+          await writeFile(join(noisy, `note-${index}.txt`), 'not a bucket', 'utf8')
+        }
+        await mkdir(join(root, 'buckets', 'cc', 'dd'), { recursive: true })
+        await writeFile(join(root, 'buckets', 'cc', 'dd', 'after-noise.json'), JSON.stringify({
+          namespaceHash: 'namespace',
+          keyHash: 'after-noise',
+          prefixHashes: ['prefix'],
+          attempts: 1,
+          expiresAt: '2026-04-16T11:59:00.000Z',
+        }), 'utf8')
+
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await bucketFileCount(root) === 1
+        })
+
+        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
+        await store.close?.()
+      }, 120_000)
+
+      it('keeps one shard handle open between runs and releases it on close', async () => {
+        const root = await createSweepRoot()
+        const now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        const seedKey = 'limiter:login|user:handle-seed'
+        await writeExpiredBucket(root, seedKey)
+        const shard = dirname(fileRateLimitDriverInternals.getBucketPath(root, seedKey))
+        for (let index = 0; index < 2_500; index += 1) {
+          await writeFile(join(shard, `handle-${index}.json`), JSON.stringify({
+            namespaceHash: 'namespace',
+            keyHash: 'handle',
+            prefixHashes: ['prefix'],
+            attempts: 1,
+            expiresAt: '2026-04-16T11:59:00.000Z',
+          }), 'utf8')
+        }
+
+        await store.hit('limiter:login|user:first-run', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        await waitUntil(async () => !fileRateLimitDriverInternals.sweepInFlight(store))
+        expect(fileRateLimitDriverInternals.sweepOpenHandles(store)).toBe(1)
+
+        await store.close?.()
+        expect(fileRateLimitDriverInternals.sweepOpenHandles(store)).toBe(0)
+      }, 120_000)
+
+      it('finishes an in-flight sweep on close and starts no more after it', async () => {
+        const root = await createSweepRoot()
+        let now = sweepStart
+        const store = createFileRateLimitStore(root, {
+          now: () => now,
+        })
+        await writeExpiredBuckets(root, 1_500, 'closing')
+
+        await store.hit('limiter:login|user:before-close', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        await store.close?.()
+        expect(fileRateLimitDriverInternals.sweepInFlight(store)).toBe(false)
+
+        now = new Date(now.getTime() + 61_000)
+        await store.hit('limiter:login|user:after-close', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBe(1)
+      }, 30_000)
+    })
+
+    it('leaves unrelated JSON files under the root alone during the sweep and clearAll', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+      tempDirs.push(root)
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createFileRateLimitStore(root, {
+        now: () => now,
+      })
+      const unrelatedPath = join(root, 'app-state.json')
+      await writeFile(unrelatedPath, JSON.stringify({
+        namespaceHash: 'app-namespace',
+        keyHash: 'app-key',
+        prefixHashes: ['app-prefix'],
+        attempts: 1,
+        expiresAt: '2026-04-16T12:00:30.000Z',
+      }), 'utf8')
+
+      now = new Date('2026-04-16T12:02:00.000Z')
+      await store.hit('limiter:login|user:fresh', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      await expect(access(unrelatedPath)).resolves.toBeUndefined()
+
+      await expect(store.clearAll()).resolves.toBe(1)
+      await expect(access(unrelatedPath)).resolves.toBeUndefined()
     })
 
     it('serializes concurrent hits on the same bucket so attempts are not lost', async () => {
@@ -1569,36 +2180,27 @@ describe('@holo-js/security rate-limit drivers', () => {
       const harness = await createHarness()
       const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, 'limiter:login|user:live-lock')
       let releaseLock!: () => void
-
-      const lockAcquired = new Promise<void>((resolve) => {
-        releaseLock = resolve
-      })
-
+      let signalAcquired!: () => void
+      const releaseRequested = new Promise<void>((resolve) => { releaseLock = resolve })
+      const lockAcquired = new Promise<void>((resolve) => { signalAcquired = resolve })
       const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
         retryDelayMs: 1,
-        timeoutMs: 20,
+        timeoutMs: 100,
       }, async () => {
-        await lockAcquired
+        signalAcquired()
+        await releaseRequested
       })
 
-      const waitForAcquired = new Promise<void>((resolve) => {
-        void fileRateLimitDriverInternals.withBucketLock(bucketPath, {
+      await lockAcquired
+      try {
+        await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
           retryDelayMs: 1,
-          timeoutMs: 100,
-        }, async () => {
-          resolve()
-        })
-      })
-
-      await fileRateLimitDriverInternals.sleep(5)
-      await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-        retryDelayMs: 1,
-        timeoutMs: 20,
-      }, async () => 'reclaimed')).rejects.toThrow(`Timed out waiting for file rate-limit lock "${fileRateLimitDriverInternals.getBucketLockPath(bucketPath)}"`)
-
-      releaseLock()
-      await holdingLock
-      await waitForAcquired
+          timeoutMs: 300,
+        }, async () => 'reclaimed')).rejects.toThrow(`Timed out waiting for file rate-limit lock "${fileRateLimitDriverInternals.getBucketLockPath(bucketPath)}"`)
+      } finally {
+        releaseLock()
+        await holdingLock
+      }
     })
 
     it('waits for active bucket locks before clearing all persisted buckets', async () => {
@@ -1798,8 +2400,8 @@ describe('@holo-js/security rate-limit drivers', () => {
           now: () => currentNow,
         })
       },
-      advancePastExpiry() {
-        currentNow = new Date('2026-04-16T12:02:00.000Z')
+      advanceSeconds(seconds) {
+        currentNow = new Date(currentNow.getTime() + seconds * 1000)
         currentAdapter?.setNow(currentNow)
       },
       cleanup() {

@@ -1,13 +1,8 @@
-import { randomUUID } from 'node:crypto'
 import type {
   NormalizedSecurityRateLimitRedisConfig,
 } from '../config'
 import Redis from 'ioredis'
 import type { SecurityRateLimitRedisDriverAdapter } from '../contracts'
-
-export interface SecurityRedisAdapterOptions {
-  readonly now?: () => Date
-}
 
 type RedisClientOptions = {
   readonly host?: string
@@ -35,15 +30,13 @@ type RedisClusterStartupNode = {
 type RedisClientLike = {
   connect(): Promise<unknown>
   multi(): {
-    zadd(key: string, score: number, member: string): ReturnType<RedisClientLike['multi']>
-    zremrangebyscore(key: string, min: string | number, max: string | number): ReturnType<RedisClientLike['multi']>
-    zcard(key: string): ReturnType<RedisClientLike['multi']>
-    zrange(key: string, start: number, stop: number, withScores: string): ReturnType<RedisClientLike['multi']>
+    set(key: string, value: number, pxLabel: 'PX', ttlMs: number, nxLabel: 'NX'): ReturnType<RedisClientLike['multi']>
+    incr(key: string): ReturnType<RedisClientLike['multi']>
+    pttl(key: string): ReturnType<RedisClientLike['multi']>
     exec(): Promise<readonly RedisCommandTuple[] | null>
   }
   del(...keys: string[]): Promise<number>
   scan(cursor: string, matchLabel: string, pattern: string, countLabel: string, count: number): Promise<[string, string[]]>
-  pexpireat(key: string, timestampMs: number): Promise<number>
   quit(): Promise<unknown>
   disconnect(): void
 }
@@ -188,12 +181,10 @@ function createRedisClusterOptions(
 
 export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter {
   private readonly client: RedisClientLike
-  private readonly now: () => Date
   private readonly prefix: string
 
-  constructor(config: NormalizedSecurityRateLimitRedisConfig, options: SecurityRedisAdapterOptions = {}) {
+  constructor(config: NormalizedSecurityRateLimitRedisConfig) {
     this.prefix = config.prefix
-    this.now = options.now ?? (() => new Date())
     const clientOptions = createRedisClientOptions(config)
     const RedisConstructor = Redis as RedisCtor
 
@@ -286,25 +277,6 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     return await this.clearMatchingKeysForClient(this.client, pattern)
   }
 
-  private parseOldestScore(result: unknown): number {
-    if (!Array.isArray(result) || result.length < 2) {
-      throw new Error('[@holo-js/security] Redis transaction failed to return the oldest rate-limit hit.')
-    }
-
-    const value = result[1]
-    const score = typeof value === 'number'
-      ? value
-      : typeof value === 'string'
-        ? Number.parseInt(value, 10)
-        : Number.NaN
-
-    if (!Number.isFinite(score)) {
-      throw new Error('[@holo-js/security] Redis transaction returned an invalid oldest-hit score.')
-    }
-
-    return score
-  }
-
   private getCommandValue(result: readonly RedisCommandTuple[], index: number, operation: string): unknown {
     const entry = result[index]
     if (!entry) {
@@ -331,32 +303,29 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     key: string,
     options: { readonly decaySeconds: number },
   ): Promise<{ readonly attempts: number, readonly ttlSeconds: number }> {
-    const now = this.now().getTime()
-    const ttlMs = options.decaySeconds * 1000
     const qualifiedKey = this.qualifyKey(key)
-    const member = `${now}:${randomUUID()}`
-
     const result = await this.client.multi()
-      .zadd(qualifiedKey, now, member)
-      .zremrangebyscore(qualifiedKey, '-inf', now - ttlMs)
-      .zcard(qualifiedKey)
-      .zrange(qualifiedKey, 0, 0, 'WITHSCORES')
+      .set(qualifiedKey, 0, 'PX', options.decaySeconds * 1000, 'NX')
+      .incr(qualifiedKey)
+      .pttl(qualifiedKey)
       .exec()
 
     if (!result) {
       throw new Error('[@holo-js/security] Redis transaction failed for increment.')
     }
 
-    const attemptsValue = this.getCommandValue(result as readonly RedisCommandTuple[], 2, 'attempt count')
-    if (typeof attemptsValue !== 'number') {
+    const replies = result as readonly RedisCommandTuple[]
+    const attempts = this.getCommandValue(replies, 1, 'attempt count')
+    if (typeof attempts !== 'number') {
       throw new Error('[@holo-js/security] Redis transaction returned an invalid attempt count.')
     }
-    const attempts = attemptsValue
-    const oldestScore = this.parseOldestScore(this.getCommandValue(result as readonly RedisCommandTuple[], 3, 'oldest rate-limit hit'))
-    await this.client.pexpireat(qualifiedKey, now + ttlMs)
-    const ttlSeconds = Math.max(0, Math.ceil(((oldestScore + ttlMs) - now) / 1000))
 
-    return { attempts, ttlSeconds }
+    const remainingMs = this.getCommandValue(replies, 2, 'window time to live')
+    if (typeof remainingMs !== 'number' || remainingMs < 0) {
+      throw new Error('[@holo-js/security] Redis transaction returned an invalid window time to live.')
+    }
+
+    return { attempts, ttlSeconds: Math.ceil(remainingMs / 1000) }
   }
 
   async del(key: string): Promise<number> {
@@ -386,9 +355,8 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
 
 export function createSecurityRedisAdapter(
   config: NormalizedSecurityRateLimitRedisConfig,
-  options?: SecurityRedisAdapterOptions,
 ): RedisSecurityAdapter {
-  return new RedisSecurityAdapter(config, options)
+  return new RedisSecurityAdapter(config)
 }
 
 export const securityRedisAdapterInternals = {

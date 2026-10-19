@@ -634,7 +634,12 @@ try {
   await assertExampleAppDevelopmentReload({ cwd, baseUrl: `http://localhost:${port}` })
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
-  await assertExampleAppRequestSecurity({ cwd, baseUrl: `http://localhost:${port}`, exposesConnectionAddress: false })
+  await assertExampleAppRequestSecurity({
+    cwd,
+    baseUrl: `http://localhost:${port}`,
+    exposesConnectionAddress: false,
+    getOutput: () => capturedOutput,
+  })
   await assertExampleAppStorageRuntime({ baseUrl: `http://localhost:${port}` })
   await waitForRedirect(`http://localhost:${port}/admin`, '/login')
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')

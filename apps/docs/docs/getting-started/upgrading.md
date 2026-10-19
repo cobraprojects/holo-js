@@ -221,6 +221,18 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### Rate-limit windows are fixed in every driver
+
+Every rate-limit driver now uses the same window. A window starts with a key's first attempt and lasts `decaySeconds`. Rejected attempts count but don't extend it. Before, the Redis driver counted attempts over a sliding window that rejected attempts extended. See [How the window works](/basics/security/rate-limiting#how-the-window-works).
+
+Redis stores each key as a counter instead of a sorted set. Buckets left by 0.3.x are sorted sets, and an attempt on a key that still holds one fails with a Redis `WRONGTYPE` error until that bucket expires. Clear them once after the upgrade:
+
+```bash
+npx holo rate-limit:clear --all
+```
+
+The `memory` driver keeps at most 10,000 keys per process and never evicts a live key. When it is full, new keys are limited until one expires. The `file` driver deletes expired keys in the background at most once a minute. The low-level `createSecurityRedisAdapter()` no longer takes a `now` option.
+
 ### CSRF tokens stored in the session
 
 The CSRF token now lives in the visitor's [session](/basics/session), as in Laravel. The `XSRF-TOKEN` cookie carries that session token encrypted, and a token copied from another browser or planted by a subdomain no longer matches.
