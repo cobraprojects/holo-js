@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
 
@@ -63,6 +63,26 @@ async function clientAddress(baseUrl, headers = {}) {
   return { status: response.status, address: response.ok ? (await response.json()).address : undefined }
 }
 
+const spoofedHeaders = { 'x-forwarded-for': '203.0.113.66', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test' }
+
+async function waitForStableClientAddress(baseUrl, predicate, message) {
+  const deadline = Date.now() + 60000
+  const stableFor = 5000
+  let observed
+  let stableSince
+  while (Date.now() < deadline) {
+    observed = await clientAddress(baseUrl, spoofedHeaders).catch(() => undefined)
+    if (observed && predicate(observed)) {
+      stableSince ??= Date.now()
+      if (Date.now() - stableSince >= stableFor) return
+    } else {
+      stableSince = undefined
+    }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  assert.fail(`${message} Last response: ${JSON.stringify(observed)}`)
+}
+
 async function assertTrustedProxyHeaders(baseUrl, guestPath) {
   assert.ok(['127.0.0.1', '::1'].includes((await clientAddress(baseUrl)).address), 'Expected a direct visitor to be identified by its connection address.')
   assert.deepEqual(
@@ -70,13 +90,13 @@ async function assertTrustedProxyHeaders(baseUrl, guestPath) {
     { status: 200, address: '192.0.2.10' },
     'Expected the client address appended by the trusted proxy, not the one the visitor supplied.',
   )
-  assert.equal(
-    (await clientAddress(baseUrl, { 'x-forwarded-for': '192.0.2.10', forwarded: 'for=203.0.113.66' })).status,
-    400,
-    'Expected requests whose Forwarded and X-Forwarded headers disagree to be rejected.',
+  assert.deepEqual(
+    await clientAddress(baseUrl, { 'x-forwarded-for': '192.0.2.10', forwarded: 'for=203.0.113.66' }),
+    { status: 200, address: '192.0.2.10' },
+    'Expected the Forwarded header to be ignored, as Laravel does.',
   )
 
-  for (const headers of [{ 'x-forwarded-proto': 'wss' }, { 'x-forwarded-host': 'bad host' }]) {
+  for (const headers of [{ 'x-forwarded-host': 'bad host' }, { 'x-forwarded-port': 'abc' }]) {
     const response = await fetch(`${baseUrl}${guestPath}`, { headers, redirect: 'manual' })
     assert.equal(response.status, 400, `Expected malformed trusted proxy headers ${JSON.stringify(headers)} to be rejected as a bad request.`)
   }
@@ -86,7 +106,42 @@ async function assertTrustedProxyHeaders(baseUrl, guestPath) {
   assert.match(csrfCookie(secure) ?? '', /;\s*Secure/i)
 }
 
-export async function assertExampleAppRequestSecurity({ baseUrl, cwd, guestPath = '/login' }) {
+async function assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, exposesConnectionAddress) {
+  const configPath = join(cwd, 'config/security.ts')
+  const originalConfig = await readFile(configPath, 'utf8')
+  const untrustedConfig = originalConfig.replace(/trustedProxies: [^\n]+,/u, "trustedProxies: ['192.0.2.1'],")
+  assert.notEqual(untrustedConfig, originalConfig, 'Expected the example app to configure trustedProxies.')
+  try {
+    await writeFile(configPath, untrustedConfig)
+    await waitForStableClientAddress(
+      baseUrl,
+      ({ address }) => address !== spoofedHeaders['x-forwarded-for'],
+      'Expected the development app to reload its trusted proxies.',
+    )
+    const spoofed = await clientAddress(baseUrl, spoofedHeaders)
+    if (exposesConnectionAddress) {
+      assert.equal(spoofed.status, 200)
+      assert.ok(['127.0.0.1', '::1'].includes(spoofed.address), `Expected X-Forwarded-For from an untrusted peer to be ignored, received ${JSON.stringify(spoofed)}.`)
+    } else {
+      assert.equal(spoofed.status, 500, 'Expected the client address to be unavailable instead of read from an untrusted peer.')
+    }
+    const page = await fetch(`${baseUrl}${guestPath}`, { headers: { ...spoofedHeaders, 'x-forwarded-host': 'bad host', 'x-forwarded-port': 'abc' }, redirect: 'manual' })
+    assert.equal(page.status, 200, 'Expected X-Forwarded-Host and X-Forwarded-Port from an untrusted peer to be ignored instead of validated.')
+    if (exposesConnectionAddress) {
+      assert.doesNotMatch(csrfCookie(page) ?? '', /;\s*Secure/i, 'Expected X-Forwarded-Proto from an untrusted peer to be ignored.')
+    }
+  } finally {
+    await writeFile(configPath, originalConfig)
+    await waitForStableClientAddress(
+      baseUrl,
+      ({ address }) => address === spoofedHeaders['x-forwarded-for'],
+      'Expected the development app to restore its trusted proxies.',
+    )
+  }
+}
+
+export async function assertExampleAppRequestSecurity({ baseUrl, cwd, guestPath = '/login', exposesConnectionAddress = true }) {
   await assertPublicStorageServesPassiveFilesOnly(baseUrl, join(cwd, 'storage/app/public'))
   await assertTrustedProxyHeaders(baseUrl, guestPath)
+  await assertUntrustedPeerHeadersIgnored(baseUrl, cwd, guestPath, exposesConnectionAddress)
 }
