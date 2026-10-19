@@ -121,20 +121,26 @@ it('reports internal realtime failures with a generic message while keeping auth
     }
   }
   const worker = await startWorker({
-    query: async () => { throw failure },
+    query: async (name) => { throw name === 'records.internal' ? failure : Object.assign(new Error('Upstream token sk_live_123 was rejected'), { status: 401 }) },
     mutate: async () => { throw new RealtimeForbiddenError('You cannot rename records.') },
     subscribe: async () => { throw new PostMissingError('Post not found.') },
   })
   worker.send('query', 'query')
   worker.send('mutation', 'mutation')
   worker.send('subscription', 'subscribe')
-  await expect.poll(() => worker.packets.filter(packet => packet.event === 'holo:realtime:error').length).toBe(3)
+  worker.socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'internal', action: 'query', name: 'records.internal', args: {} } }))
+  await expect.poll(() => worker.packets.filter(packet => packet.event === 'holo:realtime:error').length).toBe(4)
   const errors = Object.fromEntries(worker.packets.filter(packet => packet.event === 'holo:realtime:error').map(packet => [packet.data.id, packet.data]))
   expect(errors).toEqual({
     query: { id: 'query', message: 'Realtime request failed.', kind: 'runtime', status: 500 },
+    internal: { id: 'internal', message: 'Realtime request failed.', kind: 'runtime', status: 500 },
     subscription: { id: 'subscription', message: 'Post not found.', kind: 'runtime', name: 'PostMissingError', status: 400 },
     mutation: { id: 'mutation', message: 'You cannot rename records.', kind: 'authorization', name: 'RealtimeForbiddenError', status: 403 },
   })
-  expect(reports).toEqual([{ error: failure, context: { capability: 'broadcast', operation: 'worker.realtime' } }])
+  expect(reports.map(report => report.context)).toEqual([
+    { capability: 'broadcast', operation: 'worker.realtime' },
+    { capability: 'broadcast', operation: 'worker.realtime' },
+  ])
+  expect(reports.map(report => report.error)).toContain(failure)
   expect(worker.socket.readyState).toBe(WebSocket.OPEN)
 })

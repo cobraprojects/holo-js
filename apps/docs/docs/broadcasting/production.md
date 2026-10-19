@@ -125,11 +125,11 @@ The worker never sends internal error details to clients. It passes the original
 | --- | --- |
 | A channel check throws | `pusher:subscription_error` with status `500`. See [Refused subscriptions](/broadcasting/events-and-channels#refused-subscriptions). |
 | A realtime query or mutation throws an unexpected error | `Realtime request failed.` with status `500` |
-| A publish request fails | `500` with `Broadcast publish failed.` |
+| A publish request fails | `Broadcast publish failed.` with status `500` |
 
 [`RealtimeError`](/realtime/#realtimeerror), access errors, and validation errors are meant for the caller, so they keep their message.
 
-Each connection gets a unique socket ID in the Pusher `123.456` format. If a new connection would reuse an ID that is already connected, the worker closes it with code `4200` and the client reconnects.
+Each connection gets a random socket ID in the Pusher `123.456` format. If a new connection would reuse an ID already connected to the same worker, the worker closes it with code `4200` and the client reconnects.
 
 ## Run several workers
 

@@ -135,6 +135,11 @@ export interface BroadcastWorkerStats {
   }
 }
 
+function rejectSocketConnection(socket: { close(code?: number, reason?: string): void }, error: unknown, report: HoloErrorReporter): void {
+  report(error, { capability: 'broadcast', operation: 'worker.socketConnect' })
+  socket.close(4200, 'Reconnect')
+}
+
 function createScalingMessageListener(
   runtime: Pick<BroadcastWorkerRuntime, 'receiveScalingMessage'>,
   report: HoloErrorReporter,
@@ -328,8 +333,8 @@ const PUBLISH_ERROR_MESSAGE = 'Broadcast publish failed.'
 class BroadcastSubscriptionDeniedError extends Error {
   readonly status: number
 
-  constructor(status: number, message = `[@holo-js/broadcast] Channel authorization was denied (${status}).`) {
-    super(message)
+  constructor(status: number) {
+    super(`[@holo-js/broadcast] Channel authorization was denied (${status}).`)
     this.name = 'BroadcastSubscriptionDeniedError'
     this.status = status
   }
@@ -481,12 +486,12 @@ function verifyClientChannelAuth(
 ): { readonly whispers: readonly string[], readonly member?: PresenceMember } {
   const [key, signature] = clientAuth.auth.split(':', 2)
   if (key !== app.key || !signature) {
-    throw new BroadcastSubscriptionDeniedError(403, '[@holo-js/broadcast] Channel authorization signature is invalid.')
+    throw new BroadcastSubscriptionDeniedError(403)
   }
 
   const expected = signChannelAuth(app.secret, socketId, channel, clientAuth.channelData ?? '')
   if (!safeEqual(signature, expected)) {
-    throw new BroadcastSubscriptionDeniedError(403, '[@holo-js/broadcast] Channel authorization signature is invalid.')
+    throw new BroadcastSubscriptionDeniedError(403)
   }
 
   return parseSignedChannelData(clientAuth.channelData)
@@ -898,6 +903,10 @@ async function authenticateSubscription(
       }),
     })
     const response = await fetcher(authRequest)
+    if (response.status >= 500) {
+      throw new Error(`[@holo-js/broadcast] Channel authorization endpoint failed (${response.status}).`)
+    }
+
     if (!response.ok) {
       throw new BroadcastSubscriptionDeniedError(response.status)
     }
@@ -976,6 +985,23 @@ function resolveRealtimeErrorStatus(error: unknown): number | undefined {
   }
 
   return undefined
+}
+
+const CLIENT_FACING_REALTIME_ERROR_NAMES = new Set([
+  'AuthorizationError',
+  'RealtimeUnauthorizedError',
+  'RealtimeForbiddenError',
+  'ValidationException',
+])
+
+function isClientFacingRealtimeError(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false
+  }
+
+  const name = typeof error.name === 'string' ? error.name : ''
+  return CLIENT_FACING_REALTIME_ERROR_NAMES.has(name)
+    || (name !== 'RealtimeAuthUnavailableError' && isRealtimeApplicationError(error))
 }
 
 function isRealtimeApplicationError(error: object): boolean {
@@ -1266,12 +1292,12 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
     const status = resolveRealtimeErrorStatus(error)
     const kind = resolveRealtimeErrorKind(error, status)
-    if (kind !== 'authorization' && (typeof status === 'undefined' || status >= 500)) {
+    if (!isClientFacingRealtimeError(error)) {
       report(error, { capability: 'broadcast', operation: 'worker.realtime' })
       sendRealtimeMessage(socket, 'holo:realtime:error', {
         id,
         message: REALTIME_ERROR_MESSAGE,
-        kind,
+        kind: kind === 'authorization' ? 'runtime' : kind,
         status: 500,
       })
       return
@@ -1555,6 +1581,35 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
   }
 
+  function isSocketCurrent(socket: SocketState): boolean {
+    return socket.active && connectedSockets.get(socket.socketId) === socket
+  }
+
+  function sendSubscriptionError(socket: SocketState, channel: string, status: number): void {
+    if (!isSocketCurrent(socket)) {
+      return
+    }
+
+    socket.send(pusherEvent('pusher:subscription_error', {
+      type: 'AuthError',
+      error: SUBSCRIPTION_ERROR_MESSAGE,
+      status,
+    }, channel))
+  }
+
+  async function rollBackFailedPresenceSubscription(socket: SocketState, channel: string, error: unknown): Promise<void> {
+    report(error, { capability: 'broadcast', operation: 'worker.subscription' })
+    socket.subscribedChannels.delete(channel)
+    const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
+    if (removedPresenceMember.removed && removedPresenceMember.member) {
+      deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
+    }
+    await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((cleanupError: unknown) => {
+      report(cleanupError, { capability: 'broadcast', operation: 'worker.subscription' })
+    })
+    sendSubscriptionError(socket, channel, 500)
+  }
+
   async function handleSubscribe(socket: SocketState, rawChannel: string, clientAuth?: ClientChannelAuth): Promise<void> {
     const channel = normalizeRequiredString(rawChannel, 'Subscription channel')
     let authorization: Awaited<ReturnType<typeof authenticateSubscription>>
@@ -1565,17 +1620,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         report(error, { capability: 'broadcast', operation: 'worker.subscription' })
       }
 
-      if (socket.active && connectedSockets.get(socket.socketId) === socket) {
-        socket.send(pusherEvent('pusher:subscription_error', {
-          type: 'AuthError',
-          error: SUBSCRIPTION_ERROR_MESSAGE,
-          status: error instanceof BroadcastSubscriptionDeniedError ? error.status : 500,
-        }, channel))
-      }
+      sendSubscriptionError(socket, channel, error instanceof BroadcastSubscriptionDeniedError ? error.status : 500)
       return
     }
 
-    if (!socket.active || connectedSockets.get(socket.socketId) !== socket) {
+    if (!isSocketCurrent(socket)) {
       return
     }
 
@@ -1598,15 +1647,20 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     const { kind } = parseChannelKind(channel)
     if (kind === 'presence') {
       const member = authorization.member ?? Object.freeze({ id: socket.socketId })
-      const synchronized = await synchronizePresenceChannel(
-        socket.app,
-        channel,
-        member,
-        socket.socketId,
-      )
-      if (synchronized.isNewMember) {
-        deliverPresenceMemberAddedLocal(socket.app.appId, channel, member, socket.socketId)
-        await publishScalingPresenceMemberAdded(socket.app, channel, socket.socketId, member)
+      try {
+        const synchronized = await synchronizePresenceChannel(
+          socket.app,
+          channel,
+          member,
+          socket.socketId,
+        )
+        if (synchronized.isNewMember) {
+          deliverPresenceMemberAddedLocal(socket.app.appId, channel, member, socket.socketId)
+          await publishScalingPresenceMemberAdded(socket.app, channel, socket.socketId, member)
+        }
+      } catch (error) {
+        await rollBackFailedPresenceSubscription(socket, channel, error)
+        return
       }
       const presence = getPresenceRosterPayload(key)
       socket.send(pusherEvent('pusher_internal:subscription_succeeded', {
@@ -2082,8 +2136,7 @@ export async function startBroadcastWorker(
             })
           } catch (error) {
             rejectedSockets.add(socket)
-            report(error, { capability: 'broadcast', operation: 'worker.socketConnect' })
-            socket.close(4200, 'Reconnect')
+            rejectSocketConnection(socket, error, report)
           }
         },
         message(socket, message) {
@@ -2162,8 +2215,7 @@ export async function startBroadcastWorker(
         },
       })
     } catch (error) {
-      report(error, { capability: 'broadcast', operation: 'worker.socketConnect' })
-      socket.close(4200, 'Reconnect')
+      rejectSocketConnection(socket, error, report)
       return
     }
     socket.on('message', (message) => {

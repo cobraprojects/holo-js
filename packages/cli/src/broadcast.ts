@@ -133,7 +133,7 @@ type BroadcastRealtimeRuntimeBindings = {
   ): Promise<BroadcastRealtimeSubscription>
 }
 
-type RealtimeAuthRequestAccessors = {
+type AuthRequestAccessors = {
   getCookie(name: string): Promise<string | undefined>
   getHeader(name: string): Promise<string | undefined>
   appendResponseCookie(cookie: string): Promise<void>
@@ -143,7 +143,7 @@ type RealtimeAuthRequestAccessors = {
 type RealtimeServerModule = {
   configureRealtimeRuntime?(bindings?: {
     runWithAuthRequestAccessors<TValue>(
-      accessors: RealtimeAuthRequestAccessors,
+      accessors: AuthRequestAccessors,
       callback: () => Promise<TValue>,
     ): Promise<TValue>
   }): void
@@ -157,12 +157,12 @@ type RealtimeServerModule = {
   executeRealtimeQuery(
     definition: unknown,
     args: Record<string, unknown>,
-    options?: { readonly authRequest?: RealtimeAuthRequestAccessors },
+    options?: { readonly authRequest?: AuthRequestAccessors },
   ): Promise<BroadcastRealtimeExecutionResult>
   executeRealtimeMutation(
     definition: unknown,
     args: Record<string, unknown>,
-    options?: { readonly authRequest?: RealtimeAuthRequestAccessors },
+    options?: { readonly authRequest?: AuthRequestAccessors },
   ): Promise<BroadcastRealtimeExecutionResult>
   subscribeRealtimeQuery(
     definition: unknown,
@@ -172,14 +172,14 @@ type RealtimeServerModule = {
       readonly onPatch?: (patch: RealtimeSubscriptionPatch) => void | Promise<void>
       readonly onError?: (error: unknown) => void | Promise<void>
     },
-    executionOptions?: { readonly authRequest?: RealtimeAuthRequestAccessors },
+    executionOptions?: { readonly authRequest?: AuthRequestAccessors },
   ): Promise<BroadcastRealtimeSubscription>
 }
 
 type RequestAwareHoloRuntime = HoloRuntime & {
-  setAuthRequestAccessors?(accessors?: RealtimeAuthRequestAccessors): void
+  setAuthRequestAccessors?(accessors?: AuthRequestAccessors): void
   runWithAuthRequestAccessors?<TValue>(
-    accessors: RealtimeAuthRequestAccessors,
+    accessors: AuthRequestAccessors,
     callback: () => Promise<TValue>,
   ): Promise<TValue>
 }
@@ -266,7 +266,7 @@ function readCookieFromHeader(header: string | null, name: string): string | und
   return undefined
 }
 
-function createAuthRequestAccessors(headers: Headers): RealtimeAuthRequestAccessors {
+function createAuthRequestAccessors(headers: Headers): AuthRequestAccessors {
   return {
     async getCookie(name: string) {
       return readCookieFromHeader(headers.get('cookie'), name)
@@ -351,7 +351,7 @@ async function createRealtimeWorkerBindings(
   }
   const withRealtimeRequest = async <TValue>(
     context: BroadcastRealtimeExecutionContext,
-    callback: (authRequest: RealtimeAuthRequestAccessors) => Promise<TValue>,
+    callback: (authRequest: AuthRequestAccessors) => Promise<TValue>,
   ): Promise<TValue> => {
     return await callback(createAuthRequestAccessors(context.headers))
   }

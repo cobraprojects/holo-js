@@ -187,15 +187,15 @@ it('rejects unauthorized private subscriptions with a subscription error and kee
 })
 
 it('rejects private and presence subscriptions when the default worker resolves no user', async () => {
-  let authorizedUser: unknown = 'not called'
-  const worker = await startNativeWorker({ resolveUser: () => null, authorize: () => { authorizedUser = null; return true } })
+  let authorizeCalled = false
+  const worker = await startNativeWorker({ resolveUser: () => null, authorize: () => { authorizeCalled = true; return true } })
   const client = await worker.connect()
   for (const channel of ['private-orders.1', 'presence-room.1']) {
     client.socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel } }))
     await expect.poll(() => client.messages.find(message => message.event === 'pusher:subscription_error' && message.channel === channel)?.data)
       .toBe(JSON.stringify({ type: 'AuthError', error: 'Unable to authorize the channel subscription.', status: 403 }))
   }
-  expect(authorizedUser).toBe('not called')
+  expect(authorizeCalled).toBe(false)
   expect(client.messages.some(message => message.event === 'pusher_internal:subscription_succeeded')).toBe(false)
   expect(await worker.stats()).toMatchObject({ connectionCount: 1, subscribedChannelCount: 0 })
 })
@@ -215,6 +215,56 @@ it('reports internal subscription failures and sends the client a generic subscr
   })
   expect(reports).toEqual([{ error: failure, context: { capability: 'broadcast', operation: 'worker.subscription' } }])
   expect(client.socket.readyState).toBe(WebSocket.OPEN)
+})
+
+it('reports a presence synchronization failure as a subscription error and keeps the socket open', async () => {
+  const reports: Array<{ error: unknown, context: HoloErrorReportContext }> = []
+  errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  const failure = new Error('NOPERM this user has no permissions to run the hset command')
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+    channelAuth: { resolveUser: () => ({ id: 'native-user' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: () => ({ id: 'native-user' }) })] },
+    scaling: {
+      driver: 'redis', connection: 'shared', nodeId: 'node-1', eventChannel: 'events',
+      adapter: {
+        publish: async () => {}, subscribe: async () => () => {}, hashDelete: async () => {}, hashGetAll: async () => ({}), close: async () => {},
+        hashSet: async () => { throw failure },
+      },
+    },
+  })
+  onTestFinished(() => runtime.close())
+  const sent: Array<{ event: string, channel?: string, data: string }> = []
+  runtime.connectWebSocket({ socketId: '1.1', app: { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {} })
+  await runtime.receiveWebSocketMessage('1.1', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+  await runtime.receiveWebSocketMessage('1.1', JSON.stringify({ event: 'pusher:ping', data: {} }))
+  expect(sent.slice(1)).toEqual([
+    { event: 'pusher:subscription_error', channel: 'presence-room.1', data: JSON.stringify({ type: 'AuthError', error: 'Unable to authorize the channel subscription.', status: 500 }) },
+    { event: 'pusher:pong', data: '{}' },
+  ])
+  expect(reports).toEqual([{ error: failure, context: { capability: 'broadcast', operation: 'worker.subscription' } }])
+  expect(runtime.getStats()).toMatchObject({ connectionCount: 1, subscribedChannelCount: 0, presenceChannelCount: 0 })
+})
+
+it('reports a failing HTTP channel authorization endpoint and sends a generic subscription error', async () => {
+  const reports: HoloErrorReportContext[] = []
+  errorReportingInternals.configure({ report: (_error, context) => { reports.push(context) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  const authorization = createHttpServer((_incoming, outgoing) => { outgoing.writeHead(503); outgoing.end('database unavailable') })
+  authorization.listen(0, '127.0.0.1')
+  await once(authorization, 'listening')
+  onTestFinished(async () => {
+    authorization.closeAllConnections()
+    await new Promise<void>((resolve, reject) => authorization.close(error => error ? reject(error) : resolve()))
+  })
+  const address = authorization.address()
+  if (!address || typeof address === 'string') throw new Error('Native authorization port unavailable')
+  const worker = await startNativeWorker({ authEndpoint: `http://127.0.0.1:${address.port}` })
+  const client = await worker.connect()
+  client.socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'private-orders.1' } }))
+  await expect.poll(() => client.messages.find(message => message.event === 'pusher:subscription_error')?.data)
+    .toBe(JSON.stringify({ type: 'AuthError', error: 'Unable to authorize the channel subscription.', status: 500 }))
+  expect(reports).toEqual([{ capability: 'broadcast', operation: 'worker.subscription' }])
 })
 
 it('rejects a socket identifier that is already connected without disturbing the existing socket', async () => {
