@@ -184,7 +184,7 @@ Retries only happen on a worker. With the `sync` driver, an error in `handle()` 
 The worker doesn't stop your handler's code when it times out. Make the work inside `handle()` safe to finish late, or give it its own time limit.
 
 ::: tip
-Keep `timeout` shorter than the connection's `retryAfter` (90 seconds by default). Otherwise a job that is still running can be handed to a second worker. See [Drivers](/queue/drivers).
+With the `database` driver, keep `timeout` shorter than the connection's `retryAfter` (90 seconds by default). Otherwise a job that is still running can be handed to a second worker. The `redis` driver renews a running job's hold, so it doesn't need this. See [Drivers](/queue/drivers).
 :::
 
 ## The job context
@@ -357,7 +357,7 @@ Optional `string`. The queue name this job dispatches to by default. A `.onQueue
 
 ### `tries` {#tries}
 
-Optional integer, at least `1`. The total number of attempts on a worker, including the first. Defaults to `1`, so the job runs once. Your `--tries` worker flag overrides it.
+Optional integer, at least `1`. The total number of attempts on a worker, including the first. Defaults to `1`, so the job runs once. A run interrupted by a worker that stopped also counts as an attempt; see [When a worker stops unexpectedly](/queue/workers#when-a-worker-stops-unexpectedly). Your `--tries` worker flag overrides it.
 
 ### `backoff` {#backoff}
 

@@ -1023,6 +1023,7 @@
       "name": "@holo-js/queue-redis",
       "version": "0.3.28",
       "dependencies": {
+        "@holo-js/kernel": "catalog:",
         "bullmq": "catalog:",
         "ioredis": "catalog:",
         "tslib": "catalog:",

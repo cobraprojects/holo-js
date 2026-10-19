@@ -113,6 +113,16 @@ WantedBy=multi-user.target
 
 Run more copies of the service to process more jobs in parallel. See [Deploying Holo apps](/deployment/) for choosing a host that supports long-running processes.
 
+## When a worker stops unexpectedly
+
+If a worker crashes, is killed, or loses its connection while running a job, the job isn't lost. Once the connection's `retryAfter` seconds pass, another worker picks it up and runs it again. You don't need to do anything.
+
+The interrupted run counts as one of the job's `tries`. When a picked-up job has already used all of its tries, the worker doesn't run it again. It fails the job with the error `Queue job "<name>" has been attempted too many times.`, calls the job's `onFailed` hook, and saves it to the [failed jobs table](/queue/failed-jobs).
+
+With the `redis` driver, a worker keeps renewing its hold on the job it's running, so a job that runs longer than `retryAfter` isn't handed to a second worker. The `database` driver doesn't renew, so keep each job's `timeout` shorter than `retryAfter`.
+
+If a worker picks up a job whose name isn't registered, for example after you rename or delete a job file, it fails that job, saves it to the failed jobs table, and keeps processing the rest of the queue.
+
 ## Run workers from code
 
 `runQueueWorker()` runs the same loop as `queue:work`, inside your own script. Use it for a custom worker process or a test.

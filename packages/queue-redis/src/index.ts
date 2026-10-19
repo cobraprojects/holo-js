@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import {
   Queue as BullQueue,
@@ -43,6 +44,7 @@ type QueueBullConnection = ConnectionOptions | Redis | InstanceType<(typeof Redi
 type RedisReservation = {
   readonly job: BullJobInstance
   readonly token: string
+  readonly renewal: NodeJS.Timeout
 }
 
 type RedisWorkerRecord = {
@@ -285,6 +287,24 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     return queue
   }
 
+  private getLockDuration(): number {
+    return this.connection.retryAfter * 1000
+  }
+
+  private renewReservation(job: BullJobInstance, token: string): NodeJS.Timeout {
+    const lockDuration = this.getLockDuration()
+    const renewal = setInterval(() => {
+      job.extendLock(token, lockDuration).catch((error: unknown) => {
+        reportError(wrapRedisError(this.name, 'renew job reservation', error), {
+          capability: 'queue',
+          operation: 'redis.renewReservation',
+        })
+      })
+    }, lockDuration / 2)
+    renewal.unref()
+    return renewal
+  }
+
   private createWorkerKey(queueName: string, blockFor: number): string {
     return `${queueName}:${blockFor}`
   }
@@ -326,7 +346,9 @@ export class RedisQueueDriver implements QueueAsyncDriver {
         connection: this.bullConnection,
         prefix: this.getQueuePrefix(queueName),
         drainDelay: this.resolveWorkerDrainDelay(blockFor),
-        lockDuration: this.connection.retryAfter * 1000,
+        lockDuration: this.getLockDuration(),
+        stalledInterval: this.getLockDuration(),
+        maxStalledCount: Number.MAX_SAFE_INTEGER,
         removeOnComplete: { count: 0 },
         removeOnFail: { count: 0 },
       },
@@ -337,8 +359,18 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       worker,
     }
 
+    worker.on('error', (error: unknown) => {
+      reportError(wrapRedisError(this.name, 'recover abandoned reservations', error), {
+        capability: 'queue',
+        operation: 'redis.recoverAbandonedReservations',
+      })
+    })
+
     const ready = worker.waitUntilReady()
-      .then(() => workerRecord)
+      .then(async () => {
+        await worker.startStalledCheckTimer()
+        return workerRecord
+      })
       .catch(async (error: unknown) => {
         if (this.workers.get(workerKey) === workerRecord) {
           this.workers.delete(workerKey)
@@ -417,6 +449,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     this.reservations.set(token, {
       job,
       token,
+      renewal: this.renewReservation(job, token),
     })
 
     return {
@@ -441,6 +474,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     callback: (reservation: RedisReservation) => Promise<void>,
   ): Promise<void> {
     const reservation = this.getReservation(reserved)
+    clearInterval(reservation.renewal)
 
     try {
       await callback(reservation)
@@ -564,6 +598,10 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       ...this.queues.values(),
     ]
     const workerReadyPromises = [...this.workerReadyPromises.values()]
+
+    for (const reservation of this.reservations.values()) {
+      clearInterval(reservation.renewal)
+    }
 
     this.reservations.clear()
     this.workerReadyPromises.clear()
