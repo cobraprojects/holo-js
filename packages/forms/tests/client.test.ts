@@ -850,7 +850,7 @@ describe('@holo-js/forms client', () => {
       ok: false,
       status: 422,
       valid: false,
-      values: { name: 'Core', members: [{ email: 'ava@example.com', devices: [{ label: 'phone' }] }] },
+      values: { name: 'Core' },
       errors: { name: ['Name is taken.'] },
     })
 
@@ -859,7 +859,13 @@ describe('@holo-js/forms client', () => {
       recoveryCodes: [''],
       pins: [''],
       vault: [['']],
-      members: [{ email: 'ava@example.com', devices: [{ label: 'phone' }] }],
+      members: [{
+        email: 'ava@example.com',
+        password: '',
+        apiKey: '',
+        devices: [{ label: 'phone', secret: '' }],
+        backupCodes: [['']],
+      }],
     })
     expect(JSON.stringify(client.values)).not.toMatch(/recovery-one|pin-one|vault-one|member-password|member-key|device-secret|backup-one/)
   })
