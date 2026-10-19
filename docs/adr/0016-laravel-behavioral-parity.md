@@ -11,4 +11,6 @@ Recorded departures:
 - `APP_ENV` must be `development`, `production`, or `test`, and any other value fails, because Holo's environment is a typed value that selects a fixed env-file order and production safeguards; an unknown name would otherwise fall back silently.
 - `APP_ENV` in `.env` also selects the environment's env files, loaded on top of `.env`, because Node has no process-wide `putenv` step before the framework boots, so `.env` is the only file an operator can rely on to name the environment for every Holo entry point.
 - Holo encrypts only the cookies it owns (session, remember, and `XSRF-TOKEN`), because it cannot intercept cookies written through each framework's native cookie interfaces as Laravel's `EncryptCookies` does.
+- Password and sensitive fields are stripped from validation failures at every depth, including arrays, because Holo echoes submitted values in 422 response bodies and exception payloads, while Laravel flashes input only into the server-side session.
+- The Nuxt form-failure cookie carries errors but no submitted values, because it is a client-readable cookie rather than Laravel's server-side session.
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.

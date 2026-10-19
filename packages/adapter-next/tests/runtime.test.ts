@@ -4,8 +4,9 @@ import { join, resolve } from 'node:path'
 import { NextRequest } from 'next/server'
 import { resolveRequestUrl } from '@holo-js/kernel'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { field, schema, validate } from '@holo-js/validation'
 import { resetHoloRuntime } from '../../core/src/portable/holo'
-import { createNextHoloHelpers, createNextRequestContext, runWithNextRequest } from '../src/runtime'
+import { adapterNextRuntimeInternals, createNextHoloHelpers, createNextRequestContext, runWithNextRequest } from '../src/runtime'
 
 const projectRoot = resolve(import.meta.dirname, '../../../apps/blog-next')
 
@@ -20,6 +21,24 @@ describe('Next native runtime', () => {
     })
     const context = createNextRequestContext(request)
     expect(resolveRequestUrl(context).href).toBe('http://127.0.0.1:43201/auth/presentation?theme=light')
+  })
+
+  it('answers route handler validation failures with a 422 that omits submitted passwords', async () => {
+    const login = schema({ email: field.string().required().email(), password: field.password().required() })
+    const handler = adapterNextRuntimeInternals.routeHandler(async (request: Request) => {
+      await validate(request, login)
+      return new Response('ok')
+    })
+
+    const response = await handler(new Request('https://app.test/api/login', {
+      method: 'POST',
+      body: new URLSearchParams({ email: 'invalid', password: 'next-password' }),
+    }))
+
+    expect(response.status).toBe(422)
+    const body = await response.text()
+    expect(JSON.parse(body)).toMatchObject({ status: 422, values: { email: 'invalid' } })
+    expect(body).not.toContain('next-password')
   })
 
   it('reads native Next cookies and standard HTTP cookies without inventing missing values', () => {

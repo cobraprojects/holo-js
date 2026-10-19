@@ -7,7 +7,6 @@ export {
   sanitizeFlashedInput,
   validate,
 } from './contracts'
-export { sensitiveInputInternals } from './sensitiveInput'
 export type {
   FormFailureErrors,
   FormFailureInput,
