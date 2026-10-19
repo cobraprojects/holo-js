@@ -61,7 +61,7 @@ Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in 
 
 ### Debug defaults to false
 
-`debug` in `config/app.ts` now defaults to `false` when `APP_DEBUG` is unset, as in Laravel. Before, it defaulted to `true`, so apps without `APP_DEBUG` showed detailed errors. Set `APP_DEBUG=true` in your local `.env` file to keep detailed errors during development. Apps that set `APP_DEBUG` already, including the scaffold's `.env`, keep their value. `useHoloDebug()` in Nuxt and the SvelteKit error responses follow the same setting. See [Configuration](/reference/config#app-ts).
+`debug` in `config/app.ts` now defaults to `false` when `APP_DEBUG` is unset, as in Laravel. Before, it defaulted to `true`, so apps without `APP_DEBUG` showed the messages of unexpected errors in SvelteKit responses. Set `APP_DEBUG=true` in your local `.env` file to keep those messages during development. Apps that set `APP_DEBUG` already, including the scaffold's `.env`, keep their value. SvelteKit error responses and Nuxt's `useHoloDebug()` follow the same setting. Next.js doesn't read it. See [Configuration](/reference/config#app-ts).
 
 ### Broadcast subscription errors and channel authorization
 
