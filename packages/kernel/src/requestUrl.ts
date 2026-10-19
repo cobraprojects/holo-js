@@ -22,9 +22,11 @@ export type HoloRequestInput = RequestUrlParts & {
 }
 
 export type HoloForwardedRequest = {
+  readonly address?: string
   readonly protocol?: string
   readonly host?: string
-  readonly rejection?: string
+  readonly port?: string
+  readonly prefix?: string
 }
 
 export type HoloForwardedRequestResolver = (
@@ -102,25 +104,51 @@ export class HoloRequestUrlError extends TypeError {
 }
 
 const invalidRequestHostMessage = 'Request hosts must be a valid hostname and optional port.'
+const invalidRequestPortMessage = 'Request ports must be a number from 0 to 65535.'
+const invalidRequestPrefixMessage = 'Request prefixes must be a path starting with a single "/".'
+
+function validForwardedPort(port: string): string {
+  if (!/^\d{1,5}$/u.test(port) || Number(port) > 65535) throw new HoloRequestUrlError(invalidRequestPortMessage)
+  return port
+}
+
+function validForwardedPrefix(prefix: string): string {
+  const trimmed = prefix.replace(/\/+$/u, '')
+  if (trimmed && (!trimmed.startsWith('/') || trimmed.startsWith('//') || /[\s?#\\]/u.test(trimmed))) {
+    throw new HoloRequestUrlError(invalidRequestPrefixMessage)
+  }
+  return trimmed
+}
 
 function parseRequestUrl(value: string | URL, invalidMessage: string): URL {
   if (!URL.canParse(String(value), 'http://localhost')) throw new HoloRequestUrlError(invalidMessage)
   return new URL(value, 'http://localhost')
 }
 
-export function resolveRequestUrl(input: HoloRequestInput): URL {
-  const nested = input instanceof Request
+function nestedRequest(input: HoloRequestInput): RequestUrlParts | undefined {
+  return input instanceof Request
     ? undefined
     : input.request ?? input.web?.request ?? input.req ?? input.node?.req
-  const headers = input.headers ?? nested?.headers
+}
+
+function requestHeaders(input: HoloRequestInput): HoloRequestHeaders | undefined {
+  return input.headers ?? nestedRequest(input)?.headers
+}
+
+function resolveForwardedRequest(headers: HoloRequestHeaders | undefined): HoloForwardedRequest | undefined {
+  return requestForwardingState().resolveForwardedRequest?.(name => readHeader(headers, name), currentConnectionAddress())
+}
+
+function resolveUrl(input: HoloRequestInput, applyPrefix: boolean): URL {
+  const nested = nestedRequest(input)
+  const headers = requestHeaders(input)
   const value = input.url ?? nested?.url ?? input.path ?? (nested && 'path' in nested ? nested.path : undefined) ?? '/'
   const invalidUrlMessage = 'Request URLs must use http or https without credentials.'
   const url = parseRequestUrl(value, invalidUrlMessage)
   if (url.username || url.password || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
     throw new HoloRequestUrlError(invalidUrlMessage)
   }
-  const forwarded = requestForwardingState().resolveForwardedRequest?.(name => readHeader(headers, name), currentConnectionAddress())
-  if (forwarded?.rejection) throw new HoloRequestUrlError(forwarded.rejection)
+  const forwarded = resolveForwardedRequest(headers)
   const protocol = (forwarded?.protocol ?? url.protocol.slice(0, -1)).toLowerCase()
   if (protocol !== 'http' && protocol !== 'https') {
     throw new HoloRequestUrlError('Request protocols must be http or https.')
@@ -133,10 +161,32 @@ export function resolveRequestUrl(input: HoloRequestInput): URL {
   if (origin.pathname !== '/' || origin.username || origin.password || origin.search || origin.hash) {
     throw new HoloRequestUrlError(invalidRequestHostMessage)
   }
+  if (forwarded?.port !== undefined) origin.port = validForwardedPort(forwarded.port)
   url.protocol = origin.protocol
   url.host = origin.host
   url.port = origin.port
+  const prefix = forwarded?.prefix === undefined ? '' : validForwardedPrefix(forwarded.prefix)
+  if (applyPrefix) url.pathname = `${prefix}${url.pathname}`
   return url
 }
 
-export const requestUrlInternals = Object.freeze({ configureForwardedRequestResolver, currentConnectionAddress, provideConnectionAddress })
+export function resolveRequestUrl(input: HoloRequestInput): URL {
+  return resolveUrl(input, true)
+}
+
+function resolveRoutedRequestUrl(input: HoloRequestInput): URL {
+  return resolveUrl(input, false)
+}
+
+function resolveClientAddress(input: HoloRequestInput): string | undefined {
+  if (!requestForwardingState().resolveForwardedRequest) return currentConnectionAddress()
+  return resolveForwardedRequest(requestHeaders(input))?.address
+}
+
+export const requestUrlInternals = Object.freeze({
+  configureForwardedRequestResolver,
+  currentConnectionAddress,
+  provideConnectionAddress,
+  resolveClientAddress,
+  resolveRoutedRequestUrl,
+})
