@@ -16,6 +16,8 @@ type EnvRuntimeState = {
   values?: Readonly<Record<string, string>>
   pendingEvaluation: Promise<void>
   evaluationContext: AsyncLocalStorage<{ active: boolean }>
+  envReads: AsyncLocalStorage<Map<string, string | null>>
+  envSnapshot: AsyncLocalStorage<Readonly<Record<string, string | null>>>
 }
 
 function parseEnvFile(contents: string): Record<string, string> {
@@ -174,6 +176,8 @@ function getEnvRuntimeState(): EnvRuntimeState {
   runtime.__holoEnvRuntime__ ??= {
     pendingEvaluation: Promise.resolve(),
     evaluationContext: new AsyncLocalStorage(),
+    envReads: new AsyncLocalStorage(),
+    envSnapshot: new AsyncLocalStorage(),
   }
 
   return runtime.__holoEnvRuntime__
@@ -229,7 +233,30 @@ async function evaluateConfig<TValue>(
   return evaluation
 }
 
-export const configEvaluationInternals = { evaluate: evaluateConfig }
+async function recordEnvReads<TValue>(
+  callback: () => Promise<TValue>,
+): Promise<{ value: TValue, reads: Map<string, string | null> }> {
+  const reads = new Map<string, string | null>()
+  const value = await getEnvRuntimeState().envReads.run(reads, callback)
+  return { value, reads }
+}
+
+function withEnvSnapshot<TValue>(
+  snapshot: Readonly<Record<string, string | null>> | undefined,
+  callback: () => Promise<TValue>,
+): Promise<TValue> {
+  if (!snapshot) {
+    return callback()
+  }
+
+  return getEnvRuntimeState().envSnapshot.run(snapshot, callback)
+}
+
+export const configEvaluationInternals = {
+  evaluate: evaluateConfig,
+  recordEnvReads,
+  withEnvSnapshot,
+}
 
 function coerceEnvScalar<TValue extends EnvScalar>(
   key: string,
@@ -268,18 +295,25 @@ function coerceEnvScalar<TValue extends EnvScalar>(
 export function env(key: string): string
 export function env<TValue extends EnvScalar>(key: string, fallback: TValue): TValue
 export function env<TValue extends EnvScalar>(key: string, fallback?: TValue): string | TValue {
-  const runtimeValue = getEnvRuntimeState().values?.[key]
+  const state = getEnvRuntimeState()
+  const snapshot = state.envSnapshot.getStore()
+  if (snapshot && Object.hasOwn(snapshot, key)) {
+    const frozenValue = snapshot[key]
+    if (typeof frozenValue === 'string') {
+      return typeof fallback === 'undefined'
+        ? frozenValue
+        : coerceEnvScalar(key, frozenValue, fallback)
+    }
+
+    return typeof fallback === 'undefined' ? '' : fallback
+  }
+
+  const runtimeValue = state.values?.[key] ?? process.env[key]
+  state.envReads.getStore()?.set(key, runtimeValue ?? null)
   if (typeof runtimeValue === 'string') {
     return typeof fallback === 'undefined'
       ? runtimeValue
       : coerceEnvScalar(key, runtimeValue, fallback)
-  }
-
-  const processValue = process.env[key]
-  if (typeof processValue === 'string') {
-    return typeof fallback === 'undefined'
-      ? processValue
-      : coerceEnvScalar(key, processValue, fallback)
   }
 
   if (typeof fallback !== 'undefined') {

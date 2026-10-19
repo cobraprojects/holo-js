@@ -2320,6 +2320,54 @@ export default defineAppConfig({
     expect(loaded.app.exceptions.dontReport).toEqual([TypeError])
   })
 
+  it('freezes env values read by function-bearing app config at config:cache time', async () => {
+    const root = await createProject()
+    await writeFile(join(root, '.env'), 'FROZEN_APP_NAME=Cached Name\n', 'utf8')
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  name: env('FROZEN_APP_NAME', 'Fallback'),
+  exceptions: {
+    report(error) {
+      return error
+    },
+  },
+})
+`, 'utf8')
+
+    await writeConfigCache(root, { envName: 'production', processEnv: {} })
+    await writeFile(join(root, '.env'), 'FROZEN_APP_NAME=Changed Name\n', 'utf8')
+
+    const loaded = await loadConfigDirectory(root, { envName: 'production', processEnv: {} })
+
+    expect(loaded.app.name).toBe('Cached Name')
+    expect(typeof loaded.app.exceptions.report).toBe('function')
+  })
+
+  it('uses the fallback for function-bearing config env reads that were unset at config:cache time', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  name: env('FROZEN_LATER_APP_NAME', 'Fallback'),
+  exceptions: {
+    report(error) {
+      return error
+    },
+  },
+})
+`, 'utf8')
+
+    await writeConfigCache(root, { envName: 'production', processEnv: {} })
+    await writeFile(join(root, '.env'), 'FROZEN_LATER_APP_NAME=Set Later\n', 'utf8')
+
+    const loaded = await loadConfigDirectory(root, { envName: 'production', processEnv: {} })
+
+    expect(loaded.app.name).toBe('Fallback')
+  })
+
   it('caches security configs that use keyed rate limiters', async () => {
     const root = await createProject()
 

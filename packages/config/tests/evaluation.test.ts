@@ -75,7 +75,7 @@ export default { owner: env('HOLO_EVALUATION_OWNER') }
   expect(env('HOLO_EVALUATION_OWNER')).toBe('configured')
 })
 
-it('caches evaluated values for cacheable config and evaluates deferred config live', async () => {
+it('caches evaluated values for cacheable config and freezes env reads made by deferred config at cache time', async () => {
   process.env.HOLO_EVALUATION_OWNER = 'ambient'
   const root = await createProject(`
 import { env } from ${configEntry}
@@ -92,7 +92,7 @@ export default { owner: env('HOLO_EVALUATION_OWNER'), later: () => env('HOLO_EVA
     security: { owner: string, later: () => string }
   }>(root, { envName: 'production', processEnv: { HOLO_EVALUATION_OWNER: 'live' } })
   expect(loaded.custom.services).toEqual({ owner: 'build', direct: 'build' })
-  expect(loaded.custom.security.owner).toBe('live')
+  expect(loaded.custom.security.owner).toBe('build')
   expect(loaded.custom.security.later()).toBe('ambient')
   expect(process.env.HOLO_EVALUATION_OWNER).toBe('ambient')
 })
