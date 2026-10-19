@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { mkdir as defaultMkdir, open, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
 
 const RECORD_LOCK_STALE_MS = 10_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
+const releasedRecordLockTokens = new Set<string>()
 type MakeDirectory = typeof defaultMkdir
 
 type RecordLockOwner = {
@@ -173,7 +175,7 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
       return true
     } catch (error) {
       const code = errorCode(error)
-      if (code === 'ENOENT') return false
+      if (code === 'ENOENT') return true
       if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && !isBusyFileError(error)) throw error
       if (Date.now() >= deadline) return false
       await sleep(5)
@@ -183,7 +185,9 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
 
 async function reclaimStaleLock(lockPath: string, expected: RecordLockIdentity): Promise<boolean> {
   if (!recordLockIdentityMatches(expected, await readRecordLockIdentity(lockPath))) return false
-  return removeRecordLock(lockPath, expected.fileName, BUSY_FILE_RETRY_MS)
+  const removed = await removeRecordLock(lockPath, expected.fileName, BUSY_FILE_RETRY_MS)
+  if (removed && expected.owner) releasedRecordLockTokens.delete(expected.owner.token)
+  return removed
 }
 
 async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdentity | undefined> {
@@ -193,7 +197,9 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
   const owner = identity.owner
   if (owner?.host === hostname()) {
     if (owner.pid === process.pid) {
-      if (owner.processToken === PROCESS_INSTANCE_TOKEN) return undefined
+      if (owner.processToken === PROCESS_INSTANCE_TOKEN) {
+        return releasedRecordLockTokens.has(owner.token) ? identity : undefined
+      }
     } else {
       return processIsRunning(owner.pid) ? undefined : identity
     }
@@ -201,6 +207,15 @@ async function reclaimableRecordLock(lockPath: string): Promise<RecordLockIdenti
   const leasePath = identity.fileName ? join(lockPath, identity.fileName) : lockPath
   const stale = await stat(leasePath).then(value => value.mtimeMs <= Date.now() - RECORD_LOCK_STALE_MS).catch(() => false)
   return stale ? identity : undefined
+}
+
+async function releaseRecordLock(recordPath: string, lockPath: string, ownerFileName: string, ownerToken: string): Promise<void> {
+  if (await removeRecordLock(lockPath, ownerFileName, BUSY_FILE_RETRY_MS)) return
+  releasedRecordLockTokens.add(ownerToken)
+  reportError(
+    new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; a later operation in this process will reclaim it.`),
+    { capability: 'session', operation: 'file.releaseLock' },
+  )
 }
 
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
@@ -247,10 +262,10 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
     heartbeat.unref()
     return async () => {
       clearInterval(heartbeat)
-      await removeRecordLock(lockPath, ownerFileName, BUSY_FILE_RETRY_MS)
+      await releaseRecordLock(recordPath, lockPath, ownerFileName, owner.token)
     }
   } catch (error) {
-    if (acquired) await removeRecordLock(lockPath, ownerFileName)
+    if (acquired) await releaseRecordLock(recordPath, lockPath, ownerFileName, owner.token)
     else await rm(pendingPath, { recursive: true, force: true })
     throw error
   }
