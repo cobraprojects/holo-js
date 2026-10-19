@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadConfigDirectory, loadEnvironment, resetConfigRuntime, resolveAppEnvironment } from '../src'
+import { loadConfigDirectory, loadEnvironment, resetConfigRuntime, resolveAppEnvironment, resolveProjectAppEnvironmentSync } from '../src'
 
 const tempDirs: string[] = []
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../src/index.ts'))
@@ -180,5 +180,27 @@ export default defineAppConfig({ name: 'Live App', env: env('APP_ENV', 'producti
 
     expect(loaded.app.name).toBe('Live App')
     expect(loaded.app.env).toBe('production')
+  })
+})
+
+describe('synchronous application environment resolution', () => {
+  it('follows the loader precedence: --env, then the shell, then .env', async () => {
+    const root = await createProject({ '.env': 'APP_ENV=development\n' })
+
+    expect(resolveProjectAppEnvironmentSync({ cwd: root, processEnv: {} })).toBe('development')
+    expect(resolveProjectAppEnvironmentSync({ cwd: root, processEnv: { APP_ENV: 'test' } })).toBe('test')
+    expect(resolveProjectAppEnvironmentSync({ cwd: root, envName: 'production', processEnv: { APP_ENV: 'test' } })).toBe('production')
+  })
+
+  it('treats a missing APP_ENV as production', async () => {
+    const root = await createProject()
+
+    expect(resolveProjectAppEnvironmentSync({ cwd: root, processEnv: {} })).toBe('production')
+  })
+
+  it('rejects an unknown APP_ENV from the shell', async () => {
+    const root = await createProject({ '.env': 'APP_ENV=staging\n' })
+
+    expect(() => resolveProjectAppEnvironmentSync({ cwd: root, processEnv: {} })).toThrow('Invalid APP_ENV "staging"')
   })
 })

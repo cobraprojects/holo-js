@@ -114,7 +114,7 @@ npx holo migrate:fresh --seed --only database
 | --- | --- |
 | `--only <names>` | Run only these seeders. Comma-separated, or repeat the flag |
 | `--quietly` | Turn off [model events and observers](/orm/observers) while seeding |
-| `--force` | Allow seeding in production |
+| `--force` | Skip the production confirmation |
 
 ### Transactions
 
@@ -122,7 +122,7 @@ Each seeder runs in a transaction. If it throws, everything it wrote rolls back.
 
 ### Seeding in production
 
-Holo refuses to seed when the environment is `production`. The environment comes from `APP_ENV` and is `production` when `APP_ENV` isn't set. Pass `--force` when you really mean it:
+When the environment is `production`, `holo seed` asks you to confirm before it writes anything. The environment comes from `APP_ENV` and is `production` when `APP_ENV` isn't set. Without a terminal, the command stops with an error, so pass `--force` in scripts when you really mean it:
 
 ```bash
 npx holo seed --only roles --force

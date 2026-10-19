@@ -4,9 +4,12 @@ import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
 import { assertMigrationName, defineMigration } from './defineMigration'
+import { ensureMigrationTable } from './ensureMigrationTable'
+import { MigrationLease } from './MigrationLease'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
+  IsolatedMigrationResult,
   MigrateOptions,
   MigrationContext,
   MigrationDefinition,
@@ -119,36 +122,61 @@ export class MigrationService {
   async migrate(options: MigrateOptions = {}): Promise<RegisteredMigrationDefinition[]> {
     return this.runExclusively(async () => {
       await this.ensureTrackingTableForMigration()
-      const step = options.step ?? Number.POSITIVE_INFINITY
-      const ran = await this.getRanRecords()
-      const ranNames = new Set(ran.map(record => record.name))
-      const nextBatch = ran.length === 0
-        ? 1
-        : Math.max(...ran.map(record => record.batch)) + 1
+      return this.applyPendingMigrations(options)
+    })
+  }
 
-      const pending = this.getMigrations()
-        .filter(migration => !ranNames.has(migration.name))
-        .slice(0, step)
-
-      const executed: RegisteredMigrationDefinition[] = []
-      for (const migration of pending) {
-        const log = this.createMigrationLog(migration.name, 'up', nextBatch)
-        await this.runMigrationLifecycle(log, async () => {
-          await this.runMigrationTransaction(async (tx) => {
-            const context = this.createContext(tx)
-            await migration.up(context)
-            await new TableQueryBuilder(migrationsTable, tx).insert({
-              name: migration.name,
-              batch: nextBatch,
-              migrated_at: new Date(),
-            })
-          })
-        })
-        executed.push(migration)
+  async migrateIsolated(options: MigrateOptions = {}): Promise<IsolatedMigrationResult> {
+    return this.runExclusively(async () => {
+      await this.ensureTrackingTableForMigration()
+      const lease = new MigrationLease(this.connection)
+      if (!await lease.acquire()) {
+        return { kind: 'skipped' }
       }
 
-      return executed
+      try {
+        const executed = await this.applyPendingMigrations(options, () => lease.renew())
+        return { kind: 'ran', executed }
+      } finally {
+        await lease.release()
+      }
     })
+  }
+
+  private async applyPendingMigrations(
+    options: MigrateOptions,
+    beforeMigration?: () => Promise<void>,
+  ): Promise<RegisteredMigrationDefinition[]> {
+    const step = options.step ?? Number.POSITIVE_INFINITY
+    const ran = await this.getRanRecords()
+    const ranNames = new Set(ran.map(record => record.name))
+    const nextBatch = ran.length === 0
+      ? 1
+      : Math.max(...ran.map(record => record.batch)) + 1
+
+    const pending = this.getMigrations()
+      .filter(migration => !ranNames.has(migration.name))
+      .slice(0, step)
+
+    const executed: RegisteredMigrationDefinition[] = []
+    for (const migration of pending) {
+      await beforeMigration?.()
+      const log = this.createMigrationLog(migration.name, 'up', nextBatch)
+      await this.runMigrationLifecycle(log, async () => {
+        await this.runMigrationTransaction(async (tx) => {
+          const context = this.createContext(tx)
+          await migration.up(context)
+          await new TableQueryBuilder(migrationsTable, tx).insert({
+            name: migration.name,
+            batch: nextBatch,
+            migrated_at: new Date(),
+          })
+        })
+      })
+      executed.push(migration)
+    }
+
+    return executed
   }
 
   private async ensureTrackingTableForMigration(): Promise<void> {
@@ -243,12 +271,7 @@ export class MigrationService {
   }
 
   private async ensureTrackingTable(): Promise<void> {
-    const schema = createSchemaService(this.connection)
-    if (await schema.hasTable(migrationsTable.tableName)) {
-      return
-    }
-
-    await schema.createTable(migrationsTable.tableName, (table) => {
+    await ensureMigrationTable(this.connection, migrationsTable.tableName, (table) => {
       table.id()
       table.string('name').unique()
       table.integer('batch')
