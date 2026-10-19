@@ -16,6 +16,7 @@
 ### Security
 
 - Local disks refuse `delete()`, `removeItem()`, and `clear()` paths that lead outside the disk root through a symlink, and `clear()` with no base empties the root without replacing a symlinked root folder. Deleting an in-disk symlink removes only the link. See [Safe paths](apps/docs/docs/storage/index.md#safe-paths).
+- Leave passwords and `sensitive()` fields out of every serialized validation failure, including inside nested objects and arrays: `ValidationException` `values` and `toJSON()` from Validation and Forms `validate()`, Forms `fail()` and `serialize()`, and the 422 responses from Next.js, Nuxt and SvelteKit. `useForm()` clears the same fields after a failed submission, including items of sensitive arrays. The Nuxt form-failure cookie no longer carries submitted values and is `Secure` on HTTPS requests. See [Sensitive data](apps/docs/docs/basics/validation/rules.md#sensitive).
 - Isolate Realtime query results and refresh state per server subscription. Every subscription runs authorization independently; identical query names and arguments no longer reuse another caller’s result. Browser client store sharing is unchanged.
 
 - Group model caller conditions, each global scope, and soft-delete filters independently. Prevent `orWhere()` from leaking foreign or deleted rows through reads, eager loads, and `whereHas()`, and keep instance updates and deletes restricted to their target row.
