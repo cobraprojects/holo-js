@@ -1,3 +1,4 @@
+import { resolveProjectAppEnvironmentSync } from '@holo-js/config'
 import type { RuntimeConnectionConfig, RuntimeDatabaseConfig } from '@holo-js/db'
 import {
   createHoloProjectAccessors,
@@ -204,7 +205,6 @@ export const holo = createHoloProjectAccessors(async () => {
   const authRequest = createNuxtAuthRequestAccessors()
   const { createNuxtAuthorizationError } = await import('../authorization-error')
   const project = await initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
-    preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
     authRequest,
     authorizationError: {
@@ -214,7 +214,12 @@ export const holo = createHoloProjectAccessors(async () => {
   const runtimeGlobals = globalThis as RuntimeGlobals
   runtimeGlobals.__holoNuxtAuthRequestRunner = (accessors, callback) => project.runtime.runWithAuthRequestAccessors(accessors, callback)
   return project
-}, { cache: process.env.NODE_ENV === 'production' })
+}, {
+  cache: () => resolveProjectAppEnvironmentSync({
+    cwd: resolveRuntimeProjectRoot(getRuntimeConfig()),
+    processEnv: process.env,
+  }) === 'production',
+})
 
 function normalizeConnection(
   connection: RuntimeConnectionConfig,

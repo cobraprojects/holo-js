@@ -99,15 +99,30 @@ afterEach(async () => {
 })
 
 describe('@holo-js/core adapter helpers', () => {
-  it('resolves project roots and runtime defaults without host-specific behavior', () => {
-    const cwd = process.cwd()
+  it('prefers the config cache from the resolved application environment, not NODE_ENV', async () => {
+    const root = await createProjectRoot()
+    await writeFile(join(root, '.env'), 'APP_ENV=development\n')
     const previousNodeEnv = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'
 
     try {
+      expect(resolveHoloFrameworkOptions({ projectRoot: root, processEnv: {} }).runtime.preferCache).toBe(false)
+      expect(resolveHoloFrameworkOptions({ projectRoot: root, processEnv: { APP_ENV: 'production' } }).runtime.preferCache).toBe(true)
+      expect(resolveHoloFrameworkOptions({ projectRoot: root, envName: 'production', processEnv: {} }).runtime.preferCache).toBe(true)
+      expect(resolveHoloFrameworkOptions({ projectRoot: root, envName: 'test', processEnv: { APP_ENV: 'production' } }).runtime.preferCache).toBe(false)
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv
+    }
+  })
+
+  it('resolves project roots and runtime defaults without host-specific behavior', () => {
+    const cwd = process.cwd()
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'development'
+
+    try {
       const defaults = resolveHoloFrameworkOptions()
       expect(defaults.projectRoot).toBe(cwd)
-      expect(defaults.runtime.preferCache).toBe(true)
       expect(defaults.runtime.processEnv).toBe(process.env)
 
       const explicit = resolveHoloFrameworkOptions({

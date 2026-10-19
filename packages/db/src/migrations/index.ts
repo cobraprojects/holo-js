@@ -16,6 +16,7 @@ export type {
   MigrationSquashPlan,
   MigrationTemplateKind,
   MigrationTemplateOptions,
+  IsolatedMigrationResult,
   MigrateOptions,
   MigrationExecutionPolicy,
   RollbackOptions,

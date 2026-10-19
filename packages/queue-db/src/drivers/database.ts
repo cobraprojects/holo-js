@@ -100,6 +100,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
   readonly name: string
   readonly driver = 'database' as const
   readonly mode = 'async' as const
+  readonly acceptsJobId = true
 
   private readonly tableName: string
 

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { basename, join, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import type { LoadedEnvironment, HoloAppEnv } from './types'
 
@@ -15,6 +16,13 @@ type EnvRuntimeState = {
   values?: Readonly<Record<string, string>>
   pendingEvaluation: Promise<void>
   evaluationContext: AsyncLocalStorage<{ active: boolean }>
+  envReads: AsyncLocalStorage<Map<string, string | null>>
+  envSnapshot: AsyncLocalStorage<EnvSnapshotScope>
+}
+
+type EnvSnapshotScope = {
+  active: boolean
+  values: Readonly<Record<string, string | null>>
 }
 
 function parseEnvFile(contents: string): Record<string, string> {
@@ -59,6 +67,14 @@ async function readEnvFile(filePath: string): Promise<Record<string, string> | u
   }
 }
 
+function readEnvFileSync(filePath: string): Record<string, string> | undefined {
+  try {
+    return parseEnvFile(readFileSync(filePath, 'utf8'))
+  } catch {
+    return undefined
+  }
+}
+
 export function resolveAppEnvironment(
   processEnv: NodeJS.ProcessEnv = process.env,
 ): HoloAppEnv {
@@ -72,6 +88,26 @@ export function resolveAppEnvironment(
   }
 
   throw new Error(`Invalid APP_ENV "${value}". Use development, production, or test.`)
+}
+
+function selectAppEnvironmentValue(
+  envName: string | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  baseValues: Record<string, string> | undefined,
+): string | undefined {
+  return envName ?? processEnv.APP_ENV ?? baseValues?.APP_ENV
+}
+
+export function resolveProjectAppEnvironmentSync(options: {
+  cwd: string
+  envName?: string
+  processEnv?: NodeJS.ProcessEnv
+}): HoloAppEnv {
+  const processEnv = options.processEnv ?? process.env
+  const baseValues = readEnvFileSync(join(resolve(options.cwd), '.env'))
+  return resolveAppEnvironment({
+    APP_ENV: selectAppEnvironmentValue(options.envName, processEnv, baseValues),
+  })
 }
 
 export function resolveEnvironmentFileOrder(envName: HoloAppEnv): string[] {
@@ -93,7 +129,7 @@ export async function loadEnvironment(
   const processEnv = options.processEnv ?? process.env
   const baseValues = await readEnvFile(join(cwd, '.env'))
   const envName = resolveAppEnvironment({
-    APP_ENV: options.envName ?? processEnv.APP_ENV ?? baseValues?.APP_ENV,
+    APP_ENV: selectAppEnvironmentValue(options.envName, processEnv, baseValues),
   })
   const loadedFiles: string[] = []
   const warnings: string[] = []
@@ -145,6 +181,8 @@ function getEnvRuntimeState(): EnvRuntimeState {
   runtime.__holoEnvRuntime__ ??= {
     pendingEvaluation: Promise.resolve(),
     evaluationContext: new AsyncLocalStorage(),
+    envReads: new AsyncLocalStorage(),
+    envSnapshot: new AsyncLocalStorage(),
   }
 
   return runtime.__holoEnvRuntime__
@@ -200,7 +238,37 @@ async function evaluateConfig<TValue>(
   return evaluation
 }
 
-export const configEvaluationInternals = { evaluate: evaluateConfig }
+async function recordEnvReads<TValue>(
+  callback: () => Promise<TValue>,
+): Promise<{ value: TValue, reads: Map<string, string | null> }> {
+  const reads = new Map<string, string | null>()
+  const value = await getEnvRuntimeState().envReads.run(reads, callback)
+  return { value, reads }
+}
+
+function withEnvSnapshot<TValue>(
+  snapshot: Readonly<Record<string, string | null>> | undefined,
+  callback: () => Promise<TValue>,
+): Promise<TValue> {
+  if (!snapshot) {
+    return callback()
+  }
+
+  const scope: EnvSnapshotScope = { active: true, values: snapshot }
+  return getEnvRuntimeState().envSnapshot.run(scope, async () => {
+    try {
+      return await callback()
+    } finally {
+      scope.active = false
+    }
+  })
+}
+
+export const configEvaluationInternals = {
+  evaluate: evaluateConfig,
+  recordEnvReads,
+  withEnvSnapshot,
+}
 
 function coerceEnvScalar<TValue extends EnvScalar>(
   key: string,
@@ -239,18 +307,25 @@ function coerceEnvScalar<TValue extends EnvScalar>(
 export function env(key: string): string
 export function env<TValue extends EnvScalar>(key: string, fallback: TValue): TValue
 export function env<TValue extends EnvScalar>(key: string, fallback?: TValue): string | TValue {
-  const runtimeValue = getEnvRuntimeState().values?.[key]
+  const state = getEnvRuntimeState()
+  const scope = state.envSnapshot.getStore()
+  if (scope?.active && Object.hasOwn(scope.values, key)) {
+    const frozenValue = scope.values[key]
+    if (typeof frozenValue === 'string') {
+      return typeof fallback === 'undefined'
+        ? frozenValue
+        : coerceEnvScalar(key, frozenValue, fallback)
+    }
+
+    return typeof fallback === 'undefined' ? '' : fallback
+  }
+
+  const runtimeValue = state.values?.[key] ?? process.env[key]
+  state.envReads.getStore()?.set(key, runtimeValue ?? null)
   if (typeof runtimeValue === 'string') {
     return typeof fallback === 'undefined'
       ? runtimeValue
       : coerceEnvScalar(key, runtimeValue, fallback)
-  }
-
-  const processValue = process.env[key]
-  if (typeof processValue === 'string') {
-    return typeof fallback === 'undefined'
-      ? processValue
-      : coerceEnvScalar(key, processValue, fallback)
   }
 
   if (typeof fallback !== 'undefined') {

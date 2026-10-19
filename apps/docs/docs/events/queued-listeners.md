@@ -58,6 +58,20 @@ export default defineListener({
 
 `delay` is a number of seconds, or a `Date` to run at.
 
+`tries` and `backoff` retry a failing queued listener. `tries` is the total number of attempts, and it defaults to one. `backoff` is the wait before each retry, in seconds, or an array of waits per retry. Like the other queue options, they need `queue: true`.
+
+```ts
+defineListener({
+  listensTo: [UserRegistered],
+  queue: true,
+  tries: 3,
+  backoff: [10, 60],
+  handle(event) {
+    return sendWelcomeEmail(event.payload.userId)
+  },
+})
+```
+
 You can override these per dispatch:
 
 ```ts [server/lib/billing.ts]
@@ -93,7 +107,8 @@ Send IDs instead of records. Load the record inside `handle()` so the listener s
 
 A queued listener runs as a regular queue job named `holo.events.invoke-listener`. Everything about queue jobs applies:
 
-- It gets one attempt by default. Raise this with `npx holo queue:work --tries 3`.
+- It gets one attempt by default. Set the listener's `tries` to allow more (see [Choose the connection, queue, and delay](#choose-the-connection-queue-and-delay)). `npx holo queue:work --tries N` overrides every job's `tries`, so it also overrides a listener that sets its own, and it applies to listeners that don't set `tries`.
+- `backoff` on the listener sets the wait before each retry. A listener without `backoff` gets the worker's `--backoff` instead, when it has retries left.
 - When it fails for good, it shows up in `npx holo queue:failed` and you can retry it with the other [failed job commands](/queue/failed-jobs).
 
 The job stores the listener's ID. If you rename or delete a listener while its jobs are still waiting in the queue, those jobs fail with `Queued listener "<id>" is not registered.` Give long-lived queued listeners an explicit [`name`](/events/listeners#listener-names) so moving the file doesn't change the ID.
