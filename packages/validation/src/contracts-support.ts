@@ -575,12 +575,13 @@ function coerceDate(value: unknown): unknown {
   return Number.isNaN(parsed.getTime()) ? value : parsed
 }
 
-export function declaredListLimit(definition: FieldDefinition): { readonly rule: FieldRule, readonly value: number } | undefined {
-  let limit: { readonly rule: FieldRule, readonly value: number } | undefined
+export function declaredListLimit(definition: FieldDefinition): number | undefined {
+  let limit: number | undefined
   for (const rule of definition.rules) {
+    if (rule.name === 'transform') break
     const value = rule.args[0]
-    if ((rule.name === 'max' || rule.name === 'size') && typeof value === 'number' && (!limit || value < limit.value)) {
-      limit = { rule, value }
+    if ((rule.name === 'max' || rule.name === 'size') && typeof value === 'number' && (limit === undefined || value < limit)) {
+      limit = value
     }
   }
   return limit
@@ -594,7 +595,7 @@ export function coerceFieldValue(definition: FieldDefinition, value: unknown): u
 
     const rawItems = Array.isArray(value) ? value : [value]
     const limit = declaredListLimit(definition)
-    if (!definition.item || (limit && rawItems.length > limit.value)) {
+    if (!definition.item || (limit !== undefined && rawItems.length > limit)) {
       return rawItems
     }
 

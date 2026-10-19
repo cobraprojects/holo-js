@@ -108,6 +108,70 @@ describe('Validation input bounds', () => {
     }
   })
 
+  it('applies list bounds to the value at their position in the pipeline', async () => {
+    const result = await safeParse({ tags: ['a', 'b'], codes: ['1', '2'] }, schema({
+      tags: field.array(field.string()).transform(values => values.slice(0, 1)).max(1),
+      codes: field.array(field.number()).max(3).transform(values => values.slice(0, 1)).size(1),
+    }))
+
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.data).toEqual({ tags: ['a'], codes: [1] })
+
+    const oversized = await safeParse({ tags: ['a', 'b'] }, schema({
+      tags: field.array(field.string()).max(1).transform(values => values.slice(0, 1)),
+    }))
+    expect(oversized.valid).toBe(false)
+    if (!oversized.valid) expect(oversized.errors.get('tags')).toEqual(['This field must contain 1 item or fewer.'])
+  })
+
+  it('reports every applicable parent constraint without visiting oversized list items', async () => {
+    let reads = 0
+    let transforms = 0
+    const rows = Array.from({ length: 2 }, () => ({
+      get code() {
+        reads += 1
+        return '1'
+      },
+    }))
+    const result = await safeParse({ rows }, schema({
+      rows: field.array({ code: field.number() })
+        .size(3, 'Need exactly three rows.')
+        .max(1, 'Only one row allowed.')
+        .min(4, 'Need at least four rows.')
+        .transform(values => {
+          transforms += 1
+          return values.slice(0, 1)
+        })
+        .max(0, 'Post-transform bound.'),
+    }))
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.flatten()).toEqual({
+      rows: ['Need exactly three rows.', 'Only one row allowed.', 'Need at least four rows.'],
+    })
+    expect(reads).toBe(0)
+    expect(transforms).toBe(0)
+  })
+
+  it('skips parent custom rules on oversized lists with unchecked items', async () => {
+    let checks = 0
+    const check = (values: number[]) => {
+      checks += 1
+      return values.every(value => value.toFixed(0) !== '')
+    }
+    const result = await safeParse({ before: ['a', 'b'], after: ['a', 'b'] }, schema({
+      before: field.array(field.number()).custom(check).max(1),
+      after: field.array(field.number()).max(1).customAsync(async values => check(values)),
+    }))
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.errors.flatten()).toEqual({
+      before: ['This field must contain 1 item or fewer.'],
+      after: ['This field must contain 1 item or fewer.'],
+    })
+    expect(checks).toBe(0)
+  })
+
   it('keeps item errors for undersized lists and skips items for oversized ones', async () => {
     const checked: string[] = []
     const definition = schema({

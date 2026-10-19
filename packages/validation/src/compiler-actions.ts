@@ -11,11 +11,6 @@ export function exactSizeAction(definition: FieldDefinition, value: number, mess
   return v.check((input: unknown) => input === value, fallback)
 }
 
-export function oversizedListAction(definition: FieldDefinition, name: 'max' | 'size', value: number, message?: string) {
-  const fallback = name === 'max' ? defaultMaxMessage(definition.kind, value) : defaultSizeMessage(definition.kind, value)
-  return v.check((input: unknown) => !Array.isArray(input) || input.length <= value, message ?? fallback)
-}
-
 export function minAction(definition: FieldDefinition, value: number, message?: string) {
   const fallback = message ?? defaultMinMessage(definition.kind, value)
 
