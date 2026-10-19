@@ -208,7 +208,7 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-When validation fails on a browser form post, Holo redirects back to the page the form came from (status 303) and flashes the errors for one request. Read them with `useValidationErrors()`:
+When validation fails on a browser form post, Holo redirects back to the page the form came from (status 303) and flashes the errors for one request. The flash cookie holds only the error messages, never the submitted values, and is marked `Secure` when the request uses HTTPS. Read them with `useValidationErrors()`:
 
 ```vue [app/pages/posts/new.vue]
 <script setup lang="ts">

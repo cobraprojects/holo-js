@@ -1,16 +1,6 @@
-import type { FieldDefinition, SchemaInputShape, ValidationSchema } from '@holo-js/validation'
+import { validationInternals, type FieldDefinition, type SchemaInputShape, type ValidationSchema } from '@holo-js/validation'
 
-const DEFAULT_DONT_FLASH_FIELDS = Object.freeze([
-  'confirm_password',
-  'confirmPassword',
-  'current_password',
-  'currentPassword',
-  'new_password',
-  'newPassword',
-  'password',
-  'password_confirmation',
-  'passwordConfirmation',
-])
+const DEFAULT_DONT_FLASH_FIELDS = validationInternals.DONT_FLASH_FIELDS
 
 const DEFAULT_DONT_FLASH_FIELD_SET = new Set<string>(DEFAULT_DONT_FLASH_FIELDS)
 
@@ -71,27 +61,6 @@ function collectSensitivePaths(schemaDefinition: SensitiveSchema | undefined): r
   return collectSensitivePathsFromFields(schemaDefinition.fields as Record<string, unknown>)
 }
 
-function deletePath(root: Record<string, unknown>, path: string): void {
-  const parts = path.split('.').filter(Boolean)
-  const leaf = parts.at(-1)
-  if (!leaf) {
-    return
-  }
-
-  let cursor: unknown = root
-  for (const part of parts.slice(0, -1)) {
-    if (!isPlainObject(cursor)) {
-      return
-    }
-
-    cursor = cursor[part]
-  }
-
-  if (isPlainObject(cursor)) {
-    delete cursor[leaf]
-  }
-}
-
 function clearPath(root: Record<string, unknown>, path: string): void {
   const parts = path.split('.').filter(Boolean)
   const leaf = parts.at(-1)
@@ -113,32 +82,11 @@ function clearPath(root: Record<string, unknown>, path: string): void {
   }
 }
 
-function sanitizePlainObject<TData>(
-  values: TData,
-  sensitivePaths: readonly string[],
-): TData {
-  if (!isPlainObject(values)) {
-    return values
-  }
-
-  const output = structuredClone(values) as Record<string, unknown>
-
-  for (const field of DEFAULT_DONT_FLASH_FIELD_SET) {
-    delete output[field]
-  }
-
-  for (const path of sensitivePaths) {
-    deletePath(output, path)
-  }
-
-  return output as TData
-}
-
 export function sanitizeFlashedInput<TData>(
   values: Partial<TData> | TData,
   schemaDefinition?: SensitiveSchema,
 ): Partial<TData> | TData {
-  return sanitizePlainObject(values, collectSensitivePaths(schemaDefinition))
+  return validationInternals.stripSensitiveInput(values, schemaDefinition?.fields, { files: true })
 }
 
 export function clearSensitiveInputValues<TData>(values: TData, schemaDefinition?: SensitiveSchema): TData {

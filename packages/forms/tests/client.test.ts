@@ -881,7 +881,7 @@ describe('@holo-js/forms client', () => {
       '': 'private-id',
     }
     expect(clearSensitiveInputValues(emptyPathValues, emptyPathSchema)).toEqual(emptyPathValues)
-    expect(sanitizeFlashedInput(emptyPathValues, emptyPathSchema)).toEqual(emptyPathValues)
+    expect(sanitizeFlashedInput(emptyPathValues, emptyPathSchema)).toEqual({})
     expect(clearSensitiveInputValues('super-secret')).toBe('super-secret')
     expect(sanitizeFlashedInput('super-secret')).toBe('super-secret')
 

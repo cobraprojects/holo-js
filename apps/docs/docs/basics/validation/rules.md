@@ -416,7 +416,9 @@ Ratio enforcement runs on the Node.js server and requires `sharp`, as described 
 
 ### `sensitive()`
 
-Marks a field as sensitive. Form failure payloads from `submission.fail()` and `submission.serialize()` leave sensitive values out, and `useForm()` clears them after a failed submission. Password fields (`field.password()`), file fields, and fields named `password`, `passwordConfirmation`, `password_confirmation`, `currentPassword`, `current_password`, `newPassword`, `new_password`, `confirmPassword`, or `confirm_password` are already treated as sensitive.
+Marks a field as sensitive. Holo leaves sensitive values out of every validation failure: the [422 response](/basics/validation/errors#the-422-response), the `values` and `toJSON()` of a `ValidationException`, `submission.fail()`, `submission.serialize()`, and flashed form errors. `useForm()` clears them after a failed submission.
+
+Password fields (`field.password()`) and fields named `password`, `passwordConfirmation`, `password_confirmation`, `currentPassword`, `current_password`, `newPassword`, `new_password`, `confirmPassword`, or `confirm_password` are always sensitive, including inside nested objects and [arrays](#arrays). Uploaded files are also left out of failure payloads.
 
 ```ts
 field.string().sensitive().optional()

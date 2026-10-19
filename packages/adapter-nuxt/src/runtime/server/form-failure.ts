@@ -1,3 +1,5 @@
+import { resolveRequestUrl } from '@holo-js/kernel'
+
 const FORM_FAILURE_COOKIE = 'holo_form_failure'
 
 export type NitroHeaderValue = number | string | readonly string[]
@@ -16,6 +18,7 @@ export type NitroEvent = {
       url?: string
       method?: string
       headers?: Record<string, string | string[] | undefined>
+      socket?: object
     }
     res?: {
       statusCode?: number
@@ -135,9 +138,22 @@ function setHeader(event: NitroEvent, response: NitroResponse, name: string, val
   response.headers[name] = value
 }
 
-function serializeFormFailureCookie(payload: FormFailurePayload): string {
-  const encoded = encodeURIComponent(JSON.stringify(payload))
-  return `${FORM_FAILURE_COOKIE}=${encoded}; Path=/; Max-Age=60; SameSite=Lax`
+function isSecureRequest(event: NitroEvent): boolean {
+  const request = event.node?.req
+  const socket = request?.socket
+  const protocol = socket && 'encrypted' in socket && socket.encrypted === true ? 'https' : 'http'
+  try {
+    return resolveRequestUrl({ url: `${protocol}://localhost/`, headers: request?.headers }).protocol === 'https:'
+  } catch {
+    return protocol === 'https'
+  }
+}
+
+function serializeFormFailureCookie(event: NitroEvent, payload: FormFailurePayload): string {
+  const { values: _values, ...failure } = payload
+  const encoded = encodeURIComponent(JSON.stringify(failure))
+  const secure = isSecureRequest(event) ? '; Secure' : ''
+  return `${FORM_FAILURE_COOKIE}=${encoded}; Path=/; Max-Age=60; SameSite=Lax${secure}`
 }
 
 export function shouldRedirectFormFailure(event: NitroEvent): boolean {
@@ -160,7 +176,7 @@ export function applyFormFailureRedirect(
   response.body = ''
   setHeader(event, response, 'location', getRedirectLocation(event))
   setHeader(event, response, 'content-type', 'text/html; charset=utf-8')
-  appendSetCookie(event, response, serializeFormFailureCookie(failure))
+  appendSetCookie(event, response, serializeFormFailureCookie(event, failure))
 }
 
 export const formFailureInternals = {
