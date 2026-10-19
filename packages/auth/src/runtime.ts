@@ -359,6 +359,7 @@ async function resolveHoloCookie(bindings: RuntimeBindings, emptySetCookie: stri
 }
 
 const requestRememberEntries = new WeakMap<object, Promise<Map<string, string>>>()
+const requestRememberLoads = new WeakMap<object, Promise<void>>()
 const requestRememberHydrations = new WeakMap<object, Map<string, Promise<void>>>()
 const requestRememberRestorations = new WeakMap<object, Promise<unknown>>()
 
@@ -367,13 +368,30 @@ async function browserKeepsOtherSession(bindings: RuntimeBindings, sessionId: st
   return Boolean(browserSessionId && browserSessionId !== sessionId && await bindings.session.read(browserSessionId))
 }
 
+function rememberRequestKey(bindings: RuntimeBindings): object {
+  return authRequestScope(bindings.context) ?? bindings.context
+}
+
 function readRememberCookieEntries(bindings: RuntimeBindings): Promise<Map<string, string>> {
-  const scope = authRequestScope(bindings.context)
-  const existing = scope ? requestRememberEntries.get(scope) : undefined
+  const key = rememberRequestKey(bindings)
+  const existing = requestRememberEntries.get(key)
   if (existing) return existing
   const entries = resolveHoloCookie(bindings, bindings.session.rememberMeCookie('')).then(parseRememberCookie)
-  if (scope) requestRememberEntries.set(scope, entries)
+  requestRememberEntries.set(key, entries)
   return entries
+}
+
+function loadRememberCookies(bindings: RuntimeBindings): Promise<void> {
+  const key = rememberRequestKey(bindings)
+  const existing = requestRememberLoads.get(key)
+  if (existing) return existing
+  const load = (async () => {
+    for (const [name, recaller] of await readRememberCookieEntries(bindings)) {
+      if (sessionGuardNames(bindings).includes(name)) bindings.context.setRememberToken?.(name, recaller)
+    }
+  })()
+  requestRememberLoads.set(key, load)
+  return load
 }
 
 function sessionGuardNames(bindings: RuntimeBindings): readonly string[] {
@@ -383,11 +401,11 @@ function sessionGuardNames(bindings: RuntimeBindings): readonly string[] {
 }
 
 async function rememberCookieFor(bindings: RuntimeBindings, guardName: string, recaller?: string): Promise<string | undefined> {
-  const entries = await readRememberCookieEntries(bindings)
+  await loadRememberCookies(bindings)
+  const entries = new Map<string, string>()
   for (const name of sessionGuardNames(bindings)) {
     const current = name === guardName ? recaller : bindings.context.getRememberToken?.(name)
     if (current) entries.set(name, current)
-    else if (name === guardName) entries.delete(name)
   }
   const value = serializeRememberCookie(entries)
   return value ? bindings.session.rememberMeCookie(value) : forgetDefaultRememberCookie(bindings)
@@ -522,15 +540,14 @@ async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName:
 }
 
 function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, restore: boolean): Promise<void> {
-  const scope = authRequestScope(bindings.context)
-  let hydrations = scope ? requestRememberHydrations.get(scope) : undefined
+  const key = rememberRequestKey(bindings)
+  let hydrations = requestRememberHydrations.get(key)
   const pending = hydrations?.get(guardName)
   if (pending) return pending
-  if (bindings.context.getRememberToken?.(guardName)) return Promise.resolve()
   const hydration = (async () => {
-    const recaller = (await readRememberCookieEntries(bindings)).get(guardName)
+    await loadRememberCookies(bindings)
+    const recaller = bindings.context.getRememberToken?.(guardName)
     if (!recaller) return
-    bindings.context.setRememberToken?.(guardName, recaller)
     if (
       restore
       && !await guardHasSessionPayload(bindings, guardName)
@@ -539,11 +556,9 @@ function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, re
       bindings.context.setRememberToken?.(guardName)
     }
   })()
-  if (scope) {
-    hydrations ??= new Map()
-    hydrations.set(guardName, hydration)
-    requestRememberHydrations.set(scope, hydrations)
-  }
+  hydrations ??= new Map()
+  hydrations.set(guardName, hydration)
+  requestRememberHydrations.set(key, hydrations)
   return hydration
 }
 

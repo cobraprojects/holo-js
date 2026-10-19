@@ -192,7 +192,7 @@ describe('remember me', () => {
     await expect(browser.request(async () => [await auth.check(), await auth.guard('admin').check()])).resolves.toEqual([true, true])
   })
 
-  it('keeps a remember entry cleared earlier in the same request out of later cookies', async () => {
+  it.each([true, false])('keeps a remember entry cleared earlier in the same request out of later cookies (request scoped: %s)', async (scoped) => {
     users.set(2, { id: 2, email: 'mina@app.test', password: 'scrypt$hash-two', remember_token: null })
     const browser = new Browser()
     await browser.request(() => auth.loginUsingId(1, { remember: true }))
@@ -200,7 +200,7 @@ describe('remember me', () => {
     await browser.request(async () => {
       await auth.loginUsingId(2)
       await auth.guard('admin').loginUsingId(2, { remember: true })
-    })
+    }, {}, scoped)
 
     expect(decryptRemember(browser)).toEqual({ admin: [2, expect.any(String), expect.any(String)] })
     browser.expireSession()
