@@ -73,7 +73,6 @@ export type RelationConstraintDefinition = (query: ModelQueryBuilder<TableDefini
 
 type RelationConstraintCallback<TQuery> = { bivarianceHack(query: TQuery): unknown }['bivarianceHack']
 
-/** A constraint callback typed for the model a relation reaches. */
 export type ScopedRelationConstraint<TRelation extends RelationDefinition>
   = RelationConstraintCallback<ModelQueryBuilder<
     RelatedTableOfRelation<TRelation>,
@@ -438,47 +437,6 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
   = TRelation extends { readonly related: () => infer TRef }
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
-
-export interface RelationTarget {
-  readonly table: TableDefinition
-  readonly relations: RelationMap
-}
-
-/**
- * The related table and relation map reached by an eager-load path, so that
- * constraint callbacks receive a query typed for the model they constrain.
- */
-export type RelationPathTarget<TRelations extends RelationMap, TPath extends string>
-  = string extends keyof TRelations
-    ? RelationTarget
-    : TPath extends `${infer TRoot}.${infer TRest}`
-      ? TRoot extends keyof TRelations & string
-        ? RelationPathTarget<RelatedRelationsOfDefinitionOfRelation<TRelations[TRoot]>, TRest>
-        : RelationTarget
-      : TPath extends keyof TRelations & string
-        ? {
-            readonly table: RelatedTableOfRelation<TRelations[TPath]>
-            readonly relations: RelatedRelationsOfRelation<TRelations[TPath]>
-          }
-        : RelationTarget
-
-type RelatedRelationsOfDefinitionOfRelation<TRelation>
-  = TRelation extends RelationDefinition ? RelatedRelationsOfRelation<TRelation> : RelationMap
-
-type RelationTargetTable<TTarget>
-  = TTarget extends { readonly table: infer TTable extends TableDefinition } ? TTable : TableDefinition
-
-type RelationTargetRelations<TTarget>
-  = TTarget extends { readonly relations: infer TRelations extends RelationMap } ? TRelations : RelationMap
-
-export type RelationConstraintFor<TRelations extends RelationMap, TPath extends string>
-  = RelationConstraintCallback<ModelQueryBuilder<
-    RelationTargetTable<RelationPathTarget<TRelations, TPath>>,
-    RelationTargetRelations<RelationPathTarget<TRelations, TPath>>
-  >>
-
-export type RelationConstraintMapFor<TRelations extends RelationMap>
-  = { readonly [TPath in ModelRelationPath<TRelations>]?: RelationConstraintFor<TRelations, TPath> }
 
 /** True for relation kinds that resolve to an array of entities. */
 type IsToManyRelation<TRelation extends RelationDefinition>

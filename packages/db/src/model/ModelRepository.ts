@@ -3111,26 +3111,30 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   ): ModelQueryBuilder {
     const relatedTable = related.definition.table.tableName
     const latestAlias = '__holo_latest'
+    const latestKey = '__holo_latest_key'
     const latestValue = '__holo_latest_value'
-    const latestSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder()
+    const latestSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().reorder()
     const scopedSource = relation.kind === 'morphOneOfMany'
       ? latestSource.where(relation.morphTypeColumn, this.getMorphTypeValue())
       : latestSource
     const latestGroups = scopedSource
       .where(parentColumn, 'in', parentKeys)
-      .select(parentColumn)
+      .select(`${parentColumn} as ${latestKey}`)
     const latestQuery = relation.aggregate === 'max'
       ? latestGroups.addSelectMax(latestValue, relation.aggregateColumn)
       : latestGroups.addSelectMin(latestValue, relation.aggregateColumn)
     const outer = this.applyRelationConstraint(relation, related, constraint)
+    const projected = outer.getTableQueryBuilder().getPlan().selections.length > 0
     const scopedOuter = relation.kind === 'morphOneOfMany'
       ? outer.where(`${relatedTable}.${relation.morphTypeColumn}`, this.getMorphTypeValue())
       : outer
-
-    return scopedOuter
-      .joinSub(latestQuery.groupBy(parentColumn), latestAlias, `${relatedTable}.${parentColumn}`, '=', `${latestAlias}.${parentColumn}`)
+    const joined = scopedOuter
+      .joinSub(latestQuery.groupBy(parentColumn), latestAlias, `${relatedTable}.${parentColumn}`, '=', `${latestAlias}.${latestKey}`)
       .whereColumn(`${latestAlias}.${latestValue}`, '=', `${relatedTable}.${relation.aggregateColumn}`)
-      .select(...Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`))
+
+    return projected
+      ? joined
+      : joined.select(...Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`))
   }
 
   private async getThroughEntitiesByParentKey(

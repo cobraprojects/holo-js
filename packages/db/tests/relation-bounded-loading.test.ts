@@ -198,4 +198,63 @@ describe('bounded relation loading', () => {
     const [user] = await User.with('topScoringPost').get()
     expect(user!.getRelation<Entity<TableDefinition>>('topScoringPost')?.get('title')).toBe('Post C')
   })
+
+  it('keeps a constraint that filters on the foreign key and orders the candidates', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer(),
+      title: column.string(),
+      score: column.integer().nullable(),
+    })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }, { id: 2, name: 'Amina' }])
+    await db.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A', score: 9 },
+      { id: 11, userId: 1, title: 'Post B', score: 3 },
+      { id: 12, userId: 2, title: 'Post C', score: 5 },
+    ])
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        topScoringPost: scopeRelation(
+          latestOfMany(() => Post, 'userId', 'id', 'score'),
+          query => query.where('userId', '=', 1).orderBy('id', 'desc'),
+        ),
+      },
+    })
+
+    const loaded = await User.with('topScoringPost').orderBy('id').get()
+    expect(loaded[0]?.getRelation<Entity<TableDefinition>>('topScoringPost')?.get('title')).toBe('Post A')
+    expect(loaded[1]?.getRelation('topScoringPost')).toBeNull()
+  })
+
+  it('loads only the columns a relation constraint selects', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer(),
+      title: column.string(),
+      score: column.integer().nullable(),
+    })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
+    await db.table(posts).insert([{ id: 10, userId: 1, title: 'Post A', score: 9 }])
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        topScoringPost: latestOfMany(() => Post, 'userId', 'id', 'score'),
+      },
+    })
+
+    const [user] = await User.with({ topScoringPost: query => query.select('id', 'userId') }).get()
+    const loaded = user!.getRelation<Entity<TableDefinition>>('topScoringPost')!
+    expect(Object.keys(loaded.toAttributes()).sort()).toEqual(['id', 'userId'])
+  })
 })

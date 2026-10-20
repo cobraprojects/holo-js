@@ -14,7 +14,7 @@ const Post = defineModel(posts, {
 it('types scoped relation constraints against the related model', () => {
   const scoped = scopeRelation(hasMany(() => Post, 'userId'), query => {
     query.where('title', '=', 'Hello')
-    // @ts-expect-error body is a comments column, not a posts column
+    // @ts-expect-error
     query.where('body', '=', 'Hello')
   })
   void scoped
@@ -26,7 +26,7 @@ it('types lifecycle handlers against the model entity', () => {
       events: {
         saving: (entity) => {
           entity.get('title')
-          // @ts-expect-error body is a comments column, not a posts column
+          // @ts-expect-error
           entity.get('body')
         },
       },
@@ -35,7 +35,7 @@ it('types lifecycle handlers against the model entity', () => {
       events: {
         deleting: entity => {
           entity.get('body')
-          // @ts-expect-error title is a posts column, not a comments column
+          // @ts-expect-error
           entity.get('title')
         },
       },

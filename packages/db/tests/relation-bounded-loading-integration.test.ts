@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { type Entity, belongsToMany, column, hasMany, latestOfMany, morphToMany, oldestOfMany, type TableDefinition } from '../src'
+import { type Entity, belongsToMany, column, hasMany, latestOfMany, morphToMany, oldestOfMany, scopeRelation, type TableDefinition } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -97,12 +97,15 @@ function defineBoundedRelationLoadingScenario(driver: 'postgres' | 'mysql') {
           latestPost: latestOfMany(() => Post, 'userId'),
           oldestPost: oldestOfMany(() => Post, 'userId'),
           topScoringPost: latestOfMany(() => Post, 'userId', 'id', 'score'),
+          orderedPost: scopeRelation(latestOfMany(() => Post, 'userId'), query => query.orderBy('id', 'desc')),
           roles: belongsToMany(() => Role, roleUser, 'userId', 'roleId').withPivot('granted'),
           tags: morphToMany(() => Role, 'taggable', taggables, 'tagId', 'id', 'id', 'taggableType', 'taggableId').withPivot('note'),
         },
       })
 
-      const loaded = await User.with('latestPost', 'oldestPost', 'topScoringPost', 'posts').orderBy('id').get()
+      const loaded = await User.with('latestPost', 'oldestPost', 'topScoringPost', 'orderedPost', 'posts').orderBy('id').get()
+      expect(loaded.map(user => user.getRelation<Entity<TableDefinition>>('orderedPost')?.get('title') ?? null))
+        .toEqual(['Post B', 'Post D', null])
       expect(loaded.map(user => user.getRelation<Entity<TableDefinition>>('latestPost')?.get('title') ?? null))
         .toEqual(['Post B', 'Post D', null])
       expect(loaded.map(user => user.getRelation<Entity<TableDefinition>>('oldestPost')?.get('title') ?? null))
