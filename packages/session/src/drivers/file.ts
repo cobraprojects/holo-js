@@ -27,6 +27,7 @@ type RecordLockIdentity = {
   readonly device: number
   readonly inode: number
   readonly modifiedAt: number
+  readonly size: number
   readonly owner?: RecordLockOwner
   readonly fileName?: string
 }
@@ -79,10 +80,6 @@ function isBusyFileError(error: unknown): boolean {
   return BUSY_FILE_ERROR_CODES.has(errorCode(error) ?? '')
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  return await stat(path).then(() => true, () => false)
-}
-
 function parseRecordLockOwner(value: unknown): RecordLockOwner | undefined {
   if (
     !value
@@ -130,7 +127,7 @@ async function sleep(delayMs: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, delayMs))
 }
 
-async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdentity | undefined> {
+async function readRecordLockIdentity(lockPath: string, previous?: RecordLockIdentity): Promise<RecordLockIdentity | undefined> {
   let fileName: string | undefined
   try {
     fileName = (await readdir(lockPath)).find(name => name.startsWith('owner.') && name.endsWith('.json'))
@@ -139,8 +136,12 @@ async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdent
     throw error
   }
   const identityPath = fileName ? join(lockPath, fileName) : lockPath
+  const identity = await stat(identityPath).catch(() => undefined)
+  if (!identity) return undefined
   let owner: RecordLockOwner | undefined
-  if (fileName) {
+  if (fileName && previous?.owner && previous.fileName === fileName && previous.device === identity.dev && previous.inode === identity.ino && previous.size === identity.size) {
+    owner = previous.owner
+  } else if (fileName) {
     try {
       owner = parseRecordLockOwner(JSON.parse(await readFile(identityPath, 'utf8')) as unknown)
       if (owner && recordLockOwnerFileName(owner) !== fileName) owner = undefined
@@ -149,9 +150,7 @@ async function readRecordLockIdentity(lockPath: string): Promise<RecordLockIdent
       if (!(error instanceof SyntaxError) && !isMissingFileError(error)) throw error
     }
   }
-  const identity = await stat(identityPath).catch(() => undefined)
-  if (!identity) return undefined
-  return Object.freeze({ device: identity.dev, inode: identity.ino, modifiedAt: identity.mtimeMs, ...(owner ? { owner } : {}), ...(fileName ? { fileName } : {}) })
+  return Object.freeze({ device: identity.dev, inode: identity.ino, modifiedAt: identity.mtimeMs, size: identity.size, ...(owner ? { owner } : {}), ...(fileName ? { fileName } : {}) })
 }
 
 function recordLockIdentityMatches(left: RecordLockIdentity, right: RecordLockIdentity | undefined): boolean {
@@ -308,6 +307,7 @@ async function acquireRecordLockBefore(
       await ownerHandle.close()
     }
     let uncontendedFailure: unknown
+    let observedLease: RecordLockIdentity | undefined
     while (!acquired) {
       if (wait && Date.now() >= Math.min(deadline, wait.hardDeadline)) {
         throw acquireTimeoutError(recordPath, uncontendedFailure)
@@ -318,12 +318,13 @@ async function acquireRecordLockBefore(
       } catch (error) {
         const code = errorCode(error)
         const busy = isBusyFileError(error)
-        const contended = code === 'EEXIST' || code === 'ENOTEMPTY'
-          || (busy && await pathExists(lockPath))
+        const lockedByOther = code === 'EEXIST' || code === 'ENOTEMPTY'
+        const identity = lockedByOther || busy ? await readRecordLockIdentity(lockPath, observedLease) : undefined
+        const contended = lockedByOther || identity !== undefined
         if (!contended && !busy) throw error
         uncontendedFailure = contended ? undefined : error
         if (contended) {
-          const identity = await readRecordLockIdentity(lockPath)
+          observedLease = identity
           if (wait && identity?.owner && identity.owner.token !== observedOwner) {
             observedOwner = identity.owner.token
             deadline = Math.min(Date.now() + RECORD_LOCK_ACQUIRE_STALL_MS, wait.hardDeadline)
