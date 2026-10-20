@@ -2278,21 +2278,48 @@ describe('@holo-js/auth package runtime', () => {
     })
   })
 
-  it('invokes password verification when credential lookup misses a user', async () => {
+  it('verifies a missing account against one dummy digest from the configured hasher, as it verifies a real account', async () => {
     const verify = vi.fn(async () => false)
+    const hash = vi.fn(async () => 'dummy-digest')
     await configureRuntime({
-      passwordHasher: {
-        hash: vi.fn(async () => 'real-hash'),
-        verify,
-      },
+      passwordHasher: { hash, verify },
     })
 
     await expect(auth.login({
       email: 'missing@example.com',
       password: 'secret-secret',
     })).rejects.toThrow('These credentials do not match our records.')
+    await expect(auth.login({
+      email: 'missing@example.com',
+      password: 'secret-secret',
+    })).rejects.toThrow('These credentials do not match our records.')
 
-    expect(verify).toHaveBeenCalledWith('secret-secret', '')
+    expect(hash).toHaveBeenCalledTimes(1)
+    expect(verify).toHaveBeenCalledTimes(2)
+    expect(verify).toHaveBeenNthCalledWith(1, 'secret-secret', 'dummy-digest')
+    expect(verify).toHaveBeenNthCalledWith(2, 'secret-secret', 'dummy-digest')
+  })
+
+  it('verifies a real account only against its stored digest', async () => {
+    const verify = vi.fn(async () => false)
+    const hash = vi.fn(async () => 'dummy-digest')
+    const runtime = await configureRuntime({
+      passwordHasher: { hash, verify },
+    })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'stored-digest',
+    })
+
+    await expect(auth.login({
+      email: 'ava@example.com',
+      password: 'wrong-secret',
+    })).rejects.toThrow('These credentials do not match our records.')
+
+    expect(hash).not.toHaveBeenCalled()
+    expect(verify).toHaveBeenCalledTimes(1)
+    expect(verify).toHaveBeenCalledWith('wrong-secret', 'stored-digest')
   })
 
   it('pads failed login attempts to the same minimum time whether or not the account exists', async () => {

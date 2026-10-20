@@ -1,7 +1,7 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
-import { createHash, createHmac } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
 import { isAuthError } from './contracts'
 import type {
@@ -908,6 +908,20 @@ function getPasswordHash(
   return typeof value === 'string' ? value : null
 }
 
+const dummyPasswordDigests = new WeakMap<AuthPasswordHasher, Promise<string>>()
+
+function dummyPasswordDigest(hasher: AuthPasswordHasher): Promise<string> {
+  const cached = dummyPasswordDigests.get(hasher)
+  if (cached) {
+    return cached
+  }
+
+  const digest = hasher.hash(randomBytes(32).toString('hex'))
+  dummyPasswordDigests.set(hasher, digest)
+  digest.catch(() => dummyPasswordDigests.delete(hasher))
+  return digest
+}
+
 async function verifyCredentialsForProvider(
   providerName: string,
   adapter: ErasedAuthProviderAdapter,
@@ -917,7 +931,10 @@ async function verifyCredentialsForProvider(
     const bindings = getRuntimeBindings()
     const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(providerName))
     const passwordHash = user ? getPasswordHash(adapter, user) : null
-    const passwordMatches = await bindings.passwordHasher.verify(credentials.password, passwordHash ?? '')
+    const passwordMatches = await bindings.passwordHasher.verify(
+      credentials.password,
+      passwordHash || await dummyPasswordDigest(bindings.passwordHasher),
+    )
     if (!user || !passwordMatches) {
       return null
     }
