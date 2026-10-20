@@ -47,6 +47,7 @@ import {
   connectionAsyncContext,
   configureDB,
   DB,
+  queryCacheInternals,
   parseDatabaseDriver,
   registerDatabaseDriverFactory,
   resetDB,
@@ -263,6 +264,7 @@ type BroadcastModule = Pick<typeof BroadcastFeature,
   | 'broadcastRaw'
   | 'broadcastRuntimeInternals'
   | 'resetBroadcastRuntime'
+  | 'workerInternals'
 >
 
 const CORE_BROADCAST_PUBLISHER_MARKER = Symbol.for('holo-js.core.broadcast.publisher')
@@ -657,6 +659,34 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   sessionModule: SessionModule,
 ): Promise<Readonly<Record<string, SessionStore>>> {
   return (await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)).stores
+}
+
+async function configureDatabaseInvalidationScaling(
+  broadcastModule: BroadcastModule,
+  loadedConfig: LoadedHoloConfig,
+): Promise<void> {
+  const state = getRuntimeState()
+  const previous = state.databaseInvalidationSender
+  state.databaseInvalidationSender = undefined
+  await previous?.close()
+
+  const scaling = loadedConfig.broadcast.worker.scaling
+  if (!scaling) {
+    return
+  }
+
+  const sender = broadcastModule.workerInternals.createScalingInvalidationSender({
+    config: scaling,
+    queue: loadedConfig.queue,
+    redis: loadedConfig.redis,
+  })
+  const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  state.databaseInvalidationSender = {
+    async close() {
+      unsubscribe()
+      await sender.close()
+    },
+  }
 }
 
 function createCoreNotificationBroadcaster(
@@ -1517,6 +1547,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     if (queueModule) {
       await broadcastModule.broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
     }
+    await configureDatabaseInvalidationScaling(broadcastModule, loadedConfig)
   }
 
   const notificationsConfigured = hasLoadedConfigFile(loadedConfig, 'notifications')
@@ -1834,6 +1865,12 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
     },
     async () => (await loadNotificationsModule())?.resetNotificationsRuntime(),
     async () => (await loadBroadcastModule(false, projectRoot))?.resetBroadcastRuntime(),
+    async () => {
+      const state = getRuntimeState()
+      const sender = state.databaseInvalidationSender
+      state.databaseInvalidationSender = undefined
+      await sender?.close()
+    },
     async () => (await loadMailModule())?.resetMailRuntime(),
     () => resetOptionalStorageRuntime(),
     async () => {

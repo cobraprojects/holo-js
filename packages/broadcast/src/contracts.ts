@@ -225,7 +225,13 @@ export interface BroadcastRealtimeSubscription<TResult = unknown> {
   unsubscribe(): void
 }
 
+export interface BroadcastDatabaseInvalidationBridge {
+  connect(publish: (invalidation: unknown) => Promise<void>): () => void
+  receive(invalidation: unknown): Promise<void>
+}
+
 export interface BroadcastRealtimeRuntimeBindings {
+  readonly databaseInvalidation?: BroadcastDatabaseInvalidationBridge
   query(
     name: string,
     args: Record<string, unknown>,

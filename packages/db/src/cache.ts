@@ -62,6 +62,16 @@ export type DatabaseDependencyInvalidationListener = (
   event: DatabaseDependencyInvalidationEvent,
 ) => void | Promise<void>
 
+export interface RemoteDatabaseDependencyInvalidation {
+  readonly connectionName: string
+  readonly dependencies: readonly string[]
+  readonly metadata?: Omit<DatabaseDependencyInvalidationMetadata, 'contextId'>
+}
+
+export type DatabaseDependencyInvalidationPublisher = (
+  invalidation: RemoteDatabaseDependencyInvalidation,
+) => void | Promise<void>
+
 export interface DatabaseDependencyCollectionResult<TValue> {
   readonly value: TValue
   readonly dependencies: readonly string[]
@@ -344,12 +354,14 @@ type MutationPreviousRowsRequirement = (connectionName: string, tableName: strin
 function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
+  dependencyInvalidationPublishers?: Set<DatabaseDependencyInvalidationPublisher>
   mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoDbQueryCacheBridge__?: {
       bridge?: DatabaseQueryCacheBridge
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
+      dependencyInvalidationPublishers?: Set<DatabaseDependencyInvalidationPublisher>
       mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
     }
   }
@@ -381,6 +393,16 @@ export function onDatabaseDependencyInvalidated(
   return () => {
     state.dependencyInvalidationListeners?.delete(internalListener)
     state.mutationPreviousRowsRequirements?.delete(internalListener)
+  }
+}
+
+export function onDatabaseDependencyInvalidationPublished(publisher: DatabaseDependencyInvalidationPublisher): () => void {
+  const state = getQueryCacheBridgeState()
+  state.dependencyInvalidationPublishers ??= new Set<DatabaseDependencyInvalidationPublisher>()
+  state.dependencyInvalidationPublishers.add(publisher)
+
+  return () => {
+    state.dependencyInvalidationPublishers?.delete(publisher)
   }
 }
 
@@ -779,6 +801,64 @@ function rebindDatabaseQueryObservation(
 export function hasDatabaseDependencyInvalidationListeners(): boolean {
   const listeners = getQueryCacheBridgeState().dependencyInvalidationListeners
   return typeof listeners !== 'undefined' && listeners.size > 0
+}
+
+export function hasDatabaseDependencyInvalidationPublisher(): boolean {
+  const publishers = getQueryCacheBridgeState().dependencyInvalidationPublishers
+  return typeof publishers !== 'undefined' && publishers.size > 0
+}
+
+function publishDatabaseDependencyInvalidation(
+  publisher: DatabaseDependencyInvalidationPublisher,
+  event: DatabaseDependencyInvalidationEventInternal,
+): void {
+  void Promise.resolve()
+    .then(() => publisher(serializeDatabaseDependencyInvalidation(event)))
+    .catch((error: unknown) => {
+      reportError(error, { capability: 'db', operation: 'cache.invalidationPublisher' })
+    })
+}
+
+function serializeDatabaseDependencyInvalidation(
+  event: DatabaseDependencyInvalidationEventInternal,
+): RemoteDatabaseDependencyInvalidation {
+  const metadata = event[DATABASE_DEPENDENCY_METADATA_KEY]
+  return Object.freeze({
+    connectionName: event.connectionName,
+    dependencies: event.dependencies,
+    ...(metadata
+      ? {
+          metadata: Object.freeze({
+            directDependencies: metadata.directDependencies,
+            exactPredicates: metadata.exactPredicates,
+            hasMutationDependency: metadata.hasMutationDependency,
+            predicates: metadata.predicates,
+            tableDependencies: metadata.tableDependencies,
+          }),
+        }
+      : {}),
+  })
+}
+
+export async function receiveRemoteDatabaseDependencyInvalidation(
+  invalidation: RemoteDatabaseDependencyInvalidation,
+): Promise<void> {
+  await getDatabaseQueryCacheBridge()?.invalidateDependencies(invalidation.dependencies)
+  const event: DatabaseDependencyInvalidationEventInternal = {
+    connectionName: invalidation.connectionName,
+    dependencies: invalidation.dependencies,
+    mutations: [],
+  }
+  if (invalidation.metadata) {
+    Object.defineProperty(event, DATABASE_DEPENDENCY_METADATA_KEY, {
+      configurable: false,
+      enumerable: false,
+      value: Object.freeze({ ...invalidation.metadata }),
+      writable: false,
+    })
+  }
+
+  await notifyDatabaseDependencyInvalidationListeners(Object.freeze(event))
 }
 
 async function notifyDatabaseDependencyInvalidationListeners(
@@ -2060,10 +2140,18 @@ export async function invalidateQueryCacheDependencies(
   const invalidate = async () => {
     const bridge = getDatabaseQueryCacheBridge()
     await bridge?.invalidateDependencies(dependencies)
-    if (hasDatabaseDependencyInvalidationListeners()) {
-      await notifyDatabaseDependencyInvalidationListeners(
-        createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata),
-      )
+    const publishers = [...(getQueryCacheBridgeState().dependencyInvalidationPublishers ?? [])]
+    const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
+    if (publishers.length === 0 && !hasLocalListeners) {
+      return
+    }
+
+    const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
+    for (const publisher of publishers) {
+      publishDatabaseDependencyInvalidation(publisher, event)
+    }
+    if (hasLocalListeners) {
+      await notifyDatabaseDependencyInvalidationListeners(event)
     }
   }
 
@@ -2091,6 +2179,7 @@ export const queryCacheInternals = {
   getQueryCacheBridgeState,
   hasActiveDatabaseDependencyCollector,
   hasDatabaseDependencyInvalidationListeners,
+  hasDatabaseDependencyInvalidationPublisher,
   inferAutomaticInsertCacheInvalidationDependencies,
   inferAutomaticInsertCacheInvalidationPlan,
   inferAutomaticQueryCacheDependencies,
@@ -2099,6 +2188,8 @@ export const queryCacheInternals = {
   normalizeQueryCacheConfig,
   normalizeQueryCacheDependencies,
   notifyDatabaseDependencyInvalidationListeners,
+  onDatabaseDependencyInvalidationPublished,
+  receiveRemoteDatabaseDependencyInvalidation,
   disableDatabaseQueryObservationPatching,
   rebindDatabaseQueryObservationResult,
   rebindDatabaseQueryObservationScalar,

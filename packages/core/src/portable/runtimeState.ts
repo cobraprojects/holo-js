@@ -14,6 +14,7 @@ export interface HoloRuntimeState<TRuntime, TSecurityRedisAdapter, TSessionRedis
   pendingProjectRoot?: string
   securityRedisAdapter?: TSecurityRedisAdapter
   securityRateLimitStore?: { close?(): void | Promise<void> }
+  databaseInvalidationSender?: { close(): Promise<void> }
   sessionRuntimeBindings?: object
   sessionRedisAdapters?: readonly TSessionRedisAdapter[]
 }

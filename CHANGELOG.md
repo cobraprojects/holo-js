@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Realtime queries refresh when a write commits in any process, not only in the Broadcast worker that holds the subscription, when Broadcast uses Redis scaling. Before, a write from your web app, a queue worker, or another worker did not refresh live queries. Each process publishes one message to the scaling channel per committed query-builder or model write that changes a table. Raw SQL statements don't publish. See [Run several workers](apps/docs/docs/broadcasting/production.md#run-several-workers).
 - Make `@holo-js/validation` the only public schema-builder package. Remove schema builders from `@holo-js/forms` and remove the `@holo-js/forms/schema` entry.
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.

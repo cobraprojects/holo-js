@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import {
   requireBroadcastCredentials,
+  type NormalizedBroadcastWorkerScalingConfig,
   type NormalizedHoloBroadcastConfig,
 } from './config'
 import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
@@ -260,10 +261,25 @@ type BroadcastScalingPresenceMemberRemovedMessage = {
   readonly member: PresenceMember
 }
 
+type BroadcastScalingDatabaseInvalidationMessage = {
+  readonly type: 'database-invalidation'
+  readonly originNodeId: string
+  readonly invalidation: unknown
+}
+
+function createScalingDatabaseInvalidationPayload(originNodeId: string, invalidation: unknown): string {
+  return JSON.stringify({
+    type: 'database-invalidation',
+    originNodeId,
+    invalidation,
+  } satisfies BroadcastScalingDatabaseInvalidationMessage)
+}
+
 type BroadcastScalingMessage =
   | BroadcastScalingEventMessage
   | BroadcastScalingPresenceMemberAddedMessage
   | BroadcastScalingPresenceMemberRemovedMessage
+  | BroadcastScalingDatabaseInvalidationMessage
 
 type RealtimeSocketAction = 'query' | 'mutation' | 'subscribe' | 'unsubscribe'
 
@@ -1146,6 +1162,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const scalingLiveness = scaling?.liveness ?? DEFAULT_SCALING_LIVENESS
   const currentTime = (): number => options.now?.() ?? performance.now()
   const startedAt = currentTime()
+  const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation
+    ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation))
+    : undefined
   const scalingUnsubscribe = options.scalingUnsubscribe
     ? Promise.resolve(options.scalingUnsubscribe)
     : scaling && options.scalingAutoSubscribe !== false
@@ -1745,6 +1764,14 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     } satisfies BroadcastScalingEventMessage))
   }
 
+  async function publishScalingDatabaseInvalidation(invalidation: unknown): Promise<void> {
+    if (!scaling) {
+      return
+    }
+
+    await scaling.adapter.publish(scaling.eventChannel, createScalingDatabaseInvalidationPayload(scaling.nodeId, invalidation))
+  }
+
   async function publishScalingPresenceMemberAdded(
     app: BroadcastWorkerApp,
     channel: string,
@@ -1788,6 +1815,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   async function handleScalingMessage(payload: string): Promise<void> {
     const message = parseJsonObject(payload, 'Scaling event payload') as Partial<BroadcastScalingMessage>
     if (message.originNodeId === scaling?.nodeId) {
+      return
+    }
+
+    if (message.type === 'database-invalidation') {
+      await options.realtime?.databaseInvalidation?.receive(message.invalidation)
       return
     }
 
@@ -2408,6 +2440,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       }))
       await Promise.all([...pendingSocketCleanups])
       await livenessCycle
+      disconnectDatabaseInvalidation?.()
       const unsubscribe = await scalingUnsubscribe
       await unsubscribe()
       if (scaling) {
@@ -2754,8 +2787,40 @@ export async function startBroadcastWorker(
   })
 }
 
+export function createScalingInvalidationSender(input: {
+  readonly config: NormalizedBroadcastWorkerScalingConfig
+  readonly queue?: NormalizedHoloQueueConfig
+  readonly redis?: NormalizedHoloRedisConfig
+}): { publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
+  const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
+  const eventChannel = resolveScalingEventChannel(connectionName)
+  const nodeId = createScalingNodeId()
+  let adapter: Promise<BroadcastScalingAdapter> | undefined
+  const openAdapter = (): Promise<BroadcastScalingAdapter> => {
+    adapter ??= createRedisScalingAdapter(resolveRedisScalingConnection(input.queue, connectionName, input.redis))
+      .catch((error: unknown) => {
+        adapter = undefined
+        throw error
+      })
+    return adapter
+  }
+
+  return {
+    async publish(invalidation) {
+      const scalingAdapter = await openAdapter()
+      await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, invalidation))
+    },
+    async close() {
+      const opened = adapter
+      adapter = undefined
+      await opened?.then(client => client.close(), () => undefined)
+    },
+  }
+}
+
 export const workerInternals = {
   buildWorkerApps,
+  createScalingInvalidationSender,
   createScalingNodeId,
   createRedisScalingAdapter,
   createPusherSignature,
