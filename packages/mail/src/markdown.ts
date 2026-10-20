@@ -20,8 +20,8 @@ function isSafeMailHref(href: string): boolean {
 
 export function renderMarkdownInline(markdown: string): string {
   return escapeHtml(markdown)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
-      return isSafeMailHref(href) ? `<a href="${escapeHtml(href)}">${label}</a>` : label
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, escapedHref: string) => {
+      return isSafeMailHref(escapedHref) ? `<a href="${escapedHref}">${label}</a>` : label
     })
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
