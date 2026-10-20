@@ -11,6 +11,7 @@ import { createCoreSessionRevocationStore } from '../src/portable/authSessionRev
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
+import { reconfigureHoloRuntime } from '../src/portable'
 
 function holoCookieValue(setCookie: string): string {
   return Object.values(parseCookieHeader(setCookie.split(';', 1)[0]))[0] ?? ''
@@ -1062,6 +1063,24 @@ export default class Admin extends AdminEntity {
 
     expect(authenticated).toBe(true)
     expect(guest).toBe(false)
+  })
+
+  it('applies a reconfiguration that arrives while the runtime is still initializing', async () => {
+    const root = await createProject({ auth: true })
+    const runtime = await createHolo(root, {
+      authRequest: { appendResponseCookie: () => undefined, getCookie: name => `${name}-boot` },
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    const initializing = runtime.initialize()
+    await reconfigureHoloRuntime(runtime, {
+      authRequest: { appendResponseCookie: () => undefined, getCookie: name => `${name}-reconfigured` },
+    })
+    await initializing
+
+    expect(authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')).toBe('session-reconfigured')
+    await runtime.shutdown()
   })
 
   it('runs adapter requests against the currently configured auth context', async () => {

@@ -81,6 +81,7 @@ import {
   reconfigureHoloRuntime,
   reconfigureOptionalHoloSubsystems,
   registryInternals,
+  resetOptionalHoloSubsystems,
   resetHoloRuntime,
   resolveGeneratedProjectRegistryPath,
   holoRuntimeInternals,
@@ -2126,6 +2127,45 @@ export default async function boot({ config }) {
 
     await runtime.shutdown()
     runtimeGlobal.__holoCoreEnvBoots__ = undefined
+  })
+
+  it('does not deadlock when a plugin boot hook resets optional subsystems during initialization', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-reset-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-reset-boot', `
+export default {
+  id: 'reset-boot',
+  name: 'Reset Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreResetDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreResetDuringBoot__?: () => Promise<void> }
+    runtimeGlobal.__holoCoreResetDuringBoot__ = () => resetOptionalHoloSubsystems()
+
+    await expect(initializeHoloAdapterProject(root)).resolves.toMatchObject({ projectRoot: root })
   })
 
   it('runs plugin boot modules once during adapter initialization', async () => {
