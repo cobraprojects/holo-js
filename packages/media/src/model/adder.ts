@@ -92,6 +92,10 @@ const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
 const REMOTE_MEDIA_TIMEOUT_MS = 30_000
 const DEFAULT_MEDIA_DISK = 'public'
 const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
+const NAT64_WELL_KNOWN_PREFIX = Buffer.concat([Buffer.from([0x00, 0x64, 0xff, 0x9b]), Buffer.alloc(8)])
+const NAT64_LOCAL_USE_PREFIX = Buffer.from([0x00, 0x64, 0xff, 0x9b, 0x00, 0x01])
+const SIX_TO_FOUR_PREFIX = Buffer.from([0x20, 0x02])
+const IPV4_COMPATIBLE_PREFIX = Buffer.alloc(12)
 const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
   tmpdir(),
   resolve(process.cwd(), 'storage'),
@@ -650,7 +654,64 @@ function createBlockedRemoteMediaAddresses(): BlockList {
 }
 
 function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
-  return BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, address.family === 4 ? 'ipv4' : 'ipv6')
+  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, address.family === 4 ? 'ipv4' : 'ipv6')) {
+    return true
+  }
+
+  if (address.family === 4) {
+    return false
+  }
+
+  const bytes = findIPv6Bytes(address.address)
+  if (!bytes || bytes.subarray(0, 6).equals(NAT64_LOCAL_USE_PREFIX)) {
+    return true
+  }
+
+  const embeddedAddress = findEmbeddedIPv4Address(bytes)
+  return embeddedAddress !== null && BLOCKED_REMOTE_MEDIA_ADDRESSES.check(embeddedAddress, 'ipv4')
+}
+
+function findEmbeddedIPv4Address(bytes: Buffer): string | null {
+  if (bytes.subarray(0, 12).equals(NAT64_WELL_KNOWN_PREFIX)) {
+    return formatIPv4Octets(bytes.subarray(12, 16))
+  }
+
+  if (bytes.subarray(0, 2).equals(SIX_TO_FOUR_PREFIX)) {
+    return formatIPv4Octets(bytes.subarray(2, 6))
+  }
+
+  if (bytes.subarray(0, 12).equals(IPV4_COMPATIBLE_PREFIX)) {
+    return formatIPv4Octets(bytes.subarray(12, 16))
+  }
+
+  return null
+}
+
+function findIPv6Bytes(address: string): Buffer | null {
+  let canonical: string
+  try {
+    canonical = new URL(`http://[${address}]`).hostname.slice(1, -1)
+  } catch {
+    return null
+  }
+
+  const halves = canonical.split('::')
+  const head = halves[0] ? halves[0].split(':') : []
+  const tail = halves[1] ? halves[1].split(':') : []
+  const zeroGroups = halves.length === 2 ? 8 - head.length - tail.length : 0
+  const groups = [...head, ...Array<string>(zeroGroups).fill('0'), ...tail]
+  if (groups.length !== 8) {
+    return null
+  }
+
+  return Buffer.from(groups.flatMap((group) => {
+    const value = Number.parseInt(group, 16)
+    return [value >> 8, value & 0xff]
+  }))
+}
+
+function formatIPv4Octets(octets: Uint8Array): string {
+  return Array.from(octets).join('.')
 }
 
 async function resolveRemoteMediaAddress(

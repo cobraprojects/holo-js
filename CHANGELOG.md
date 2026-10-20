@@ -39,6 +39,7 @@
 
 ### Security
 
+- Harden remote-fetch address classification in `addMediaFromUrl()`. See [Add media from a URL](apps/docs/docs/media/index.md#addmediafromurl).
 - Keep hidden foreign keys out of Realtime patches. When a model hides, shows only some, casts, or appends attributes, or a handler changes visibility or appends attributes on the records it loads, Realtime re-runs the query instead of patching it when a belongs-to foreign key changes, so the hidden key can no longer reach subscribers through a patch. Plain models keep incremental patching. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#realtime-relations-honor-hidden-attributes).
 - Enforce the configured remember lifetime on the server using an authenticated expiry in each encrypted recaller. Replayed expired remember cookies cannot restore authentication.
 - Bound each Broadcast browser connection to 100 channels and 100 realtime query subscriptions. The worker closes a connection that sends more than 200 messages in a one-second window or whose buffered output exceeds 4 MB, with code `1008`. Refused channel and realtime subscriptions beyond the limits return status `429` and keep the socket open. See [Connection limits](apps/docs/docs/broadcasting/production.md#connection-limits).

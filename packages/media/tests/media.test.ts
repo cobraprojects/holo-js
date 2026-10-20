@@ -283,6 +283,15 @@ function createAnimatedGif(frameCount: number): Buffer {
   ])
 }
 
+async function getRejectionMessage(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  throw new Error('Expected the remote media add to reject.')
+}
+
 async function createRemoteMediaServer(handler: RequestListener) {
   const server = createServer(handler)
   await new Promise<void>(resolveListening => server.listen(0, '127.0.0.1', resolveListening))
@@ -2671,6 +2680,55 @@ describe('@holo-js/media', () => {
 
     } finally {
       vi.unstubAllGlobals()
+    }
+  })
+
+  it('refuses remote uploads to IPv6 addresses that embed a blocked IPv4 address with the IPv4 error', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Embedded IPv4' })
+    const probes = [
+      ['[64:ff9b::7f00:1]', '127.0.0.1'],
+      ['[64:ff9b::a9fe:a9fe]', '169.254.169.254'],
+      ['[64:ff9b::c0a8:1]', '192.168.0.1'],
+      ['[64:ff9b:1:7f00:0:100::]', '127.0.0.1'],
+      ['[64:ff9b:1:fffe::7f00:1]', '127.0.0.1'],
+      ['[2002:7f00:1::]', '127.0.0.1'],
+      ['[2002:a9fe:a9fe::]', '169.254.169.254'],
+      ['[::7f00:1]', '127.0.0.1'],
+    ] as const
+
+    for (const [probe, ipv4] of probes) {
+      const ipv4Message = await getRejectionMessage(post.addMediaFromUrl(`http://${ipv4}/private.jpg`).toMediaCollection('images'))
+      expect(ipv4Message).toContain('local or private hosts')
+      expect(await getRejectionMessage(post.addMediaFromUrl(`http://${probe}/private.jpg`).toMediaCollection('images')))
+        .toBe(ipv4Message)
+    }
+  })
+
+  it('refuses hostnames that resolve to IPv6 addresses embedding a blocked IPv4 address', async () => {
+    const url = new URL('https://media.example.test/hero.jpg')
+
+    for (const address of ['64:ff9b::7f00:1', '64:ff9b:1:7f00:0:100::', '2002:a9fe:a9fe::', '::c0a8:1']) {
+      await expect(mediaAdderInternals.resolveRemoteMediaAddress(url, async () => [{ address, family: 6 }]))
+        .rejects.toThrow('must not resolve to local or private hosts')
+    }
+  })
+
+  it('allows hostnames that resolve to IPv6 addresses embedding a public IPv4 address', async () => {
+    const url = new URL('https://media.example.test/hero.jpg')
+
+    for (const address of ['64:ff9b::808:808', '2002:808:808::', '::808:808']) {
+      await expect(mediaAdderInternals.resolveRemoteMediaAddress(url, async () => [{ address, family: 6 }]))
+        .resolves.toEqual({ address, family: 6 })
     }
   })
 
