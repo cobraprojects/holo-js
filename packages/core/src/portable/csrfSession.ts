@@ -18,15 +18,7 @@ export function createCsrfSessionAccessor(
     const name = cookieName()
     const sessionCookie = cookies[name]
     const sessionId = sessionCookie ? session.decryptCookie(name, sessionCookie) : undefined
-    const record = sessionId ? await session.read(sessionId) : null
-    if (record) {
-      return record
-    }
-
-    const rememberName = `${name}_remember`
-    const rememberCookie = cookies[rememberName]
-    const rememberToken = rememberCookie ? session.decryptCookie(rememberName, rememberCookie) : undefined
-    return rememberToken ? await session.consumeRememberMeToken(rememberToken) : null
+    return sessionId ? await session.read(sessionId) : null
   }
 
   return Object.freeze({

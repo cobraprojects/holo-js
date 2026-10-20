@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { holoNotificationsDefaults, type NormalizedHoloNotificationsConfig } from './config'
 import type {
   NotificationChannelDispatchResult,
@@ -242,7 +243,12 @@ export async function dispatchNotificationDelivery(
       })
     })
     const deferred = bindings.deferAfterCommit(async () => {
-      await execute()
+      const result = await execute()
+      for (const channel of result.channels) {
+        if (!channel.success) {
+          reportError(channel.error, { capability: 'notifications', operation: 'channel.afterCommit' })
+        }
+      }
     })
     if (deferred) {
       return Object.freeze({

@@ -915,10 +915,8 @@ function createBenchmarkReturningDatabaseContext(adapter: BenchmarkModelAdapter)
 
 function createAuthRequestAccessors(): RealtimeAuthRequestAccessors {
   return {
-    appendResponseCookie: async () => {},
     getCookie: async () => undefined,
     getHeader: async () => undefined,
-    redirectResponse: async () => {},
   }
 }
 

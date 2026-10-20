@@ -34,13 +34,6 @@ type RuntimeState = {
   hooks: EventRuntimeHooks
 }
 
-type ListenerExecutionGroups = {
-  readonly immediateSyncListeners: readonly RegisteredListener[]
-  readonly immediateQueuedListeners: readonly RegisteredListener[]
-  readonly deferredSyncListeners: readonly RegisteredListener[]
-  readonly deferredQueuedListeners: readonly RegisteredListener[]
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false
@@ -176,56 +169,28 @@ function createEventEnvelope<TPayload>(
   })
 }
 
-function splitRegisteredListeners(
+function splitListenersByCommitTiming(
   listeners: readonly RegisteredListener[],
+  shouldDeferAll: boolean,
 ): {
-  readonly syncListeners: readonly RegisteredListener[]
-  readonly queuedListeners: readonly RegisteredListener[]
+  readonly immediateListeners: readonly RegisteredListener[]
+  readonly deferredListeners: readonly RegisteredListener[]
 } {
-  const syncListeners: RegisteredListener[] = []
-  const queuedListeners: RegisteredListener[] = []
+  const immediateListeners: RegisteredListener[] = []
+  const deferredListeners: RegisteredListener[] = []
 
   for (const listener of listeners) {
-    if (listener.definition.queue === true) {
-      queuedListeners.push(listener)
+    if (shouldDeferAll || listener.definition.afterCommit === true) {
+      deferredListeners.push(listener)
       continue
     }
 
-    syncListeners.push(listener)
+    immediateListeners.push(listener)
   }
 
   return Object.freeze({
-    syncListeners: Object.freeze(syncListeners),
-    queuedListeners: Object.freeze(queuedListeners),
-  })
-}
-
-async function executeSyncListeners<TPayload>(
-  listeners: readonly RegisteredListener[],
-  event: EventEnvelope<string, TPayload>,
-): Promise<number> {
-  for (const listener of listeners) {
-    await executeListener(listener, event)
-  }
-
-  return listeners.length
-}
-
-async function executeListenerGroups<TPayload>(
-  syncListeners: readonly RegisteredListener[],
-  queuedListeners: readonly RegisteredListener[],
-  event: EventEnvelope<string, TPayload>,
-  options: PendingOptions,
-): Promise<{
-  readonly syncCount: number
-  readonly queuedCount: number
-}> {
-  const syncCount = await executeSyncListeners(syncListeners, event)
-  const queuedCount = await dispatchQueuedListeners(queuedListeners, event, options)
-
-  return Object.freeze({
-    syncCount,
-    queuedCount,
+    immediateListeners: Object.freeze(immediateListeners),
+    deferredListeners: Object.freeze(deferredListeners),
   })
 }
 
@@ -259,71 +224,28 @@ function createQueuedListenerDispatch(
   })
 }
 
-async function dispatchQueuedListeners<TPayload>(
+async function dispatchQueuedListener<TPayload>(
+  listener: RegisteredListener,
+  event: EventEnvelope<string, TPayload>,
+  options: PendingOptions,
+): Promise<void> {
+  const dispatcher = getRuntimeState().hooks.dispatchQueuedListener ?? dispatchQueuedListenerViaQueue
+  await dispatcher(createQueuedListenerDispatch(listener, event, options))
+}
+
+async function runListenersInOrder<TPayload>(
   listeners: readonly RegisteredListener[],
   event: EventEnvelope<string, TPayload>,
   options: PendingOptions,
-): Promise<number> {
-  if (listeners.length === 0) {
-    return 0
-  }
-
-  validateQueuedEventPayload(event.payload)
-  const dispatcher = getRuntimeState().hooks.dispatchQueuedListener ?? dispatchQueuedListenerViaQueue
-
+): Promise<void> {
   for (const listener of listeners) {
-    await dispatcher(createQueuedListenerDispatch(listener, event, options))
-  }
-
-  return listeners.length
-}
-
-function splitListenersForExecution(
-  listeners: readonly RegisteredListener[],
-  forceAfterCommit: boolean,
-): ListenerExecutionGroups {
-  const immediateSyncListeners: RegisteredListener[] = []
-  const immediateQueuedListeners: RegisteredListener[] = []
-  const deferredSyncListeners: RegisteredListener[] = []
-  const deferredQueuedListeners: RegisteredListener[] = []
-
-  for (const listener of listeners) {
-    const shouldDefer = forceAfterCommit || listener.definition.afterCommit === true
-    if (shouldDefer) {
-      if (listener.definition.queue === true) {
-        deferredQueuedListeners.push(listener)
-        continue
-      }
-
-      deferredSyncListeners.push(listener)
-      continue
-    }
-
     if (listener.definition.queue === true) {
-      immediateQueuedListeners.push(listener)
+      await dispatchQueuedListener(listener, event, options)
       continue
     }
 
-    immediateSyncListeners.push(listener)
+    await executeListener(listener, event)
   }
-
-  return Object.freeze({
-    immediateSyncListeners: Object.freeze(immediateSyncListeners),
-    immediateQueuedListeners: Object.freeze(immediateQueuedListeners),
-    deferredSyncListeners: Object.freeze(deferredSyncListeners),
-    deferredQueuedListeners: Object.freeze(deferredQueuedListeners),
-  })
-}
-
-function validateQueuedPayloadForExecutionGroups<TPayload>(
-  groups: ListenerExecutionGroups,
-  payload: TPayload,
-): void {
-  if (groups.immediateQueuedListeners.length === 0 && groups.deferredQueuedListeners.length === 0) {
-    return
-  }
-
-  validateQueuedEventPayload(payload)
 }
 
 function scheduleDeferredDispatch(
@@ -346,67 +268,45 @@ async function executeDispatch<TPayload>(
   requireRegisteredEvent(eventName)
   const envelope = createEventEnvelope(eventName, payload)
   const listeners = listRegisteredListenersForEvent(eventName)
-  const groups = splitListenersForExecution(listeners, options.afterCommit === true)
-  validateQueuedPayloadForExecutionGroups(groups, envelope.payload)
-
-  if (options.afterCommit) {
-    const scheduled = scheduleDeferredDispatch(async () => {
-      await executeListenerGroups(
-        [...groups.immediateSyncListeners, ...groups.deferredSyncListeners],
-        [...groups.immediateQueuedListeners, ...groups.deferredQueuedListeners],
-        envelope,
-        options,
-      )
-    }, eventName)
-
-    if (scheduled) {
-      return Object.freeze({
-        eventName,
-        occurredAt: envelope.occurredAt,
-        deferred: true,
-        syncListeners: groups.immediateSyncListeners.length + groups.deferredSyncListeners.length,
-        queuedListeners: groups.immediateQueuedListeners.length + groups.deferredQueuedListeners.length,
-      })
-    }
+  const queuedListeners = listeners.filter(listener => listener.definition.queue === true).length
+  if (queuedListeners > 0) {
+    validateQueuedEventPayload(envelope.payload)
   }
 
-  const immediate = await executeListenerGroups(
-    groups.immediateSyncListeners,
-    groups.immediateQueuedListeners,
-    envelope,
-    options,
-  )
-
-  let deferred = false
-  if (groups.deferredSyncListeners.length > 0 || groups.deferredQueuedListeners.length > 0) {
-    const scheduled = scheduleDeferredDispatch(async () => {
-      await executeListenerGroups(
-        groups.deferredSyncListeners,
-        groups.deferredQueuedListeners,
-        envelope,
-        options,
-      )
-    }, eventName)
-
-    if (scheduled) {
-      deferred = true
-    } else {
-      await executeListenerGroups(
-        groups.deferredSyncListeners,
-        groups.deferredQueuedListeners,
-        envelope,
-        options,
-      )
-    }
-  }
-
-  return Object.freeze({
+  const createResult = (deferred: boolean): EventDispatchResult => Object.freeze({
     eventName,
     occurredAt: envelope.occurredAt,
     deferred,
-    syncListeners: immediate.syncCount + groups.deferredSyncListeners.length,
-    queuedListeners: immediate.queuedCount + groups.deferredQueuedListeners.length,
+    syncListeners: listeners.length - queuedListeners,
+    queuedListeners,
   })
+
+  const { immediateListeners, deferredListeners } = splitListenersByCommitTiming(
+    listeners,
+    options.afterCommit === true,
+  )
+  if (deferredListeners.length === 0) {
+    await runListenersInOrder(listeners, envelope, options)
+    return createResult(false)
+  }
+
+  // The deferred callback is registered before the immediate listeners run, so it stays
+  // gated on their completion: a failing immediate listener leaves nothing queued to run.
+  let immediatePhaseCompleted = false
+  const scheduled = scheduleDeferredDispatch(async () => {
+    if (immediatePhaseCompleted) {
+      await runListenersInOrder(deferredListeners, envelope, options)
+    }
+  }, eventName)
+
+  if (!scheduled) {
+    await runListenersInOrder(listeners, envelope, options)
+    return createResult(false)
+  }
+
+  await runListenersInOrder(immediateListeners, envelope, options)
+  immediatePhaseCompleted = true
+  return createResult(true)
 }
 
 class PendingEventDispatch<TPayload> implements EventPendingDispatch<TPayload> {
@@ -521,18 +421,16 @@ export const eventRuntimeInternals = {
   createEventEnvelope,
   createQueuedListenerDispatch,
   createRuntimeBinding,
-  dispatchQueuedListeners,
-  executeListenerGroups,
+  dispatchQueuedListener,
   executeDispatch,
   executeListener,
-  executeSyncListeners,
+  runListenersInOrder,
   getRuntimeState,
   isPlainObject,
   normalizeEventName,
   requireRegisteredEvent,
   resolveDispatchedEventName,
   scheduleDeferredDispatch,
-  splitRegisteredListeners,
-  splitListenersForExecution,
+  splitListenersByCommitTiming,
   validateQueuedEventPayload,
 }

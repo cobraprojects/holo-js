@@ -153,6 +153,31 @@ function isMissingNextRequestScope(error: unknown): boolean {
   return error instanceof Error && error.message.includes('outside a request scope')
 }
 
+type WorkUnitStorageModule = {
+  readonly workUnitAsyncStorage: { getStore(): { readonly phase?: string } | undefined }
+}
+
+function nextCookiesMutableInCurrentPhase(requireNext: (id: string) => unknown): boolean {
+  try {
+    const { workUnitAsyncStorage } = requireNext('next/dist/server/app-render/work-unit-async-storage.external.js') as WorkUnitStorageModule
+    return workUnitAsyncStorage.getStore()?.phase === 'action'
+  } catch {
+    return true
+  }
+}
+
+function isReadonlyNextCookieStore(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Cookies can only be modified in a Server Action or Route Handler')
+}
+
+const NEXT_COOKIE_WRITE_UNAVAILABLE = 'cookie_write_unavailable'
+
+function createCookieWriteUnavailableError(cause: unknown): Error {
+  return Object.assign(new Error('Cookies can only be set in a Server Action or Route Handler, not while rendering a Server Component.', { cause }), {
+    code: NEXT_COOKIE_WRITE_UNAVAILABLE,
+  })
+}
+
 export function createNextRequestContext(request: Request): NextRequestLike {
   const nextRequest = request as NextRequestWithCookies
   const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
@@ -207,10 +232,20 @@ function resolveNextAuthRequestAccessors(projectRoot = process.cwd()): NonNullab
         throw error
       }
     },
+    async canAppendResponseCookie() {
+      try {
+        const { cookies } = requireNext('next/headers.js') as NextHeadersModule
+        await cookies()
+      } catch (error) {
+        if (isMissingNextRequestScope(error)) return false
+        throw error
+      }
+      return nextCookiesMutableInCurrentPhase(requireNext)
+    },
     async appendResponseCookie(cookie: string) {
       const parsed = parseResponseCookie(cookie)
       if (!parsed) {
-        return
+        throw new Error('[@holo-js/adapter-next] An authentication cookie could not be parsed.')
       }
 
       try {
@@ -218,7 +253,8 @@ function resolveNextAuthRequestAccessors(projectRoot = process.cwd()): NonNullab
         const store = await cookies() as MutableNextCookieStore
         store.set(parsed.name, parsed.value, parsed.options)
       } catch (error) {
-        if (!isMissingNextRequestScope(error)) throw error
+        if (isMissingNextRequestScope(error) || isReadonlyNextCookieStore(error)) throw createCookieWriteUnavailableError(error)
+        throw error
       }
     },
     async redirectResponse(url: string) {

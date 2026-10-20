@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import session, {
   configureSessionRuntime,
   normalizeSessionConfig,
-  consumeRememberMeToken,
   cookie,
   cookies,
   createDatabaseSessionStore,
@@ -17,7 +16,6 @@ import session, {
   fileSessionDriverInternals,
   getSessionRuntime,
   invalidateSession,
-  issueRememberMeToken,
   parseCookieHeader,
   readSession,
   rememberMeCookie,
@@ -120,27 +118,23 @@ describe('@holo-js/session package surface', () => {
     expect(await readSession('session_1')).toBeNull()
     expect((await readSession('session_2'))?.data).toEqual({ cartId: 'cart_1' })
 
-    const rememberToken = await issueRememberMeToken('session_2')
-    expect((await consumeRememberMeToken(rememberToken))?.id).toBe('session_2')
-    expect(await consumeRememberMeToken('bad-token')).toBeNull()
+    expect(session).not.toHaveProperty('issueRememberMeToken')
+    expect(session).not.toHaveProperty('consumeRememberMeToken')
 
     const updated = await writeSession({
       ...rotated,
       data: Object.freeze({ cartId: 'cart_2' }),
-      rememberTokenHash: 'remember-hash',
     })
     expect(updated).toMatchObject({
       id: 'session_2',
       data: {
         cartId: 'cart_2',
       },
-      rememberTokenHash: 'remember-hash',
     })
     expect(await readSession('session_2')).toMatchObject({
       data: {
         cartId: 'cart_2',
       },
-      rememberTokenHash: 'remember-hash',
     })
 
     expect(cookie('custom', 'value', { httpOnly: false })).toContain('custom=value')
@@ -326,35 +320,6 @@ describe('@holo-js/session package surface', () => {
     expect(((await storeMap.read('stable-session')) !== null)).toBe(true)
     await expect(touchSession('missing')).resolves.toBeNull()
     await expect(rotateSession('missing')).rejects.toThrow('Session "missing" was not found')
-    await expect(issueRememberMeToken('missing')).rejects.toThrow('Session "missing" was not found')
-
-    await storeMap.write(createRecord('remember-without-hash'))
-    await expect(consumeRememberMeToken(
-      `remember-without-hash.${Date.now().toString(36)}.secret`,
-    )).resolves.toBeNull()
-
-    await storeMap.write(createRecord('legacy-remember', {
-      expiresAt: new Date(Date.now() + 60_000),
-      rememberTokenHash: sessionRuntimeInternals.hashRememberToken('secret'),
-    }))
-    await expect(consumeRememberMeToken('legacy-remember.secret')).resolves.toMatchObject({
-      id: 'legacy-remember',
-    })
-    await expect(consumeRememberMeToken('legacy-remember.')).resolves.toBeNull()
-    await expect(consumeRememberMeToken('legacy-remember.@.secret')).resolves.toBeNull()
-
-    const rememberToken = await issueRememberMeToken(rotatedWithGeneratedId.id, {
-      store: 'database',
-    })
-    await expect(consumeRememberMeToken(rememberToken, {
-      store: 'database',
-    })).resolves.toMatchObject({
-      id: rotatedWithGeneratedId.id,
-    })
-    await expect(consumeRememberMeToken(
-      `${rotatedWithGeneratedId.id}.${Date.now().toString(36)}.wrong`,
-      { store: 'database' },
-    )).resolves.toBeNull()
   })
 
   it('caps touched sessions at the configured absolute lifetime', async () => {
@@ -494,110 +459,6 @@ describe('@holo-js/session package surface', () => {
 
     expect(remainingLifetimeMs).toBeLessThanOrEqual((15 * 60_000) + 1000)
     expect(remainingLifetimeMs).toBeGreaterThan((14 * 60_000))
-  })
-
-  it('rejects a remember-me token after the base session has expired', async () => {
-    const storeMap = await createNativeSessionStore('database')
-    configureSessionRuntime({
-      config: {
-        driver: 'database',
-        stores: {
-          database: {
-            name: 'database',
-            driver: 'database',
-            connection: 'default',
-            table: 'sessions',
-          },
-        },
-        cookie: {
-          name: 'my_session',
-          path: '/',
-          secure: false,
-          httpOnly: true,
-          sameSite: 'lax',
-          partitioned: false,
-          maxAge: 30,
-        },
-        idleTimeout: 15,
-        absoluteLifetime: 30,
-        rememberMeLifetime: 60,
-      },
-      stores: {
-        database: storeMap,
-      },
-    })
-
-    const created = await createSession({
-      name: 'remembered',
-    })
-    const rememberToken = await issueRememberMeToken(created.id)
-    const stored = (await storeMap.read(created.id))
-    expect(stored?.rememberTokenHash).toBeTypeOf('string')
-
-    await storeMap.write(Object.freeze({
-      ...stored!,
-      expiresAt: new Date(Date.now() - 1000),
-    }))
-
-    await expect(consumeRememberMeToken(rememberToken)).resolves.toBeNull()
-    expect(((await storeMap.read(created.id)) !== null)).toBe(false)
-
-    await expect(consumeRememberMeToken(rememberToken)).resolves.toBeNull()
-  })
-
-  it('finds remember-me tokens across configured stores when no store hint is provided', async () => {
-    const databaseMap = await createNativeSessionStore('database')
-    const fileMap = await createNativeSessionStore('file')
-    configureSessionRuntime({
-      config: {
-        driver: 'database',
-        stores: {
-          database: {
-            name: 'database',
-            driver: 'database',
-            connection: 'default',
-            table: 'sessions',
-          },
-          file: {
-            name: 'file',
-            driver: 'file',
-            path: './storage/framework/sessions',
-          },
-        },
-        cookie: {
-          name: 'my_session',
-          path: '/',
-          secure: false,
-          httpOnly: true,
-          sameSite: 'lax',
-          partitioned: false,
-          maxAge: 30,
-        },
-        idleTimeout: 15,
-        absoluteLifetime: 30,
-        rememberMeLifetime: 60,
-      },
-      stores: {
-        database: databaseMap,
-        file: fileMap,
-      },
-    })
-
-    const created = await createSession({
-      name: 'remembered-secondary',
-      store: 'file',
-    })
-    const rememberToken = await issueRememberMeToken(created.id, {
-      store: 'file',
-    })
-    await databaseMap.write(createRecord(created.id, {
-      rememberTokenHash: 'not-the-token',
-    }))
-
-    await expect(consumeRememberMeToken(rememberToken)).resolves.toMatchObject({
-      id: created.id,
-      store: 'file',
-    })
   })
 
   it('persists file-backed sessions on disk', async () => {

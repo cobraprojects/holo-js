@@ -116,7 +116,6 @@ export default defineMigration({
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
       table.index(['expires_at'])
     })
   },
@@ -297,7 +296,7 @@ const setCookie = sessionCookie(rotated.id)
 |---|---|
 | `newId` | Use this ID instead of a random one |
 | `data` | Replace the session data |
-| `renewLifetime` | Restart the lifetime from now and drop any remember-me token |
+| `renewLifetime` | Restart the lifetime from now |
 | `store` | Move the session to another store (not allowed while it has flash data) |
 
 Auth does this for you when a user signs in.
@@ -339,21 +338,6 @@ Holo refuses to build cookies that browsers would reject or that weaken security
 Set `SESSION_SECURE=true` in production so cookies are only sent over HTTPS.
 :::
 
-## Remember-me tokens
-
-Remember-me tokens let a user stay signed in after the session expires. [Auth](/auth/session-and-cookies) issues and checks them when you log in with `remember: true`. To use them directly:
-
-```ts
-import { consumeRememberMeToken, issueRememberMeToken, rememberMeCookie } from '@holo-js/session'
-
-const token = await issueRememberMeToken(sessionId)
-const setCookie = rememberMeCookie(token)
-
-const restored = await consumeRememberMeToken(token)
-```
-
-`consumeRememberMeToken()` returns the session record, or `null` if the token is invalid or older than `rememberMeLifetime` minutes. Only a hash of the token is stored.
-
 ## Configuration reference
 
 | Option | Default | Description |
@@ -362,7 +346,7 @@ const restored = await consumeRememberMeToken(token)
 | `stores` | `file` and `database` stores | Named stores; see [choose a store](#choose-a-store) |
 | `idleTimeout` | `120` | Minutes of inactivity before a session expires |
 | `absoluteLifetime` | `120` | Maximum session age in minutes |
-| `rememberMeLifetime` | `43200` (30 days) | Remember-me token lifetime in minutes |
+| `rememberMeLifetime` | `43200` (30 days) | Remember-me cookie lifetime in minutes |
 | `cookie.name` | `holo_session` | Session cookie name |
 | `cookie.path` | `/` | Cookie path |
 | `cookie.domain` | not set | Cookie domain |
@@ -383,8 +367,6 @@ Every public function in `@holo-js/session`, grouped by task. Internal helpers a
 **Change the session**: [rotateSession()](#rotatesession), [invalidateSession()](#invalidatesession)
 
 **Flash data**: [flashSession()](#flashsession), [takeSession()](#takesession)
-
-**Remember-me tokens**: [issueRememberMeToken()](#issueremembermetoken), [consumeRememberMeToken()](#consumeremembermetoken)
 
 **Cookies**: [cookie()](#cookie), [sessionCookie()](#sessioncookie), [rememberMeCookie()](#remembermecookie), [cookies.make()](#cookies-make), [cookies.forget()](#cookies-forget), [serializeCookie()](#serializecookie), [parseCookieHeader()](#parsecookieheader)
 
@@ -426,7 +408,7 @@ Records activity and pushes the idle expiry forward, but never past the absolute
 
 `rotateSession(sessionId: string, options?: { newId?: string, data?: object, renewLifetime?: boolean, store?: string }): Promise<SessionRecord>`
 
-Gives the session a new ID and keeps its data and flash values. `renewLifetime` restarts the lifetime and clears any remember-me token. Throws when the session doesn't exist, and when a store can't keep the data.
+Gives the session a new ID and keeps its data and flash values. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, and when a store can't keep the data.
 
 ### invalidateSession()
 
@@ -445,18 +427,6 @@ Stores a value that `takeSession()` can read once. Keys must start with a letter
 `takeSession<TValue = unknown>(sessionId: string, key: string, options?: { store?: string }): Promise<TValue | undefined>`
 
 Returns the flashed value and removes it, so a second call returns `undefined`.
-
-### issueRememberMeToken()
-
-`issueRememberMeToken(sessionId: string, options?: { store?: string }): Promise<string>`
-
-Creates a remember-me token for the session and returns it. Holo stores only a hash. Send it to the browser with `rememberMeCookie()`. Throws when the session doesn't exist.
-
-### consumeRememberMeToken()
-
-`consumeRememberMeToken(token: string, options?: { store?: string }): Promise<SessionRecord | null>`
-
-Returns the session for a valid token, or `null` when the token is unknown, doesn't match, or is older than `rememberMeLifetime`.
 
 ### cookie()
 

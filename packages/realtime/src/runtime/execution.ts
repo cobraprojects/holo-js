@@ -46,7 +46,7 @@ export async function runWithExecutionOptions<TResult>(
   if (options?.authRequest) {
     const runner = bindings?.runWithAuthRequestAccessors
     if (runner) {
-      return await runner(options.authRequest, callback)
+      return await runner({ getCookie: options.authRequest.getCookie, getHeader: options.authRequest.getHeader }, callback)
     }
   }
 

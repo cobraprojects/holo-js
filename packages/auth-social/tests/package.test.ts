@@ -70,7 +70,7 @@ async function configureRuntime(options: {
   const persistence = await createNativeAuthPersistence()
   const usersProvider = persistence.providers.users as AuthProviderAdapter<UserRecord>
   const adminsProvider = persistence.providers.admins as AuthProviderAdapter<UserRecord>
-  const context = authRuntimeInternals.createMemoryAuthContext()
+  const context = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
   configureAuthRuntime({
     config: defineAuthConfig({
       defaults: {

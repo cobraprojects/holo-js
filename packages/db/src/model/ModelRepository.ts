@@ -35,6 +35,7 @@ import {
 } from './RelationAggregateCalculator'
 import { listMorphModels, resolveMorphModel } from './morphRegistry'
 import { getModelRuntimeSettings } from './runtimeSettings'
+import { modelNeedsSerialization } from './serialize'
 import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueIds'
 import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -86,6 +87,10 @@ type BelongsToManyRelatedObservationMetadata = {
 }
 type PivotRelationDefinition = Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
 type PivotMutationRelationDefinition = PivotRelationDefinition
+
+function relatedRowsArePatchable(related: ModelRepository): boolean {
+  return !modelNeedsSerialization(related.definition)
+}
 
 const relationAggregateObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryAggregateObservation>>()
 const relationQueryObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryObservation>>()
@@ -769,6 +774,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       if (observed) {
         recordDatabaseQueryObservation(Object.freeze({
           ...observed,
+          patchable: observed.patchable && relatedRowsArePatchable(related),
           resultPath: createPath(index, relationName),
         }))
         continue
@@ -794,7 +800,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: true,
+        patchable: relatedRowsArePatchable(related),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignKey,
           operator: '=' as const,
@@ -823,7 +829,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       const resultPath = createPath(index, relationName)
       const observed = this.getRelationQueryObservation(entity, relationName)
       if (observed) {
-        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(observed, resultPath))
+        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation({
+          ...observed,
+          patchable: observed.patchable && relatedRowsArePatchable(related),
+        }, resultPath))
         continue
       }
 
@@ -847,7 +856,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: true,
+        patchable: relatedRowsArePatchable(related),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignKey,
           operator: '=' as const,
@@ -879,10 +888,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         relationName,
         relation,
         resultPath.slice(0, -1),
-        !relation.constraint,
+        !relation.constraint && relatedRowsArePatchable(related),
       ))
       if (observed) {
-        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(observed, resultPath))
+        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation({
+          ...observed,
+          patchable: observed.patchable && relatedRowsArePatchable(related),
+        }, resultPath))
         continue
       }
 
@@ -910,7 +922,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: true,
+        patchable: relatedRowsArePatchable(related),
         predicates: Object.freeze([Object.freeze({
           column: relation.ownerKey,
           operator: '=' as const,
@@ -1118,7 +1130,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         connectionName: this.getConnectionName(),
         dependencies,
         orderBy: relation.pivotOrderBy,
-        patchable: relation.pivotWheres.length === 0,
+        patchable: relation.pivotWheres.length === 0 && relatedRowsArePatchable(related) && this.pivotRowsArePatchable(relation),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignPivotKey,
           operator: '=' as const,
@@ -1141,7 +1153,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           ...relatedMetadata.dependencies,
         ]),
         orderBy: [],
-        patchable: true,
+        patchable: relatedRowsArePatchable(related),
         predicates: Object.freeze([Object.freeze({
           column: relation.relatedKey,
           operator: 'in' as const,
@@ -1153,6 +1165,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         tableName: related.definition.table.tableName,
       }))
     }
+  }
+
+  private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
+    return !relation.pivotModel || !modelNeedsSerialization(this.resolveRelatedRepository(relation.pivotModel).definition)
   }
 
   private createBelongsToManyRelatedObservationMetadata(
