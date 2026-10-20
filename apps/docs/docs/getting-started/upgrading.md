@@ -522,6 +522,12 @@ Check three behaviors when you upgrade:
 
 A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
 
+### Query writes set updated_at
+
+On a model with timestamps, these query writes now set `updated_at` to the current time unless you pass your own value: `update()`, `updateJson()`, `increment()`, and `decrement()`. Query `upsert()` sets `created_at` and `updated_at` on new rows, and sets `updated_at` on conflict when you list columns to update. On a soft-delete model, query and instance `delete()` and `restore()` set `updated_at` together with `deleted_at`. Before, all of these left `updated_at` unchanged. Instance `restore()` also saves the model's unsaved changes, as Laravel's restore does, so a changed attribute or primary key is written when you restore.
+
+Check code that reads `updated_at` to find changed rows, such as a "recently updated" list, a cache key, or a sync cursor. Rows you write from now on change `updated_at`; existing rows keep their stored values. `forceDelete()` and the table builder (`DB.table()`) don't change. Use the table builder for a write that must leave `updated_at` alone. See [Query updates](/orm/writes#update-many-rows).
+
 ### Password hashing cost
 
 New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
@@ -529,6 +535,10 @@ New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r
 A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
 
 No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
+
+### Dev server exits non-zero on a port conflict
+
+`holo dev` now exits with a non-zero status when another `holo dev` for the same project is already running. Before, it exited 0 and left the first server running. A port already in use by another process has always exited non-zero, and it still does, now with the port named. `holo dev` never stops a process for you. Update any CI script or wrapper that treated a second `holo dev` as success. To replace a running server, stop it first, using the PID in the message.
 
 ## Earlier 0.3.x releases
 

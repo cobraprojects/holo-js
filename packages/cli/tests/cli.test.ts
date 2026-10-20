@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
@@ -7135,11 +7135,11 @@ export default {
     expect(collectMultiStringFlag({ o: 'users' }, 'only', 'o')).toEqual(['users'])
     expect(collectMultiStringFlag({ only: '   ' }, 'only')).toBeUndefined()
     expect(createRuntimeInvocation('/tmp/holo-runtime-worker.mjs')).toEqual({
-      command: 'node',
+      command: process.execPath,
       args: ['/tmp/holo-runtime-worker.mjs'],
     })
     expect(createRuntimeInvocation('/tmp/holo-runtime-worker.ts')).toEqual({
-      command: 'node',
+      command: process.execPath,
       args: ['--experimental-strip-types', '/tmp/holo-runtime-worker.ts'],
     })
     const largeRuntimeOutputSize = 1024 * 1024 + 1024
@@ -7159,6 +7159,14 @@ export default {
     })
     expect(missingRuntimeOutput.status).not.toBe(0)
     expect(missingRuntimeOutput.error).toBeInstanceOf(Error)
+    const builtRuntimeWorker = createRuntimeInvocation(fileURLToPath(new URL('../dist/runtime-worker.mjs', import.meta.url)))
+    const oversizedRuntimePayload = await runRuntimeInvocation(builtRuntimeWorker.command, builtRuntimeWorker.args, {
+      cwd: process.cwd(),
+      env: process.env,
+      input: JSON.stringify({ kind: 'probe', runtimeConfig: { db: { default: 'sqlite', connections: {} } }, padding: 'x'.repeat(256 * 1024) }),
+    })
+    expect(oversizedRuntimePayload.stderr).not.toContain('Runtime payload is missing database configuration.')
+    expect(oversizedRuntimePayload.stderr).toContain('Driver "sqlite" is not registered')
     expect(inferRuntimeMigrationName('file:///tmp/2026_01_01_000001_create_sessions_table.js')).toBe('2026_01_01_000001_create_sessions_table')
     expect(() => inferRuntimeMigrationName('file:///tmp/create_sessions_table.js')).toThrow(
       'Registered migration "file:///tmp/create_sessions_table.js" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.',

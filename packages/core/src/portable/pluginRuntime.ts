@@ -1,4 +1,5 @@
 import type { QueueDriverFactory } from '@holo-js/queue'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { resolve } from 'node:path'
 import type { LoadedHoloConfig } from '@holo-js/config'
 import {
@@ -14,9 +15,22 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+type HoloPluginBootScope = {
+  active: boolean
+}
+
 const bootedHoloPluginModules = new Set<string>()
 const pendingHoloPluginBoots = new Map<string, Promise<void>>()
+const HOLO_PLUGIN_BOOT_SCOPES = Symbol.for('holo.core.pluginBootScope')
 let bootGeneration = 0
+
+function holoPluginBootScopes(): AsyncLocalStorage<HoloPluginBootScope> {
+  const host = globalThis as typeof globalThis & {
+    [HOLO_PLUGIN_BOOT_SCOPES]?: AsyncLocalStorage<HoloPluginBootScope>
+  }
+  host[HOLO_PLUGIN_BOOT_SCOPES] ??= new AsyncLocalStorage<HoloPluginBootScope>()
+  return host[HOLO_PLUGIN_BOOT_SCOPES]
+}
 
 function resolveHoloPluginBootKey(projectRoot: string, bootModule: HoloPluginRuntimeModule): string {
   return [resolve(projectRoot), bootModule.plugin.packageName, bootModule.runtime].join('\0')
@@ -40,8 +54,13 @@ export async function bootConfiguredHoloPluginModule(
     : bootModule.module
   if (typeof candidate !== 'function') return
   const generation = bootGeneration
+  const scope: HoloPluginBootScope = { active: true }
   const boot = (async () => {
-    await candidate({ projectRoot, config: loadedConfig })
+    try {
+      await holoPluginBootScopes().run(scope, () => candidate({ projectRoot, config: loadedConfig }))
+    } finally {
+      scope.active = false
+    }
     if (generation === bootGeneration) bootedHoloPluginModules.add(bootKey)
   })()
   pendingHoloPluginBoots.set(bootKey, boot)
@@ -49,6 +68,12 @@ export async function bootConfiguredHoloPluginModule(
     await boot
   } finally {
     if (pendingHoloPluginBoots.get(bootKey) === boot) pendingHoloPluginBoots.delete(bootKey)
+  }
+}
+
+export function assertOutsidePluginBoot(action: string): void {
+  if (holoPluginBootScopes().getStore()?.active) {
+    throw new Error(`[@holo-js/core] ${action} cannot run inside a plugin boot hook. Plugin boot runs once per application lifecycle; move this call out of the hook.`)
   }
 }
 
