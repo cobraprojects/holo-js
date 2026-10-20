@@ -9111,6 +9111,7 @@ export default {
 
     const pastTime = new Date(Date.now() - 60_000)
     await utimes(generatedTsconfigPath, pastTime, pastTime)
+    const backdatedTsconfigMtime = (await stat(generatedTsconfigPath)).mtimeMs
 
     await (async () => {
       await runProjectPrepare(projectRoot)
@@ -9120,7 +9121,7 @@ export default {
     const secondRegistryStat = await stat(generatedRegistryPath)
     const secondRegistry = JSON.parse(await readFile(generatedRegistryPath, 'utf8')) as { generatedAt: string }
 
-    expect(secondTsconfigStat.mtimeMs).toBe(pastTime.getTime())
+    expect(secondTsconfigStat.mtimeMs).toBe(backdatedTsconfigMtime)
     expect(secondRegistryStat.mtimeMs).toBeGreaterThanOrEqual(firstRegistryStat.mtimeMs)
     expect(typeof firstRegistry.generatedAt).toBe('string')
     expect(typeof secondRegistry.generatedAt).toBe('string')

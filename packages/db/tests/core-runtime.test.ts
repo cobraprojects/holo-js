@@ -115,16 +115,16 @@ describe('native database contexts', () => {
     const first = await openDatabase('sqlite', { connectionName: 'first' })
     const second = await openDatabase('postgres', { connectionName: 'second' })
     configureDB(createConnectionManager({ defaultConnection: 'first', connections: { first: first.db, second: second.db } }))
-    let secondSettled = () => {}
-    const settled = new Promise<void>(resolve => { secondSettled = resolve })
+    let resolveSecondSettled = () => {}
+    const secondSettled = new Promise<void>(resolve => { resolveSecondSettled = resolve })
     await Promise.all([
       DB.connection('first').transaction(async () => {
-        await settled
+        await secondSettled
         await DB.table(first.table).insert({ id: 1, name: 'First' })
       }),
       DB.connection('second').transaction(async () => {
         await DB.table(second.table).insert({ id: 1, name: 'Second' })
-      }).finally(() => secondSettled()),
+      }).finally(() => resolveSecondSettled()),
     ])
     expect(await first.db.table(first.table).pluck('name')).toEqual(['First'])
     expect(await second.db.table(second.table).pluck('name')).toEqual(['Second'])

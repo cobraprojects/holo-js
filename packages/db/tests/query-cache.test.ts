@@ -93,7 +93,9 @@ describe('native database and cache integration', () => {
     expect((await query.first())?.get('created_at')).toEqual(new Date('2026-01-01'))
     await adapter.execute("UPDATE users SET name = 'After expiry' WHERE id = 1")
     expect((await query.first())?.get('name')).toBe('Ava')
-    await vi.waitFor(async () => expect((await query.first())?.get('name')).toBe('After expiry'), { timeout: 5000, interval: 20 })
+    await vi.waitFor(async () => {
+      expect((await query.first())?.get('name')).toBe('After expiry')
+    }, { timeout: 1200, interval: 20 })
   })
 
   it('shares concurrent cache misses without issuing duplicate database reads', async () => {
