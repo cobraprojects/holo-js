@@ -15,7 +15,7 @@ Governing rules: [ADR-0016](../docs/adr/0016-laravel-behavioral-parity.md) (foll
 
 These are the four dispositions the ticket permits; "not-reproduced" is not one of them. Items 2, 5 and 18 are partly reproduced or partly decision-gated; each row says which part. A reproduced item whose fix needs a choice is also listed under Decisions needed.
 
-Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Implementation issues are filed as #212–#223 and linked as sub-issues of #98. Items with no decision yet (1, 22, 32, 33) are still open.
+Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Implementation issues are filed as #212–#224 and linked as sub-issues of #98. Every item now has an outcome: 32 and 33 are wontfix, 1 is #224, and 22 is carried by #222.
 
 ## Dispositions
 
@@ -140,10 +140,10 @@ Audit-time dispositions above are kept as recorded. This table gives the orchest
 | 35 | insufficient-information | Follow-up: replace sleep-based waits (test-only) | #223 |
 | 37 | reproduced | Implement: auth failures via the channel .error() callback; malformed frames dropped with a dev-mode log | #221 |
 | 22 (Nuxt sub-finding) | follow-up | Follow-up: storage route honors X-Forwarded-Proto only from trusted proxies (security) | #222 |
-| 1 | insufficient-information | Open: no decision given | none |
-| 22 (publicStorage trusted-proxy) | insufficient-information | Open: needs reproduction through the adapter with proxy trust | none |
-| 32 | insufficient-information | Open: maintainability only; no decision given | none |
-| 33 | insufficient-information | Open: maintainability only; no decision given | none |
+| 1 | insufficient-information | Implement: raise scrypt N to 2^17 (r=8, p=1), rehash on login, record as ADR-0016 hardening | #224 |
+| 22 (publicStorage trusted-proxy) | insufficient-information | Folded into #222 as an acceptance criterion: temporary URLs behind a trusted TLS proxy use https | #222 |
+| 32 | insufficient-information | Wontfix: maintainability only, no behavior defect (closed 2026-10-20) | wontfix |
+| 33 | insufficient-information | Wontfix: maintainability only, no behavior defect (closed 2026-10-20) | wontfix |
 
 Items 10, 14, 17, 27 and 36 keep their audit dispositions (rejected-by-decision) and need no issue.
 
