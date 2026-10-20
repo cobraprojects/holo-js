@@ -121,7 +121,7 @@
   },
   "scripts": {
     "dev:docs": "bun --cwd apps/docs dev",
-    "build": "bun run --workspaces --if-present --sequential build",
+    "build": "node scripts/build-libraries.mjs",
     "build:docs": "bun --cwd apps/docs build",
     "stub": "bun run --workspaces --if-present --sequential stub",
     "lint": "node scripts/run-eslint.mjs && node scripts/run-generated-eslint.mjs",
