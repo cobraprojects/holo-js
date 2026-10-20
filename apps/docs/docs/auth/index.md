@@ -468,7 +468,7 @@ Marks the email as verified for the token's user. `verifyEmail()` calls it for y
 
 Holo hashes passwords with scrypt by default, at N = 2^15, r = 8, p = 3. Each hash uses about 32 MiB of memory, and a process runs at most four hashes at once; more wait in line. These helpers use the same hasher as login and registration, and they work without a configured auth runtime.
 
-When a user logs in with a digest made at older settings, Holo saves a new digest after the password matches, through the provider's `update()` method. A provider without `update()` keeps its old digest, and login still succeeds.
+When a user logs in with a digest made at older settings, Holo saves a new digest after the password matches, for the built-in database providers. The save is one conditional write that applies only if the stored digest is still the one that was verified. A custom provider keeps its old digest until the password changes, and login still succeeds.
 
 ### hashPassword()
 

@@ -503,7 +503,7 @@ New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r
 
 A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
 
-No migration is needed. A digest made with the old settings still verifies, and a successful login replaces it with a new digest through the provider's `update()` method. A provider without `update()` keeps its old digests. See [Authentication](/auth/).
+No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
 
 ## Earlier 0.3.x releases
 

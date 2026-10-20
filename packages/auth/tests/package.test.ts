@@ -62,6 +62,8 @@ import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure 
 import { scryptPasswordHasherInternals } from '../src/runtime/scryptPasswordHasher'
 import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
 
+const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
+
 function createScryptDigestAt(
   password: string,
   params: { readonly N: number, readonly r: number, readonly p: number },
@@ -1780,6 +1782,86 @@ describe('@holo-js/auth package runtime', () => {
     await expect(verifyPassword('old-secret', String(stored?.password))).resolves.toBe(false)
   })
 
+  it('keeps a password reset that lands between a legacy-digest login verifying and its rehash write', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('old-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+    const resetDigest = await hashPassword('new-secret')
+    const users = runtime.usersProvider
+    let resetLanded = false
+    const landResetOnce = async () => {
+      if (resetLanded) {
+        return
+      }
+
+      resetLanded = true
+      const user = await users.findByCredentials({ email: 'ava@example.com' })
+      await users.update!(user!, { password: resetDigest })
+    }
+    const landingUsers = {
+      ...users,
+      async update(user: UserRecord, input: Readonly<Record<string, unknown>>) {
+        await landResetOnce()
+        return users.update!(user, input)
+      },
+      async [REHASH_PASSWORD_IF_UNCHANGED](user: UserRecord, expectedDigest: string, newDigest: string) {
+        await landResetOnce()
+        return Reflect.get(users, REHASH_PASSWORD_IF_UNCHANGED).call(users, user, expectedDigest, newDigest) as boolean
+      },
+    }
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      providers: { users: landingUsers, admins: runtime.adminsProvider },
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'old-secret' })).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+
+    const stored = await users.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toBe(resetDigest)
+    await expect(verifyPassword('new-secret', String(stored?.password))).resolves.toBe(true)
+    await expect(verifyPassword('old-secret', String(stored?.password))).resolves.toBe(false)
+  })
+
+  it('skips the rehash for a custom provider without the compare-and-set capability', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+    const users = runtime.usersProvider
+    let updateCalls = 0
+    const customUsers = {
+      ...users,
+      async update(user: UserRecord, input: Readonly<Record<string, unknown>>) {
+        updateCalls += 1
+        return users.update!(user, input)
+      },
+    }
+    Reflect.deleteProperty(customUsers, REHASH_PASSWORD_IF_UNCHANGED)
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      providers: { users: customUsers, admins: runtime.adminsProvider },
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+
+    expect(updateCalls).toBe(0)
+    const stored = await users.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toBe(legacyDigest)
+  })
+
   it('keeps a legacy-digest login successful when the rehashed password cannot be saved', async () => {
     const runtime = await configureRuntime()
     const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 })
@@ -1789,17 +1871,15 @@ describe('@holo-js/auth package runtime', () => {
       password: legacyDigest,
       email_verified_at: new Date(),
     })
+    const failingUsers = {
+      ...runtime.usersProvider,
+      async [REHASH_PASSWORD_IF_UNCHANGED]() {
+        throw new Error('users table unavailable')
+      },
+    }
     authRuntimeInternals.configureRuntime({
       ...authRuntimeInternals.getRuntimeBindings(),
-      providers: {
-        users: {
-          ...runtime.usersProvider,
-          async update() {
-            throw new Error('users table unavailable')
-          },
-        },
-        admins: runtime.adminsProvider,
-      },
+      providers: { users: failingUsers, admins: runtime.adminsProvider },
     })
 
     await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).resolves.toMatchObject({

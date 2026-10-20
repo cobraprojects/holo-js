@@ -151,6 +151,8 @@ export function serializeMultiFactorCredentialRecord(record: MultiFactorCredenti
 }
 
 const HOLO_AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
+const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
+type RehashPasswordIfUnchanged = (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
 type CoreAuthProviderBinding = ReturnType<typeof AuthFeature.authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
 export async function createCoreAuthPersistence<TCustom extends HoloConfigMap>(
@@ -543,6 +545,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
     const model = resolvedModule.default as {
       definition?: {
         readonly table?: {
+          readonly tableName?: string
           readonly columns?: Readonly<Record<string, unknown>>
         }
         readonly guarded?: readonly string[]
@@ -668,7 +671,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       return null
     }
 
-    const adapter: CoreAuthProviderBinding = {
+    const adapter: CoreAuthProviderBinding & { readonly [REHASH_PASSWORD_IF_UNCHANGED]: RehashPasswordIfUnchanged } = {
       async findById(id: string | number) {
         const repository = redemption.repository(providerName)
         const resolved = repository ? await repository.find(id) : await model.find(id)
@@ -749,6 +752,22 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         const persisted = existing ? await saveAuthEntity(existing, values) : null
 
         return markProviderUser(persisted ?? await model.update(id, values), providerName)
+      },
+      [REHASH_PASSWORD_IF_UNCHANGED]: async (user: unknown, expectedDigest: string, newDigest: string) => {
+        const table = model.definition?.table?.tableName
+        const values = sanitizeAuthWriteInput({
+          password: newDigest,
+          updated_at: serializeAuthTimestamp(new Date(), DB.connection().getDriver()),
+        })
+        if (!table || typeof values.password !== 'string') {
+          return false
+        }
+
+        const result = await DB.table(table)
+          .where('id', getEntityAttributes(user).id as string | number)
+          .where('password', expectedDigest)
+          .update(values)
+        return (result.affectedRows ?? 0) > 0
       },
       matchesUser(user: unknown) {
         if (typeof model === 'function' && user instanceof model) {

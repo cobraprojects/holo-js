@@ -490,7 +490,7 @@ const matches = await verifyPassword('current-password', user.password)
 const outdated = await needsPasswordRehash(user.password)
 ```
 
-`needsPasswordRehash()` tells you a hash was made with older settings. Login already replaces such a digest for providers that implement `update()`. When you verify passwords yourself and it returns `true` after a successful `verifyPassword()`, hash the plain password again and save it.
+`needsPasswordRehash()` tells you a hash was made with older settings. Login already replaces such a digest for the built-in database providers. Custom providers keep their digest until the password changes. When you verify passwords yourself and it returns `true` after a successful `verifyPassword()`, hash the plain password again and save it.
 
 ## Impersonate a user
 

@@ -922,6 +922,15 @@ function dummyPasswordDigest(hasher: AuthPasswordHasher): Promise<string> {
   return digest
 }
 
+const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
+
+type RehashPasswordIfUnchanged = (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
+
+function getRehashPasswordIfUnchanged(adapter: ErasedAuthProviderAdapter): RehashPasswordIfUnchanged | undefined {
+  const capability: unknown = Reflect.get(adapter, REHASH_PASSWORD_IF_UNCHANGED)
+  return typeof capability === 'function' ? capability as RehashPasswordIfUnchanged : undefined
+}
+
 async function rehashPasswordAfterLogin({
   adapter,
   user,
@@ -935,7 +944,8 @@ async function rehashPasswordAfterLogin({
   readonly digest: string | null | undefined
   readonly hasher: AuthPasswordHasher
 }): Promise<void> {
-  if (!digest || !adapter.update) {
+  const rehashIfUnchanged = getRehashPasswordIfUnchanged(adapter)
+  if (!digest || !adapter.update || !rehashIfUnchanged) {
     return
   }
 
@@ -944,13 +954,7 @@ async function rehashPasswordAfterLogin({
       return
     }
 
-    const replacement = await hasher.hash(password)
-    const current = await adapter.findById(adapter.getId(user))
-    if (!current || getPasswordHash(adapter, current) !== digest) {
-      return
-    }
-
-    await adapter.update(current, { password: replacement })
+    await rehashIfUnchanged.call(adapter, user, digest, await hasher.hash(password))
   } catch (error) {
     reportError(error, { capability: 'auth', operation: 'password.rehashOnLogin' })
   }
