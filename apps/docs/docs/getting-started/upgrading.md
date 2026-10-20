@@ -31,7 +31,8 @@ Server subscriptions now authorize and execute independently, including subscrip
 
 ### Realtime relations honor hidden attributes
 
-Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. No code changes are required. Subscriptions to those relations run the handler more often. Relations to plain related models keep incremental patching.
+Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. The same applies to a root model that sets those rules and loads a belongs-to relation: Holo re-runs the query when the foreign key changes. A handler that calls `makeHidden()`, `makeVisible()`, `setHidden()`, `setVisible()`, `append()`, `setAppends()`, or `withoutAppends()` on the records it loads gets the same re-run. No code changes are required. Subscriptions to those relations and queries run the handler more often. Relations to plain related models keep incremental patching.
+
 
 ### Model scope grouping
 
@@ -438,6 +439,16 @@ redis: {
 ```
 
 Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
+
+### Transaction nesting and commit errors
+
+Check three behaviors when you upgrade:
+
+- A `transaction()` call on a connection object made while a transaction is open on that connection now becomes a savepoint. Before, it started a second transaction that could commit the outer work early. If you relied on that early commit, move the work out of the outer callback.
+- When an `afterCommit` callback throws, `DB.transaction()` rejects with that same error. It used to reject with a `TransactionError` wrapping it. Update any `catch` that checked for `TransactionError` in that case.
+- `timeoutMs` and `signal` on a transaction only limit how long it takes to start. Commit and rollback are never interrupted. If you relied on a timeout to abandon a slow commit, the commit now finishes. See [Timeouts and cancellation](/database/transactions#timeouts-and-cancellation).
+
+To retry a transaction after a deadlock or lock timeout, pass `attempts`. See [Retry deadlocks](/database/transactions#retry-deadlocks).
 
 ## Earlier 0.3.x releases
 

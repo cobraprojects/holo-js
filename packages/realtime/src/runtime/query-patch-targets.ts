@@ -136,6 +136,7 @@ export function createPatchedQueryObservation(
     selectionColumns: readQuerySelectionColumns(query),
     selectionResultKeys: readQuerySelectionResultKeys(query),
     selections: query.selections,
+    serialized: query.serialized,
     tableName: query.tableName,
   })
 }
@@ -377,6 +378,10 @@ function selectQueryPatchCapability(
   rowPatchMode: RowPatchMode | undefined,
   skipsPatching: boolean,
 ): QueryPatchCapability {
+  if (query.serialized) {
+    return 'refresh'
+  }
+
   if (skipsPatching) {
     return query.patchable && (rowPatchMode === 'rows' || rowPatchMode === 'offset-window') ? 'patchable' : 'refresh'
   }
