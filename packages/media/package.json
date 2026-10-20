@@ -4,6 +4,11 @@
   "description": "Holo-JS Framework - media collections and conversions for Holo-JS models",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobraprojects/holo-js.git",
+    "directory": "packages/media"
+  },
   "exports": {
     ".": {
       "@holo-js/source": "./src/index.ts",
@@ -21,7 +26,8 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",

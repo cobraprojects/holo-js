@@ -4,6 +4,11 @@
   "description": "Holo-JS Framework - Nuxt adapter",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobraprojects/holo-js.git",
+    "directory": "packages/adapter-nuxt"
+  },
   "exports": {
     ".": {
       "@holo-js/source": "./src/module.ts",
@@ -34,7 +39,8 @@
   "main": "./dist/module.mjs",
   "types": "./dist/types.d.mts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "nuxt-module-build build",

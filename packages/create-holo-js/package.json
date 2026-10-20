@@ -4,11 +4,17 @@
   "description": "Holo-JS project scaffolder",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobraprojects/holo-js.git",
+    "directory": "packages/create-holo-js"
+  },
   "bin": {
     "create-holo-js": "dist/bin/create-holo-js.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
