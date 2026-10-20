@@ -405,6 +405,12 @@ Social sign-in no longer signs in as an existing user whose email isn't verified
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
+### WorkOS sign-in requires a session ID
+
+WorkOS sign-in no longer uses the access token or the authorization code as the session ID. Before, when WorkOS's response had no session ID, sign-in succeeded and `logoutWithWorkos()` sent that token or code to WorkOS as `session_id`. Now the callback fails with `workos_auth_failed` and creates no session. WorkOS AuthKit always returns a session ID in the WorkOS session ID shape (`session_` followed by letters, digits, `_` or `-`), so this only affects malformed responses. Sessions created before the upgrade keep the old value until they expire. Logging out of them ends the local session only: logout sends a stored value to WorkOS only when it has the shape of a WorkOS session ID, and a token or code never does.
+
+The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `true`, even over HTTP, and behind a trusted proxy that terminates TLS when `X-Forwarded-Proto` is `https`.
+
 ### Sessions don't cross between 0.3 and 0.4
 
 Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
