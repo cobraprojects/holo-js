@@ -862,17 +862,16 @@ function retireSmtpTransports(): void {
   }
 }
 
-function acquireSmtpTransport(
+function getOrCreateSmtpTransport(
   mailer: string,
   createTransport: () => NodemailerTransport,
 ): SmtpTransportEntry {
   const state = getRuntimeState()
   state.smtpTransports ??= new Map()
-  let entry = state.smtpTransports.get(mailer)
-  if (!entry) {
-    entry = { transport: createTransport(), inFlight: 0, retired: false }
-    state.smtpTransports.set(mailer, entry)
-  }
+  const existing = state.smtpTransports.get(mailer)
+  if (existing) return existing
+  const entry = { transport: createTransport(), inFlight: 0, retired: false }
+  state.smtpTransports.set(mailer, entry)
   return entry
 }
 
@@ -880,19 +879,22 @@ function setPooledSmtpSocketsRef(transport: NodemailerTransport, ref: boolean): 
   for (const resource of (transport as PooledSmtpTransport).transporter?._connections ?? []) {
     const socket = resource.connection?._socket
     if (!socket) continue
-    if (ref) socket.ref()
-    else socket.unref()
+    if (ref) {
+      socket.ref()
+    } else {
+      socket.unref()
+    }
   }
 }
 
 async function sendThroughSmtpTransport(
   entry: SmtpTransportEntry,
-  message: NodemailerMailMessage,
+  createMessage: () => Promise<NodemailerMailMessage>,
 ): Promise<NodemailerSendResult> {
   if (entry.inFlight === 0) setPooledSmtpSocketsRef(entry.transport, true)
   entry.inFlight++
   try {
-    return await entry.transport.sendMail(message)
+    return await entry.transport.sendMail(await createMessage())
   } finally {
     entry.inFlight--
     if (entry.inFlight === 0) {
@@ -915,8 +917,7 @@ async function sendViaSmtp(
     )
   }
 
-  const smtpMessage = await createSmtpMessage(mail, context)
-  const entry = acquireSmtpTransport(context.mailer, () => nodemailer.createTransport({
+  const entry = getOrCreateSmtpTransport(context.mailer, () => nodemailer.createTransport({
     pool: true,
     host: mailerConfig.host,
     port: mailerConfig.port,
@@ -930,7 +931,7 @@ async function sendViaSmtp(
         }
       : {}),
   }))
-  const result = await sendThroughSmtpTransport(entry, smtpMessage)
+  const result = await sendThroughSmtpTransport(entry, () => createSmtpMessage(mail, context))
 
   return createBaseSendResult(context, {
     ...(typeof result.messageId === 'string' ? { providerMessageId: result.messageId } : {}),

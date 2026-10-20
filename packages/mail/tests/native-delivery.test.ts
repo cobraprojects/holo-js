@@ -40,8 +40,11 @@ async function startSmtpServer({ rejectRecipient = false, holdAcceptance }: Smtp
           if (line === '.') {
             messages.push(data.join('\r\n'))
             data = undefined
-            if (holdAcceptance) void holdAcceptance.then(() => socket.write('250 Message accepted\r\n'))
-            else socket.write('250 Message accepted\r\n')
+            if (holdAcceptance) {
+              void holdAcceptance.then(() => socket.write('250 Message accepted\r\n'))
+            } else {
+              socket.write('250 Message accepted\r\n')
+            }
           } else {
             data.push(line.startsWith('..') ? line.slice(1) : line)
           }
@@ -105,7 +108,7 @@ configureMailRuntime({ config: normalizeMailConfig({
 const result = await sendMail(defineMail({ to: 'ava@example.com', subject: 'One-shot script', text: 'Hello' }))
 assert.equal(result.driver, 'smtp')
 `
-  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, tsconfigRaw: { compilerOptions: {} }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
+  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
   const entry = compiled.outputFiles[0]
   if (!entry) throw new Error('One-shot mail script compilation produced no entry')
   await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 10000 })
@@ -391,13 +394,23 @@ it('lets a one-shot script exit after its SMTP send instead of holding the poole
   expect(provider.messages).toHaveLength(1)
 })
 
-it('keeps an in-flight send alive through reconfiguration and closes its connection once it finishes', async () => {
+it.each([
+  ['resets', () => resetMailRuntime()],
+  ['reconfigures', (port: number) => configureMailRuntime({
+    config: normalizeMailConfig({
+      default: 'smtp',
+      from: { email: 'mailer@example.com', name: 'Mailer Sender' },
+      replyTo: { email: 'reply@example.com' },
+      mailers: { smtp: { driver: 'smtp', host: '127.0.0.1', port, secure: false } },
+    }),
+  })],
+] as const)('keeps an in-flight send alive when the mail runtime %s and closes its connection once it finishes', async (_name, retire) => {
   let acceptMessage!: () => void
   const accepted = new Promise<void>(resolve => { acceptMessage = resolve })
   const provider = await startSmtpProvider({ holdAcceptance: accepted })
   const send = Promise.resolve(sendMail(defineMail({ to: 'ava@example.com', subject: 'In flight', text: 'Hello' })))
   await vi.waitFor(() => expect(provider.messages).toHaveLength(1))
-  resetMailRuntime()
+  retire(provider.port)
   acceptMessage()
   await expect(send).resolves.toMatchObject({ driver: 'smtp', mailer: 'smtp' })
   await vi.waitFor(() => expect(provider.stats.closedConnections).toBe(1))
