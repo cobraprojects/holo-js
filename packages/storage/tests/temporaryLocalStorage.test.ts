@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { requestUrlInternals } from '@holo-js/kernel'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createPublicStorageResponse, normalizeModuleOptions, type NormalizedHoloStorageConfig } from '../src'
 import { createTemporaryLocalStorageUrl } from '../src/temporaryLocalStorage'
@@ -32,7 +33,16 @@ async function fixture() {
   return { root, config, runtime, disk, url, response }
 }
 
+function trustProxies(trustedProxies: readonly string[], peer: string): void {
+  requestUrlInternals.provideConnectionAddress(() => peer)
+  requestUrlInternals.configureForwardedRequestResolver((readHeader, connectionAddress) => trustedProxies.includes(connectionAddress ?? '')
+    ? { protocol: readHeader('x-forwarded-proto'), host: readHeader('x-forwarded-host'), port: readHeader('x-forwarded-port'), prefix: readHeader('x-forwarded-prefix') }
+    : {})
+}
+
 afterEach(async () => {
+  requestUrlInternals.configureForwardedRequestResolver(undefined)
+  requestUrlInternals.provideConnectionAddress(undefined)
   await Promise.all([...roots].map(root => rm(root, { recursive: true, force: true })))
   roots.clear()
 })
@@ -187,5 +197,61 @@ describe('private local storage URLs on Windows', () => {
     } finally {
       Object.defineProperty(process, 'platform', descriptor)
     }
+  })
+})
+
+describe('private local storage URLs behind a trusted proxy', () => {
+  const proxy = '10.0.0.1'
+  const visitor = '203.0.113.9'
+
+  it('honors X-Forwarded-Proto only from a trusted proxy', async () => {
+    const { root, config, runtime, disk } = await fixture()
+    const url = createTemporaryLocalStorageUrl(disk, 'image #1.png', { ...runtime, appKey, appUrl: 'https://app.test' }, 60)
+    const plain = new URL(url)
+    plain.protocol = 'http:'
+    const request = () => new Request(plain, { headers: { 'x-forwarded-proto': 'https' } })
+
+    trustProxies([proxy], proxy)
+    const trusted = await createPublicStorageResponse(root, config, request(), appKey)
+    expect(trusted.status).toBe(200)
+    await expect(trusted.text()).resolves.toBe('private-image')
+
+    trustProxies([proxy], visitor)
+    const untrusted = await createPublicStorageResponse(root, config, request(), appKey)
+    expect(untrusted.status).toBe(404)
+  })
+
+  it('honors forwarded host and port only from a trusted proxy', async () => {
+    const { root, config, runtime, disk } = await fixture()
+    const url = createTemporaryLocalStorageUrl(disk, 'image #1.png', { ...runtime, appKey, appUrl: 'https://app.test:8443' }, 60)
+    const internal = new URL(url)
+    internal.host = 'internal.test:8080'
+    const forwarded = { host: 'internal.test:8080', 'x-forwarded-host': 'app.test', 'x-forwarded-port': '8443' }
+
+    trustProxies([proxy], proxy)
+    const trusted = await createPublicStorageResponse(root, config, new Request(internal, { headers: forwarded }), appKey)
+    expect(trusted.status).toBe(200)
+
+    trustProxies([proxy], visitor)
+    const untrusted = await createPublicStorageResponse(root, config, new Request(internal, { headers: forwarded }), appKey)
+    expect(untrusted.status).toBe(404)
+  })
+
+  it('verifies the public URL including a trusted forwarded prefix while routing by the unprefixed path', async () => {
+    const { root, config, runtime, disk } = await fixture()
+    const url = createTemporaryLocalStorageUrl(disk, 'image #1.png', { ...runtime, appKey, appUrl: 'https://app.test/blog' }, 60)
+    expect(new URL(url).pathname.startsWith('/blog/assets/__holo_private/')).toBe(true)
+    const proxied = new URL(url)
+    proxied.pathname = proxied.pathname.replace(/^\/blog/u, '')
+    const headers = { 'x-forwarded-prefix': '/blog' }
+
+    trustProxies([proxy], proxy)
+    const trusted = await createPublicStorageResponse(root, config, new Request(proxied, { headers }), appKey)
+    expect(trusted.status).toBe(200)
+    await expect(trusted.text()).resolves.toBe('private-image')
+
+    trustProxies([proxy], visitor)
+    const untrusted = await createPublicStorageResponse(root, config, new Request(proxied, { headers }), appKey)
+    expect(untrusted.status).toBe(404)
   })
 })

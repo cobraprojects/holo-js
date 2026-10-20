@@ -25,6 +25,22 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 - Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
 - When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
 
+### Temporary URLs behind a proxy
+
+Public and temporary storage URLs read the scheme, host, port, and path prefix from forwarded headers only when `trustedProxies` lists the proxy, as [`resolveRequestUrl()`](/basics/security/cors-and-proxies#read-the-public-url) does. Before, the Nuxt storage route accepted `X-Forwarded-Proto` from any client, and the other forwarded headers were ignored.
+
+If your Nuxt or SvelteKit app runs behind a proxy that terminates TLS and serves temporary URLs, list the proxy:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['10.0.0.1'],
+})
+```
+
+Without that, the app sees `http`, and a temporary URL signed with `https://` returns 404. Public files keep working because their path doesn't depend on the scheme.
+
 ### Realtime subscription isolation
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
