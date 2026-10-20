@@ -151,8 +151,10 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
   }
 }
 
+const DEFAULT_MAX_PREPARED_STATEMENTS = 256
+
 function createNativeMySQLPool(config: PoolOptions): MySQLPoolLike {
-  const pool = mysql.createPool({ ...config, timezone: config.timezone ?? 'Z' })
+  const pool = mysql.createPool({ maxPreparedStatements: DEFAULT_MAX_PREPARED_STATEMENTS, ...config, timezone: config.timezone ?? 'Z' })
   if (!config.timezone || config.timezone === 'Z') {
     pool.pool.on('connection', (connection) => {
       connection.query("SET time_zone = '+00:00'")

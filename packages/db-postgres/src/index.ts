@@ -80,11 +80,11 @@ function createHoloPool(config?: PoolConfig): Pool {
           return (value: string) => parseCalendarDate(value, holoRuntimeInternals.getApplicationTimezone())
             ?? types.getTypeParser(oid, format)(value)
         }
-        if (config?.types) return config.types.getTypeParser(oid, format)
         if (oid === 1114 && format === 'text') {
           return (value: string) => parseWallClockTimestamp(value, holoRuntimeInternals.getApplicationTimezone())
             ?? types.getTypeParser(oid, format)(value)
         }
+        if (config?.types) return config.types.getTypeParser(oid, format)
         return types.getTypeParser(oid, format)
       },
     },

@@ -176,7 +176,7 @@ export class SchemaService {
   }
 
   async enableForeignKeyConstraints(): Promise<void> {
-    await this.connection.getAdapter().execute(this.createForeignKeyConstraintStatement(true).sql)
+    await this.connection.executeCompiled(this.createForeignKeyConstraintStatement(true))
   }
 
   async disableForeignKeyConstraints(): Promise<void> {
@@ -196,6 +196,14 @@ export class SchemaService {
       : this.runWithoutForeignKeyConstraints(callback)))
   }
 
+  private async restoreForeignKeyConstraints(): Promise<void> {
+    try {
+      await this.enableForeignKeyConstraints()
+    } catch {
+      await this.connection.getAdapter().execute(this.createForeignKeyConstraintStatement(true).sql)
+    }
+  }
+
   private async runWithoutForeignKeyConstraints<TResult>(
     callback: () => TResult | Promise<TResult>,
   ): Promise<TResult> {
@@ -206,7 +214,7 @@ export class SchemaService {
     } finally {
       await serializeOnPinnedConnection(pinned, async () => {
         try {
-          await this.enableForeignKeyConstraints()
+          await this.restoreForeignKeyConstraints()
         } finally {
           pinned.active = false
         }

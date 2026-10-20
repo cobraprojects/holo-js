@@ -58,12 +58,22 @@ function offsetMillisAt(instant: Date, timeZone: string): number {
   return utcMillisOf(wallClockAt(instant, timeZone)) - wholeSecond
 }
 
+const DAY_MILLIS = 24 * 60 * 60 * 1000
+
 function instantOfWallClock(wall: WallClock, timeZone: string): Date {
   const local = utcMillisOf(wall)
-  const firstOffset = offsetMillisAt(new Date(local), timeZone)
-  const candidate = local - firstOffset
-  const secondOffset = offsetMillisAt(new Date(candidate), timeZone)
-  return new Date(secondOffset === firstOffset ? candidate : local - secondOffset)
+  const offsets = [...new Set([
+    offsetMillisAt(new Date(local - DAY_MILLIS), timeZone),
+    offsetMillisAt(new Date(local + DAY_MILLIS), timeZone),
+  ])]
+  const valid = offsets
+    .map(offset => local - offset)
+    .filter(instant => offsetMillisAt(new Date(instant), timeZone) === local - instant)
+  if (valid.length > 0) {
+    return new Date(Math.min(...valid))
+  }
+
+  return new Date(local - offsetMillisAt(new Date(local - DAY_MILLIS), timeZone))
 }
 
 function pad(value: number, length: number): string {
@@ -106,10 +116,11 @@ export function parseWallClockTimestamp(value: string, timeZone: string): Date |
 
 export function formatWithOffset(instant: Date, timeZone: string): string {
   const wall = wallClockAt(instant, timeZone)
-  const offsetMinutes = Math.round(offsetMillisAt(instant, timeZone) / 60000)
-  const sign = offsetMinutes < 0 ? '-' : '+'
-  const absolute = Math.abs(offsetMinutes)
+  const offsetSeconds = Math.round(offsetMillisAt(instant, timeZone) / 1000)
+  const sign = offsetSeconds < 0 ? '-' : '+'
+  const absolute = Math.abs(offsetSeconds)
+  const seconds = absolute % 60 === 0 ? '' : `:${pad(absolute % 60, 2)}`
   const era = wall.year <= 0 ? ' BC' : ''
   const year = wall.year <= 0 ? 1 - wall.year : wall.year
-  return `${pad(year, 4)}-${pad(wall.month, 2)}-${pad(wall.day, 2)}T${pad(wall.hour, 2)}:${pad(wall.minute, 2)}:${pad(wall.second, 2)}.${pad(wall.millisecond, 3)}${sign}${pad(Math.trunc(absolute / 60), 2)}:${pad(absolute % 60, 2)}${era}`
+  return `${pad(year, 4)}-${pad(wall.month, 2)}-${pad(wall.day, 2)}T${pad(wall.hour, 2)}:${pad(wall.minute, 2)}:${pad(wall.second, 2)}.${pad(wall.millisecond, 3)}${sign}${pad(Math.trunc(absolute / 3600), 2)}:${pad(Math.trunc(absolute % 3600 / 60), 2)}${seconds}${era}`
 }

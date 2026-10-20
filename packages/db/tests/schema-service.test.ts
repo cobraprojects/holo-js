@@ -248,6 +248,20 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         expect(String((await db.queryCompiled(state)).rows[0]!.state)).toBe(driver === 'postgres' ? 'origin' : '1')
       })
 
+      it('runs the standalone enable through the query logger', async () => {
+        const sources: string[] = []
+        const { schema } = await openDatabase(driver, {
+          logger: {
+            onQueryStart: entry => {
+              sources.push(entry.source ?? '')
+            },
+          },
+        })
+
+        await schema.enableForeignKeyConstraints()
+        expect(sources).toContain('schema:enableForeignKeys')
+      })
+
       it('restores foreign-key checks when a logger fails before the restore statement starts', async () => {
         const { db, schema } = await openDatabase(driver, {
           logger: {
