@@ -542,28 +542,26 @@ describe('remember me', () => {
     const browser = new Browser()
     await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
     browser.expireSession()
-    const challenge = await getSessionRuntime().create({
-      data: {
-        auth: {
-          guard: 'web',
-          provider: 'users',
-          userId: 1,
-          user: { id: 1, email: 'ava@app.test' },
-          authenticatedAt: new Date().toISOString(),
-          multiFactorChallengeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-        },
+    await browser.request(() => auth.loginUsingId(1))
+
+    const current = authRuntimeInternals.getRuntimeBindings()
+    const requestContext = createAsyncAuthContext()
+    authRuntimeInternals.configureRuntime({
+      ...current,
+      context: {
+        ...requestContext,
+        getRequestCookie: (name: string) => browser.cookies.get(name),
+        canAppendResponseCookie: () => false,
       },
     })
-    browser.receive(getSessionRuntime().sessionCookie(challenge.id))
-
-    const readOnly = new Browser()
-    for (const [name, value] of browser.cookies) readOnly.cookies.set(name, value)
-    readOnly.receive = () => {}
-
-    await expect(readOnly.request(async () => [
-      await auth.guard('admin').check(),
-      await auth.guard('admin').provider(),
-    ])).resolves.toEqual([true, 'users'])
+    try {
+      await expect(requestContext.run(async () => [
+        await auth.guard('admin').check(),
+        await auth.guard('admin').provider(),
+      ])).resolves.toEqual([true, 'users'])
+    } finally {
+      authRuntimeInternals.configureRuntime(current)
+    }
   })
 
   it.each([true, false])('keeps the browser on a pending multi-factor challenge when the restored guard logs out (async context: %s)', async (scoped) => {
