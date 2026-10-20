@@ -53,6 +53,7 @@ export interface FluxConnectorChannel {
   onMembersChange(callback: (members: readonly BroadcastJsonObject[]) => void): () => void
   onNotification(callback: (payload: BroadcastJsonObject) => void): () => void
   onWhisper(name: string, callback: (payload: BroadcastJsonObject) => void): () => void
+  onError?(callback: (error: Error) => void): () => void
   sendWhisper(name: string, payload: BroadcastJsonObject): Promise<void>
   leave(): void
 }
@@ -76,6 +77,7 @@ export interface FluxSubscription<
     callback?: (payload: BroadcastJsonObject) => void,
   ): FluxSubscription<TManifest, TChannel>
   notification(callback: (payload: BroadcastJsonObject) => void): FluxSubscription<TManifest, TChannel>
+  error(callback: (error: Error) => void): FluxSubscription<TManifest, TChannel>
   listenForWhisper<TWhisper extends FluxManifestTypes<TManifest, TChannel>['whisperName']>(
     name: TWhisper,
     callback: (payload: BroadcastJsonObject) => void,
@@ -91,7 +93,9 @@ export interface FluxPresenceSubscription<
   TChannel extends string = string,
 > extends FluxSubscription<TManifest, TChannel>,
     FluxPresenceState<FluxManifestTypes<TManifest, TChannel>['presenceMember']>,
-    FluxPresenceListenerControls<TManifest, TChannel> {}
+    FluxPresenceListenerControls<TManifest, TChannel> {
+  error(callback: (error: Error) => void): FluxPresenceSubscription<TManifest, TChannel>
+}
 
 export interface FluxClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxConnectionControls {
   readonly options: Readonly<FluxClientOptions<TManifest>>
@@ -152,6 +156,7 @@ type HoloWebSocketGlobals = typeof globalThis & {
 
 type HoloConnectorChannelState = PusherChannelState & {
   subscribed: boolean
+  errorListeners: Set<(error: Error) => void>
 }
 
 type HoloChannelAuthResponse = {
@@ -320,6 +325,32 @@ function parseWireData(value: unknown): BroadcastJsonObject {
   }
 
   return Object.freeze({})
+}
+
+function parseFrame(value: string): { readonly message: BroadcastJsonObject, readonly payload: BroadcastJsonObject } | undefined {
+  try {
+    const message = parseJsonObject(value)
+    return { message, payload: parseWireData(message.data) }
+  } catch {
+    return undefined
+  }
+}
+
+function isDevelopmentBuild(): boolean {
+  try {
+    return process.env.NODE_ENV !== 'production'
+  } catch {
+    return false
+  }
+}
+
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value))
+}
+
+function createSubscriptionRefusedError(channel: string, payload: BroadcastJsonObject): Error {
+  const detail = typeof payload.error === 'string' ? payload.error : 'The server refused the subscription.'
+  return new Error(`[@holo-js/flux] Subscription to ${channel} was refused: ${detail}`)
 }
 
 function normalizeOptionalConnectorString(value: unknown): string | undefined {
@@ -507,6 +538,10 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
         continue
       }
 
+      if (state.kind !== 'public' && resolvedOptions?.authEndpoint && !socketId) {
+        continue
+      }
+
       state.subscribed = true
       if (state.kind === 'public' || !resolvedOptions?.authEndpoint) {
         sendMessage({
@@ -530,9 +565,12 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
             ...auth,
           },
         })
-      }, () => {
+      }, (error: unknown) => {
         if (connection?.socket === flushedSocket) {
           state.subscribed = false
+          for (const listener of [...state.errorListeners]) {
+            listener(toError(error))
+          }
         }
       })
     }
@@ -543,10 +581,17 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       return
     }
 
-    const message = parseJsonObject(event.data)
+    const frame = parseFrame(event.data)
+    if (!frame) {
+      if (isDevelopmentBuild()) {
+        console.warn('[@holo-js/flux] Dropped a WebSocket frame that is not valid JSON.')
+      }
+      return
+    }
+
+    const { message, payload } = frame
     const eventName = typeof message.event === 'string' ? message.event : ''
     const channel = typeof message.channel === 'string' ? message.channel : undefined
-    const payload = parseWireData(message.data)
 
     if (eventName === 'pusher:connection_established') {
       socketId = typeof payload.socket_id === 'string' ? payload.socket_id : undefined
@@ -565,6 +610,10 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
 
     if (eventName === 'pusher:subscription_error') {
       state.subscribed = false
+      const error = createSubscriptionRefusedError(state.name, payload)
+      for (const listener of [...state.errorListeners]) {
+        listener(error)
+      }
       return
     }
 
@@ -696,6 +745,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       memberListeners: new Set(),
       members: Object.freeze([]),
       subscribed: false,
+      errorListeners: new Set(),
     }
     channels.set(key, state)
     return state
@@ -747,6 +797,12 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
         onWhisper(name: string, callback: (payload: BroadcastJsonObject) => void) {
           return addCallback(state.whisperListeners, name, callback)
         },
+        onError(callback: (error: Error) => void) {
+          state.errorListeners.add(callback)
+          return () => {
+            state.errorListeners.delete(callback)
+          }
+        },
         async sendWhisper(name: string, payload: BroadcastJsonObject) {
           await ensureConnected()
           sendMessage({
@@ -794,6 +850,8 @@ function createSubscription<
     .replace(/^presence-/, '')}`
   let left = false
   const notificationHandlers = new Set<(payload: BroadcastJsonObject) => void>()
+  const errorHandlers = new Set<(error: Error) => void>()
+  let isErrorAttached = false
 
   const registeredSubscriptions = registry.get(registryKey) ?? new Set<() => void>()
   registry.set(registryKey, registeredSubscriptions)
@@ -833,6 +891,21 @@ function createSubscription<
         }
       }))
       detachCallbacks.add(stop)
+    }
+  }
+
+  const ensureError = (callback: (error: Error) => void): void => {
+    errorHandlers.add(callback)
+    if (!isErrorAttached) {
+      isErrorAttached = true
+      const stop = connectorChannel.onError?.((error: Error) => {
+        for (const listener of [...errorHandlers]) {
+          listener(error)
+        }
+      })
+      if (stop) {
+        detachCallbacks.add(stop)
+      }
     }
   }
 
@@ -907,6 +980,10 @@ function createSubscription<
     },
     notification(callback: (payload: BroadcastJsonObject) => void) {
       ensureNotification(callback)
+      return this
+    },
+    error(callback: (error: Error) => void) {
+      ensureError(callback)
       return this
     },
     listenForWhisper(name: string, callback: (payload: BroadcastJsonObject) => void) {
@@ -1014,6 +1091,10 @@ function createPresenceSubscription<
     },
     notification(callback: (payload: BroadcastJsonObject) => void) {
       return base.notification(callback) as FluxPresenceSubscription<TManifest, TChannel>
+    },
+    error(callback: (error: Error) => void) {
+      base.error(callback)
+      return subscription
     },
     listenForWhisper(name: string, callback: (payload: BroadcastJsonObject) => void) {
       return base.listenForWhisper(name, callback) as FluxPresenceSubscription<TManifest, TChannel>

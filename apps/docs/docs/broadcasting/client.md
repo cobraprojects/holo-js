@@ -84,7 +84,7 @@ The `payload` type comes from the `payload` of the matching `defineBroadcast` in
 
 The client type must match the server. A browser on the public channel `feed` won't receive events sent to `privateChannel('feed')`.
 
-If the server refuses a private or presence channel, the connection stays open and the browser's other channels keep working. Flux tries that channel again the next time you subscribe to it or connect. See [Refused subscriptions](/broadcasting/events-and-channels#refused-subscriptions).
+If the server refuses a private or presence channel, the connection stays open and the browser's other channels keep working. Flux tries that channel again the next time you subscribe to it or connect. Each refusal goes to the channel's error callback. See [Subscription errors](#subscription-errors) and [Refused subscriptions](/broadcasting/events-and-channels#refused-subscriptions).
 
 ```ts
 useFluxPublic('feed.global', 'feed.updated', (payload) => {
@@ -127,6 +127,7 @@ Every hook accepts an optional `options` object as its last argument:
 | --- | --- |
 | `client` | Use this Flux client instead of the default `flux` client. Mainly useful in tests. |
 | `onUnmount` | Called with a function that leaves the channel. Store it and call it when you're done, instead of waiting for unmount. |
+| `onError` | Called with an `Error` when the server refuses the channel or its authorization fails. Channel hooks only. See [Subscription errors](#subscription-errors). |
 
 `useFluxConnectionStatus` also accepts `onChange`, and `useFluxPresence` takes `onHere` in its callbacks argument. Both are shown in their sections.
 
@@ -225,6 +226,32 @@ The callback receives `{ type, data }`, where `data` is what your notification's
 Broadcast notifications send to the channel names returned by the notifiable's `routeNotificationForBroadcast()` exactly as written. To reach `useFluxNotification('users.42', ...)`, return `private-users.42`, and add a `defineChannel('users.{userId}', ...)` rule that lets the user in.
 :::
 
+## Subscription errors
+
+When the server refuses a channel, or Flux can't get the authorization for it, the subscription's error callback runs with an `Error`. The connection stays open, and the other channels keep working.
+
+```ts
+import { flux } from '@holo-js/flux'
+
+flux.private(`orders.${orderId}`)
+  .listen('orders.shipment-updated', onUpdate)
+  .error((error) => {
+    console.warn(error.message)
+  })
+```
+
+In a hook, pass `onError` in the options:
+
+```ts
+useFlux(`orders.${orderId}`, 'orders.shipment-updated', onUpdate, {
+  onError: (error) => {
+    console.warn(error.message)
+  },
+})
+```
+
+Flux drops a WebSocket frame that isn't valid JSON and keeps delivering the frames after it. Development builds log a warning for each dropped frame, and production builds don't log.
+
 ## Connection status
 
 `useFluxConnectionStatus` reports the WebSocket state: `idle`, `connecting`, `connected`, or `disconnected`.
@@ -310,7 +337,7 @@ order.leaveChannel()
 | `flux.getStatus()` | The current connection status. |
 | `flux.onStatusChange(callback)` | Subscribe to status changes. Returns an unsubscribe function. |
 
-A subscription has `listen(event, callback)`, `notification(callback)`, `listenForWhisper(name, callback)`, `whisper(name, payload)`, `stopListening()`, and `leaveChannel()`.
+A subscription has `listen(event, callback)`, `notification(callback)`, `error(callback)`, `listenForWhisper(name, callback)`, `whisper(name, payload)`, `stopListening()`, and `leaveChannel()`.
 
 ### Presence callbacks
 
@@ -534,6 +561,16 @@ shipment.listen()
 ```ts
 flux.private(`users.${userId}`).notification((notification) => {
   console.log(notification)
+})
+```
+
+### error
+
+`error(callback)` calls `callback` with an `Error` when the server refuses this channel's subscription or the authorization request fails. See [Subscription errors](#subscription-errors).
+
+```ts
+flux.private(`orders.${orderId}`).error((error) => {
+  console.warn(error.message)
 })
 ```
 

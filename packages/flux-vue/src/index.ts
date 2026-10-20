@@ -20,6 +20,10 @@ export interface FluxComposableOptions<TManifest extends GeneratedBroadcastManif
   readonly onUnmount?: (cleanup: () => void) => void
 }
 
+export interface FluxChannelComposableOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxComposableOptions<TManifest> {
+  readonly onError?: (error: Error) => void
+}
+
 export interface FluxConnectionStatusComposableOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxComposableOptions<TManifest> {
   readonly onChange?: (status: FluxConnectionStatus) => void
 }
@@ -93,10 +97,10 @@ export function useFlux<
   channel: TChannel,
   events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxComposableOptions<TManifest> = {},
+  options: FluxChannelComposableOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = subscribeWithEvents(
-    resolveClient(options).private(channel),
+    resolveClient(options).private(channel).error(error => options.onError?.(error)),
     events,
     callback,
   )
@@ -114,10 +118,10 @@ export function useFluxPublic<
   channel: TChannel,
   events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxComposableOptions<TManifest> = {},
+  options: FluxChannelComposableOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = subscribeWithEvents(
-    resolveClient(options).channel(channel),
+    resolveClient(options).channel(channel).error(error => options.onError?.(error)),
     events,
     callback,
   )
@@ -135,7 +139,7 @@ export function useFluxPrivate<
   channel: TChannel,
   events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxComposableOptions<TManifest> = {},
+  options: FluxChannelComposableOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFlux(channel, events, callback, options)
 }
@@ -147,9 +151,10 @@ export function useFluxPresence<
 >(
   channel: TChannel,
   callbacks: FluxPresenceComposableCallbacks<ManifestComposablePresenceMember<TMember, TManifest, TChannel>> = {},
-  options: FluxComposableOptions<TManifest> = {},
+  options: FluxChannelComposableOptions<TManifest> = {},
 ): FluxPresenceComposableState<ManifestComposablePresenceMember<TMember, TManifest, TChannel>> {
   const subscription = resolveClient(options).presence(channel) as unknown as AnyFluxPresenceSubscription
+  subscription.error(error => options.onError?.(error))
   type TResolvedMember = ManifestComposablePresenceMember<TMember, TManifest, TChannel>
   const members = shallowRef(subscription.members as readonly TResolvedMember[])
   let active = true
@@ -206,9 +211,9 @@ export function useFluxNotification<
 >(
   channel: TChannel,
   callback: (payload: BroadcastJsonObject) => void,
-  options: FluxComposableOptions<TManifest> = {},
+  options: FluxChannelComposableOptions<TManifest> = {},
 ): FluxListenerControls {
-  const subscription = resolveClient(options).private(channel).notification(callback) as AnyFluxSubscription
+  const subscription = resolveClient(options).private(channel).error(error => options.onError?.(error)).notification(callback) as AnyFluxSubscription
   registerCleanup(options, () => {
     subscription.leaveChannel()
   })
@@ -223,7 +228,7 @@ export function useFluxModel<
   channel: TChannel,
   events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxComposableOptions<TManifest> = {},
+  options: FluxChannelComposableOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFluxPrivate(channel, events, callback, options)
 }
