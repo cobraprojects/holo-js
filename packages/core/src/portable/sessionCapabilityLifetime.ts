@@ -3,14 +3,13 @@ import type { LoadedHoloConfig } from '@holo-js/config'
 
 type SessionRedisConfig = Extract<LoadedHoloConfig['session']['stores'][string], { readonly driver: 'redis' }>
 
-export async function acquireSessionStores<TStore, TAdapter>(
+export async function acquireSessionStores<TStore>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig,
   factories: {
     createFileStore(root: string): TStore
     createDatabaseStore(table: string, connection: string | undefined): TStore
-    createRedisStore(adapter: TAdapter): TStore
-    acquireRedisAdapter(config: SessionRedisConfig): Promise<TAdapter>
+    acquireRedisStore(config: SessionRedisConfig): Promise<TStore>
   },
 ): Promise<Readonly<Record<string, TStore>>> {
   const stores: Record<string, TStore> = {}
@@ -27,7 +26,7 @@ export async function acquireSessionStores<TStore, TAdapter>(
       continue
     }
     if (config.driver === 'redis') {
-      stores[name] = factories.createRedisStore(await factories.acquireRedisAdapter(config))
+      stores[name] = await factories.acquireRedisStore(config)
     }
   }
   if (!(loadedConfig.session.driver in stores)) {

@@ -1032,6 +1032,38 @@ export default class Admin extends AdminEntity {
     expect(await secondCookie).toBe('session-second')
   })
 
+  it('keeps the first request after boot and reload isolated from boot-time and concurrent auth state', async () => {
+    const root = await createProject({ auth: true })
+    const options = {
+      authRequest: { appendResponseCookie: () => undefined },
+      processEnv: process.env,
+      preferCache: false,
+    }
+    const booted = await initializeHolo(root, options)
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    const login = await booted.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => booted.auth!.loginUsingId(1))
+    await initializeHolo(root, options)
+
+    const readAuthState = async (sessionId: string | undefined): Promise<boolean | undefined> => {
+      const runtime = await initializeHolo(root, {
+        ...options,
+        authRequest: {
+          appendResponseCookie: () => undefined,
+          getCookie: () => sessionId ? sessionCookieValue(sessionId) : undefined,
+        },
+      })
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      return runtime.auth?.check()
+    }
+    const [authenticated, guest] = await Promise.all([
+      Promise.resolve().then(() => readAuthState(login.sessionId)),
+      Promise.resolve().then(() => readAuthState(undefined)),
+    ])
+
+    expect(authenticated).toBe(true)
+    expect(guest).toBe(false)
+  })
+
   it('runs adapter requests against the currently configured auth context', async () => {
     const root = await createProject({ auth: true })
     const project = await initializeHoloAdapterProject(root, {

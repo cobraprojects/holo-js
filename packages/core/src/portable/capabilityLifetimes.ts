@@ -3,7 +3,7 @@ export function throwCapabilityFailures(failures: readonly unknown[]): void {
   if (failures.length > 1) throw new AggregateError(failures, 'Optional capability cleanup failed.')
 }
 
-export async function releaseRedisAdapters(adapters: readonly { disconnect?(): void | Promise<void>, close?(): void | Promise<void> }[]): Promise<void> {
+export async function releaseManagedResources(adapters: readonly { disconnect?(): void | Promise<void>, close?(): void | Promise<void> }[]): Promise<void> {
   const failures: unknown[] = []
   for (const adapter of [...new Set(adapters)].reverse()) {
     try {

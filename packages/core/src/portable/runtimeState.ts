@@ -7,18 +7,13 @@ export interface HoloRuntimeTransition<TRuntime> {
   readonly settled: Promise<void>
 }
 
-export interface ManagedSecurityRateLimitStore {
-  readonly store: { close?(): void | Promise<void> }
-  readonly redisBacked: boolean
-}
-
-export interface HoloRuntimeState<TRuntime, TSecurityRedisConnections, TSessionRedisConnections> {
+export interface HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections> {
   current?: TRuntime
   transition?: HoloRuntimeTransition<TRuntime>
   pending?: Promise<TRuntime>
   pendingProjectRoot?: string
-  securityRedisConnections?: TSecurityRedisConnections
-  securityRateLimitStore?: ManagedSecurityRateLimitStore
+  securityResources?: TSecurityResources
+  securityRateLimitStore?: object
   sessionRuntimeBindings?: object
   sessionRedisConnections?: TSessionRedisConnections
   optionalSubsystemsTurn?: Promise<void>
@@ -39,16 +34,16 @@ type OptionalRuntimeGlobals = typeof globalThis & {
   __holoSecurityRuntime__?: { bindings?: { readonly rateLimitStore?: unknown } }
 }
 
-export function createRuntimeStateAccessors<TRuntime, TSecurityRedisConnections, TSessionRedisConnections>(): {
-  getRuntimeState(): HoloRuntimeState<TRuntime, TSecurityRedisConnections, TSessionRedisConnections>
+export function createRuntimeStateAccessors<TRuntime, TSecurityResources, TSessionRedisConnections>(): {
+  getRuntimeState(): HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections>
   snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBindings
   restoreOptionalSubsystemRuntimeBindings(
     bindings: OptionalSubsystemRuntimeBindings,
   ): void
 } {
-  const getRuntimeState = (): HoloRuntimeState<TRuntime, TSecurityRedisConnections, TSessionRedisConnections> => {
+  const getRuntimeState = (): HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections> => {
     const runtime = globalThis as typeof globalThis & {
-      __holoRuntime__?: HoloRuntimeState<TRuntime, TSecurityRedisConnections, TSessionRedisConnections>
+      __holoRuntime__?: HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections>
     }
     runtime.__holoRuntime__ ??= {}
     return runtime.__holoRuntime__
@@ -81,7 +76,7 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityRedisConnections,
       ...(runtime.__holoBroadcastRuntime__?.bindings
         ? { broadcast: runtime.__holoBroadcastRuntime__.bindings }
         : {}),
-      ...(!state.securityRateLimitStore || runtime.__holoSecurityRuntime__?.bindings?.rateLimitStore !== state.securityRateLimitStore?.store
+      ...(!state.securityRateLimitStore || runtime.__holoSecurityRuntime__?.bindings?.rateLimitStore !== state.securityRateLimitStore
         ? { security: runtime.__holoSecurityRuntime__?.bindings }
         : {}),
     })
@@ -118,7 +113,7 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityRedisConnections,
     if (bindings.security || runtime.__holoSecurityRuntime__) {
       runtime.__holoSecurityRuntime__ ??= {}
       runtime.__holoSecurityRuntime__.bindings = bindings.security
-      state.securityRedisConnections = undefined
+      state.securityResources = undefined
     }
   }
 
