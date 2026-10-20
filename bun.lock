@@ -907,20 +907,20 @@
     "packages/kernel": {
       "name": "@holo-js/kernel",
       "version": "0.3.28",
+      "dependencies": {
+        "file-type": "catalog:",
+      },
       "devDependencies": {
         "@types/node": "catalog:",
-        "file-type": "catalog:",
         "sharp": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "file-type": "catalog:",
         "sharp": "catalog:",
       },
       "optionalPeers": [
-        "file-type",
         "sharp",
       ],
     },
@@ -1132,7 +1132,6 @@
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/kernel": "catalog:",
-        "file-type": "catalog:",
       },
       "devDependencies": {
         "@types/node": "catalog:",

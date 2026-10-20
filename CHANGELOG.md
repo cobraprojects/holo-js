@@ -137,6 +137,10 @@
 - PostgreSQL `date` and `timestamp` values use `app.timezone` (default `UTC`) instead of the Node process's time zone. A `date` reads as a `Date` at midnight in `app.timezone`, `timestamp` reads and writes its wall-clock time in `app.timezone`, and a `Date` query value is sent with its offset. Full PostgreSQL date formats are parsed, including five-digit years, `BC`, and `infinity`. Injected PostgreSQL clients, pools, and `createPool` objects read dates and timestamps in `app.timezone` too, through a per-query type config. Ambiguous fall-back times resolve to standard time, as PostgreSQL does. A `DATE` or `TIMESTAMP` that falls in a DST gap resolves forward, as PostgreSQL does, so a DATE keeps its calendar day. `timestamptz` values bind with their full historical offset, seconds included. Holo's date and timestamp parsers take precedence over a custom `types` config for those two OIDs, and the config still applies to every other OID.
 - A transaction started inside `withoutForeignKeyConstraints()` runs on the pinned connection one at a time, so concurrent transactions can't share one `BEGIN`. A transaction that reaches the pinned connection after its callback returned fails with `TransactionError` instead of running with foreign-key checks on.
 
+### Fixed
+
+- `@holo-js/kernel` declares `file-type` as a regular dependency. Before, it was an optional peer, but file-content checks import it unconditionally, so installs that couldn't resolve it from kernel's location failed every S3 write and every file-content check, such as `stat()` and file validation.
+
 ### Compatibility and upgrade requirements
 
 - **Pivot columns aren't loaded unless declared.** Code that reads `pivot` for a column that isn't in `withPivot()` or `withTimestamps()` gets `undefined`. Add the column to `withPivot()`. See [Pivot columns](apps/docs/docs/getting-started/upgrading.md#pivot-columns-and-one-of-many-relations).
