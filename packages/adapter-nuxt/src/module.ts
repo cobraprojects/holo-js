@@ -84,7 +84,7 @@ const MODEL_FILE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.j
 const HOLO_PACKAGE_SCOPE = '@holo-js/'
 const realtimeClientDefinitionPrefix = '\0holo-realtime-client:'
 const realtimeDefinitionsModuleId = '#holo/realtime-definitions'
-const VALIDATION_CLIENT_DEPENDENCIES = ['valibot', 'file-type'] as const
+const VALIDATION_CLIENT_DEPENDENCIES = ['valibot', '@holo-js/kernel > file-type'] as const
 const CLIENT_OPTIMIZE_DEPS = [
   {
     packageName: `${HOLO_PACKAGE_SCOPE}forms`,
