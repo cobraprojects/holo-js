@@ -11,7 +11,13 @@ export function collectRelationKeys<TTable extends TableDefinition>(entities: re
   return [...new Set(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))]
 }
 
-function chunkRelationKeys(keys: readonly unknown[]): unknown[][] {
+export function isPaginatedRelationQuery(query: ModelQueryBuilder): boolean {
+  const plan = query.getTableQueryBuilder().getPlan()
+  return typeof plan.limit === 'number' || typeof plan.offset === 'number'
+}
+
+function chunkRelationKeys(keys: readonly unknown[], paginated: boolean): unknown[][] {
+  if (paginated) return keys.length === 0 ? [] : [[...keys]]
   const chunks: unknown[][] = []
   for (let offset = 0; offset < keys.length; offset += RELATION_KEY_CHUNK_SIZE) {
     const chunk = keys.slice(offset, offset + RELATION_KEY_CHUNK_SIZE)
@@ -24,10 +30,11 @@ function chunkRelationKeys(keys: readonly unknown[]): unknown[][] {
 
 export async function loadRelationKeyChunks<TRow>(
   keys: readonly unknown[],
+  paginated: boolean,
   load: (chunk: readonly unknown[]) => Promise<readonly TRow[]>,
 ): Promise<TRow[]> {
   const rows: TRow[] = []
-  for (const chunk of chunkRelationKeys(keys)) {
+  for (const chunk of chunkRelationKeys(keys, paginated)) {
     for (const row of await load(chunk)) rows.push(row)
   }
   return rows
@@ -43,9 +50,11 @@ export async function retrieveRelation(
   const observationCount = observe && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
-  for (const chunk of chunkRelationKeys(keys)) {
-    const query = createQuery()
-    if (typeof observationCount === 'number' && !plan) plan = query.getTableQueryBuilder().getPlan()
+  const probe = createQuery()
+  const paginated = isPaginatedRelationQuery(probe)
+  if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
+  for (const [index, chunk] of chunkRelationKeys(keys, paginated).entries()) {
+    const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
   }
   if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
@@ -77,7 +86,7 @@ export async function retrievePivotRelation(
   pivotSelection: readonly string[],
 ): Promise<{ rows: Record<string, unknown>[], related: Map<unknown, Entity> }> {
   if (parentKeys.length === 0) return { rows: [], related: new Map() }
-  const rows = await loadRelationKeyChunks(parentKeys, chunk => createPivotQuery()
+  const rows = await loadRelationKeyChunks(parentKeys, false, chunk => createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)
     .get<Record<string, unknown>>())

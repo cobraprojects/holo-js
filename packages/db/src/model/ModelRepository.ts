@@ -21,7 +21,7 @@ import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
-import { collectRelationKeys, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
+import { collectRelationKeys, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -2954,7 +2954,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await loadRelationKeyChunks(localKeys, chunk => this.applyRelationConstraint(relation, related, constraint)
+    const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
+    const relatedEntities = await loadRelationKeyChunks(localKeys, paginated, chunk => this.applyRelationConstraint(relation, related, constraint)
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', chunk)
       .get())
@@ -2990,7 +2991,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const grouped = new Map<unknown, Entity[]>()
 
     for (const group of groups.values()) {
-      const relatedEntities = await loadRelationKeyChunks([...new Set(group.ids)], chunk => this.applyRelationConstraint(relation, group.repository, constraint)
+      const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, group.repository, constraint))
+      const relatedEntities = await loadRelationKeyChunks([...new Set(group.ids)], paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
         .where(group.repository.definition.primaryKey, 'in', chunk)
         .get())
       const relatedMap = new Map(
@@ -3092,7 +3094,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
     const related = this.resolveRelatedRepository(relation.related)
-    const latestEntities = await loadRelationKeyChunks(parentKeys, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
+    const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
+    const latestEntities = await loadRelationKeyChunks(parentKeys, paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
     const grouped = new Map<unknown, Entity[]>()
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn).entries()) {
@@ -3149,7 +3152,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const through = this.resolveThroughRepository(relation.through)
-    const throughEntities = await loadRelationKeyChunks(parentKeys, chunk => through.query()
+    const throughEntities = await loadRelationKeyChunks(parentKeys, false, chunk => through.query()
       .where(relation.firstKey, 'in', chunk)
       .get())
 
@@ -3343,7 +3346,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const pivotSelection = this.getPivotSelection(relation, [relation.foreignPivotKey, relation.morphIdColumn, relation.morphTypeColumn])
-    const pivotRows = await loadRelationKeyChunks(parentKeys, chunk => this.createMorphToManyPivotQuery(relation, this.getConnection())
+    const pivotRows = await loadRelationKeyChunks(parentKeys, false, chunk => this.createMorphToManyPivotQuery(relation, this.getConnection())
       .select(...pivotSelection)
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', chunk)
@@ -3397,7 +3400,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
     const related = this.resolveRelatedRepository(relation.related)
     const pivotSelection = this.getPivotSelection(relation, [relation.foreignPivotKey, relation.morphIdColumn, relation.morphTypeColumn])
-    const pivotRows = await loadRelationKeyChunks(parentKeys, chunk => this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
+    const pivotRows = await loadRelationKeyChunks(parentKeys, false, chunk => this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
       .select(...pivotSelection)
       .where(relation.foreignPivotKey, 'in', chunk)
       .get<Record<string, unknown>>())

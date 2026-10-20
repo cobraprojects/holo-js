@@ -257,4 +257,45 @@ describe('bounded relation loading', () => {
     const loaded = user!.getRelation<Entity<TableDefinition>>('topScoringPost')!
     expect(Object.keys(loaded.toAttributes()).sort()).toEqual(['id', 'userId'])
   })
+
+  it('applies a limit to the whole eager load across key chunks', async () => {
+    const User = await seedUsersWithOnePostEach(300)
+    const loaded = await User.with('posts', query => query.orderBy('id').limit(5)).get()
+
+    expect(postIdsAcross(loaded)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('applies an offset to the whole eager load across key chunks', async () => {
+    const User = await seedUsersWithOnePostEach(300)
+    const loaded = await User.with('posts', query => query.orderBy('id').offset(290).limit(1000)).get()
+
+    expect(postIdsAcross(loaded)).toEqual([291, 292, 293, 294, 295, 296, 297, 298, 299, 300])
+  })
 })
+
+async function seedUsersWithOnePostEach(count: number) {
+  const db = openSQLite()
+  const users = defineTable('users', { id: column.id(), name: column.string() })
+  const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+  await createTestTable(db, users)
+  await createTestTable(db, posts)
+  const userRows = Array.from({ length: count }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+  for (let index = 0; index < userRows.length; index += 100) {
+    await db.table(users).insert(userRows.slice(index, index + 100))
+    await db.table(posts).insert(userRows.slice(index, index + 100).map(user => ({ id: user.id, userId: user.id, title: `post ${user.id}` })))
+  }
+
+  const Post = defineModelFromTable(posts)
+  return defineModelFromTable(users, {
+    relations: {
+      posts: hasMany(() => Post, 'userId'),
+    },
+  })
+}
+
+function postIdsAcross(users: readonly { getRelation<T>(name: string): T }[]): number[] {
+  return users
+    .flatMap(user => user.getRelation<Entity<TableDefinition>[]>('posts') ?? [])
+    .map(post => post.get('id') as number)
+    .sort((left, right) => left - right)
+}
