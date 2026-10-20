@@ -499,13 +499,21 @@ async function ensureRememberRecaller(providerName: string, userId: string | num
   return rememberRecallerFor(adapter, user, token)
 }
 
-async function cycleRememberToken(providerName: string, userId: string | number): Promise<string | undefined> {
+async function rotateRememberToken(
+  providerName: string,
+  userId: string | number,
+): Promise<{ readonly adapter: ErasedAuthProviderAdapter, readonly user: unknown, readonly token: string } | undefined> {
   const { adapter } = getProviderAdapter(providerName)
   const user = await adapter.findById(userId)
   if (!user || !getRememberToken(adapter, user)) return undefined
   const token = createRememberToken()
   await requireRememberTokenUpdates(adapter, providerName)(user, token)
-  return rememberRecallerFor(adapter, user, token)
+  return { adapter, user, token }
+}
+
+async function cycleRememberToken(providerName: string, userId: string | number): Promise<string | undefined> {
+  const rotated = await rotateRememberToken(providerName, userId)
+  return rotated ? rememberRecallerFor(rotated.adapter, rotated.user, rotated.token) : undefined
 }
 
 async function guardHasSessionPayload(bindings: RuntimeBindings, guardName: string): Promise<boolean> {
@@ -2053,7 +2061,11 @@ async function impersonationForGuard(guardName: string): Promise<AuthImpersonati
     return null
   }
 
-  return await createImpersonationState(state.payload)
+  const impersonation = await createImpersonationState(state.payload)
+  if (state.payload.impersonation && !impersonation) {
+    await stopImpersonatingForGuard(guardName)
+  }
+  return impersonation
 }
 
 async function stopImpersonatingForGuard(guardName: string): Promise<AuthenticatedAuthUser | null> {
@@ -2731,7 +2743,7 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       }
       const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
       const resetUser = await updateUserRecord(record.provider, userId, { password })
-      await cycleRememberToken(record.provider, userId)
+      await rotateRememberToken(record.provider, userId)
       return resetUser
     })
     if (!updated) {

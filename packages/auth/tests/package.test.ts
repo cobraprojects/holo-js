@@ -1766,6 +1766,29 @@ describe('@holo-js/auth package runtime', () => {
     await expect(user()).resolves.toBeNull()
   })
 
+  it('ends an impersonation whose actor no longer exists instead of reporting it as cleared while the target stays signed in', async () => {
+    const runtime = await configureRuntime()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await loginUsing(actor)
+    await impersonate(target)
+
+    await runtime.usersProvider.delete!(actor.id)
+
+    await expect(impersonation()).resolves.toBeNull()
+    await expect(user()).resolves.toBeNull()
+  })
+
   it('refuses to impersonate with remember and changes nothing', async () => {
     const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
@@ -2540,6 +2563,29 @@ describe('@holo-js/auth package runtime', () => {
     otherBrowserContext.setSessionId('web', otherBrowser.sessionId)
     configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
     await expect(check()).resolves.toBe(true)
+  })
+
+  it('rotates the remember token on password reset even when no remember-me lifetime is configured', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    await runtime.usersProvider.updateRememberToken!(created!, 'remember-before-reset')
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      providers: { users: runtime.usersProvider, admins: runtime.adminsProvider },
+      session: { ...bindings.session, rememberMeLifetimeMinutes: undefined },
+    })
+
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await expect(resetPassword({
+      token: runtime.deliveries[0]!.tokenValue,
+      password: 'new-secret',
+      passwordConfirmation: 'new-secret',
+    })).resolves.toMatchObject({ email: 'ava@example.com' })
+
+    const reset = await runtime.usersProvider.findById(created!.id as number)
+    expect(reset?.remember_token).toEqual(expect.any(String))
+    expect(reset?.remember_token).not.toBe('remember-before-reset')
   })
 
   it('creates, invalidates, and consumes password reset tokens', async () => {
