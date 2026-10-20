@@ -335,10 +335,6 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     )
   }
 
-  hydrate(values: Partial<ModelRecord<TTable>>): Entity<TTable> {
-    return new Entity(this, this.normalizeFromStorage(values), true)
-  }
-
   async retrieve(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
     return this.retrieveWithCasts(values, {})
   }
@@ -3518,7 +3514,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: PivotRelationDefinition,
   ): Entity {
     const relatedRepository = entity.getRepository() as ModelRepository
-    const cloned = relatedRepository.hydrate(entity.toAttributes())
+    const cloned = hydrateRecord(relatedRepository, entity.toAttributes())
     cloned.setRelation(relation.pivotAccessor, this.extractPivotAttributes(row, relation))
     return cloned
   }
@@ -3529,7 +3525,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   ): Record<string, unknown> | Entity {
     if (relation.pivotModel) {
       const pivotRepository = this.resolveRelatedRepository(relation.pivotModel)
-      return pivotRepository.hydrate(row)
+      return hydrateRecord(pivotRepository, row)
     }
 
     const connection = this.getConnection()
@@ -3802,7 +3798,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return this.valueTransformer.serializeAttributeValue(key, value)
   }
 
-  private normalizeFromStorage(values: Partial<ModelRecord<TTable>>, extraCasts: Record<string, ModelCastDefinition> = {}): Partial<ModelRecord<TTable>> {
+  normalizeFromStorage(values: Partial<ModelRecord<TTable>>, extraCasts: Record<string, ModelCastDefinition> = {}): Partial<ModelRecord<TTable>> {
     return this.valueTransformer.normalizeFromStorage(values, extraCasts)
   }
 
@@ -3837,4 +3833,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return this.valueTransformer.applyCastGet(cast, value)
   }
 
+}
+
+export function hydrateRecord<TTable extends TableDefinition>(
+  repository: ModelRepository<TTable>,
+  values: Partial<ModelRecord<TTable>>,
+): Entity<TTable> {
+  return new Entity(repository, repository.normalizeFromStorage(values), true)
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { hydrateRecord } from '../src/model/ModelRepository'
 import {
   DB,
   Entity,
@@ -311,7 +312,7 @@ describe('model relation slice', () => {
     await orphan.load('author')
     expect(orphan.getRelation('author')).toBeNull()
 
-    const detachedUser = User.getRepository().hydrate({ id: null as never, name: 'Detached' })
+    const detachedUser = hydrateRecord(User.getRepository(), { id: null as never, name: 'Detached' })
     await detachedUser.load('posts', 'profile')
     expect(detachedUser.getRelation<Entity<TableDefinition>[]>('posts')).toEqual([])
     expect(detachedUser.getRelation('profile')).toBeNull()
@@ -727,7 +728,7 @@ describe('model relation slice', () => {
         ] as never,
         path,
       )
-      const aggregateUser = User.getRepository().hydrate({ id: 1, name: 'Ava' })
+      const aggregateUser = hydrateRecord(User.getRepository(), { id: 1, name: 'Ava' })
       aggregateUser.setComputed('posts_sum_score', 8)
       User.getRepository().recordRelationAggregateObservations(
         [aggregateUser],
@@ -737,7 +738,7 @@ describe('model relation slice', () => {
         ] as never,
         path,
       )
-      const fallbackUser = User.getRepository().hydrate({ id: 1, name: 'Ava' })
+      const fallbackUser = hydrateRecord(User.getRepository(), { id: 1, name: 'Ava' })
       fallbackUser.setRelation('posts', [])
       fallbackUser.setRelation('profile', null)
       fallbackUser.setRelation('roles', [{}])
@@ -746,12 +747,12 @@ describe('model relation slice', () => {
         ['posts', 'profile', 'roles'],
         path,
       )
-      const fallbackPost = Post.getRepository().hydrate({ id: 20, userId: 1, title: 'Post A', score: 5 })
+      const fallbackPost = hydrateRecord(Post.getRepository(), { id: 20, userId: 1, title: 'Post A', score: 5 })
       fallbackPost.setRelation('author', fallbackUser)
       Post.getRepository().recordRelationObservations([fallbackPost], ['author'], path)
       const unsavedUser = User.make({ name: 'Unsaved' })
       await User.getRepository().loadRelations(
-        [User.getRepository().hydrate({ id: 1, name: 'Ava' }), unsavedUser],
+        [hydrateRecord(User.getRepository(), { id: 1, name: 'Ava' }), unsavedUser],
         [{ relation: 'posts' }],
         false,
       )
@@ -783,7 +784,7 @@ describe('model relation slice', () => {
           ),
         },
       })
-      const scopedUser = ScopedUser.getRepository().hydrate({ id: 1, name: 'Ava' })
+      const scopedUser = hydrateRecord(ScopedUser.getRepository(), { id: 1, name: 'Ava' })
       scopedUser.setRelation('posts', [])
       scopedUser.setRelation('profile', null)
       scopedUser.setRelation('roles', [])
@@ -792,7 +793,7 @@ describe('model relation slice', () => {
         ['posts', 'profile', 'roles'],
         path,
       )
-      const scopedPost = ScopedPost.getRepository().hydrate({ id: 20, userId: 1, title: 'Post A', score: 5 })
+      const scopedPost = hydrateRecord(ScopedPost.getRepository(), { id: 20, userId: 1, title: 'Post A', score: 5 })
       scopedPost.setRelation('author', scopedUser)
       ScopedPost.getRepository().recordRelationObservations([scopedPost], ['author'], path)
       const MorphUser = defineModelFromTable(users, {
@@ -800,13 +801,13 @@ describe('model relation slice', () => {
           images: morphMany(() => Post, 'imageable', 'imageableType', 'imageableId'),
         },
       })
-      const morphUser = MorphUser.getRepository().hydrate({ id: 1, name: 'Ava' })
+      const morphUser = hydrateRecord(MorphUser.getRepository(), { id: 1, name: 'Ava' })
       morphUser.setRelation('images', [])
       MorphUser.getRepository().recordRelationObservations([morphUser], ['images'], path)
       return true
     })
 
-    const pendingUser = User.getRepository().hydrate({ id: 1, name: 'Ava' })
+    const pendingUser = hydrateRecord(User.getRepository(), { id: 1, name: 'Ava' })
     pendingUser.setPendingRelationLoad('profile', Promise.resolve().then(() => {
       pendingUser.setRelation('profile', null)
     }))
@@ -999,7 +1000,7 @@ describe('model relation slice', () => {
     await expect(BrokenPivotFilterUser.query().with('roles').get()).rejects.toThrow(SecurityError)
     await expect(BrokenPivotOrderUser.query().with('roles').get()).rejects.toThrow(SecurityError)
 
-    const detachedUser = User.getRepository().hydrate({ id: null as never, name: 'Detached' })
+    const detachedUser = hydrateRecord(User.getRepository(), { id: null as never, name: 'Detached' })
     await detachedUser.load('roles')
     expect(detachedUser.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
 
@@ -1900,7 +1901,7 @@ describe('model relation slice', () => {
       'name',
       'Amina',
     ).orderBy('id').get()).map(post => post.get('id'))).toEqual([10, 11, 12])
-    const detachedUser = User.getRepository().hydrate({ id: null as never, name: 'Ghost' })
+    const detachedUser = hydrateRecord(User.getRepository(), { id: null as never, name: 'Ghost' })
     const firstUser = await User.findOrFail(1)
     const secondUser = await User.findOrFail(2)
     expect((await Post.whereBelongsTo(firstUser).orderBy('id').get()).map(post => post.get('id'))).toEqual([10, 11])
@@ -1947,7 +1948,7 @@ describe('model relation slice', () => {
         reviewer: belongsTo(() => User.definition, 'reviewerId') } })
     expect((await ReviewPost.whereBelongsTo(firstUser).get())).toEqual([])
 
-    const detachedPost = Post.getRepository().hydrate({ id: 99, userId: null as never, title: 'Orphan' })
+    const detachedPost = hydrateRecord(Post.getRepository(), { id: 99, userId: null as never, title: 'Orphan' })
     expect(await (Post.getRepository() as unknown as RepositoryRelationHarness).filterByRelations([detachedPost], [{ relation: 'author', negate: false }])).toEqual([])
     expect(await (User.getRepository() as unknown as RepositoryRelationHarness).filterByRelations([detachedUser], [{ relation: 'posts', negate: false }])).toEqual([])
   })
@@ -2236,7 +2237,7 @@ describe('model relation slice', () => {
     expect((mechanic.toJSON() as Record<string, unknown>).repairs_exists).toBe(true)
     expect((mechanic.toJSON() as Record<string, unknown>).repairs_sum_cost).toBe(250)
 
-    const detached = Mechanic.getRepository().hydrate({ id: null as never, name: 'Detached' })
+    const detached = hydrateRecord(Mechanic.getRepository(), { id: null as never, name: 'Detached' })
     await detached.loadCount('owner', 'repairs')
     await detached.loadExists('owner', 'repairs')
     await detached.loadSum('repairs', 'cost')
@@ -2519,7 +2520,7 @@ describe('model relation slice', () => {
     expect((user.toJSON() as Record<string, unknown>).posts_count).toBe(2)
     expect((user.toJSON() as Record<string, unknown>).roles_exists).toBe(true)
 
-    const detachedUser = User.getRepository().hydrate({ id: null as never, name: 'Detached' })
+    const detachedUser = hydrateRecord(User.getRepository(), { id: null as never, name: 'Detached' })
     await detachedUser.loadCount('posts')
     await detachedUser.loadMax('posts', 'score')
     expect((detachedUser.toJSON() as Record<string, unknown>).posts_count).toBe(0)
@@ -2628,7 +2629,7 @@ describe('model relation slice', () => {
     const loadedMax = await User.withMax('roles', 'weight').orderBy('id').get()
     expect(loadedMax.map(user => (user.toJSON() as Record<string, unknown>).roles_max_weight)).toEqual([null, null])
 
-    const detached = User.getRepository().hydrate({ id: null as never, name: 'Detached' })
+    const detached = hydrateRecord(User.getRepository(), { id: null as never, name: 'Detached' })
     await detached.loadCount('roles')
     await detached.loadExists('roles')
     await detached.loadMax('roles', 'weight')
@@ -2710,7 +2711,7 @@ describe('model relation slice', () => {
 
     expect(await User.has('roles').get()).toEqual([])
 
-    const detached = User.getRepository().hydrate({ id: null as never, name: 'Detached' })
+    const detached = hydrateRecord(User.getRepository(), { id: null as never, name: 'Detached' })
     const filtered = await (User.getRepository() as unknown as RepositoryRelationHarness).filterByRelations(
       [detached],
       [{ relation: 'roles', negate: false }],
@@ -2870,7 +2871,7 @@ describe('model relation slice', () => {
       'Cannot mutate relation "roles" on an unsaved User.',
     )
 
-    const userWithoutParentKey = User.getRepository().hydrate({ id: null as never, name: 'Broken' })
+    const userWithoutParentKey = hydrateRecord(User.getRepository(), { id: null as never, name: 'Broken' })
     await expect(userWithoutParentKey.attach('roles', 100)).rejects.toThrow(
       'Cannot mutate relation "roles" without a parent key value.',
     )
@@ -3149,7 +3150,7 @@ describe('model relation slice', () => {
     expect(() => Image.query().whereMorphedTo('imageable', User.make({ name: 'Unsaved' }))).toThrow(
       'whereMorphedTo targets must be persisted entities.',
     )
-    const brokenTarget = User.getRepository().hydrate({ id: 9, name: 'Broken' })
+    const brokenTarget = hydrateRecord(User.getRepository(), { id: 9, name: 'Broken' })
     brokenTarget.forceFill({ id: undefined } as never)
     expect(() => Image.query().whereMorphedTo('imageable', brokenTarget)).toThrow(
       'whereMorphedTo targets must have a defined primary key value.',
@@ -3555,7 +3556,7 @@ describe('model relation slice', () => {
       relations: {
         posts: hasMany(() => Post, 'userId') } })
     ToggledUser.automaticallyEagerLoadRelationships(true)
-    const toggledUser = ToggledUser.getRepository().hydrate({ id: 2, name: 'Amina' } as never)
+    const toggledUser = hydrateRecord(ToggledUser.getRepository(), { id: 2, name: 'Amina' } as never)
     await expect(asDynamicEntity(toggledUser).posts).resolves.toHaveLength(1)
 
     const parent = await User.findOrFail(1)
