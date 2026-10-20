@@ -15,7 +15,7 @@ Governing rules: [ADR-0016](../docs/adr/0016-laravel-behavioral-parity.md) (foll
 
 These are the four dispositions the ticket permits; "not-reproduced" is not one of them. Items 2, 5 and 18 are partly reproduced or partly decision-gated; each row says which part. A reproduced item whose fix needs a choice is also listed under Decisions needed.
 
-Creating the per-package GitHub issues is not done yet. It is outward-facing and was not authorised in this run, so the proposed-tickets table below is a draft, not filed issues.
+Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Implementation issues are filed as #212–#223 and linked as sub-issues of #98. Items with no decision yet (1, 22, 32, 33) are still open.
 
 ## Dispositions
 
@@ -111,7 +111,45 @@ Reproduced items. Rows marked "decision" or "confirm scope" need approval (see D
 | db | 15 | split bulk inserts under the driver bind limit | decision (Decision 5) |
 | cli | 28 | `holo dev` exit code on port conflict; owned-stale auto-stop | decision (Decision 8) |
 
+## Resolution (2026-10-20)
+
+Audit-time dispositions above are kept as recorded. This table gives the orchestrator's outcome for each item and the issue that carries it. Rule applied: follow Laravel; keep hardening only where it is security.
+
+| Item | Audit disposition | Resolution | Issue |
+| --- | --- | --- | --- |
+| 2 | reproduced | Implement: state cookie Secure = configured OR https (decision-free) | #212 |
+| 3 | insufficient-information | Implement: per-session Redis keys, no hash tag (Laravel) | #213 |
+| 5 | reproduced | Implement: remove the access-token and authorization-code session-id fallbacks | #212 |
+| 7 | reproduced | Rejected: no per-request upstream revocation check (not Laravel) | closed with decision |
+| 11 | insufficient-information | Implement: CSRF enabled by default, with upgrade note | #219 |
+| 13 | reproduced | Implement: URL branch keeps ssl | #214 |
+| 15 | reproduced | Rejected: no bulk-insert splitting (Laravel does not split) | closed with decision |
+| 16 | reproduced | Implement: sync dedupes ids; attach unchanged | #214 |
+| 18 | reproduced | Implement: query update() sets updated_at, with upgrade note | #214 |
+| 20 | reproduced | Implement: keep the media SSRF guard, record it in ADR-0016 as hardening, cover the embedded-IPv4 ranges | #215 |
+| 21 | reproduced | Implement: store Content-Type on S3 PUT (Flysystem parity) | #216 |
+| 23 | reproduced | Implement: single-escape the markdown href | #217 |
+| 24 | insufficient-information | Rejected: no SMTP connection pooling (Laravel parity) | closed with decision |
+| 25 | insufficient-information | Rejected: no Origin requirement; allowed-origins stays optional (Reverb parity) | closed with decision |
+| 26 | insufficient-information | Rejected: no publish nonce cache; the 300 s Pusher window is parity | closed with decision |
+| 28 | reproduced | Implement: non-zero exit on an unowned port conflict; re-enable owned-stale auto-stop | #218 |
+| 29 | insufficient-information | Implement: runtime worker via process.execPath | #218 |
+| 30 | reproduced | Implement: payload via stdin or temp file (decision-free) | #218 |
+| 31 | reproduced | Implement: bounded retention for .js/.mjs config loads | #220 |
+| 34 | insufficient-information | Rejected: no pre-0.3 Svelte upgrade support (0.x policy) | closed with decision |
+| 35 | insufficient-information | Follow-up: replace sleep-based waits (test-only) | #223 |
+| 37 | reproduced | Implement: auth failures via the channel .error() callback; malformed frames dropped with a dev-mode log | #221 |
+| 22 (Nuxt sub-finding) | follow-up | Follow-up: storage route honors X-Forwarded-Proto only from trusted proxies (security) | #222 |
+| 1 | insufficient-information | Open: no decision given | none |
+| 22 (publicStorage trusted-proxy) | insufficient-information | Open: needs reproduction through the adapter with proxy trust | none |
+| 32 | insufficient-information | Open: maintainability only; no decision given | none |
+| 33 | insufficient-information | Open: maintainability only; no decision given | none |
+
+Items 10, 14, 17, 27 and 36 keep their audit dispositions (rejected-by-decision) and need no issue.
+
 ## Decisions needed
+
+Resolved 2026-10-20 (see Resolution). The list below is the question as it was asked.
 
 1. **#3** Redis single hash tag vs per-session keys.
 2. **#5** Remove the authorization-code session-id fallback (changes a pinned test).
@@ -131,6 +169,6 @@ Reproduced items. Rows marked "decision" or "confirm scope" need approval (see D
 
 ## Follow-ups outside this inventory
 
-- Nuxt storage route trusts `X-Forwarded-Proto` regardless of `trustedProxies`, unlike the realtime and broadcast-auth routes (`packages/adapter-nuxt/src/runtime/server/routes/storage.ts`, observed under #22). Needs its own ticket.
-- Sleep-based test waits (#35): 87 sites, starting with cli and db.
-- Publish-replay nonce (#26) is a product choice, not a parity defect.
+- Nuxt storage route trusts `X-Forwarded-Proto` regardless of `trustedProxies`, unlike the realtime and broadcast-auth routes (`packages/adapter-nuxt/src/runtime/server/routes/storage.ts`, observed under #22). Filed as #222.
+- Sleep-based test waits (#35): 87 sites, starting with cli and db. Filed as #223.
+- Publish-replay nonce (#26) was rejected on 2026-10-20 (Pusher's 300 s window is parity).
