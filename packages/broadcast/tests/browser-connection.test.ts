@@ -55,6 +55,7 @@ function createHarness(resolveUrl: () => string | Promise<string> = () => 'ws://
 describe('Broadcast browser connection ownership', () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('deduplicates configuration discovery and connection until open', async () => {
@@ -199,6 +200,50 @@ describe('Broadcast browser connection ownership', () => {
     BrowserSocketAdapter.sockets.at(-1)!.emit('open')
     expect(harness.opens).toBe(2)
     expect(harness.connection.reconnecting).toBe(false)
+    harness.connection.disconnect()
+  })
+
+  it('grows the reconnect delay across open-then-close cycles that never stay open', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    BrowserSocketAdapter.sockets[0]!.emit('open')
+    await first
+    BrowserSocketAdapter.sockets[0]!.emit('close')
+
+    const delays = [250, 500, 1000, 2000, 4000, 8000, 15_000, 15_000]
+    for (const [index, delay] of delays.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1)
+      expect(BrowserSocketAdapter.sockets).toHaveLength(index + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      const socket = BrowserSocketAdapter.sockets[index + 1]!
+      socket.emit('open')
+      socket.emit('close')
+    }
+    harness.connection.disconnect()
+  })
+
+  it('resets the reconnect delay once a reopened connection stays open for the stability window', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    BrowserSocketAdapter.sockets[0]!.emit('open')
+    await first
+    BrowserSocketAdapter.sockets[0]!.emit('close')
+    await vi.advanceTimersByTimeAsync(250)
+    BrowserSocketAdapter.sockets[1]!.emit('open')
+    BrowserSocketAdapter.sockets[1]!.emit('close')
+    await vi.advanceTimersByTimeAsync(500)
+    BrowserSocketAdapter.sockets[2]!.emit('open')
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    BrowserSocketAdapter.sockets[2]!.emit('close')
+    await vi.advanceTimersByTimeAsync(249)
+    expect(BrowserSocketAdapter.sockets).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(BrowserSocketAdapter.sockets).toHaveLength(4)
     harness.connection.disconnect()
   })
 

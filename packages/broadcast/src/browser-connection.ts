@@ -22,6 +22,7 @@ type ConnectionAttempt = {
 
 const RECONNECT_BASE_DELAY_MS = 500
 const RECONNECT_MAX_DELAY_MS = 30_000
+const STABLE_CONNECTION_MS = 5_000
 
 function reconnectDelay(attempt: number): number {
   const ceiling = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1))
@@ -40,15 +41,16 @@ function createConnection(options: {
   let reconnecting = false
   let reconnectAttempts = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let stabilityTimer: ReturnType<typeof setTimeout> | undefined
 
   const cancelReconnect = (): void => {
     clearTimeout(reconnectTimer)
     reconnectTimer = undefined
   }
 
-  const resetBackoff = (): void => {
-    reconnecting = false
-    reconnectAttempts = 0
+  const cancelStabilityCheck = (): void => {
+    clearTimeout(stabilityTimer)
+    stabilityTimer = undefined
   }
 
   const scheduleReconnect = (): void => {
@@ -83,6 +85,7 @@ function createConnection(options: {
       if (attempt !== next) {
         return
       }
+      cancelStabilityCheck()
       attempt = undefined
       reconnecting ||= opened
       reject(error)
@@ -111,8 +114,14 @@ function createConnection(options: {
             return
           }
           opened = true
-          resetBackoff()
+          reconnecting = false
           resolve(socket)
+          stabilityTimer = setTimeout(() => {
+            stabilityTimer = undefined
+            if (attempt === next) {
+              reconnectAttempts = 0
+            }
+          }, STABLE_CONNECTION_MS)
           options.onOpen?.(socket)
         })
         socket.addEventListener('message', (event) => {
@@ -141,8 +150,10 @@ function createConnection(options: {
   }
 
   const disconnect = (): void => {
-    resetBackoff()
+    reconnecting = false
+    reconnectAttempts = 0
     cancelReconnect()
+    cancelStabilityCheck()
     const previous = attempt
     attempt = undefined
     previous?.reject(new Error(options.failureMessage))
