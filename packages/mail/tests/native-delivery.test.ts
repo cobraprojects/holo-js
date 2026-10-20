@@ -111,7 +111,7 @@ assert.equal(result.driver, 'smtp')
   const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
   const entry = compiled.outputFiles[0]
   if (!entry) throw new Error('One-shot mail script compilation produced no entry')
-  await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 10000 })
+  await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
 }
 
 async function runNativeMailWorker(port: number, operation: 'queue' | 'transaction' | 'queued-transaction' | 'storage' | 'log' | 'delayed' | 'builtins' | 'plugin' | 'broken-plugin', s3Port?: number): Promise<{ stdout: string, stderr: string }> {
@@ -388,11 +388,11 @@ it('reconnects for the next send after the server drops the idle connection', as
   expect(provider.stats.connections).toBe(2)
 })
 
-it('lets a one-shot script exit after its SMTP send instead of holding the pooled connection open', async () => {
+it('lets a one-shot script exit once its SMTP connection has been idle for the pool timeout', async () => {
   const provider = await startSmtpServer()
   await runOneShotSmtpSend(provider.port)
   expect(provider.messages).toHaveLength(1)
-})
+}, 20000)
 
 it.each([
   ['resets', () => resetMailRuntime()],

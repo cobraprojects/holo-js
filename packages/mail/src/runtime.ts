@@ -193,16 +193,6 @@ type NodemailerTransport = {
   close(): void
 }
 
-type PooledSmtpTransport = NodemailerTransport & {
-  readonly transporter?: {
-    readonly _connections?: readonly {
-      readonly connection?: {
-        readonly _socket?: { ref(): void, unref(): void } | false | null
-      }
-    }[]
-  }
-}
-
 type SmtpTransportEntry = {
   readonly transport: NodemailerTransport
   inFlight: number
@@ -852,6 +842,8 @@ async function createSmtpMessage(
   }
 }
 
+const SMTP_POOL_IDLE_TIMEOUT_MS = 5000
+
 function retireSmtpTransports(): void {
   const state = getRuntimeState()
   const entries = [...state.smtpTransports?.values() ?? []]
@@ -875,32 +867,16 @@ function getOrCreateSmtpTransport(
   return entry
 }
 
-function setPooledSmtpSocketsRef(transport: NodemailerTransport, ref: boolean): void {
-  for (const resource of (transport as PooledSmtpTransport).transporter?._connections ?? []) {
-    const socket = resource.connection?._socket
-    if (!socket) continue
-    if (ref) {
-      socket.ref()
-    } else {
-      socket.unref()
-    }
-  }
-}
-
 async function sendThroughSmtpTransport(
   entry: SmtpTransportEntry,
   createMessage: () => Promise<NodemailerMailMessage>,
 ): Promise<NodemailerSendResult> {
-  if (entry.inFlight === 0) setPooledSmtpSocketsRef(entry.transport, true)
   entry.inFlight++
   try {
     return await entry.transport.sendMail(await createMessage())
   } finally {
     entry.inFlight--
-    if (entry.inFlight === 0) {
-      if (entry.retired) entry.transport.close()
-      else setPooledSmtpSocketsRef(entry.transport, false)
-    }
+    if (entry.retired && entry.inFlight === 0) entry.transport.close()
   }
 }
 
@@ -919,6 +895,7 @@ async function sendViaSmtp(
 
   const entry = getOrCreateSmtpTransport(context.mailer, () => nodemailer.createTransport({
     pool: true,
+    idleTimeout: SMTP_POOL_IDLE_TIMEOUT_MS,
     host: mailerConfig.host,
     port: mailerConfig.port,
     secure: mailerConfig.secure,
