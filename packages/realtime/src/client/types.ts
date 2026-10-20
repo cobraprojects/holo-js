@@ -15,13 +15,17 @@ export type RealtimeQueryStore<TResult> = {
   subscribe(listener: () => void): () => void
 }
 
+export type RealtimeSnapshotDelivery = {
+  readonly resync?: boolean
+}
+
 export type RealtimeClientTransport = {
   query<TResult>(name: string, args: Record<string, unknown>): Promise<RealtimeSubscriptionSnapshot<TResult>>
   mutate<TResult>(name: string, args: Record<string, unknown>): Promise<RealtimeExecutionResult<TResult>>
   subscribe<TResult>(
     name: string,
     args: Record<string, unknown>,
-    listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void,
+    listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>, delivery?: RealtimeSnapshotDelivery) => void,
     onError: (error: unknown) => void,
   ): () => void
 }

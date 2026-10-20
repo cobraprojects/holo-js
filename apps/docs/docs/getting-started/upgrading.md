@@ -92,6 +92,11 @@ Each [Broadcast browser connection](/broadcasting/production#connection-limits) 
 
 A subscription beyond the channel or realtime limit fails with status `429`, and the socket stays open. A connection that exceeds the message rate, or that has more than 4 MB of output waiting for it, is closed with code `1008`. If a page needs more live queries than one connection allows, split them across pages.
 
+### Browser connections reconnect
+
+Realtime and Flux reconnect on their own after the WebSocket closes or fails. They wait about half a second before the first try, then wait longer after each failed try, up to 30 seconds, with some randomness so browsers don't all retry at once. Live queries and channels are sent again on the new connection, and a live query shows the current result. Flux re-authorizes private and presence channels during reconnect.
+
+Two behaviors changed for app code. A worker restart no longer calls the `onError` of every active subscription, so don't rely on that callback to detect an outage. A realtime mutation that was already sent when the socket closed rejects with a connection error and isn't sent again, because the server may already have run it. Catch that error and retry only when the mutation is safe to repeat. See [When the connection drops](/realtime/#when-the-connection-drops).
 ### Broadcast dead connections and presence after a crash
 
 The Node.js worker now pings each WebSocket connection every 30 seconds and closes any that don't answer. Browsers and clients built on a WebSocket library that answers pings, such as `ws`, need no change. A custom client that never answers WebSocket pings is disconnected within 60 seconds, so it must answer pings or send a message at least that often.

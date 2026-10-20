@@ -13,6 +13,7 @@ import {
 import type {
   MutableRealtimeQueryStore,
   RealtimeClientTransport,
+  RealtimeSnapshotDelivery,
   SharedRealtimeSnapshot,
 } from './types'
 import {
@@ -83,6 +84,17 @@ export function createRealtimeQueryStore<TResult>(
     listeners.clear()
   }
 
+  const applySnapshot = (nextSnapshot: RealtimeSubscriptionSnapshot<TResult>) => {
+    const sharedSnapshot = createSharedRealtimeSnapshot(snapshot, snapshotDataHash, nextSnapshot)
+    snapshot = sharedSnapshot.snapshot
+    snapshotDataHash = sharedSnapshot.hash
+    if (!sharedSnapshot.changed) {
+      return
+    }
+
+    notify()
+  }
+
   const setSnapshot = (nextSnapshot: RealtimeSubscriptionSnapshot<TResult>) => {
     if (disposed) {
       return
@@ -92,14 +104,18 @@ export function createRealtimeQueryStore<TResult>(
       return
     }
 
-    const sharedSnapshot = createSharedRealtimeSnapshot(snapshot, snapshotDataHash, nextSnapshot)
-    snapshot = sharedSnapshot.snapshot
-    snapshotDataHash = sharedSnapshot.hash
-    if (!sharedSnapshot.changed) {
+    applySnapshot(nextSnapshot)
+  }
+
+  const applyLiveSnapshot = (
+    nextSnapshot: RealtimeSubscriptionSnapshot<TResult>,
+    delivery?: RealtimeSnapshotDelivery,
+  ) => {
+    if (!delivery?.resync && isStaleRealtimeSnapshot(snapshot, nextSnapshot)) {
       return
     }
 
-    notify()
+    applySnapshot(nextSnapshot)
   }
 
   const load = (): Promise<RealtimeSubscriptionSnapshot<TResult>> => {
@@ -141,13 +157,13 @@ export function createRealtimeQueryStore<TResult>(
       })
       try {
         connected = true
-        unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot) => {
+        unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot, delivery) => {
           if (startupId !== currentStartupId) {
             return
           }
 
           seenLiveSnapshot = true
-          setSnapshot(nextSnapshot)
+          applyLiveSnapshot(nextSnapshot, delivery)
         }, (error) => {
           if (startupId !== currentStartupId) {
             return
