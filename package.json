@@ -208,7 +208,6 @@
     "globals": "catalog:",
     "@holo-js/cli": "workspace:*",
     "@holo-js/adapter-shared": "workspace:*",
-    "@holo-js/kernel": "workspace:*",
     "mysql2": "catalog:",
     "pg": "catalog:",
     "playwright": "catalog:",

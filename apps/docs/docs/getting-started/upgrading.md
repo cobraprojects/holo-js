@@ -70,6 +70,10 @@ Factories and `holo seed` now run without mass-assignment guards, as in Laravel.
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
 
+### Next.js servers close Holo resources on shutdown
+
+When a Next.js server receives `SIGINT` or `SIGTERM`, it now closes Holo's database, Redis, queue, and other connections after it finishes in-flight requests, then exits. The process waits up to 30 seconds from the signal for requests to finish and connections to close, so give your process manager at least that long to stop the server. For example, set `terminationGracePeriodSeconds` in Kubernetes or `TimeoutStopSec` in systemd. Nuxt already closed Holo resources on shutdown and now reports a failed close through `exceptions.report`. No code changes are required. See [Stop the server](/deployment/#stop-the-server).
+
 ### Unexpected SvelteKit errors
 
 Without a `handleError` export in `src/hooks.server.ts`, an unexpected error in a SvelteKit app is logged through the reporter, and the response carries SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is still returned while `debug` is `true` in `config/app.ts`. Export `handleError` if your client needs a different message. See [Unexpected errors in SvelteKit](/basics/errors#unexpected-errors-in-sveltekit).

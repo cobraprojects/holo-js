@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Next.js servers close Holo's database, Redis, queue, and other connections when they receive `SIGINT` or `SIGTERM`, after in-flight requests finish, and exit once the close completes or 30 seconds after the signal, whichever comes first. Before, the process exited without closing them.
+- Failed Nuxt shutdowns are reported through `exceptions.report` with capability `nuxt` and operation `shutdown`, and failed Next.js shutdowns with capability `next`. Before, Nuxt dropped these errors silently.
+- Nuxt builds no longer keep storage disk credentials in build-time state, so `nuxt build` has no database or storage secrets to write out.
 - Make `@holo-js/validation` the only public schema-builder package. Remove schema builders from `@holo-js/forms` and remove the `@holo-js/forms/schema` entry.
 - Accept `@holo-js/validation` schemas directly in Forms submission helpers and framework form adapters.
 - Keep compiled browser validation on the Validation entry and reject the removed Forms schema entry in packaged-export checks.

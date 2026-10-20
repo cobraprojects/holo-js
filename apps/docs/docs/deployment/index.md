@@ -70,6 +70,14 @@ New Next.js apps trust forwarded headers from any connection with `trustedProxie
 
 If you don't pass `--port`, Holo uses the `PORT` environment variable.
 
+## Stop the server
+
+Send the Next.js or Nuxt server `SIGTERM` (or press Ctrl+C) to stop it. The server finishes the requests it is handling, then Holo closes its database, Redis, queue, and other connections before the process exits.
+
+Next.js gives both steps 30 seconds from the signal. If they take longer, the process exits without finishing the close, so set your process manager's stop timeout to at least 30 seconds. Nuxt's server also waits up to 30 seconds by default.
+
+Holo reports a failed close through `exceptions.report`, with capability `next` or `nuxt` and operation `shutdown`. Holo doesn't wait for your reporter to finish, so flush your error tracker before exit if you need every report. See [Reporting errors](/basics/errors#reporting-errors).
+
 ## Run migrations
 
 Run migrations as an explicit deploy step, before you build and before new code serves traffic:

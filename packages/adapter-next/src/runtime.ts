@@ -1,10 +1,12 @@
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
+import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
 import { serializeValidationException } from '@holo-js/validation'
 import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
 import { getCurrentNextRequest, setNextAuthRequestRunner, type NextRequestLike } from './request-context'
+import { installNextShutdown } from './shutdown'
 export { runWithNextRequest, type NextRequestLike } from './request-context'
 
 export type NextHoloRuntimeOptions = CreateHoloOptions & {
@@ -283,6 +285,7 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
       },
     })
     setNextAuthRequestRunner(callback => runtime.runWithAuthRequestAccessors(authRequest, callback))
+    installNextShutdown({ close: () => runtime.shutdown(), report: captureErrorReporter() })
     return runtime
   }
 

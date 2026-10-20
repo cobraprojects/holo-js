@@ -17,7 +17,6 @@
         "@eslint/js": "catalog:",
         "@holo-js/adapter-shared": "workspace:*",
         "@holo-js/cli": "workspace:*",
-        "@holo-js/kernel": "workspace:*",
         "@types/better-sqlite3": "catalog:",
         "@vitest/coverage-istanbul": "catalog:",
         "@vitest/coverage-v8": "catalog:",
@@ -212,6 +211,7 @@
         "@holo-js/adapter-shared": "catalog:",
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
+        "@holo-js/kernel": "catalog:",
         "@holo-js/validation": "catalog:",
       },
       "devDependencies": {
