@@ -4,6 +4,11 @@
   "description": "Holo-JS Framework - project creation, discovery, and operational CLI",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobraprojects/holo-js.git",
+    "directory": "packages/cli"
+  },
   "bin": {
     "holo": "./dist/bin/holo.mjs",
     "holo-js": "./dist/bin/holo.mjs"
@@ -19,7 +24,8 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "skills"
+    "skills",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node ../../scripts/generate-cli-workspace-catalog.mjs && tsup",

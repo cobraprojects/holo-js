@@ -1,4 +1,5 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +9,9 @@ import { collectPackageManifestFailures } from './validate-dependency-version-po
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const interruptSignals = ['SIGINT', 'SIGTERM', 'SIGHUP']
+let activeTree
+const publishStopGraceMs = 5000
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -75,7 +79,7 @@ async function listPackageManifestPaths(root = repoRoot) {
   return manifestPaths.filter(manifestPath => typeof manifestPath === 'string')
 }
 
-export async function withResolvedCatalogManifests(callback, root = repoRoot) {
+export async function withResolvedCatalogManifests(callback, root = repoRoot, options = {}) {
   const rootManifest = await readJson(join(root, 'package.json'))
   const catalog = rootManifest.workspaces?.catalog
   if (!isObject(catalog)) {
@@ -89,12 +93,42 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
   const originalManifests = new Map()
   let callbackError
 
+  let pendingWrites = Promise.resolve()
+  let shutdown
+  const stopAndRestore = async (signal) => {
+    try {
+      await options.onInterrupt?.(signal)
+    } catch (error) {
+      console.error(error)
+    }
+    await pendingWrites.catch(() => {})
+    for (const [manifestPath, contents] of originalManifests) {
+      try {
+        writeFileSync(manifestPath, contents)
+      } catch (error) {
+        console.error(`Failed to restore ${manifestPath}: ${error.message}`)
+      }
+    }
+  }
+  const restoreOnInterrupt = async (signal) => {
+    shutdown ??= stopAndRestore(signal)
+    await shutdown
+    for (const interruptSignal of interruptSignals) {
+      process.removeListener(interruptSignal, restoreOnInterrupt)
+    }
+    process.kill(process.pid, signal)
+  }
+  for (const signal of interruptSignals) {
+    process.on(signal, restoreOnInterrupt)
+  }
+
   try {
     for (const manifestPath of packageManifestPaths) {
       const original = await readFile(manifestPath, 'utf8')
       originalManifests.set(manifestPath, original)
       const resolved = resolveReleaseManifest(JSON.parse(original), catalog)
-      await writeFile(manifestPath, `${JSON.stringify(resolved, null, 2)}\n`)
+      pendingWrites = writeFile(manifestPath, `${JSON.stringify(resolved, null, 2)}\n`)
+      await pendingWrites
     }
 
     await callback()
@@ -102,25 +136,120 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
     callbackError = error
   }
 
-  const manifestEntries = [...originalManifests]
-  const restoreResults = await Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
-    writeFile(manifestPath, contents)
-  )))
-  const restoreFailures = restoreResults.flatMap((result, index) => {
-    if (result.status === 'fulfilled') {
-      return []
-    }
+  try {
+    const manifestEntries = [...originalManifests]
+    pendingWrites = Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
+      writeFile(manifestPath, contents)
+    )))
+    const restoreResults = await pendingWrites
+    const restoreFailures = restoreResults.flatMap((result, index) => {
+      if (result.status === 'fulfilled') {
+        return []
+      }
 
-    const manifestPath = manifestEntries[index]?.[0] ?? '<unknown>'
-    const reason = result.reason instanceof Error ? result.reason.message : String(result.reason)
-    return [`${manifestPath}: ${reason}`]
-  })
-  if (restoreFailures.length > 0) {
-    throw new Error(`Failed to restore ${restoreFailures.length} package manifest(s): ${restoreFailures.join('; ')}`)
+      const manifestPath = manifestEntries[index]?.[0] ?? '<unknown>'
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason)
+      return [`${manifestPath}: ${reason}`]
+    })
+    if (restoreFailures.length > 0) {
+      throw new Error(`Failed to restore ${restoreFailures.length} package manifest(s): ${restoreFailures.join('; ')}`)
+    }
+  } finally {
+    for (const signal of interruptSignals) {
+      process.removeListener(signal, restoreOnInterrupt)
+    }
   }
   if (callbackError) {
     throw callbackError
   }
+}
+
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return error.code !== 'ESRCH'
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs = Infinity) {
+  const deadline = Date.now() + timeoutMs
+  while (processGroupAlive(pid)) {
+    if (Date.now() >= deadline) return false
+    await sleep(50)
+  }
+  return true
+}
+
+export function startProcessTree(command, args, options = {}) {
+  const posix = process.platform !== 'win32'
+  const graceMs = options.graceMs ?? publishStopGraceMs
+  const child = spawn(command, args, {
+    cwd: options.cwd ?? repoRoot,
+    stdio: 'inherit',
+    detached: posix,
+  })
+  const leaderClosed = new Promise((resolveClose, rejectClose) => {
+    child.on('error', rejectClose)
+    child.on('close', code => resolveClose(code ?? 1))
+  })
+  const exited = leaderClosed.then(async (code) => {
+    if (posix) await waitForProcessGroupExit(child.pid)
+    return code
+  })
+
+  const signalTree = (signal) => {
+    if (!posix) {
+      spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' })
+      return
+    }
+
+    try {
+      process.kill(-child.pid, signal)
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error
+    }
+  }
+
+  let stopping
+  return {
+    exited,
+    stop(signal) {
+      stopping ??= (async () => {
+        signalTree(signal)
+        if (!posix) {
+          await leaderClosed
+          return
+        }
+        if (await waitForProcessGroupExit(child.pid, graceMs)) return
+
+        signalTree('SIGKILL')
+        await waitForProcessGroupExit(child.pid)
+      })()
+      return stopping
+    },
+  }
+}
+
+async function runChangesetPublish() {
+  const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
+  const tree = startProcessTree(changesetBinary, ['publish'])
+  activeTree = tree
+
+  try {
+    return await tree.exited
+  } finally {
+    activeTree = undefined
+  }
+}
+
+async function stopActivePublish(signal) {
+  await activeTree?.stop(signal)
 }
 
 async function publishWithResolvedCatalogs() {
@@ -128,18 +257,8 @@ async function publishWithResolvedCatalogs() {
   validateNpmPublishAuthentication()
 
   await withResolvedCatalogManifests(async () => {
-    const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
-    const result = spawnSync(changesetBinary, ['publish'], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    })
-
-    if (result.error) {
-      throw result.error
-    }
-
-    publishStatus = result.status ?? 1
-  })
+    publishStatus = await runChangesetPublish()
+  }, repoRoot, { onInterrupt: stopActivePublish })
 
   return publishStatus
 }

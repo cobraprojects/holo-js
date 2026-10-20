@@ -99,6 +99,20 @@ The framework versions that `holo new` installs are set in `packages/cli/src/met
 
 Keep the example apps in `apps/` in line with what new projects get.
 
+## Releases
+
+Merging to `main` runs the Release workflow in `.github/workflows/release.yml`. It builds the packages, then runs `bun run release:skip-build`, which publishes every package whose version is not on npm yet with npm provenance, and pushes a git tag for each published version. The publish job runs only for `main` and declares the `release` environment. Publishing needs an `NPM_TOKEN` secret with publish access to the `@holo-js` scope, stored as a secret of the `release` environment rather than a repository secret. Until that secret exists, the publish step logs a notice and the run succeeds without publishing. Only the publish step receives the token.
+
+Repository owners must create the `release` environment in the GitHub repository settings, with these rules:
+
+- Required reviewers, so a person approves each publish.
+- Deployment branches limited to `main`, so a workflow run from another branch cannot read the token.
+- The `NPM_TOKEN` secret, stored in that environment.
+
+The workflow checks the ref too, but a branch can change its own workflow file, so the environment rules are the control that protects the token.
+
+`bun run release` replaces `catalog:` and `workspace:*` ranges in the package manifests for the publish and restores the original manifests afterwards, including when the run is interrupted with SIGINT, SIGTERM, or SIGHUP. The versioning rules that releases follow are in [Versioning](/getting-started/versioning).
+
 ## Issues and pull requests
 
 Issues and feature requests are tracked in [GitHub Issues](https://github.com/cobraprojects/holo-js/issues). For a bug, include the framework, database, a minimal reproduction, and what you expected. For a larger change, open an issue first so the design can be agreed before you write code.
