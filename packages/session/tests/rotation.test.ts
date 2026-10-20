@@ -114,6 +114,37 @@ it('lets exactly one of several concurrent rotations claim a replacement id on a
   await expect(session.read('shared-replacement', { store: 'target' })).resolves.toMatchObject({ id: 'shared-replacement' })
 })
 
+it('lets a rotation take a replacement id held only by an expired file session', async () => {
+  const sourceDirectory = await mkdtemp(join(tmpdir(), 'session-rotation-source-'))
+  const targetDirectory = await mkdtemp(join(tmpdir(), 'session-rotation-target-'))
+  directories.push(sourceDirectory, targetDirectory)
+  const cookie = { name: 'session', path: '/', secure: false, httpOnly: true, sameSite: 'lax' as const, partitioned: false, maxAge: 120 }
+  configureSessionRuntime({
+    config: {
+      driver: 'source',
+      stores: {
+        source: { name: 'source', driver: 'file', path: sourceDirectory },
+        target: { name: 'target', driver: 'file', path: targetDirectory },
+      },
+      cookie,
+      idleTimeout: 30,
+      absoluteLifetime: 120,
+      rememberMeLifetime: 1440,
+    },
+    stores: { source: withoutPrivateFlash(createFileSessionStore(sourceDirectory)), target: createFileSessionStore(targetDirectory) },
+  })
+  const session = getSessionRuntime()
+  const replacementId = 'expired-replacement'
+  const target = createFileSessionStore(targetDirectory)
+  const now = new Date()
+  await target.write({ id: replacementId, store: 'target', data: { stale: true }, createdAt: now, lastActivityAt: now, expiresAt: new Date(Date.now() - 1_000) })
+  const source = await session.create({ store: 'source', data: { userId: 7 } })
+
+  await expect(session.rotate(source.id, { store: 'target', newId: replacementId })).resolves.toMatchObject({ id: replacementId })
+
+  await expect(session.read(replacementId, { store: 'target' })).resolves.toMatchObject({ id: replacementId, data: { userId: 7 } })
+})
+
 it('keeps replacement data and renewal options precisely typed', () => {
   expectTypeOf<RotateSessionOptions['data']>().toEqualTypeOf<SessionRecord['data'] | undefined>()
   expectTypeOf<RotateSessionOptions['renewLifetime']>().toEqualTypeOf<boolean | undefined>()

@@ -370,7 +370,7 @@ async function writeReplacementRecord(store: SessionStore, record: SessionRecord
     }
     return
   }
-  if (await store.read(record.id)) {
+  if (await readRecordFromStore(record.id, store)) {
     throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
   }
   await store.write(record)
