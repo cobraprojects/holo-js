@@ -92,6 +92,8 @@ const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
 const REMOTE_MEDIA_TIMEOUT_MS = 30_000
 const DEFAULT_MEDIA_DISK = 'public'
 const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
+const IETF_PROTOCOL_ASSIGNMENTS = createIETFProtocolAssignmentsBlockList()
+const GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS = createGloballyReachableIETFProtocolAssignments()
 const NAT64_WELL_KNOWN_PREFIX = Buffer.concat([Buffer.from([0x00, 0x64, 0xff, 0x9b]), Buffer.alloc(8)])
 const NAT64_LOCAL_USE_PREFIX = Buffer.from([0x00, 0x64, 0xff, 0x9b, 0x00, 0x01])
 const SIX_TO_FOUR_PREFIX = Buffer.from([0x20, 0x02])
@@ -651,9 +653,38 @@ function createBlockedRemoteMediaAddresses(): BlockList {
   for (const [network, prefix] of [
     ['::', 128],
     ['::1', 128],
+    ['100::', 64],
+    ['100:0:0:1::', 64],
+    ['2001:db8::', 32],
+    ['3fff::', 20],
+    ['5f00::', 16],
     ['fc00::', 7],
     ['fe80::', 10],
+    ['fec0::', 10],
     ['ff00::', 8],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv6')
+  }
+  return blockList
+}
+
+function createIETFProtocolAssignmentsBlockList(): BlockList {
+  const blockList = new BlockList()
+  blockList.addSubnet('2001::', 23, 'ipv6')
+  return blockList
+}
+
+function createGloballyReachableIETFProtocolAssignments(): BlockList {
+  const blockList = new BlockList()
+  for (const [network, prefix] of [
+    ['2001::', 32],
+    ['2001:1::1', 128],
+    ['2001:1::2', 128],
+    ['2001:1::3', 128],
+    ['2001:3::', 32],
+    ['2001:4:112::', 48],
+    ['2001:20::', 28],
+    ['2001:30::', 28],
   ] as const) {
     blockList.addSubnet(network, prefix, 'ipv6')
   }
@@ -667,6 +698,13 @@ function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
 
   if (address.family === 4) {
     return false
+  }
+
+  if (
+    IETF_PROTOCOL_ASSIGNMENTS.check(address.address, 'ipv6')
+    && !GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS.check(address.address, 'ipv6')
+  ) {
+    return true
   }
 
   const bytes = findIPv6Bytes(address.address)
