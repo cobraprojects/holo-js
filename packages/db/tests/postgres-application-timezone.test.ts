@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
-import { types as pgTypes } from 'pg'
+import { Client, Pool, types as pgTypes } from 'pg'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createDatabase, createDialect } from '../src'
 
@@ -169,6 +169,54 @@ describe('PostgreSQL dates in app.timezone at DST gaps and historical offsets', 
         await adapter.execute(`INSERT INTO ${table} VALUES (1, '2024-03-15 10:00:00')`)
         expect((await db.queryCompiled({ sql: `SELECT id, at FROM ${table} WHERE id = $1`, bindings: [1] })).rows)
           .toEqual([{ id: 'int:1', at: new Date('2024-03-15T01:00:00Z') }])
+      } finally {
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await db.disconnect()
+      }
+    })
+  })
+})
+
+describe('PostgreSQL injected clients read dates in app.timezone', () => {
+  it.each(['client', 'pool'] as const)('reads DATE and TIMESTAMP in app.timezone through an injected pg %s', async kind => {
+    await withAppTimezone('Asia/Tokyo', async () => {
+      const injected = kind === 'client' ? new Client(liveConfig) : new Pool({ ...liveConfig, max: 2 })
+      if (injected instanceof Client) await injected.connect()
+      const adapter = createPostgresAdapter(kind === 'client' ? { client: injected as Client } : { pool: injected as Pool })
+      const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+      const table = `holo_injected_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, day DATE NOT NULL, at TIMESTAMP NOT NULL)`)
+        await adapter.execute(`INSERT INTO ${table} VALUES (1, '2024-03-15', '2024-03-15 10:00:00')`)
+        const [row] = (await db.queryCompiled({ sql: `SELECT day, at FROM ${table} WHERE id = $1`, bindings: [1] })).rows
+        expect(row).toEqual({
+          day: new Date('2024-03-14T15:00:00Z'),
+          at: new Date('2024-03-15T01:00:00Z'),
+        })
+        await db.executeCompiled({ sql: `UPDATE ${table} SET day = $2, at = $3 WHERE id = $1`, bindings: [1, row!.day, row!.at] })
+        expect((await db.queryCompiled({ sql: `SELECT day::text AS day, at::text AS at FROM ${table} WHERE id = $1`, bindings: [1] })).rows)
+          .toEqual([{ day: '2024-03-15', at: '2024-03-15 10:00:00' }])
+      } finally {
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await db.disconnect()
+      }
+    })
+  })
+
+  it('resolves a fall-back TIMESTAMP to standard time, as PostgreSQL does', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+      const table = `holo_fallback_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL)`)
+        await adapter.execute(`INSERT INTO ${table} VALUES (1, '2024-11-03 01:30:00')`)
+        const [row] = (await db.queryCompiled({ sql: `SELECT at FROM ${table} WHERE id = $1`, bindings: [1] })).rows
+        expect(row!.at).toEqual(new Date('2024-11-03T06:30:00.000Z'))
+        expect((await db.queryCompiled({
+          sql: 'SELECT (($1::timestamp) AT TIME ZONE \'America/New_York\') = $2::timestamptz AS same',
+          bindings: ['2024-11-03 01:30:00', row!.at],
+        })).rows).toEqual([{ same: true }])
       } finally {
         await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
         await db.disconnect()

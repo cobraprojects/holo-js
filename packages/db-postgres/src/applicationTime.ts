@@ -70,7 +70,7 @@ function instantOfWallClock(wall: WallClock, timeZone: string): Date {
     .map(offset => local - offset)
     .filter(instant => offsetMillisAt(new Date(instant), timeZone) === local - instant)
   if (valid.length > 0) {
-    return new Date(Math.min(...valid))
+    return new Date(Math.max(...valid))
   }
 
   return new Date(local - offsetMillisAt(new Date(local - DAY_MILLIS), timeZone))

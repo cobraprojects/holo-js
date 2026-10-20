@@ -35,7 +35,7 @@ function createFixture(driver: 'postgres' | 'mysql', direct = false) {
   function postgresClient() {
     const client = createClient()
     return {
-      async query(sql: string) { return { rows: client.query(sql), rowCount: 1 } },
+      async query(sql: string | { text: string }) { return { rows: client.query(typeof sql === 'string' ? sql : sql.text), rowCount: 1 } },
       release: client.release,
       end: client.end,
     }
