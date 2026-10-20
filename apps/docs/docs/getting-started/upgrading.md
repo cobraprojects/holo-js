@@ -25,6 +25,22 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 - Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
 - When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
 
+### Temporary URLs behind a proxy
+
+Public and temporary storage URLs read the scheme, host, port, and path prefix from forwarded headers only when `trustedProxies` lists the proxy, as [`resolveRequestUrl()`](/basics/security/cors-and-proxies#read-the-public-url) does. Before, the Nuxt storage route accepted `X-Forwarded-Proto` from any client, and the other forwarded headers were ignored.
+
+If your Nuxt or SvelteKit app runs behind a proxy that terminates TLS and serves temporary URLs, list the proxy:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['10.0.0.1'],
+})
+```
+
+Without that, the app sees `http`, and a temporary URL signed with `https://` returns 404. Public files keep working because their path doesn't depend on the scheme.
+
 ### Realtime subscription isolation
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
@@ -409,9 +425,24 @@ Social sign-in no longer signs in as an existing user whose email isn't verified
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
+### WorkOS sign-in requires a session ID
+
+WorkOS sign-in no longer uses the access token or the authorization code as the session ID. Before, when WorkOS's response had no session ID, sign-in succeeded and `logoutWithWorkos()` sent that token or code to WorkOS as `session_id`. Now the callback fails with `workos_auth_failed` and creates no session. WorkOS AuthKit always returns a session ID in the WorkOS session ID shape (`session_` followed by letters, digits, `_` or `-`), so this only affects malformed responses. Sessions created before the upgrade keep the old value until they expire. Logging out of them ends the local session only: logout sends a stored value to WorkOS only when it has the shape of a WorkOS session ID, and a token or code never does.
+
+The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `true`, even over HTTP, and behind a trusted proxy that terminates TLS when `X-Forwarded-Proto` is `https`.
+
 ### Sessions don't cross between 0.3 and 0.4
 
 Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
+
+### Redis sessions use one key per session
+
+Each Redis session is its own key: the store's `prefix`, then `holo:session:`, then the session ID. Sessions spread across a Redis Cluster, and they never sit under a bare session ID.
+
+- **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
+- **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
+- **Set a `prefix` to share a Redis database.** Holo's `holo:session:` namespace keeps session keys apart from other data, and a `prefix` separates apps that use the same database.
+- **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops, or the delete fails, between the two steps, the old ID stays valid until its expiry. Under heavy concurrent writes to the same session, rotation falls back to reading the latest state, copying it, and deleting the old key without a check. A write or flash value that lands between that final read and the delete can be lost or kept on both IDs.
 
 ### Verification resend requires a signed-in user
 
@@ -490,6 +521,18 @@ Check three behaviors when you upgrade:
 - `pivot` on a many-to-many relation holds only the pivot keys and the columns declared with `withPivot()` and `withTimestamps()`. Before, it held every pivot column. Add `withPivot('column')` for each column your code reads from `pivot`. A custom pivot model from `using()` receives the same columns, so add `'id'` to `withPivot()` if you read the pivot's `id`.
 - A one-of-many relation (`latestOfMany`, `oldestOfMany`, `ofMany`, and the morph variants) whose column is `NULL` on every related row loads `null`, as in Laravel. Before, it loaded the first related row. To keep the old result, skip the `NULL` rows with a constraint: `scopeRelation(latestOfMany(() => Post, 'user_id', 'id', 'score'), query => query.whereNotNull('score'))`.
 - Eager loads run one query per 256 parent keys, except a relation whose constraint sets `limit()` or `offset()`, which runs as one query so the limit or offset applies to the whole load. A constraint callback passed to `with()` or `scopeRelation()` can run more than once: once per chunk, and for one-of-many relations once for the grouped lookup and once for the outer query. Don't count or log calls inside it.
+
+### MySQL `ssl` with a connection URL
+
+A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
+
+### Password hashing cost
+
+New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
+
+A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
+
+No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
 
 ## Earlier 0.3.x releases
 

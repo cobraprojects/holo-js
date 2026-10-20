@@ -92,11 +92,15 @@ const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
 const REMOTE_MEDIA_TIMEOUT_MS = 30_000
 const DEFAULT_MEDIA_DISK = 'public'
 const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
+const GLOBALLY_REACHABLE_BLOCKED_IPV4_ADDRESSES = createGloballyReachableBlockedIPv4Addresses()
+const GLOBAL_UNICAST_IPV6_ADDRESSES = createGlobalUnicastIPv6Addresses()
+const IETF_PROTOCOL_ASSIGNMENTS = createIETFProtocolAssignmentsBlockList()
+const GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS = createGloballyReachableIETFProtocolAssignments()
 const NAT64_WELL_KNOWN_PREFIX = Buffer.concat([Buffer.from([0x00, 0x64, 0xff, 0x9b]), Buffer.alloc(8)])
-const NAT64_LOCAL_USE_PREFIX = Buffer.from([0x00, 0x64, 0xff, 0x9b, 0x00, 0x01])
 const SIX_TO_FOUR_PREFIX = Buffer.from([0x20, 0x02])
 const IPV4_COMPATIBLE_PREFIX = Buffer.alloc(12)
 const TRANSLATED_IPV4_PREFIX = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0])
+const IPV4_MAPPED_PREFIX = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff])
 const TEREDO_PREFIX = Buffer.from([0x20, 0x01, 0x00, 0x00])
 const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
   tmpdir(),
@@ -617,8 +621,13 @@ function resolveRemoteMediaUrl(value: string): URL {
     throw new Error('[@holo-js/media] Remote media URLs must not include credentials.')
   }
 
-  if (isBlockedRemoteMediaHost(url.hostname)) {
+  if (isLocalRemoteMediaName(url.hostname)) {
     throw new Error('[@holo-js/media] Remote media URLs must not target local or private hosts.')
+  }
+
+  const literal = parseRemoteMediaIPLiteral(url.hostname)
+  if (literal) {
+    assertRemoteMediaAddressesAllowed([literal])
   }
 
   return url
@@ -635,19 +644,28 @@ function createBlockedRemoteMediaAddresses(): BlockList {
     ['172.16.0.0', 12],
     ['192.0.0.0', 24],
     ['192.0.2.0', 24],
+    ['192.88.99.2', 32],
     ['192.168.0.0', 16],
     ['198.18.0.0', 15],
     ['198.51.100.0', 24],
     ['203.0.113.0', 24],
     ['224.0.0.0', 4],
+    ['240.0.0.0', 4],
+    ['255.255.255.255', 32],
   ] as const) {
     blockList.addSubnet(network, prefix, 'ipv4')
   }
   for (const [network, prefix] of [
     ['::', 128],
     ['::1', 128],
+    ['100::', 64],
+    ['100:0:0:1::', 64],
+    ['2001:db8::', 32],
+    ['3fff::', 20],
+    ['5f00::', 16],
     ['fc00::', 7],
     ['fe80::', 10],
+    ['fec0::', 10],
     ['ff00::', 8],
   ] as const) {
     blockList.addSubnet(network, prefix, 'ipv6')
@@ -655,40 +673,98 @@ function createBlockedRemoteMediaAddresses(): BlockList {
   return blockList
 }
 
+function createGloballyReachableBlockedIPv4Addresses(): BlockList {
+  const blockList = new BlockList()
+  for (const [network, prefix] of [
+    ['192.0.0.9', 32],
+    ['192.0.0.10', 32],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv4')
+  }
+  return blockList
+}
+
+function createGlobalUnicastIPv6Addresses(): BlockList {
+  const blockList = new BlockList()
+  blockList.addSubnet('2000::', 3, 'ipv6')
+  return blockList
+}
+
+function createIETFProtocolAssignmentsBlockList(): BlockList {
+  const blockList = new BlockList()
+  blockList.addSubnet('2001::', 23, 'ipv6')
+  return blockList
+}
+
+function createGloballyReachableIETFProtocolAssignments(): BlockList {
+  const blockList = new BlockList()
+  for (const [network, prefix] of [
+    ['2001::', 32],
+    ['2001:1::1', 128],
+    ['2001:1::2', 128],
+    ['2001:1::3', 128],
+    ['2001:3::', 32],
+    ['2001:4:112::', 48],
+    ['2001:20::', 28],
+    ['2001:30::', 28],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv6')
+  }
+  return blockList
+}
+
+function isBlockedRemoteMediaIPv4Address(address: string): boolean {
+  return BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address, 'ipv4')
+    && !GLOBALLY_REACHABLE_BLOCKED_IPV4_ADDRESSES.check(address, 'ipv4')
+}
+
 function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
-  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, address.family === 4 ? 'ipv4' : 'ipv6')) {
-    return true
-  }
-
   if (address.family === 4) {
-    return false
+    return isBlockedRemoteMediaIPv4Address(address.address)
   }
 
-  const bytes = findIPv6Bytes(address.address)
-  if (!bytes || bytes.subarray(0, 6).equals(NAT64_LOCAL_USE_PREFIX)) {
+  return isBlockedRemoteMediaIPv6Address(address.address)
+}
+
+function isBlockedRemoteMediaIPv6Address(address: string): boolean {
+  const bytes = findIPv6Bytes(address)
+  if (!bytes) {
     return true
   }
 
-  return findEmbeddedIPv4Addresses(bytes).some(embeddedAddress => BLOCKED_REMOTE_MEDIA_ADDRESSES.check(embeddedAddress, 'ipv4'))
+  if (!GLOBAL_UNICAST_IPV6_ADDRESSES.check(address, 'ipv6')) {
+    const mappedAddress = findMappedIPv4Address(bytes)
+    return mappedAddress === null || isBlockedRemoteMediaIPv4Address(mappedAddress)
+  }
+
+  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address, 'ipv6')) {
+    return true
+  }
+
+  if (
+    IETF_PROTOCOL_ASSIGNMENTS.check(address, 'ipv6')
+    && !GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS.check(address, 'ipv6')
+  ) {
+    return true
+  }
+
+  return findEmbeddedIPv4Addresses(bytes).some(isBlockedRemoteMediaIPv4Address)
+}
+
+function findMappedIPv4Address(bytes: Buffer): string | null {
+  const mappedPrefixes = [NAT64_WELL_KNOWN_PREFIX, IPV4_COMPATIBLE_PREFIX, IPV4_MAPPED_PREFIX, TRANSLATED_IPV4_PREFIX]
+  if (!mappedPrefixes.some(prefix => bytes.subarray(0, 12).equals(prefix))) {
+    return null
+  }
+
+  return formatIPv4Octets(bytes.subarray(12, 16))
 }
 
 function findEmbeddedIPv4Addresses(bytes: Buffer): string[] {
   const embeddedAddresses: string[] = []
 
-  if (bytes.subarray(0, 12).equals(NAT64_WELL_KNOWN_PREFIX)) {
-    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
-  }
-
   if (bytes.subarray(0, 2).equals(SIX_TO_FOUR_PREFIX)) {
     embeddedAddresses.push(formatIPv4Octets(bytes.subarray(2, 6)))
-  }
-
-  if (bytes.subarray(0, 12).equals(IPV4_COMPATIBLE_PREFIX)) {
-    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
-  }
-
-  if (bytes.subarray(0, 12).equals(TRANSLATED_IPV4_PREFIX)) {
-    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
   }
 
   if (bytes.subarray(0, 4).equals(TEREDO_PREFIX)) {
@@ -734,12 +810,29 @@ async function resolveRemoteMediaAddress(
   url: URL,
   resolver: RemoteMediaAddressResolver,
 ): Promise<LookupAddress> {
-  const addresses = await resolver(url.hostname)
+  const addresses = await resolveRemoteMediaHostAddresses(url.hostname, resolver)
+  assertRemoteMediaAddressesAllowed(addresses)
+  return addresses[0]!
+}
+
+function assertRemoteMediaAddressesAllowed(addresses: readonly LookupAddress[]): void {
   if (addresses.length === 0 || addresses.some(isBlockedRemoteMediaAddress)) {
     throw new Error('[@holo-js/media] Remote media URLs must not resolve to local or private hosts.')
   }
+}
 
-  return addresses[0]!
+async function resolveRemoteMediaHostAddresses(
+  hostname: string,
+  resolver: RemoteMediaAddressResolver,
+): Promise<readonly LookupAddress[]> {
+  const literal = parseRemoteMediaIPLiteral(hostname)
+  return literal ? [literal] : await resolver(hostname)
+}
+
+function parseRemoteMediaIPLiteral(hostname: string): LookupAddress | null {
+  const address = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+  const family = isIP(address)
+  return family === 0 ? null : { address, family }
 }
 
 function requestRemoteMedia(url: URL, address: LookupAddress, signal?: AbortSignal): Promise<Response> {
@@ -787,17 +880,9 @@ function resolveRemoteMediaRequest(protocol: string): typeof requestHttp {
   return protocol === 'https:' ? requestHttps : requestHttp
 }
 
-function isBlockedRemoteMediaHost(hostname: string): boolean {
+function isLocalRemoteMediaName(hostname: string): boolean {
   const lowerCaseHostname = hostname.toLowerCase()
-  const normalized = lowerCaseHostname.startsWith('[') && lowerCaseHostname.endsWith(']')
-    ? lowerCaseHostname.slice(1, -1)
-    : lowerCaseHostname
-  if (normalized === 'localhost' || normalized.endsWith('.localhost')) {
-    return true
-  }
-
-  const family = isIP(normalized)
-  return family !== 0 && isBlockedRemoteMediaAddress({ address: normalized, family })
+  return lowerCaseHostname === 'localhost' || lowerCaseHostname.endsWith('.localhost')
 }
 
 function validateSource(

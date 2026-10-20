@@ -155,7 +155,6 @@
     "unused-file:packages/adapter-nuxt/src/runtime/server/routes/broadcast-config.get.ts",
     "unused-file:packages/adapter-nuxt/src/runtime/server/routes/realtime-mutation.post.ts",
     "unused-file:packages/adapter-nuxt/src/runtime/server/routes/realtime-query.post.ts",
-    "unused-file:packages/adapter-nuxt/src/runtime/server/routes/realtime-request.ts",
     "unused-file:packages/auth/tests/support/hosted-models/Admin.ts",
     "unused-file:packages/auth/tests/support/hosted-models/User.ts",
     "unused-file:packages/auth/tests/support/hosted-models/model.ts",

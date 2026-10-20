@@ -363,6 +363,19 @@ export async function touchSession(sessionId: string, options?: TouchSessionOpti
   return touched
 }
 
+async function writeReplacementRecord(store: SessionStore, record: SessionRecord): Promise<void> {
+  if (store.writeIfAbsent) {
+    if (!(await store.writeIfAbsent(record))) {
+      throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
+    }
+    return
+  }
+  if (await readRecordFromStore(record.id, store)) {
+    throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
+  }
+  await store.write(record)
+}
+
 export async function rotateSession(sessionId: string, options: RotateSessionOptions = {}): Promise<SessionRecord> {
   const rotated = await rotateSessionRecord(sessionId, options)
   await collectExpiredSessions(getStore(rotated.store).store)
@@ -396,7 +409,7 @@ async function rotateSessionRecord(sessionId: string, options: RotateSessionOpti
     if (located.store.flash || located.store.take) {
       throw new Error('[@holo-js/session] Sessions with private flash state cannot be rotated between stores.')
     }
-    await store.write(rotated)
+    await writeReplacementRecord(store, rotated)
     await located.store.delete(sessionId)
     return rotated
   }
@@ -405,7 +418,7 @@ async function rotateSessionRecord(sessionId: string, options: RotateSessionOpti
       if (store.flash || store.take) {
         throw new Error(`[@holo-js/session] Session store "${name}" does not support private-state-preserving rotation.`)
       }
-      await store.write(rotated)
+      await writeReplacementRecord(store, rotated)
       await store.delete(sessionId)
       return rotated
     }

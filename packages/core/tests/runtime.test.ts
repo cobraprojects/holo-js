@@ -78,8 +78,10 @@ import {
   initializeHolo,
   loadGeneratedProjectRegistry,
   peekHolo,
+  reconfigureHoloRuntime,
   reconfigureOptionalHoloSubsystems,
   registryInternals,
+  resetOptionalHoloSubsystems,
   resetHoloRuntime,
   resolveGeneratedProjectRegistryPath,
   holoRuntimeInternals,
@@ -306,6 +308,28 @@ export default defineRedisConfig({
   },
 })
 `, 'utf8')
+}
+
+async function createRedisSecurityProject(): Promise<{
+  readonly root: string
+  readonly client: { client(...args: string[]): Promise<unknown> }
+  readonly connections: () => Promise<number>
+  readonly baseline: number
+}> {
+  const service = await startRedisService()
+  const client = service.clients[0]
+  const port = service.ports[0]
+  if (!client || !port) throw new Error('The native Redis service did not start')
+  const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+  const baseline = await connections()
+  const root = await createProject()
+  await writeBaseConfig(root)
+  await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
+`)
+  await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
+  return { root, client, connections, baseline }
 }
 
 async function writeAuthConfig(root: string): Promise<void> {
@@ -2106,6 +2130,203 @@ export default async function boot({ config }) {
     runtimeGlobal.__holoCoreEnvBoots__ = undefined
   })
 
+  it('does not deadlock when a plugin boot hook resets optional subsystems during initialization', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-reset-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-reset-boot', `
+export default {
+  id: 'reset-boot',
+  name: 'Reset Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreResetDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreResetDuringBoot__?: () => Promise<void> }
+    runtimeGlobal.__holoCoreResetDuringBoot__ = () => resetOptionalHoloSubsystems()
+
+    await expect(initializeHoloAdapterProject(root)).resolves.toMatchObject({ projectRoot: root })
+  })
+
+  it('boots a plugin module again in the next runtime when a boot still running during reset finishes late', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-slow-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-slow-boot', `
+export default {
+  id: 'slow-boot',
+  name: 'Slow Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreSlowBoots__ = (globalThis.__holoCoreSlowBoots__ ?? 0) + 1
+  await globalThis.__holoCoreSlowBootGate__()
+}
+`,
+    })
+    let markBootStarted: () => void = () => undefined
+    const bootStarted = new Promise<void>(resolve => { markBootStarted = resolve })
+    let releaseBoot: () => void = () => undefined
+    const bootGate = new Promise<void>(resolve => { releaseBoot = resolve })
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreSlowBoots__?: number
+      __holoCoreSlowBootGate__?: () => Promise<void>
+    }
+    runtimeGlobal.__holoCoreSlowBoots__ = 0
+    runtimeGlobal.__holoCoreSlowBootGate__ = async () => {
+      markBootStarted()
+      await bootGate
+    }
+
+    const firstInitialization = initializeHoloAdapterProject(root).catch(() => undefined)
+    await bootStarted
+    await resetOptionalHoloSubsystems()
+    releaseBoot()
+    await firstInitialization
+
+    await initializeHoloAdapterProject(root)
+    expect(runtimeGlobal.__holoCoreSlowBoots__).toBe(2)
+  })
+
+  it('boots plugin modules when optional subsystems are reconfigured directly', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-direct-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-direct-boot', `
+export default {
+  id: 'direct-boot',
+  name: 'Direct Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreDirectBoots__ = (globalThis.__holoCoreDirectBoots__ ?? 0) + 1
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreDirectBoots__?: number }
+    runtimeGlobal.__holoCoreDirectBoots__ = 0
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    expect(runtimeGlobal.__holoCoreDirectBoots__).toBe(1)
+  })
+
+  it('boots a plugin module once when concurrent reconfigurations reach it while its boot is still running', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-concurrent-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-concurrent-boot', `
+export default {
+  id: 'concurrent-boot',
+  name: 'Concurrent Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreConcurrentBoots__ = (globalThis.__holoCoreConcurrentBoots__ ?? 0) + 1
+  await globalThis.__holoCoreConcurrentBootGate__()
+}
+`,
+    })
+    let markBootStarted: () => void = () => undefined
+    const bootStarted = new Promise<void>(resolve => { markBootStarted = resolve })
+    let releaseBoot: () => void = () => undefined
+    const bootGate = new Promise<void>(resolve => { releaseBoot = resolve })
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreConcurrentBoots__?: number
+      __holoCoreConcurrentBootGate__?: () => Promise<void>
+    }
+    runtimeGlobal.__holoCoreConcurrentBoots__ = 0
+    runtimeGlobal.__holoCoreConcurrentBootGate__ = async () => {
+      markBootStarted()
+      await bootGate
+    }
+    const config = await loadConfigDirectory(root)
+
+    const first = reconfigureOptionalHoloSubsystems(root, config)
+    await bootStarted
+    const second = reconfigureOptionalHoloSubsystems(root, config)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    releaseBoot()
+    await Promise.all([first, second])
+
+    expect(runtimeGlobal.__holoCoreConcurrentBoots__).toBe(1)
+  })
+
   it('runs plugin boot modules once during adapter initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -3105,7 +3326,96 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     expect(await connections()).toBe(baseline)
   })
 
-  it.each(['redis', 'file', 'removed'] as const)('releases the previous real Redis store when security is reconfigured to %s', async driver => {
+  it('keeps a real Redis rate-limit store usable for in-flight work across an unchanged reconfiguration', async () => {
+    const { root, connections, baseline } = await createRedisSecurityProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const inFlight = getSecurityRuntimeBindings()?.rateLimitStore
+    if (!inFlight) throw new Error('The configured Redis rate limiter was not acquired')
+    await expect(inFlight.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    await expect(inFlight.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
+    await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 3 } })
+    expect(await connections()).toBe(baseline + 1)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('keeps one real Redis rate-limit connection after repeated reconfigurations with nothing in flight', async () => {
+    const { root, connections, baseline } = await createRedisSecurityProject()
+    const hitWithCurrentStore = async () => getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })
+    for (const prefix of ['replacement:', 'original:', 'replacement:', 'original:']) {
+      await writeSecurityConfig(root, `export default { rateLimit: { driver: 'redis', redis: { prefix: '${prefix}' } } }`)
+      await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
+      await expect(hitWithCurrentStore()).resolves.toMatchObject({ limited: false })
+      await expect.poll(connections).toBe(baseline + 1)
+    }
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('closes Redis session clients opened before a failed session acquisition and never promotes them on a later reconfiguration', async () => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
+    const reservation = createServer()
+    await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
+    const address = reservation.address()
+    if (!address || typeof address === 'string') throw new Error('No unavailable Redis port allocated')
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port}, db: 0 }, alternate: { host: '127.0.0.1', port: ${port}, db: 1 }, unavailable: { host: '127.0.0.1', port: ${address.port} } } })
+`)
+    const writeSessionStores = async (primary: string, secondary: string) => {
+      await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: {
+  primary: { driver: 'redis', connection: '${primary}' },
+  secondary: { driver: 'redis', connection: '${secondary}' },
+} })
+`, 'utf8')
+    }
+    await writeSessionStores('default', 'unavailable')
+    await expect(holoRuntimeInternals.createCoreSessionStores(root, await loadConfigDirectory(root), sessionModule)).rejects.toThrow(/ECONNREFUSED|Connection is closed/i)
+    await expect.poll(connections).toBe(baseline)
+
+    await writeSessionStores('alternate', 'default')
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await expect.poll(connections).toBe(baseline + 2)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('returns the same session store object while an unchanged Redis configuration keeps its connection', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    if (!port) throw new Error('The native Redis service did not start')
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port}, db: 0 } } })
+`)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: { primary: { driver: 'redis', connection: 'default' } } })
+`, 'utf8')
+
+    const first = await holoRuntimeInternals.createCoreSessionStores(root, await loadConfigDirectory(root), sessionModule)
+    const second = await holoRuntimeInternals.createCoreSessionStores(root, await loadConfigDirectory(root), sessionModule)
+
+    expect(second.primary).toBe(first.primary)
+    await resetHoloRuntime()
+  })
+
+  it('does not reopen Redis session clients when a reconfiguration is queued behind a shutdown', async () => {
     const service = await startRedisService()
     const client = service.clients[0]
     const port = service.ports[0]
@@ -3118,25 +3428,90 @@ export default defineSessionConfig({ driver: 'primary', stores: {
 import { defineRedisConfig } from ${kernelPackageEntry}
 export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
 `)
-    await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: { primary: { driver: 'redis', connection: 'default' } } })
+`, 'utf8')
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    await expect.poll(connections).toBe(baseline + 1)
+
+    const stopping = runtime.shutdown()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await reconfigureHoloRuntime(runtime, {})
+    await stopping
+
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('lets in-flight real Redis rate-limit operations finish when the runtime disposes concurrently', async () => {
+    const { root, client, connections, baseline } = await createRedisSecurityProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const store = getSecurityRuntimeBindings()?.rateLimitStore
+    if (!store) throw new Error('The configured Redis rate limiter was not acquired')
+    await expect(store.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ limited: false })
+    await expect.poll(connections).toBe(baseline + 1)
+
+    const stalled = client.client('PAUSE', '300', 'ALL')
+    const firstOperation = store.hit('account', { maxAttempts: 10, decaySeconds: 60 })
+    const disposing = resetOptionalHoloSubsystems()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const secondOperation = store.hit('account', { maxAttempts: 10, decaySeconds: 60 })
+    await stalled
+
+    await expect(firstOperation).resolves.toMatchObject({ limited: false })
+    await expect(secondOperation).resolves.toMatchObject({ limited: false })
+    await disposing
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('serializes concurrent reconfigurations so each Redis session client is acquired once', async () => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
+`)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: { primary: { driver: 'redis', connection: 'default' } } })
+`, 'utf8')
+    const config = await loadConfigDirectory(root)
+
+    await Promise.all([reconfigureOptionalHoloSubsystems(root, config), reconfigureOptionalHoloSubsystems(root, config)])
+
+    await expect.poll(connections).toBe(baseline + 1)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it.each(['redis', 'file', 'removed'] as const)('closes a replaced real Redis store once its in-flight operation settles when security is reconfigured to %s', async driver => {
+    const { root, connections, baseline } = await createRedisSecurityProject()
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
     const previous = getSecurityRuntimeBindings()?.rateLimitStore
     if (!previous) throw new Error('The configured Redis rate limiter was not acquired')
-    await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
-    expect(await connections()).toBe(baseline + 1)
+    const inFlight = previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })
     if (driver === 'removed') {
       await rm(join(root, 'config/security.ts'))
     } else {
       await writeSecurityConfig(root, `export default { rateLimit: { driver: '${driver}', redis: { prefix: 'replacement:' }, file: { path: './rate-limits' } } }`)
     }
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
-    await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).rejects.toThrow(/closed/i)
+
+    await expect(inFlight).resolves.toMatchObject({ limited: false })
+    await expect.poll(connections).toBe(baseline)
     if (driver === 'removed') {
       expect(getSecurityRuntimeBindings()).toBeUndefined()
     } else {
-      await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+      await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ limited: false })
+      await expect.poll(connections).toBe(baseline + (driver === 'redis' ? 1 : 0))
     }
-    await expect.poll(connections).toBe(baseline + (driver === 'redis' ? 1 : 0))
     await resetHoloRuntime()
     await expect.poll(connections).toBe(baseline)
   })

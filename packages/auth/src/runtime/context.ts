@@ -47,6 +47,7 @@ export type MemoryAuthContext = AuthRuntimeContext & {
 
 export type AsyncAuthContext = AuthRuntimeContext & {
   activate(): void
+  adoptRequestScope(): void
   run<TValue>(callback: () => TValue): TValue
 }
 
@@ -100,6 +101,9 @@ export function createAsyncAuthContext(): AsyncAuthContext {
       if (!storage.getStore()) {
         storage.enterWith(createMemoryAuthContext())
       }
+    },
+    adoptRequestScope() {
+      storage.enterWith(createMemoryAuthContext())
     },
     run(callback) {
       return storage.run(createMemoryAuthContext(), callback)

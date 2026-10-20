@@ -6,16 +6,26 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
-import { afterEach, expect, it, onTestFinished } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { configureMailRuntime, defineMail, MailSendError, normalizeMailConfig, previewMail, renderMailPreview, resetMailRuntime, sendMail } from '../src'
 
-async function startSmtpProvider(rejectRecipient = false) {
+type SmtpServerOptions = {
+  readonly rejectRecipient?: boolean
+  readonly holdAcceptance?: Promise<void>
+}
+
+async function startSmtpServer({ rejectRecipient = false, holdAcceptance }: SmtpServerOptions = {}) {
   const messages: string[] = []
   const commands: string[] = []
+  const stats = { connections: 0, closedConnections: 0 }
   const sockets = new Set<Socket>()
   const server = createServer(socket => {
+    stats.connections++
     sockets.add(socket)
-    socket.on('close', () => sockets.delete(socket))
+    socket.on('close', () => {
+      sockets.delete(socket)
+      stats.closedConnections++
+    })
     socket.setEncoding('utf8')
     socket.write('220 Local SMTP provider\r\n')
     let buffer = ''
@@ -30,7 +40,11 @@ async function startSmtpProvider(rejectRecipient = false) {
           if (line === '.') {
             messages.push(data.join('\r\n'))
             data = undefined
-            socket.write('250 Message accepted\r\n')
+            if (holdAcceptance) {
+              void holdAcceptance.then(() => socket.write('250 Message accepted\r\n'))
+            } else {
+              socket.write('250 Message accepted\r\n')
+            }
           } else {
             data.push(line.startsWith('..') ? line.slice(1) : line)
           }
@@ -61,18 +75,44 @@ async function startSmtpProvider(rejectRecipient = false) {
   })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('SMTP provider did not bind a port')
+  const dropConnections = () => {
+    for (const socket of sockets) socket.destroy()
+  }
+  return { messages, commands, stats, port: address.port, dropConnections }
+}
+
+async function startSmtpProvider(options: SmtpServerOptions = {}) {
+  const provider = await startSmtpServer(options)
   configureMailRuntime({
     config: normalizeMailConfig({
       default: 'smtp',
       from: { email: 'mailer@example.com', name: 'Mailer Sender' },
       replyTo: { email: 'reply@example.com' },
-      mailers: { smtp: { driver: 'smtp', host: '127.0.0.1', port: address.port, secure: false } },
+      mailers: { smtp: { driver: 'smtp', host: '127.0.0.1', port: provider.port, secure: false } },
     }),
   })
-  return { messages, commands, port: address.port }
+  return provider
 }
 
 afterEach(() => resetMailRuntime())
+
+async function runOneShotSmtpSend(port: number): Promise<void> {
+  const srcPath = resolve(import.meta.dirname, '../src/index.ts')
+  const script = `
+import assert from 'node:assert/strict'
+import { configureMailRuntime, defineMail, normalizeMailConfig, sendMail } from ${JSON.stringify(srcPath)}
+configureMailRuntime({ config: normalizeMailConfig({
+  default: 'smtp', from: { email: 'mailer@example.com' },
+  mailers: { smtp: { driver: 'smtp', host: '127.0.0.1', port: ${port}, secure: false } },
+}) })
+const result = await sendMail(defineMail({ to: 'ava@example.com', subject: 'One-shot script', text: 'Hello' }))
+assert.equal(result.driver, 'smtp')
+`
+  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
+  const entry = compiled.outputFiles[0]
+  if (!entry) throw new Error('One-shot mail script compilation produced no entry')
+  await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+}
 
 async function runNativeMailWorker(port: number, operation: 'queue' | 'transaction' | 'queued-transaction' | 'storage' | 'log' | 'delayed' | 'builtins' | 'plugin' | 'broken-plugin', s3Port?: number): Promise<{ stdout: string, stderr: string }> {
   const harnessPath = resolve(import.meta.dirname, '../../queue-db/tests/support/sqlite-queue.ts')
@@ -87,7 +127,7 @@ import { join } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import { Storage, resetStorageRuntime } from '@holo-js/storage/runtime'
 import '@holo-js/storage/config'
-import { configureMailRuntime, normalizeMailConfig, defineMail, sendMail, listFakeSentMails, listPreviewMailArtifacts, loadMailPluginDrivers } from '@holo-js/mail'
+import { configureMailRuntime, normalizeMailConfig, defineMail, sendMail, listFakeSentMails, listPreviewMailArtifacts, loadMailPluginDrivers, resetMailRuntime } from '@holo-js/mail'
 import { runQueueWorker } from '@holo-js/queue'
 const harness = await createSQLiteQueueHarness()
 configureMailRuntime({ config: normalizeMailConfig({
@@ -233,6 +273,7 @@ try {
     }
   }
 } finally {
+  resetMailRuntime()
   await harness.cleanup()
 }
 `
@@ -302,8 +343,24 @@ it('escapes app-provided mail content and rejects executable markdown links in r
   expect(html).not.toContain('<script>alert(1)</script>')
 })
 
+it('escapes a markdown link href once and keeps the label escaped once in real previews', async () => {
+  const mail = defineMail({
+    to: 'ava@example.com',
+    from: 'sender@example.com',
+    subject: 'Links',
+    markdown: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)',
+  })
+  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
+  const preview = await previewMail(mail)
+  expect(preview.html).toContain('<a href="https://example.test/?a=1&amp;b=2">Search</a>')
+  expect(preview.html).toContain('<a href="https://example.test/b">A &amp; B</a>')
+  expect(preview.html).toContain('bad')
+  expect(preview.html).not.toContain('&amp;amp;')
+  expect(preview.html).not.toContain('javascript:')
+})
+
 it('reports a real SMTP rejection with the native mailer context', async () => {
-  const provider = await startSmtpProvider(true)
+  const provider = await startSmtpProvider({ rejectRecipient: true })
   let finalized = false
   const result = await sendMail(defineMail({ to: 'ava@example.com', subject: 'Rejected delivery', text: 'Hello' }))
     .finally(() => { finalized = true })
@@ -312,6 +369,110 @@ it('reports a real SMTP rejection with the native mailer context', async () => {
   expect(result).toBeInstanceOf(MailSendError)
   expect(result).toMatchObject({ driver: 'smtp', mailer: 'smtp', cause: { responseCode: 550 } })
   expect(provider.messages).toEqual([])
+})
+
+it('reuses one SMTP connection for sequential sends through the same mailer', async () => {
+  const provider = await startSmtpProvider()
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'First pooled send', text: 'One' }))
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Second pooled send', text: 'Two' }))
+  expect(provider.messages).toHaveLength(2)
+  expect(provider.stats.connections).toBe(1)
+})
+
+it('reconnects for the next send after the server drops the idle connection', async () => {
+  const provider = await startSmtpProvider()
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Before idle drop', text: 'One' }))
+  provider.dropConnections()
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'After idle drop', text: 'Two' }))
+  expect(provider.messages).toHaveLength(2)
+  expect(provider.messages[1]).toContain('Subject: After idle drop')
+  expect(provider.stats.connections).toBe(2)
+})
+
+it('sends overlapping messages through one mailer over one SMTP connection', async () => {
+  const provider = await startSmtpProvider()
+  await Promise.all([
+    sendMail(defineMail({ to: 'ava@example.com', subject: 'Overlapping one', text: 'One' })),
+    sendMail(defineMail({ to: 'ava@example.com', subject: 'Overlapping two', text: 'Two' })),
+  ])
+  expect(provider.messages).toHaveLength(2)
+  expect(provider.stats.connections).toBe(1)
+})
+
+it('lets a one-shot script exit once its SMTP connection has been idle for the pool timeout', async () => {
+  const provider = await startSmtpServer()
+  await runOneShotSmtpSend(provider.port)
+  expect(provider.messages).toHaveLength(1)
+}, 20000)
+
+it.each([
+  ['resets', () => resetMailRuntime()],
+  ['reconfigures', (port: number) => configureMailRuntime({
+    config: normalizeMailConfig({
+      default: 'smtp',
+      from: { email: 'mailer@example.com', name: 'Mailer Sender' },
+      replyTo: { email: 'reply@example.com' },
+      mailers: { smtp: { driver: 'smtp', host: '127.0.0.1', port, secure: false } },
+    }),
+  })],
+] as const)('keeps an in-flight send alive when the mail runtime %s and closes its connection once it finishes', async (_name, retire) => {
+  let acceptMessage!: () => void
+  const accepted = new Promise<void>(resolve => { acceptMessage = resolve })
+  const provider = await startSmtpProvider({ holdAcceptance: accepted })
+  const send = Promise.resolve(sendMail(defineMail({ to: 'ava@example.com', subject: 'In flight', text: 'Hello' })))
+  await vi.waitFor(() => expect(provider.messages).toHaveLength(1))
+  retire(provider.port)
+  acceptMessage()
+  await expect(send).resolves.toMatchObject({ driver: 'smtp', mailer: 'smtp' })
+  await vi.waitFor(() => expect(provider.stats.closedConnections).toBe(1))
+})
+
+it('closes the cached SMTP connection when the mail runtime is reset', async () => {
+  const provider = await startSmtpProvider()
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Before reset', text: 'One' }))
+  await new Promise(resolve => setTimeout(resolve, 50))
+  expect(provider.stats.closedConnections).toBe(0)
+  resetMailRuntime()
+  await vi.waitFor(() => expect(provider.stats.closedConnections).toBe(1))
+})
+
+it('keeps a separate SMTP connection for each mailer', async () => {
+  const primary = await startSmtpServer()
+  const secondary = await startSmtpServer()
+  configureMailRuntime({
+    config: normalizeMailConfig({
+      default: 'primary',
+      from: { email: 'mailer@example.com' },
+      mailers: {
+        primary: { driver: 'smtp', host: '127.0.0.1', port: primary.port, secure: false },
+        secondary: { driver: 'smtp', host: '127.0.0.1', port: secondary.port, secure: false },
+      },
+    }),
+  })
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Primary mailer', text: 'One' }))
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Secondary mailer', text: 'Two' })).using('secondary')
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Primary again', text: 'Three' }))
+  expect(primary.messages).toHaveLength(2)
+  expect(secondary.messages).toHaveLength(1)
+  expect(primary.stats.connections).toBe(1)
+  expect(secondary.stats.connections).toBe(1)
+})
+
+it('replaces the cached SMTP connection when the mailer config changes', async () => {
+  const previous = await startSmtpProvider()
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'Before config change', text: 'One' }))
+  const next = await startSmtpServer()
+  configureMailRuntime({
+    config: normalizeMailConfig({
+      default: 'smtp',
+      from: { email: 'mailer@example.com' },
+      mailers: { smtp: { driver: 'smtp', host: '127.0.0.1', port: next.port, secure: false } },
+    }),
+  })
+  await sendMail(defineMail({ to: 'ava@example.com', subject: 'After config change', text: 'Two' }))
+  expect(next.messages).toHaveLength(1)
+  expect(next.stats.connections).toBe(1)
+  await vi.waitFor(() => expect(previous.stats.closedConnections).toBe(1))
 })
 
 it('requires usable app renderers for view-backed previews', async () => {

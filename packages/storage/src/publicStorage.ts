@@ -2,7 +2,8 @@ import { Readable } from 'node:stream'
 import { type FileHandle, open, realpath, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { type FileContentInspection, fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
-import { localStoragePathInternals } from '@holo-js/kernel'
+import { localStoragePathInternals, requestUrlInternals, resolveRequestUrl } from '@holo-js/kernel'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
@@ -193,6 +194,15 @@ function resolveFallbackPublicStorageRequest(projectRoot: string, config: HoloSt
   return candidates.find(candidate => candidate && candidate.disk.name !== attemptedDiskName) ?? null
 }
 
+function resolveStorageRequestUrls(request: Request): { visitorUrl: URL, routedUrl: URL } | null {
+  try {
+    return { visitorUrl: resolveRequestUrl(request), routedUrl: requestUrlInternals.resolveRoutedRequestUrl(request) }
+  } catch (error) {
+    reportError(error, { capability: 'storage', operation: 'request.url' })
+    return null
+  }
+}
+
 export async function createPublicStorageResponse(projectRoot: string, storageConfig: NormalizedHoloStorageConfig, request: Request, appKey?: string): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return createMissingFileResponse()
   const normalized = normalizeModuleOptions({
@@ -200,19 +210,11 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
     routePrefix: storageConfig.routePrefix,
     disks: storageConfig.disks,
   })
-  const url = new URL(request.url)
-  const host = request.headers.get('host')
-  if (host) {
-    try {
-      const authority = new URL(`${url.protocol}//${host}`)
-      if (authority.username || authority.password || authority.pathname !== '/' || authority.search || authority.hash) return createMissingFileResponse()
-      url.host = authority.host
-    } catch {
-      return createMissingFileResponse()
-    }
-  }
-  if (isTemporaryLocalStorageRequest(normalized, url)) {
-    const entry = resolveTemporaryLocalStorageRequest(projectRoot, normalized, url, appKey, request.method)
+  const urls = resolveStorageRequestUrls(request)
+  if (!urls) return createMissingFileResponse()
+  const { visitorUrl, routedUrl } = urls
+  if (isTemporaryLocalStorageRequest(normalized, routedUrl)) {
+    const entry = resolveTemporaryLocalStorageRequest(projectRoot, normalized, routedUrl, visitorUrl, appKey, request.method)
     if (!entry) return createMissingFileResponse()
     try {
       return await createLocalStorageFileResponse(projectRoot, entry.disk, entry.absolutePath, request, true) ?? createMissingFileResponse()
@@ -220,7 +222,7 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
       return createMissingFileResponse()
     }
   }
-  const pathname = url.pathname
+  const pathname = routedUrl.pathname
   const routePath = pathname.startsWith(normalized.routePrefix) ? pathname.slice(normalized.routePrefix.length) : pathname
   const segments = resolveRouteSegments(routePath)
 
