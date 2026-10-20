@@ -90,6 +90,7 @@
 
 ### Changed
 
+- `addMediaFromUrl()` fetches public IPv6-literal URLs such as `http://[2001:db8::1]/hero.jpg`, which were refused because the brackets stayed in the hostname. An IP literal is checked against the same address rules as a resolved address and skips DNS. A loopback or private IPv6 literal is refused with the same message as a hostname that resolves to one, `must not resolve to local or private hosts`. IPv4 literals that point at a local or private network now get that message too, where they used to get `must not target local or private hosts`.
 - Many-to-many relations (`belongsToMany`, `morphToMany`, `morphedByMany`) load only the pivot keys and the columns declared with `withPivot()` and `withTimestamps()` into `pivot`, as Laravel does. Before, every pivot column was loaded. See [Reading pivot columns](apps/docs/docs/orm/relationships/many-to-many.md#reading-pivot-columns).
 - One-of-many relations (`latestOfMany`, `oldestOfMany`, `ofMany`, and their morph variants) choose the related row in the query, as Laravel does, instead of loading every related row into memory. A relation whose column is `NULL` for every candidate loads `null`, as in Laravel; before, it loaded the first candidate.
 - Eager loads and relation filters split their key lists into chunks of at most 256 keys, so a relation loaded for thousands of parents stays within database bind-parameter limits. Each chunk runs its own query. A relation whose constraint sets `limit()` or `offset()` runs as one query, so the limit or offset applies to the whole load, as in Laravel.

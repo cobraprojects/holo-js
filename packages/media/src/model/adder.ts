@@ -617,8 +617,13 @@ function resolveRemoteMediaUrl(value: string): URL {
     throw new Error('[@holo-js/media] Remote media URLs must not include credentials.')
   }
 
-  if (isBlockedRemoteMediaHost(url.hostname)) {
+  if (isLocalRemoteMediaName(url.hostname)) {
     throw new Error('[@holo-js/media] Remote media URLs must not target local or private hosts.')
+  }
+
+  const literal = parseRemoteMediaIPLiteral(url.hostname)
+  if (literal) {
+    assertRemoteMediaAddressesAllowed([literal])
   }
 
   return url
@@ -734,12 +739,29 @@ async function resolveRemoteMediaAddress(
   url: URL,
   resolver: RemoteMediaAddressResolver,
 ): Promise<LookupAddress> {
-  const addresses = await resolver(url.hostname)
+  const addresses = await resolveRemoteMediaHostAddresses(url.hostname, resolver)
+  assertRemoteMediaAddressesAllowed(addresses)
+  return addresses[0]!
+}
+
+function assertRemoteMediaAddressesAllowed(addresses: readonly LookupAddress[]): void {
   if (addresses.length === 0 || addresses.some(isBlockedRemoteMediaAddress)) {
     throw new Error('[@holo-js/media] Remote media URLs must not resolve to local or private hosts.')
   }
+}
 
-  return addresses[0]!
+async function resolveRemoteMediaHostAddresses(
+  hostname: string,
+  resolver: RemoteMediaAddressResolver,
+): Promise<readonly LookupAddress[]> {
+  const literal = parseRemoteMediaIPLiteral(hostname)
+  return literal ? [literal] : await resolver(hostname)
+}
+
+function parseRemoteMediaIPLiteral(hostname: string): LookupAddress | null {
+  const address = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+  const family = isIP(address)
+  return family === 0 ? null : { address, family }
 }
 
 function requestRemoteMedia(url: URL, address: LookupAddress, signal?: AbortSignal): Promise<Response> {
@@ -787,17 +809,9 @@ function resolveRemoteMediaRequest(protocol: string): typeof requestHttp {
   return protocol === 'https:' ? requestHttps : requestHttp
 }
 
-function isBlockedRemoteMediaHost(hostname: string): boolean {
+function isLocalRemoteMediaName(hostname: string): boolean {
   const lowerCaseHostname = hostname.toLowerCase()
-  const normalized = lowerCaseHostname.startsWith('[') && lowerCaseHostname.endsWith(']')
-    ? lowerCaseHostname.slice(1, -1)
-    : lowerCaseHostname
-  if (normalized === 'localhost' || normalized.endsWith('.localhost')) {
-    return true
-  }
-
-  const family = isIP(normalized)
-  return family !== 0 && isBlockedRemoteMediaAddress({ address: normalized, family })
+  return lowerCaseHostname === 'localhost' || lowerCaseHostname.endsWith('.localhost')
 }
 
 function validateSource(

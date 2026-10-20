@@ -2735,6 +2735,80 @@ describe('@holo-js/media', () => {
     }
   })
 
+  it('fetches public IPv6-literal remote media without a DNS lookup', async () => {
+    const imageBytes = await createImageBuffer()
+    const lookups: string[] = []
+    const requestedAddresses: { address: string, family: number }[] = []
+    mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+      async (hostname) => {
+        lookups.push(hostname)
+        throw new Error('DNS must not be consulted for an IP literal')
+      },
+      async (_url, address) => {
+        requestedAddresses.push(address)
+        return new Response(new Uint8Array(imageBytes), { headers: { 'content-type': 'image/jpeg' } })
+      },
+    ))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'IPv6 Literal' })
+    const media = await post
+      .addMediaFromUrl('http://[2001:db8::1]/remote.jpg')
+      .toMediaCollection('images')
+
+    expect(media.fileName).toBe('remote.jpg')
+    expect(lookups).toEqual([])
+    expect(requestedAddresses).toEqual([{ address: '2001:db8::1', family: 6 }])
+  })
+
+  it('refuses loopback and private IPv6-literal remote media with the error of its resolved form', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Blocked IPv6 Literal' })
+    const requests: string[] = []
+    const recordRequest = async (url: URL) => {
+      requests.push(url.hostname)
+      return new Response(null)
+    }
+
+    for (const address of ['::1', '::', 'fc00::1', 'fd00::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '64:ff9b::7f00:1']) {
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => [{ address, family: 6 }],
+        recordRequest,
+      ))
+      const resolvedMessage = await getRejectionMessage(post.addMediaFromUrl('https://media.example.test/private.jpg').toMediaCollection('images'))
+
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => {
+          throw new Error('DNS must not be consulted for an IP literal')
+        },
+        recordRequest,
+      ))
+      const literalMessage = await getRejectionMessage(post.addMediaFromUrl(`https://[${address}]/private.jpg`).toMediaCollection('images'))
+
+      expect(literalMessage).toBe(resolvedMessage)
+      expect(literalMessage).toContain('must not resolve to local or private hosts')
+    }
+    expect(requests).toEqual([])
+  })
+
   it('pins remote media HTTP requests to the validated address', async () => {
     const server = createServer((_request, response) => {
       response.setHeader('content-type', 'text/plain')
