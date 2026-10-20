@@ -2023,6 +2023,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     activeSessionRuntime = optionalSubsystems.session
     activeAuthRuntime = optionalSubsystems.auth
     activeAuthContext = optionalSubsystems.authContext
+    activeAuthContext?.setRequestAccessors?.(subsystemOptions.authRequest)
     return optionalSubsystems
   }
 
