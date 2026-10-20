@@ -2308,6 +2308,93 @@ export default async function boot() {
     expect(peekHolo()).toBeUndefined()
   })
 
+  it('rejects a plugin boot hook that reconfigures optional subsystems directly instead of waiting on its own boot', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-optional-reconfigure-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-optional-reconfigure-boot', `
+export default {
+  id: 'optional-reconfigure-boot',
+  name: 'Optional Reconfigure Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreOptionalReconfigureDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreOptionalReconfigureDuringBoot__?: () => Promise<unknown> }
+    const loadedConfig = await loadConfigDirectory(root)
+    const runtime = await createHolo(root)
+    runtimeGlobal.__holoCoreOptionalReconfigureDuringBoot__ = () => reconfigureOptionalHoloSubsystems(root, loadedConfig)
+
+    await expect(settleWithin(runtime.initialize(), 2000)).rejects.toThrow(/optional subsystem reconfiguration cannot run inside a plugin boot hook/)
+    expect(peekHolo()).toBeUndefined()
+  })
+
+  it('rejects a plugin boot hook that initializes through a framework adapter that is already starting', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-adapter-initialize-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-adapter-initialize-boot', `
+export default {
+  id: 'adapter-initialize-boot',
+  name: 'Adapter Initialize Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreAdapterInitializeDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreAdapterInitializeDuringBoot__?: () => Promise<unknown> }
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoBootHookAdapterInitialize__',
+      displayName: 'Boot Hook',
+    })
+    runtimeGlobal.__holoCoreAdapterInitializeDuringBoot__ = () => adapter.initializeProject({ projectRoot: root })
+
+    await expect(settleWithin(adapter.initializeProject({ projectRoot: root }), 2000))
+      .rejects.toThrow(/Boot Hook Holo project initialization cannot run inside a plugin boot hook/)
+    expect(peekHolo()).toBeUndefined()
+  })
+
   it('boots a plugin module again in the next runtime when a boot still running during reset finishes late', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

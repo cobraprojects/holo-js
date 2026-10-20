@@ -1501,6 +1501,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   loadedConfig: LoadedHoloConfig<TCustom>,
   options: OptionalSubsystemsOptions = {},
 ): Promise<OptionalSubsystemsResult> {
+  assertOutsidePluginBoot(projectRoot, 'Holo optional subsystem reconfiguration')
   const optionalSubsystems = await runOptionalSubsystemsSerially(() => configureOptionalHoloSubsystems(projectRoot, loadedConfig, options))
   await bootHoloPluginModules(projectRoot, loadedConfig)
   return optionalSubsystems
