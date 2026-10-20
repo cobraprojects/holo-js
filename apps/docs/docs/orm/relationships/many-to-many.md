@@ -211,7 +211,7 @@ await post.tags().detach()
 
 ## Syncing
 
-`sync()` makes the pivot match the list you pass: missing IDs are attached, extra IDs are detached, and changed pivot columns are updated. It returns what changed:
+`sync()` makes the pivot match the list you pass: missing IDs are attached, extra IDs are detached, and changed pivot columns are updated. It returns what changed. An ID that appears more than once is synced once, and its last pivot values win:
 
 ```ts
 const changes = await post.tags().sync([1, 2, 3])

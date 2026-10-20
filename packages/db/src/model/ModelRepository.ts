@@ -1706,6 +1706,24 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return this.upsert(match, values)
   }
 
+  withWriteTimestamps(
+    payload: Readonly<Record<string, unknown>>,
+    mode: WriteMode,
+    timestamp = new Date().toISOString(),
+  ): Record<string, unknown> {
+    const { createdAtColumn, updatedAtColumn } = this.definition
+    const timestamped: Record<string, unknown> = { ...payload }
+    if (mode === 'create' && createdAtColumn && !(createdAtColumn in payload)) {
+      timestamped[createdAtColumn] = this.normalizeForStorage(createdAtColumn, timestamp)
+    }
+
+    if (updatedAtColumn && !(updatedAtColumn in payload)) {
+      timestamped[updatedAtColumn] = this.normalizeForStorage(updatedAtColumn, timestamp)
+    }
+
+    return timestamped
+  }
+
   sanitizeWritePayload(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
@@ -1813,9 +1831,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       const deletedAtColumn = this.getDeletedAtColumn()
       if (deletedAtColumn) {
         const deletedAt = new Date().toISOString()
-        await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update({
-          [deletedAtColumn]: deletedAt,
-        })
+        const written = this.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt)
+        await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
+        entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
         entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) } as never)
         await this.dispatchEvent('trashed', entity)
       } else {
@@ -1849,11 +1867,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       await this.dispatchCancelableEvent('restoring', entity)
-      await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update({
-        [deletedAtColumn]: null,
-      })
+      const written = this.withWriteTimestamps({ [deletedAtColumn]: null }, 'update')
+      await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
+      entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
       entity.forceFill({ [deletedAtColumn]: null } as never)
-      const restored = this.hydrate({ ...entity.toAttributes(), [primaryKey]: id })
+      const restored = new Entity<TTable>(this, { ...entity.toAttributes(), [primaryKey]: id } as Partial<ModelRecord<TTable>>, true)
       restored.forceFill({ [primaryKey]: entity.get(primaryKey) } as never)
       await this.dispatchEvent('restored', restored)
       await this.touchOwners(restored)

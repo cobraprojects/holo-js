@@ -1379,14 +1379,14 @@ export class ModelQueryBuilder<
   }
 
   async update(values: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult> {
-    return this.getTableQueryBuilder().update(this.repository.sanitizeWritePayload(values, 'update'))
+    return this.getTableQueryBuilder().update(this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(values, 'update'), 'update'))
   }
 
   async updateJson(
     columnPath: ModelJsonColumnPath<TTable>,
     value: unknown,
   ): Promise<DriverExecutionResult> {
-    return this.getTableQueryBuilder().update(this.repository.sanitizeWritePayload({ [columnPath]: value } as Record<string, unknown>, 'update'))
+    return this.getTableQueryBuilder().update(this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload({ [columnPath]: value } as Record<string, unknown>, 'update'), 'update'))
   }
 
   async increment(
@@ -1397,7 +1397,7 @@ export class ModelQueryBuilder<
     return this.getTableQueryBuilder().increment(
       column,
       amount,
-      this.repository.sanitizeWritePayload(extraValues, 'update'),
+      this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
     )
   }
 
@@ -1409,7 +1409,7 @@ export class ModelQueryBuilder<
     return this.getTableQueryBuilder().decrement(
       column,
       amount,
-      this.repository.sanitizeWritePayload(extraValues, 'update'),
+      this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
     )
   }
 
@@ -1418,18 +1418,24 @@ export class ModelQueryBuilder<
     uniqueBy: readonly ModelColumnName<TTable>[],
     updateColumns: readonly ModelColumnName<TTable>[] = [],
   ): Promise<DriverExecutionResult> {
+    const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (
-      this.repository.sanitizeWritePayload(value, 'create')
+      this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(value, 'create'), 'create', timestamp)
     ))
-    return this.tableQuery.upsert(rows, uniqueBy, updateColumns)
+    const { updatedAtColumn } = this.repository.definition
+    const timestampedUpdateColumns = updatedAtColumn && updateColumns.length > 0 && !updateColumns.includes(updatedAtColumn as ModelColumnName<TTable>)
+      ? [...updateColumns, updatedAtColumn as ModelColumnName<TTable>]
+      : updateColumns
+    return this.tableQuery.upsert(rows, uniqueBy, timestampedUpdateColumns)
   }
 
   async delete(): Promise<DriverExecutionResult> {
     const deletedAtColumn = this.repository.getDeletedAtColumn()
     if (deletedAtColumn) {
-      return this.withoutTrashed().getTableQueryBuilder().update({
-        [deletedAtColumn]: new Date().toISOString(),
-      })
+      const deletedAt = new Date().toISOString()
+      return this.withoutTrashed().getTableQueryBuilder().update(
+        this.repository.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt),
+      )
     }
 
     return this.getTableQueryBuilder().delete()
