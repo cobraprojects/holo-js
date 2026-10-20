@@ -93,13 +93,14 @@ const REMOTE_MEDIA_TIMEOUT_MS = 30_000
 const DEFAULT_MEDIA_DISK = 'public'
 const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
 const GLOBALLY_REACHABLE_BLOCKED_IPV4_ADDRESSES = createGloballyReachableBlockedIPv4Addresses()
+const GLOBAL_UNICAST_IPV6_ADDRESSES = createGlobalUnicastIPv6Addresses()
 const IETF_PROTOCOL_ASSIGNMENTS = createIETFProtocolAssignmentsBlockList()
 const GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS = createGloballyReachableIETFProtocolAssignments()
 const NAT64_WELL_KNOWN_PREFIX = Buffer.concat([Buffer.from([0x00, 0x64, 0xff, 0x9b]), Buffer.alloc(8)])
-const NAT64_LOCAL_USE_PREFIX = Buffer.from([0x00, 0x64, 0xff, 0x9b, 0x00, 0x01])
 const SIX_TO_FOUR_PREFIX = Buffer.from([0x20, 0x02])
 const IPV4_COMPATIBLE_PREFIX = Buffer.alloc(12)
 const TRANSLATED_IPV4_PREFIX = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0])
+const IPV4_MAPPED_PREFIX = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff])
 const TEREDO_PREFIX = Buffer.from([0x20, 0x01, 0x00, 0x00])
 const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
   tmpdir(),
@@ -683,6 +684,12 @@ function createGloballyReachableBlockedIPv4Addresses(): BlockList {
   return blockList
 }
 
+function createGlobalUnicastIPv6Addresses(): BlockList {
+  const blockList = new BlockList()
+  blockList.addSubnet('2000::', 3, 'ipv6')
+  return blockList
+}
+
 function createIETFProtocolAssignmentsBlockList(): BlockList {
   const blockList = new BlockList()
   blockList.addSubnet('2001::', 23, 'ipv6')
@@ -716,42 +723,48 @@ function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
     return isBlockedRemoteMediaIPv4Address(address.address)
   }
 
-  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, 'ipv6')) {
+  return isBlockedRemoteMediaIPv6Address(address.address)
+}
+
+function isBlockedRemoteMediaIPv6Address(address: string): boolean {
+  const bytes = findIPv6Bytes(address)
+  if (!bytes) {
+    return true
+  }
+
+  if (!GLOBAL_UNICAST_IPV6_ADDRESSES.check(address, 'ipv6')) {
+    const mappedAddress = findMappedIPv4Address(bytes)
+    return mappedAddress === null || isBlockedRemoteMediaIPv4Address(mappedAddress)
+  }
+
+  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address, 'ipv6')) {
     return true
   }
 
   if (
-    IETF_PROTOCOL_ASSIGNMENTS.check(address.address, 'ipv6')
-    && !GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS.check(address.address, 'ipv6')
+    IETF_PROTOCOL_ASSIGNMENTS.check(address, 'ipv6')
+    && !GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS.check(address, 'ipv6')
   ) {
-    return true
-  }
-
-  const bytes = findIPv6Bytes(address.address)
-  if (!bytes || bytes.subarray(0, 6).equals(NAT64_LOCAL_USE_PREFIX)) {
     return true
   }
 
   return findEmbeddedIPv4Addresses(bytes).some(isBlockedRemoteMediaIPv4Address)
 }
 
+function findMappedIPv4Address(bytes: Buffer): string | null {
+  const mappedPrefixes = [NAT64_WELL_KNOWN_PREFIX, IPV4_COMPATIBLE_PREFIX, IPV4_MAPPED_PREFIX, TRANSLATED_IPV4_PREFIX]
+  if (!mappedPrefixes.some(prefix => bytes.subarray(0, 12).equals(prefix))) {
+    return null
+  }
+
+  return formatIPv4Octets(bytes.subarray(12, 16))
+}
+
 function findEmbeddedIPv4Addresses(bytes: Buffer): string[] {
   const embeddedAddresses: string[] = []
 
-  if (bytes.subarray(0, 12).equals(NAT64_WELL_KNOWN_PREFIX)) {
-    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
-  }
-
   if (bytes.subarray(0, 2).equals(SIX_TO_FOUR_PREFIX)) {
     embeddedAddresses.push(formatIPv4Octets(bytes.subarray(2, 6)))
-  }
-
-  if (bytes.subarray(0, 12).equals(IPV4_COMPATIBLE_PREFIX)) {
-    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
-  }
-
-  if (bytes.subarray(0, 12).equals(TRANSLATED_IPV4_PREFIX)) {
-    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
   }
 
   if (bytes.subarray(0, 4).equals(TEREDO_PREFIX)) {
