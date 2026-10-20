@@ -401,7 +401,7 @@ The `memory` driver keeps at most 10,000 keys per process and never evicts a liv
 The CSRF token now lives in the visitor's [session](/basics/session), as in Laravel. The `XSRF-TOKEN` cookie carries that session token encrypted, and a token copied from another browser or planted by a subdomain no longer matches.
 
 - **Tokens reissue after upgrading.** The first unsafe request each browser sends after the upgrade gets `419`, because its session has no token yet. The next page load stores a token in the session and issues a new `XSRF-TOKEN` cookie.
-- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf` without Auth, add `@holo-js/session` to your dependencies. Without a `config/session.ts`, Holo uses the default file session store.
+- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf`, or leaves it on by default, without Auth, add `@holo-js/session` to your dependencies. Without it, the app fails at startup with `Session support requires @holo-js/session to be installed.` Without a `config/session.ts`, Holo uses the default file session store.
 - **Send the session cookie.** Visitors without a session get one on their first page load. Scripts and tests that post with only the `XSRF-TOKEN` cookie must also send the `holo_session` cookie (or your `session.cookie.name`).
 - **`X-XSRF-TOKEN` is also accepted.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value, so existing `fetch` calls keep working. The new `X-XSRF-TOKEN` header accepts the cookie value, as in Laravel.
 - **Custom session stores need `setDataIfAbsent`.** The token is written with one atomic store call, so a rotation or logout that runs at the same moment can't bring back the old session. Built-in file, database and Redis stores support it. A custom store must add `setDataIfAbsent(sessionId, key, value)` before CSRF-protected pages load. Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, preserve an existing key or insert the value if absent, then return `{ found: true, value: storedValue }`. For the reserved `_token` key, treat a non-string or empty value as absent and replace it atomically; preserve a valid token initialized by another request. Keep the session's other data and expiry unchanged.
@@ -412,10 +412,11 @@ The CSRF token now lives in the visitor's [session](/basics/session), as in Lara
 `csrf.enabled` now defaults to `true`, as in Laravel's `web` group. A `config/security.ts` that has no `csrf` block checks every unsafe request (`POST`, `PUT`, `PATCH`, `DELETE`). Before, the default was off. Apps created with `holo new` or `holo install security` already set `csrf.enabled: true` and don't change.
 
 - **Unsafe requests without a token get `419`.** Forms and `fetch` calls that don't send the token, such as `csrf.input()`, `useForm`, or the `X-CSRF-TOKEN` header, now fail. Routes that receive webhooks or API calls from other clients can be listed in `csrf.except`.
-- **Install `@holo-js/session`.** The token lives in the session, so a security config without a `csrf` block now also needs `@holo-js/session`.
 - **Opt out with `enabled: false`.** Set it to restore the old behavior for the whole app. This removes forgery protection, so prefer `except` for the routes that need it.
 
 ```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
 export default defineSecurityConfig({
   csrf: {
     enabled: false,

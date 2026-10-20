@@ -87,7 +87,7 @@ describe('native csrf middleware', () => {
     const broadcastAuth = await nextCsrfProtection()(new NextRequest('https://app.test/broadcasting/auth', {
       method: 'POST', headers: { cookie },
     }))
-    expect(broadcastAuth?.status).not.toBe(419)
+    expect(broadcastAuth).toBeUndefined()
   })
 
   it('leaves CSRF checks off when the csrf block sets enabled to false', async () => {
@@ -99,7 +99,8 @@ describe('native csrf middleware', () => {
     const allowed = await nextCsrfProtection()(new NextRequest('https://app.test/api/login', {
       method: 'POST', headers: { cookie: 'browser=browser-a' },
     }))
-    expect(allowed?.status).not.toBe(419)
+    expect(allowed?.status).toBe(200)
+    expect(allowed?.headers.get('x-middleware-next')).toBe('1')
   })
 
   it('serves credentialed CORS preflight and preserves CORS headers on CSRF rejection', async () => {
