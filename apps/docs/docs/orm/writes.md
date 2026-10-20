@@ -235,7 +235,7 @@ await Session.where('expires_at', '<', new Date()).delete()
 
 ## Soft delete and restore
 
-When a model has [soft deletes](/orm/#soft-deletes) enabled, `delete()` sets `deleted_at` instead of removing the row. This applies to instance, key, and query deletes. On a model with timestamps, the soft delete and the restore also set `updated_at` to the same time. `restore()` on a model also saves its unsaved changes, as Laravel does. `forceDelete()` removes the row and doesn't write `updated_at`.
+When a model has [soft deletes](/orm/#soft-deletes) enabled, `delete()` sets `deleted_at` instead of removing the row. This applies to instance, key, and query deletes. On a model with timestamps, the soft delete and the restore also set `updated_at` to the same time. `restore()` on a model also saves its unsaved changes, as Laravel does. `forceDelete()` removes the row and doesn't write `updated_at`. Instance writes follow the model's global scopes: a row that a scope hides is not changed, and the call does nothing for it.
 
 ```ts
 await post.delete()

@@ -177,7 +177,7 @@ describe('model query mutations apply updated_at like Laravel', () => {
     expect(restored.get('deleted_at')).toEqual((await Post.findOrFail(1)).get('deleted_at'))
   })
 
-  it('restores a row that a global scope would hide, and returns the entity', async () => {
+  it('an instance restore does not reach a row that a global scope hides', async () => {
     const db = await openModelDatabase()
     const accounts = defineTable('accounts', {
       id: column.id(),
@@ -194,60 +194,70 @@ describe('model query mutations apply updated_at like Laravel', () => {
     })
 
     const account = await Account.withoutGlobalScopes().withTrashed().findOrFail(1)
-    const restored = await account.restore()
-    expect(restored.get('deleted_at')).toBeNull()
-    expect(restored.get('status')).toBe('pending')
-    expect((await Account.withoutGlobalScopes().findOrFail(1)).get('deleted_at')).toBeNull()
+    await account.restore()
+    expect((await db.table(accounts).where('id', 1).first())?.deleted_at).not.toBeNull()
   })
 
-  it('writes an instance save, soft delete, and force delete even when a global scope hides the row', async () => {
+  it('instance writes do not reach rows a tenant scope hides, and in-scope trashed rows still restore and force delete', async () => {
     const db = await openModelDatabase()
     const accounts = defineTable('accounts', {
       id: column.id(),
+      tenant_id: column.integer(),
       status: column.string(),
       deleted_at: column.timestamp().nullable(),
     })
     await createTestTable(db, accounts)
-    await db.table(accounts).insert({ id: 1, status: 'pending', deleted_at: null })
-    await db.table(accounts).insert({ id: 2, status: 'pending', deleted_at: null })
-    await db.table(accounts).insert({ id: 3, status: 'pending', deleted_at: past })
+    await db.table(accounts).insert([
+      { id: 1, tenant_id: 1, status: 'pending', deleted_at: past },
+      { id: 2, tenant_id: 2, status: 'pending', deleted_at: null },
+      { id: 3, tenant_id: 2, status: 'pending', deleted_at: past },
+    ])
     const Account = defineModelFromTable(accounts, {
       softDeletes: true,
       timestamps: false,
       fillable: ['status'],
-      globalScopes: { activeOnly: query => query.where('status', 'active') },
+      globalScopes: { tenant: query => query.where('tenant_id', 1) },
     })
 
-    const saved = await Account.withoutGlobalScopes().findOrFail(1)
-    saved.set('status', 'active')
-    await saved.save()
-    expect((await Account.withoutGlobalScopes().findOrFail(1)).get('status')).toBe('active')
+    const foreign = await Account.withoutGlobalScopes().findOrFail(2)
+    foreign.set('status', 'hacked')
+    await foreign.save()
+    expect((await db.table(accounts).where('id', 2).first())?.status).toBe('pending')
+    await foreign.delete()
+    expect((await db.table(accounts).where('id', 2).first())?.deleted_at).toBeNull()
 
-    const deleted = await Account.withoutGlobalScopes().findOrFail(2)
-    await deleted.delete()
-    expect((await Account.withoutGlobalScopes().withTrashed().findOrFail(2)).get('deleted_at')).toBeInstanceOf(Date)
+    const foreignTrashed = await Account.withoutGlobalScopes().withTrashed().findOrFail(3)
+    await foreignTrashed.forceDelete()
+    expect(await db.table(accounts).where('id', 3).count()).toBe(1)
 
-    const forced = await Account.withoutGlobalScopes().withTrashed().findOrFail(3)
-    await forced.forceDelete()
-    expect(await db.table(accounts).where('id', 3).count()).toBe(0)
+    const own = await Account.withTrashed().findOrFail(1)
+    await own.restore()
+    expect((await db.table(accounts).where('id', 1).first())?.deleted_at).toBeNull()
+    await own.delete()
+    await own.forceDelete()
+    expect(await db.table(accounts).where('id', 1).count()).toBe(0)
   })
 
-  it('hard deletes an instance on a model without soft deletes even when a global scope hides the row', async () => {
+  it('a hard delete on a model without soft deletes does not reach a row a global scope hides', async () => {
     const db = await openModelDatabase()
     const accounts = defineTable('accounts', {
       id: column.id(),
+      tenant_id: column.integer(),
       status: column.string(),
     })
     await createTestTable(db, accounts)
-    await db.table(accounts).insert({ id: 1, status: 'pending' })
+    await db.table(accounts).insert([
+      { id: 1, tenant_id: 1, status: 'pending' },
+      { id: 2, tenant_id: 2, status: 'pending' },
+    ])
     const Account = defineModelFromTable(accounts, {
       timestamps: false,
       fillable: ['status'],
-      globalScopes: { activeOnly: query => query.where('status', 'active') },
+      globalScopes: { tenant: query => query.where('tenant_id', 1) },
     })
 
-    await (await Account.withoutGlobalScopes().findOrFail(1)).delete()
-    expect(await db.table(accounts).count()).toBe(0)
+    await (await Account.withoutGlobalScopes().findOrFail(2)).delete()
+    expect(await db.table(accounts).count()).toBe(2)
   })
 
   it('does not fire retrieved observers while restoring', async () => {

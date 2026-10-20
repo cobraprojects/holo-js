@@ -1797,7 +1797,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         return this.finishUnchangedSave(entity)
       }
 
-      await this.queryWithoutGlobalScopes().where(primaryKey, id).getTableQueryBuilder().update(dirty)
+      await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
       entity.recordChanges(written)
       entity.forceFill(this.normalizeFromStorage(dirty))
       await this.dispatchEvent('updated', entity)
@@ -1832,13 +1832,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       if (deletedAtColumn) {
         const deletedAt = new Date().toISOString()
         const written = this.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt)
-        await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
+        await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
         entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) } as never)
         entity.syncOriginalAttributes(Object.keys(written))
         await this.dispatchEvent('trashed', entity)
       } else {
-        await this.queryWithoutGlobalScopes().where(primaryKey, id).delete()
+        await this.query().where(primaryKey, id).delete()
       }
 
       await this.dispatchEvent('deleted', entity)
@@ -1874,7 +1874,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       const written = entity.getDirty()
       const dirty = this.sanitizeWritePayload(written, 'update', false, false)
       if (Object.keys(dirty).length > 0) {
-        await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
+        await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
       }
 
       entity.recordChanges(written)
@@ -1900,7 +1900,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
       await this.dispatchCancelableEvent('deleting', entity)
       await this.dispatchCancelableEvent('forceDeleting', entity)
-      await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).delete()
+      await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).delete()
       await this.dispatchEvent('forceDeleted', entity)
       await this.dispatchEvent('deleted', entity)
       await this.touchOwners(entity)
