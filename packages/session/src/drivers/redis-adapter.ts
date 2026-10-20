@@ -47,24 +47,45 @@ redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return 1
 `
 
-const ROTATE_SESSION_SCRIPT = `
-local previousKey = KEYS[1]
-local nextKey = KEYS[2]
-if redis.call('HEXISTS', previousKey, 'record') == 0 then
-  return 0
+const READ_SESSION_FIELDS_SCRIPT = `
+if redis.call('HEXISTS', KEYS[1], 'record') == 0 then
+  return {}
 end
-if redis.call('HEXISTS', nextKey, 'record') == 1 then
+return redis.call('HGETALL', KEYS[1])
+`
+
+const COPY_SESSION_SCRIPT = `
+if redis.call('HEXISTS', KEYS[1], 'record') == 1 then
   return -1
 end
-local fields = redis.call('HGETALL', previousKey)
-for index = 1, #fields, 2 do
-  if fields[index] ~= 'record' then
-    redis.call('HSET', nextKey, fields[index], fields[index + 1])
+redis.call('HSET', KEYS[1], 'record', ARGV[1])
+for index = 3, #ARGV, 2 do
+  if ARGV[index] ~= 'record' then
+    redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])
   end
 end
-redis.call('HSET', nextKey, 'record', ARGV[1])
-redis.call('PEXPIRE', nextKey, ARGV[2])
-redis.call('DEL', previousKey)
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return 1
+`
+
+const DELETE_UNCHANGED_SESSION_SCRIPT = `
+local current = redis.call('HGETALL', KEYS[1])
+if #current == 0 then
+  return 0
+end
+if #current ~= #ARGV then
+  return -1
+end
+local expected = {}
+for index = 1, #ARGV, 2 do
+  expected[ARGV[index]] = ARGV[index + 1]
+end
+for index = 1, #current, 2 do
+  if expected[current[index]] ~= current[index + 1] then
+    return -1
+  end
+end
+redis.call('DEL', KEYS[1])
 return 1
 `
 
@@ -93,7 +114,9 @@ redis.call('HSET', KEYS[1], 'record', ARGV[2])
 return 1
 `
 
+const SESSION_KEY_NAMESPACE = 'holo:session:'
 const SET_SESSION_DATA_ATTEMPTS = 8
+const ROTATE_SESSION_ATTEMPTS = 8
 
 const TAKE_SESSION_SCRIPT = `
 if redis.call('HEXISTS', KEYS[1], 'record') == 0 then
@@ -299,6 +322,13 @@ function serializeFlashValue(value: unknown): string {
   return encoded
 }
 
+function readSessionFields(result: unknown): readonly string[] {
+  if (!Array.isArray(result) || result.some(item => typeof item !== 'string')) {
+    throw new Error('[@holo-js/session] Redis returned an invalid session record.')
+  }
+  return result as string[]
+}
+
 function deserializeTakeResult(result: unknown): SessionStoreTakeResult {
   if (!Array.isArray(result) || (result[0] !== 0 && result[0] !== 1)) {
     throw new Error('[@holo-js/session] Redis returned an invalid atomic take result.')
@@ -325,7 +355,7 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
   }
 
   private qualifyKey(sessionId: string): string {
-    return `${this.prefix}{holo-session}:${sessionId}`
+    return `${this.prefix}${SESSION_KEY_NAMESPACE}${sessionId}`
   }
 
   async connect(): Promise<void> {
@@ -348,6 +378,12 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     )
   }
 
+  async writeIfAbsent(record: SessionRecord): Promise<boolean> {
+    const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
+    const created = await this.client.eval(COPY_SESSION_SCRIPT, 1, this.qualifyKey(record.id), serializeSessionRecord(record), ttlMs)
+    return created === 1
+  }
+
   async del(sessionId: string): Promise<void> {
     await this.client.del(this.qualifyKey(sessionId))
   }
@@ -357,20 +393,43 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
       await this.set(record)
       return
     }
+    const previousKey = this.qualifyKey(previousSessionId)
+    const nextKey = this.qualifyKey(record.id)
     const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
-    const result = await this.client.eval(
-      ROTATE_SESSION_SCRIPT,
-      2,
-      this.qualifyKey(previousSessionId),
-      this.qualifyKey(record.id),
-      serializeSessionRecord(record),
-      ttlMs,
-    )
-    if (result === -1) {
-      throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
+    const encoded = serializeSessionRecord(record)
+    for (let attempt = 0; attempt < ROTATE_SESSION_ATTEMPTS; attempt += 1) {
+      const fields = await this.readRotationSource(previousSessionId, previousKey)
+      await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+      const removed = await this.client.eval(DELETE_UNCHANGED_SESSION_SCRIPT, 1, previousKey, ...fields)
+      if (removed === 1) return
+      await this.client.del(nextKey)
+      if (removed === 0) {
+        throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
+      }
     }
-    if (result !== 1) {
+    const fields = await this.readRotationSource(previousSessionId, previousKey)
+    await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+    await this.client.del(previousKey)
+  }
+
+  private async readRotationSource(previousSessionId: string, previousKey: string): Promise<readonly string[]> {
+    const fields = readSessionFields(await this.client.eval(READ_SESSION_FIELDS_SCRIPT, 1, previousKey))
+    if (fields.length === 0) {
       throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
+    }
+    return fields
+  }
+
+  private async copyRotationTarget(
+    nextSessionId: string,
+    nextKey: string,
+    encoded: string,
+    ttlMs: number,
+    fields: readonly string[],
+  ): Promise<void> {
+    const copied = await this.client.eval(COPY_SESSION_SCRIPT, 1, nextKey, encoded, ttlMs, ...fields)
+    if (copied === -1) {
+      throw new Error(`[@holo-js/session] Session "${nextSessionId}" already exists.`)
     }
   }
 

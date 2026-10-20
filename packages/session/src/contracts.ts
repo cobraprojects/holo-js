@@ -62,6 +62,7 @@ export interface CookieSerializeOptions {
 export interface SessionStore {
   read(sessionId: string): Promise<SessionRecord | null>
   write(record: SessionRecord): Promise<void>
+  writeIfAbsent?(record: SessionRecord): Promise<boolean>
   delete(sessionId: string): Promise<void>
   rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
