@@ -3,12 +3,13 @@ import { defineRealtimeQuery, type RealtimeSubscriptionSnapshot } from '../src'
 import {
   configureRealtimeClientTransport,
   getRealtimeQueryStore,
+  hydrateRealtimeQuery,
   resetRealtimeClientRuntime,
   type RealtimeClientTransport,
 } from '../src/client'
+import type { RealtimeSnapshotDelivery } from '../src/client/types'
 
-type Delivery = { readonly resync?: boolean }
-type Listener = (snapshot: RealtimeSubscriptionSnapshot<string[]>, delivery?: Delivery) => void
+type Listener = (snapshot: RealtimeSubscriptionSnapshot<string[]>, delivery?: RealtimeSnapshotDelivery) => void
 
 function snapshot(data: string[], version: number): RealtimeSubscriptionSnapshot<string[]> {
   return { name: 'posts.list', data, dependencies: [], version }
@@ -17,21 +18,23 @@ function snapshot(data: string[], version: number): RealtimeSubscriptionSnapshot
 function createScriptedTransport() {
   let listener: Listener | undefined
   const transport: RealtimeClientTransport = {
-    async query<TResult>() {
-      return snapshot(['loaded'], 1) as unknown as RealtimeSubscriptionSnapshot<TResult>
+    query() {
+      return new Promise<never>(() => {})
     },
     async mutate() {
       throw new Error('Mutations are not scripted.')
     },
-    subscribe<TResult>(_name: string, _args: Record<string, unknown>, next: (snapshot: RealtimeSubscriptionSnapshot<TResult>, delivery?: Delivery) => void) {
+    subscribe(_name, _args, next) {
       listener = next as unknown as Listener
-      return () => {}
+      return () => {
+        listener = undefined
+      }
     },
   }
   return {
     transport,
-    emit(next: RealtimeSubscriptionSnapshot<string[]>, delivery?: Delivery) {
-      listener!(next, delivery)
+    emit(next: RealtimeSubscriptionSnapshot<string[]>, delivery?: RealtimeSnapshotDelivery) {
+      listener?.(next, delivery)
     },
   }
 }
@@ -42,18 +45,18 @@ const listPosts = defineRealtimeQuery({
   handler: async () => ['loaded'],
 })
 
-async function connectedStore() {
+function connectedStore() {
   const scripted = createScriptedTransport()
   configureRealtimeClientTransport(scripted.transport)
   onTestFinished(resetRealtimeClientRuntime)
-  const store = getRealtimeQueryStore<string[]>(listPosts, {})
-  await store.load()
+  hydrateRealtimeQuery(listPosts, {}, snapshot(['loaded'], 1))
+  const store = getRealtimeQueryStore(listPosts, {})
   store.connect()
   return { store, scripted }
 }
 
-it('keeps the newest version when a custom transport delivers an older snapshot later', async () => {
-  const { store, scripted } = await connectedStore()
+it('keeps the newest version when a custom transport delivers an older snapshot later', () => {
+  const { store, scripted } = connectedStore()
 
   scripted.emit(snapshot(['newer'], 5))
   scripted.emit(snapshot(['older'], 4))
@@ -61,8 +64,8 @@ it('keeps the newest version when a custom transport delivers an older snapshot 
   expect(store.snapshot).toMatchObject({ version: 5, data: ['newer'] })
 })
 
-it('accepts a lower version as a new generation when the transport marks it as a resync', async () => {
-  const { store, scripted } = await connectedStore()
+it('accepts a lower version as a new generation when the transport marks it as a resync', () => {
+  const { store, scripted } = connectedStore()
 
   scripted.emit(snapshot(['before'], 5))
   scripted.emit(snapshot(['after'], 1), { resync: true })

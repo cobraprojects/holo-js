@@ -218,5 +218,4 @@ it('recovers a live query after the worker restarts at the same address and deli
   await expect.poll(() => native.connections(), { timeout: 10_000 }).toBe(1)
   await expect.poll(() => store.snapshot?.data[0]?.score, { timeout: 10_000 }).toBe(43)
   leaveStore()
-  store.dispose()
 }, 20_000)
