@@ -1871,10 +1871,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         Object.entries(entity.getDirty()).filter(([key]) => key !== deletedAtColumn && key !== this.definition.updatedAtColumn),
       )
       const written = this.withWriteTimestamps({ [deletedAtColumn]: null }, 'update')
-      await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
+      await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
       entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
       entity.forceFill({ [deletedAtColumn]: null } as never)
-      const restored = await this.query().withTrashed().where(primaryKey as never, id).first()
+      const restored = await this.queryWithoutGlobalScopes().withTrashed().where(primaryKey as never, id).first()
       if (!restored) {
         throw new ModelNotFoundException(this.definition.name)
       }

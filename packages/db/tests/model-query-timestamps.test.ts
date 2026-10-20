@@ -177,6 +177,29 @@ describe('model query mutations apply updated_at like Laravel', () => {
     expect(restored.get('deleted_at')).toEqual((await Post.findOrFail(1)).get('deleted_at'))
   })
 
+  it('restores a row that a global scope would hide, and returns the entity', async () => {
+    const db = await openModelDatabase()
+    const accounts = defineTable('accounts', {
+      id: column.id(),
+      status: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, accounts)
+    await db.table(accounts).insert({ id: 1, status: 'pending', deleted_at: past })
+    const Account = defineModelFromTable(accounts, {
+      softDeletes: true,
+      timestamps: false,
+      fillable: ['status'],
+      globalScopes: { activeOnly: query => query.where('status', 'active') },
+    })
+
+    const account = await Account.withoutGlobalScopes().withTrashed().findOrFail(1)
+    const restored = await account.restore()
+    expect(restored.get('deleted_at')).toBeNull()
+    expect(restored.get('status')).toBe('pending')
+    expect((await Account.withoutGlobalScopes().findOrFail(1)).get('deleted_at')).toBeNull()
+  })
+
   it('bumps updated_at with deleted_at on query delete and restore, and force delete still removes the row', async () => {
     const db = await openModelDatabase()
     const posts = postsTable()
