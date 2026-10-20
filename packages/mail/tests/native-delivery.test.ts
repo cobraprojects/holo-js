@@ -127,7 +127,7 @@ import { join } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import { Storage, resetStorageRuntime } from '@holo-js/storage/runtime'
 import '@holo-js/storage/config'
-import { configureMailRuntime, normalizeMailConfig, defineMail, sendMail, listFakeSentMails, listPreviewMailArtifacts, loadMailPluginDrivers } from '@holo-js/mail'
+import { configureMailRuntime, normalizeMailConfig, defineMail, sendMail, listFakeSentMails, listPreviewMailArtifacts, loadMailPluginDrivers, resetMailRuntime } from '@holo-js/mail'
 import { runQueueWorker } from '@holo-js/queue'
 const harness = await createSQLiteQueueHarness()
 configureMailRuntime({ config: normalizeMailConfig({
@@ -273,6 +273,7 @@ try {
     }
   }
 } finally {
+  resetMailRuntime()
   await harness.cleanup()
 }
 `
