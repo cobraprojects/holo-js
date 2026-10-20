@@ -80,6 +80,12 @@ Delivers mail to an SMTP server. Use it for real email: your provider's SMTP end
 
 The scaffolded config reads these from `MAIL_HOST`, `MAIL_PORT`, `MAIL_SECURE`, `MAIL_USERNAME`, and `MAIL_PASSWORD`.
 
+### Connection reuse
+
+Holo keeps one SMTP connection open for each mailer and sends later messages over it. A connection that stays idle for 5 seconds closes, and the next message opens a new one.
+
+Shutting down the Holo runtime closes the connection right away. A script that sends mail and never calls `shutdown()` on the runtime from `initializeHolo()` exits up to 5 seconds after its last send.
+
 ## preview
 
 Saves each sent mail as a JSON file instead of delivering it. This is the default mailer in new projects, so nothing reaches real inboxes during development.
