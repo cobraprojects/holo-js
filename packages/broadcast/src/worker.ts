@@ -2288,6 +2288,25 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     socket.pendingMessage = cleanup
   }
 
+  let closing: Promise<void> | undefined
+  async function closeRuntime(): Promise<void> {
+  if (livenessTimer !== undefined) {
+    clearInterval(livenessTimer)
+  }
+  await Promise.all([...connectedSockets.values()].map(async socket => {
+    socket.close(1001, 'Worker shutdown')
+    disconnectSocket(socket.socketId)
+  }))
+  await Promise.all([...pendingSocketCleanups])
+  await livenessCycle
+  disconnectDatabaseInvalidation?.()
+  const unsubscribe = await scalingUnsubscribe
+  await unsubscribe()
+  if (scaling) {
+    await scaling.adapter.close()
+  }
+  }
+
   return Object.freeze({
     async fetch(request: Request): Promise<Response> {
       const url = new URL(request.url)
@@ -2437,22 +2456,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
           : false,
       })
     },
-    async close(): Promise<void> {
-      if (livenessTimer !== undefined) {
-        clearInterval(livenessTimer)
-      }
-      await Promise.all([...connectedSockets.values()].map(async socket => {
-        socket.close(1001, 'Worker shutdown')
-        disconnectSocket(socket.socketId)
-      }))
-      await Promise.all([...pendingSocketCleanups])
-      await livenessCycle
-      disconnectDatabaseInvalidation?.()
-      const unsubscribe = await scalingUnsubscribe
-      await unsubscribe()
-      if (scaling) {
-        await scaling.adapter.close()
-      }
+    close(): Promise<void> {
+      closing ??= closeRuntime()
+      return closing
     },
   })
 }
@@ -2522,276 +2528,281 @@ export async function startBroadcastWorker(
       await scalingUnsubscribe?.()
     },
   })
-  if (scalingConfig) {
-    scalingUnsubscribe = await scalingConfig.adapter.subscribe(
-      scalingConfig.eventChannel,
-      createScalingMessageListener(runtime, report),
-    ).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
-  }
-  const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
-  const appsByKey = buildWorkerApps(config)
-  const pathPrefix = config.worker.path.replace(/\/$/, '')
-  const appPathRegex = new RegExp(`^${escapeRegExp(pathPrefix)}/([^/]+)$`)
-  if (bun?.serve) {
-    const rejectedSockets = new WeakSet<object>()
-    const server = bun.serve({
-      hostname: config.worker.host,
-      port: config.worker.port,
-      async fetch(request, wsServer) {
-        const url = new URL(request.url)
-        const appMatch = url.pathname.match(appPathRegex)
-        if (appMatch) {
-          const key = appMatch[1]!
-          const app = appsByKey[key]
-          if (!app) {
-            return new Response('Unknown app key', { status: 401 })
-          }
-
-          if (!isAllowedWorkerOrigin(request, config.worker.allowedOrigins)) {
-            return new Response('Forbidden', { status: 403 })
-          }
-
-          const upgraded = wsServer.upgrade(request, {
-            data: {
-              socketId: createSocketId(),
-              app,
-              headers: request.headers,
-            } satisfies WorkerConnectionInfo,
-          })
-          if (upgraded) {
-            return new Response(null, { status: 200 })
-          }
-        }
-
-        return await runtime.fetch(request)
-      },
-      websocket: {
-        open(socket) {
-          try {
-            runtime.connectWebSocket({
-              ...socket.data,
-              send(payload) {
-                socket.send(payload)
-              },
-              /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
-              close(code, reason) {
-                socket.close(code, reason)
-              },
-              bufferedAmount() {
-                return socket.getBufferedAmount()
-              },
-            })
-          } catch (error) {
-            rejectedSockets.add(socket)
-            rejectSocketConnection(socket, error, report)
-          }
-        },
-        message(socket, message) {
-          if (rejectedSockets.has(socket)) {
-            return
-          }
-          const messageBytes = typeof message === 'string'
-            ? Buffer.byteLength(message)
-            : message.byteLength
-          if (messageBytes > config.worker.maxMessageBytes) {
-            runtime.disconnectWebSocket(socket.data.socketId)
-            socket.close(1009, 'Message too large')
-            return
-          }
-          const value = typeof message === 'string'
-            ? message
-            : new TextDecoder().decode(message)
-          void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
-            report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
-            runtime.disconnectWebSocket(socket.data.socketId)
-            socket.close(4001, 'Protocol error')
-          })
-        },
-        close(socket) {
-          if (rejectedSockets.has(socket)) {
-            return
-          }
-
-          runtime.disconnectWebSocket(socket.data.socketId)
-        },
-      },
-    })
-
-    return Object.freeze({
-      host: config.worker.host,
-      port: config.worker.port,
-      async stop() {
-        server.stop(true)
-        await runtime.close()
-      },
-    })
-  }
-
-  let nodeWsModule: unknown
   try {
-    nodeWsModule = await (runtimeBindings.loadWebSocketModule
-      ? runtimeBindings.loadWebSocketModule()
-      /* v8 ignore next -- default ws import; tests always provide loadWebSocketModule */
-      : import('ws'))
-  } catch (error) {
-    await runtime.close()
-    const details = error instanceof Error ? error.message : String(error)
-    throw new Error(`[@holo-js/broadcast] Node runtime requires the "ws" package for broadcast:work. ${details}`)
-  }
-  const WebSocketServer = (nodeWsModule as NodeWebSocketModuleLike).WebSocketServer
-  if (typeof WebSocketServer !== 'function') {
-    await runtime.close()
-    throw new Error('[@holo-js/broadcast] Node runtime websocket module is missing WebSocketServer export.')
-  }
+    if (scalingConfig) {
+      scalingUnsubscribe = await scalingConfig.adapter.subscribe(
+        scalingConfig.eventChannel,
+        createScalingMessageListener(runtime, report),
+      ).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
+    }
+    const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
+    const appsByKey = buildWorkerApps(config)
+    const pathPrefix = config.worker.path.replace(/\/$/, '')
+    const appPathRegex = new RegExp(`^${escapeRegExp(pathPrefix)}/([^/]+)$`)
+    if (bun?.serve) {
+      const rejectedSockets = new WeakSet<object>()
+      const server = bun.serve({
+        hostname: config.worker.host,
+        port: config.worker.port,
+        async fetch(request, wsServer) {
+          const url = new URL(request.url)
+          const appMatch = url.pathname.match(appPathRegex)
+          if (appMatch) {
+            const key = appMatch[1]!
+            const app = appsByKey[key]
+            if (!app) {
+              return new Response('Unknown app key', { status: 401 })
+            }
 
-  const requestConnectionInfo = new WeakMap<IncomingMessage, WorkerConnectionInfo>()
-  const wsServer = new WebSocketServer({ noServer: true, maxPayload: config.worker.maxMessageBytes })
-  const heartbeat = startNodeSocketHeartbeat(wsServer)
-  /* v8 ignore start -- Node websocket connection handler is adapter glue; exercised by real ws integration tests */
-  wsServer.on('connection', (socket, request) => {
-    const connectionInfo = requestConnectionInfo.get(request)!
+            if (!isAllowedWorkerOrigin(request, config.worker.allowedOrigins)) {
+              return new Response('Forbidden', { status: 403 })
+            }
 
-    const socketId = connectionInfo.socketId
-    try {
-      runtime.connectWebSocket({
-        ...connectionInfo,
-        send(payload) {
-          socket.send(payload)
+            const upgraded = wsServer.upgrade(request, {
+              data: {
+                socketId: createSocketId(),
+                app,
+                headers: request.headers,
+              } satisfies WorkerConnectionInfo,
+            })
+            if (upgraded) {
+              return new Response(null, { status: 200 })
+            }
+          }
+
+          return await runtime.fetch(request)
         },
-        close(code, reason) {
-          socket.close(code, reason)
-        },
-        bufferedAmount() {
-          return socket.bufferedAmount
+        websocket: {
+          open(socket) {
+            try {
+              runtime.connectWebSocket({
+                ...socket.data,
+                send(payload) {
+                  socket.send(payload)
+                },
+                /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
+                close(code, reason) {
+                  socket.close(code, reason)
+                },
+                bufferedAmount() {
+                  return socket.getBufferedAmount()
+                },
+              })
+            } catch (error) {
+              rejectedSockets.add(socket)
+              rejectSocketConnection(socket, error, report)
+            }
+          },
+          message(socket, message) {
+            if (rejectedSockets.has(socket)) {
+              return
+            }
+            const messageBytes = typeof message === 'string'
+              ? Buffer.byteLength(message)
+              : message.byteLength
+            if (messageBytes > config.worker.maxMessageBytes) {
+              runtime.disconnectWebSocket(socket.data.socketId)
+              socket.close(1009, 'Message too large')
+              return
+            }
+            const value = typeof message === 'string'
+              ? message
+              : new TextDecoder().decode(message)
+            void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
+              report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
+              runtime.disconnectWebSocket(socket.data.socketId)
+              socket.close(4001, 'Protocol error')
+            })
+          },
+          close(socket) {
+            if (rejectedSockets.has(socket)) {
+              return
+            }
+
+            runtime.disconnectWebSocket(socket.data.socketId)
+          },
         },
       })
-    } catch (error) {
-      rejectSocketConnection(socket, error, report)
-      return
+
+      return Object.freeze({
+        host: config.worker.host,
+        port: config.worker.port,
+        async stop() {
+          server.stop(true)
+          await runtime.close()
+        },
+      })
     }
-    socket.on('pong', () => {
-      heartbeat.recordActivity(socket)
-    })
-    socket.on('message', (message) => {
-      heartbeat.recordActivity(socket)
-      const messageBytes = getNodeWebSocketMessageBytes(message)
-      if (messageBytes > config.worker.maxMessageBytes) {
-        runtime.disconnectWebSocket(socketId)
-        socket.close(1009, 'Message too large')
+
+    let nodeWsModule: unknown
+    try {
+      nodeWsModule = await (runtimeBindings.loadWebSocketModule
+        ? runtimeBindings.loadWebSocketModule()
+        /* v8 ignore next -- default ws import; tests always provide loadWebSocketModule */
+        : import('ws'))
+    } catch (error) {
+      await runtime.close()
+      const details = error instanceof Error ? error.message : String(error)
+      throw new Error(`[@holo-js/broadcast] Node runtime requires the "ws" package for broadcast:work. ${details}`)
+    }
+    const WebSocketServer = (nodeWsModule as NodeWebSocketModuleLike).WebSocketServer
+    if (typeof WebSocketServer !== 'function') {
+      await runtime.close()
+      throw new Error('[@holo-js/broadcast] Node runtime websocket module is missing WebSocketServer export.')
+    }
+
+    const requestConnectionInfo = new WeakMap<IncomingMessage, WorkerConnectionInfo>()
+    const wsServer = new WebSocketServer({ noServer: true, maxPayload: config.worker.maxMessageBytes })
+    const heartbeat = startNodeSocketHeartbeat(wsServer)
+    /* v8 ignore start -- Node websocket connection handler is adapter glue; exercised by real ws integration tests */
+    wsServer.on('connection', (socket, request) => {
+      const connectionInfo = requestConnectionInfo.get(request)!
+
+      const socketId = connectionInfo.socketId
+      try {
+        runtime.connectWebSocket({
+          ...connectionInfo,
+          send(payload) {
+            socket.send(payload)
+          },
+          close(code, reason) {
+            socket.close(code, reason)
+          },
+          bufferedAmount() {
+            return socket.bufferedAmount
+          },
+        })
+      } catch (error) {
+        rejectSocketConnection(socket, error, report)
         return
       }
-      const value = decodeNodeWebSocketMessage(message)
-      void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
-        report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
+      socket.on('pong', () => {
+        heartbeat.recordActivity(socket)
+      })
+      socket.on('message', (message) => {
+        heartbeat.recordActivity(socket)
+        const messageBytes = getNodeWebSocketMessageBytes(message)
+        if (messageBytes > config.worker.maxMessageBytes) {
+          runtime.disconnectWebSocket(socketId)
+          socket.close(1009, 'Message too large')
+          return
+        }
+        const value = decodeNodeWebSocketMessage(message)
+        void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
+          report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })
+          runtime.disconnectWebSocket(socketId)
+          socket.close(4001, 'Protocol error')
+        })
+      })
+      socket.on('close', () => {
         runtime.disconnectWebSocket(socketId)
-        socket.close(4001, 'Protocol error')
       })
     })
-    socket.on('close', () => {
-      runtime.disconnectWebSocket(socketId)
-    })
-  })
-  /* v8 ignore stop */
+    /* v8 ignore stop */
 
-  const httpServer = createServer(async (request, response) => {
-    const requestUrl = toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`)
-    let requestBody: Buffer | undefined
+    const httpServer = createServer(async (request, response) => {
+      const requestUrl = toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`)
+      let requestBody: Buffer | undefined
+      try {
+        requestBody = await readNodeRequestBody(request, config.worker.maxRequestBytes)
+      } catch (error) {
+        writeNodeRequestBodyError(response, error)
+        return
+      }
+      const requestInit: RequestInit = {
+        method: request.method,
+        headers: toNodeHeaders(request.headers),
+      }
+
+      if (typeof requestBody !== 'undefined') {
+        requestInit.body = new Uint8Array(requestBody)
+      }
+
+      const runtimeRequest = new Request(requestUrl, {
+        ...requestInit,
+      })
+      const runtimeResponse = await runtime.fetch(runtimeRequest)
+      await writeNodeResponse(response, runtimeResponse)
+    })
+    /* v8 ignore start -- Node websocket upgrade handler is adapter glue; requires real ws package for integration testing */
+    httpServer.on('upgrade', (request, socket, head) => {
+      const requestUrl = new URL(toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`))
+      const appMatch = requestUrl.pathname.match(appPathRegex)
+      if (!appMatch) {
+        socket.destroy()
+        return
+      }
+
+      const app = appsByKey[appMatch[1]!]
+      if (!app) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+        return
+      }
+
+      const originRequest = new Request(requestUrl, { headers: toNodeHeaders(request.headers) })
+      if (!isAllowedWorkerOrigin(originRequest, config.worker.allowedOrigins)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+        return
+      }
+
+      requestConnectionInfo.set(request, {
+        socketId: createSocketId(),
+        app,
+        headers: toNodeHeaders(request.headers),
+      })
+      wsServer.handleUpgrade(request, socket, head, (client, upgradedRequest) => {
+        wsServer.emit('connection', client, upgradedRequest)
+      })
+    })
+    /* v8 ignore stop */
     try {
-      requestBody = await readNodeRequestBody(request, config.worker.maxRequestBytes)
-    } catch (error) {
-      writeNodeRequestBodyError(response, error)
-      return
-    }
-    const requestInit: RequestInit = {
-      method: request.method,
-      headers: toNodeHeaders(request.headers),
-    }
-
-    if (typeof requestBody !== 'undefined') {
-      requestInit.body = new Uint8Array(requestBody)
-    }
-
-    const runtimeRequest = new Request(requestUrl, {
-      ...requestInit,
-    })
-    const runtimeResponse = await runtime.fetch(runtimeRequest)
-    await writeNodeResponse(response, runtimeResponse)
-  })
-  /* v8 ignore start -- Node websocket upgrade handler is adapter glue; requires real ws package for integration testing */
-  httpServer.on('upgrade', (request, socket, head) => {
-    const requestUrl = new URL(toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`))
-    const appMatch = requestUrl.pathname.match(appPathRegex)
-    if (!appMatch) {
-      socket.destroy()
-      return
-    }
-
-    const app = appsByKey[appMatch[1]!]
-    if (!app) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
-    }
-
-    const originRequest = new Request(requestUrl, { headers: toNodeHeaders(request.headers) })
-    if (!isAllowedWorkerOrigin(originRequest, config.worker.allowedOrigins)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
-    }
-
-    requestConnectionInfo.set(request, {
-      socketId: createSocketId(),
-      app,
-      headers: toNodeHeaders(request.headers),
-    })
-    wsServer.handleUpgrade(request, socket, head, (client, upgradedRequest) => {
-      wsServer.emit('connection', client, upgradedRequest)
-    })
-  })
-  /* v8 ignore stop */
-  try {
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      httpServer.once('error', rejectPromise)
-      httpServer.listen(config.worker.port, config.worker.host, () => {
-        httpServer.off('error', rejectPromise)
-        resolvePromise()
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        httpServer.once('error', rejectPromise)
+        httpServer.listen(config.worker.port, config.worker.host, () => {
+          httpServer.off('error', rejectPromise)
+          resolvePromise()
+        })
       })
+    } catch (error) {
+      heartbeat.stop()
+      wsServer.close()
+      await runtime.close()
+      throw error
+    }
+
+    const address = httpServer.address()
+    /* v8 ignore next -- defensive fallback when httpServer.address() returns a string or null */
+    const port = typeof address === 'object' && address ? address.port : config.worker.port
+    return Object.freeze({
+      host: config.worker.host,
+      port,
+      async stop() {
+        await runtime.close()
+        heartbeat.stop()
+        await new Promise<void>((resolvePromise) => {
+          wsServer.close(() => {
+            resolvePromise()
+          })
+        })
+        ;(httpServer as { closeIdleConnections?: () => void }).closeIdleConnections?.()
+        ;(httpServer as { closeAllConnections?: () => void }).closeAllConnections?.()
+        await new Promise<void>((resolvePromise, rejectPromise) => {
+          httpServer.close((error) => {
+            if (error) {
+              rejectPromise(error)
+              return
+            }
+            resolvePromise()
+          })
+        })
+      },
     })
   } catch (error) {
-    heartbeat.stop()
-    wsServer.close()
-    await runtime.close()
+    await runtime.close().catch(() => undefined)
     throw error
   }
-
-  const address = httpServer.address()
-  /* v8 ignore next -- defensive fallback when httpServer.address() returns a string or null */
-  const port = typeof address === 'object' && address ? address.port : config.worker.port
-  return Object.freeze({
-    host: config.worker.host,
-    port,
-    async stop() {
-      await runtime.close()
-      heartbeat.stop()
-      await new Promise<void>((resolvePromise) => {
-        wsServer.close(() => {
-          resolvePromise()
-        })
-      })
-      ;(httpServer as { closeIdleConnections?: () => void }).closeIdleConnections?.()
-      ;(httpServer as { closeAllConnections?: () => void }).closeAllConnections?.()
-      await new Promise<void>((resolvePromise, rejectPromise) => {
-        httpServer.close((error) => {
-          if (error) {
-            rejectPromise(error)
-            return
-          }
-          resolvePromise()
-        })
-      })
-    },
-  })
 }
 
 function createScalingInvalidationSender(input: {

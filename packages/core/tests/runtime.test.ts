@@ -3444,6 +3444,20 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
   })
 
+  it('disposes the database invalidation sender and unregisters its publisher when a reconfiguration removes the broadcast config', async () => {
+    const { root, connections, baseline } = await createScalingInvalidationProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    expect(await connections()).toBeGreaterThan(baseline)
+
+    await rm(join(root, 'config/broadcast.ts'))
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    await expect.poll(connections).toBe(baseline)
+    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+    await resetHoloRuntime()
+  })
+
   it('closes Redis session clients opened before a failed session acquisition and never promotes them on a later reconfiguration', async () => {
     const service = await startRedisService()
     const client = service.clients[0]

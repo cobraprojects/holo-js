@@ -770,7 +770,7 @@ function getDatabaseInvalidationSenders(): DatabaseInvalidationSenders {
 }
 
 async function configureDatabaseInvalidationScaling(
-  broadcastModule: BroadcastModule,
+  broadcastModule: BroadcastModule | undefined,
   loadedConfig: LoadedHoloConfig,
 ): Promise<void> {
   const state = getRuntimeState()
@@ -778,8 +778,8 @@ async function configureDatabaseInvalidationScaling(
   state.databaseInvalidationUnsubscribe?.()
   state.databaseInvalidationUnsubscribe = undefined
 
-  const scaling = loadedConfig.broadcast.worker.scaling
-  if (scaling) {
+  const scaling = broadcastModule ? loadedConfig.broadcast.worker.scaling : undefined
+  if (broadcastModule && scaling) {
     try {
       const lease = await senders.acquire(
         { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis },
@@ -1678,8 +1678,8 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     if (queueModule) {
       await broadcastModule.broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
     }
-    await configureDatabaseInvalidationScaling(broadcastModule, loadedConfig)
   }
+  await configureDatabaseInvalidationScaling(broadcastModule, loadedConfig)
 
   const notificationsConfigured = hasLoadedConfigFile(loadedConfig, 'notifications')
   const notificationsModule = notificationsConfigured

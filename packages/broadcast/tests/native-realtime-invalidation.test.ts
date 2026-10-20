@@ -291,3 +291,78 @@ it('publishes once per mutation when the worker starts first and the app sender 
   await new Promise(resolve => setTimeout(resolve, 300))
   expect(invalidations).toHaveLength(2)
 }, 30_000)
+
+it('leaves no publisher registered and no Redis connection open when the worker cannot bind its port', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+  const baseline = await connections()
+  const occupant = createServer()
+  await new Promise<void>(resolve => occupant.listen(0, '127.0.0.1', resolve))
+  onTestFinished(() => new Promise<void>(resolve => occupant.close(() => resolve())))
+  const address = occupant.address()
+  if (!address || typeof address === 'string') throw new Error('No occupied port available')
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+
+  await expect(startBroadcastWorker({
+    config: normalizeBroadcastConfig({
+      default: 'main',
+      connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { host: '127.0.0.1', port: address.port, scheme: 'http' } } },
+      worker: { host: '127.0.0.1', port: address.port, scaling: { driver: 'redis', connection: 'shared' } },
+    }),
+    redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: redisPort } } }),
+    realtime: {
+      databaseInvalidation: bridge,
+      query: async () => { throw new Error('No query is registered') },
+      mutate: async () => { throw new Error('No mutation is registered') },
+      subscribe: async () => { throw new Error('No subscription is registered') },
+    },
+  })).rejects.toThrow()
+
+  expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+  await expect.poll(connections).toBe(baseline)
+  void db
+}, 30_000)
+
+it('leaves no publisher registered and no Redis connection open when the Node websocket server constructor throws', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+  const baseline = await connections()
+  const port = await reservePort()
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+
+  await expect(startBroadcastWorker({
+    config: normalizeBroadcastConfig({
+      default: 'main',
+      connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { host: '127.0.0.1', port, scheme: 'http' } } },
+      worker: { host: '127.0.0.1', port, scaling: { driver: 'redis', connection: 'shared' } },
+    }),
+    redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: redisPort } } }),
+    loadWebSocketModule: async () => ({
+      WebSocketServer: class {
+        constructor() {
+          throw new Error('websocket server constructor failed')
+        }
+      },
+    }),
+    realtime: {
+      databaseInvalidation: bridge,
+      query: async () => { throw new Error('No query is registered') },
+      mutate: async () => { throw new Error('No mutation is registered') },
+      subscribe: async () => { throw new Error('No subscription is registered') },
+    },
+  })).rejects.toThrow('websocket server constructor failed')
+
+  expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+  await expect.poll(connections).toBe(baseline)
+  void db
+}, 30_000)
