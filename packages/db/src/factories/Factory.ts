@@ -1,7 +1,7 @@
 import { HydrationError, SecurityError } from '../core/errors'
 import { withoutModelGuards } from '../model/eventState'
-import { hydrateRecord, type ModelRepository } from '../model/ModelRepository'
 import type { Entity } from '../model/Entity'
+import type { ModelRepository } from '../model/ModelRepository'
 import type { RelationDefinition } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -510,7 +510,7 @@ export class Factory<TModel extends FactoryModelReference = FactoryModelReferenc
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>,
     attributes: Record<string, unknown>,
   ): RelatedEntity {
-    const pivotRelated = hydrateRecord(related.getRepository() as ModelRepository, related.toAttributes())
+    const pivotRelated = (related.getRepository() as ModelRepository).hydrate(related.toAttributes())
     const parentId = entity.get(relation.parentKey as never)
     const relatedId = related.get(relation.relatedKey as never)
 

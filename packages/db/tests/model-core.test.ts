@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { hydrateRecord } from '../src/model/ModelRepository'
 import {
   ConfigurationError,
   DB,
@@ -1932,7 +1931,7 @@ describe('model core slice', () => {
     await expect(user.delete()).rejects.toThrow('Cannot delete an entity that has not been persisted yet.')
 
     const repo = User.getRepository()
-    const brokenDelete = hydrateRecord(repo, { name: 'Ghost', email: 'g@example.com', status: 'active' })
+    const brokenDelete = repo.hydrate({ name: 'Ghost', email: 'g@example.com', status: 'active' })
     await expect(repo.deleteEntity(brokenDelete)).rejects.toThrow('Cannot delete User without a primary key value.')
 
     const orphan = new Entity({ definition: User.definition, getConnection: () => DB.connection() } as never, { id: 9 }, true)
@@ -1956,7 +1955,7 @@ describe('model core slice', () => {
       fillable: ['name'],
       softDeletes: true })
     const softRepo = SoftUser.getRepository()
-    const softEntity = hydrateRecord(softRepo, { id: 1, name: 'Soft', deleted_at: '2025-01-01T00:00:00.000Z' as never })
+    const softEntity = softRepo.hydrate({ id: 1, name: 'Soft', deleted_at: '2025-01-01T00:00:00.000Z' as never })
     await expect(softRepo.freshEntity(softEntity)).resolves.toBeUndefined()
   })
 
@@ -2118,7 +2117,7 @@ describe('model core slice', () => {
     await createTestTable(db, notes)
     const Note = defineModelFromTable(notes, {
       fillable: ['name'] })
-    const noteClone = Note.getRepository().replicateEntity(hydrateRecord(Note.getRepository(), { id: 9, name: 'Note' }))
+    const noteClone = Note.getRepository().replicateEntity(Note.getRepository().hydrate({ id: 9, name: 'Note' }))
     expect(noteClone.toAttributes()).toEqual({ name: 'Note' })
   })
 
@@ -2226,7 +2225,7 @@ describe('model core slice', () => {
 
     await expect(User.firstOrFail()).rejects.toThrow('User not found.')
 
-    const broken = hydrateRecord(User.getRepository(), { name: 'Broken' })
+    const broken = User.getRepository().hydrate({ name: 'Broken' })
     broken.set('name', 'Still broken')
     await expect(broken.save()).rejects.toThrow('Cannot persist User without a primary key value.')
 
@@ -2241,14 +2240,14 @@ describe('model core slice', () => {
     const SoftUser = defineModelFromTable(softTable, {
       softDeletes: true })
     const repo = User.getRepository()
-    const brokenRestore = hydrateRecord(SoftUser.getRepository(), { deleted_at: '2025-01-01T00:00:00.000Z' as never })
+    const brokenRestore = SoftUser.getRepository().hydrate({ deleted_at: '2025-01-01T00:00:00.000Z' as never })
     await expect(SoftUser.getRepository().restoreEntity(brokenRestore)).rejects.toThrow(
       'Cannot restore SoftUser without a primary key value.',
     )
     await expect(SoftUser.getRepository().forceDeleteEntity(brokenRestore)).rejects.toThrow(
       'Cannot force-delete SoftUser without a primary key value.',
     )
-    const plainRestorable = hydrateRecord(repo, { id: 3, name: 'Plain' })
+    const plainRestorable = repo.hydrate({ id: 3, name: 'Plain' })
     await expect(repo.restoreEntity(plainRestorable)).rejects.toThrow('User does not support soft deletes.')
   })
 
