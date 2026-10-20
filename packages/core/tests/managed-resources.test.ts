@@ -132,6 +132,33 @@ describe('managed resources', () => {
     expect(closed.sort()).toEqual(['first', 'second'])
   })
 
+  it('keeps an active resource open during dispose until its held operation settles', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
+    const only = await resources.acquire('only', config => createRecordingResource(config, closed))
+    await resources.commit()
+    let settle: () => void = () => undefined
+    const operation = only.hold(() => new Promise<void>(resolve => { settle = resolve }))
+
+    const disposing = resources.dispose()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(closed).toEqual([])
+
+    settle()
+    await operation
+    await disposing
+    expect(closed).toEqual(['only'])
+  })
+
+  it('rejects an acquisition once dispose has started', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
+    const disposing = resources.dispose()
+    await expect(resources.acquire('late', config => createRecordingResource(config, closed))).rejects.toThrow(/disposed/)
+    await disposing
+    expect(closed).toEqual([])
+  })
+
   it('holds a resource for each store operation through a held store until the operation settles', async () => {
     const closed: string[] = []
     const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()

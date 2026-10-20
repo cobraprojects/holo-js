@@ -312,6 +312,7 @@ export default defineRedisConfig({
 
 async function createRedisSecurityProject(): Promise<{
   readonly root: string
+  readonly client: { client(...args: string[]): Promise<unknown> }
   readonly connections: () => Promise<number>
   readonly baseline: number
 }> {
@@ -328,7 +329,7 @@ import { defineRedisConfig } from ${kernelPackageEntry}
 export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
 `)
   await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
-  return { root, connections, baseline }
+  return { root, client, connections, baseline }
 }
 
 async function writeAuthConfig(root: string): Promise<void> {
@@ -3440,6 +3441,27 @@ export default defineSessionConfig({ driver: 'primary', stores: { primary: { dri
     await reconfigureHoloRuntime(runtime, {})
     await stopping
 
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('lets in-flight real Redis rate-limit operations finish when the runtime disposes concurrently', async () => {
+    const { root, client, connections, baseline } = await createRedisSecurityProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const store = getSecurityRuntimeBindings()?.rateLimitStore
+    if (!store) throw new Error('The configured Redis rate limiter was not acquired')
+    await expect(store.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ limited: false })
+    await expect.poll(connections).toBe(baseline + 1)
+
+    const stalled = client.client('PAUSE', '300', 'ALL')
+    const firstOperation = store.hit('account', { maxAttempts: 10, decaySeconds: 60 })
+    const disposing = resetOptionalHoloSubsystems()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const secondOperation = store.hit('account', { maxAttempts: 10, decaySeconds: 60 })
+    await stalled
+
+    await expect(firstOperation).resolves.toMatchObject({ limited: false })
+    await expect(secondOperation).resolves.toMatchObject({ limited: false })
+    await disposing
     await expect.poll(connections).toBe(baseline)
   })
 

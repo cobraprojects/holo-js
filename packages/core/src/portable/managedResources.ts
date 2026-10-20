@@ -27,6 +27,7 @@ interface ManagedResourceEntry<TConfig, TValue> {
   readonly value: TValue
   readonly lease: ResourceLease<TValue>
   pending: number
+  onClosed?: () => void
 }
 
 export function createManagedResources<TConfig, TValue extends ReleasableResource>(
@@ -36,6 +37,8 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
   let retained: ManagedResourceEntry<TConfig, TValue>[] = []
   let claimed: ManagedResourceEntry<TConfig, TValue>[] = []
   let opened: ManagedResourceEntry<TConfig, TValue>[] = []
+  let draining: ManagedResourceEntry<TConfig, TValue>[] = []
+  let disposing = false
   const releasing = new Set<Promise<void>>()
 
   const findSameConfig = (entries: readonly ManagedResourceEntry<TConfig, TValue>[], config: TConfig) =>
@@ -43,18 +46,23 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
 
   const closeWhenIdle = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
     retained = retained.filter(candidate => candidate !== entry)
+    draining = draining.filter(candidate => candidate !== entry)
     const release = releaseManagedResources([entry.value])
       .catch(error => reportError(error, {
         capability: 'runtime',
         operation: 'releaseReplacedResource',
       }))
-      .finally(() => releasing.delete(release))
+      .finally(() => {
+        releasing.delete(release)
+        entry.onClosed?.()
+      })
     releasing.add(release)
   }
 
   const finishOperation = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
     entry.pending -= 1
-    if (entry.pending === 0 && retained.includes(entry) && !claimed.includes(entry)) closeWhenIdle(entry)
+    const awaitingIdle = retained.includes(entry) || draining.includes(entry)
+    if (entry.pending === 0 && awaitingIdle && !claimed.includes(entry)) closeWhenIdle(entry)
   }
 
   const createEntry = (config: TConfig, value: TValue): ManagedResourceEntry<TConfig, TValue> => {
@@ -87,6 +95,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
 
   return {
     async acquire(config, create) {
+      if (disposing) throw new Error('[@holo-js/core] Managed resources are disposed; acquire a new registry instead.')
       const reusable = findSameConfig(claimed, config)
         ?? findSameConfig(active, config)
         ?? findSameConfig(retained, config)
@@ -120,13 +129,19 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       await releaseManagedResources(values)
     },
     async dispose() {
-      const values = [...active, ...retained, ...claimed, ...opened].map(entry => entry.value)
+      disposing = true
+      const entries = [...active, ...retained, ...claimed, ...opened]
       active = []
       retained = []
       claimed = []
       opened = []
+      const idle = entries.filter(entry => entry.pending === 0)
+      for (const entry of entries.filter(candidate => candidate.pending > 0)) {
+        draining.push(entry)
+        releasing.add(new Promise<void>(resolve => { entry.onClosed = resolve }))
+      }
       await Promise.all([...releasing])
-      await releaseManagedResources(values)
+      await releaseManagedResources(idle.map(entry => entry.value))
     },
   }
 }
