@@ -229,31 +229,61 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   }
 }
 
+const RECORD_LOCK_TOMBSTONE_SUFFIX = '.released'
+const TOMBSTONE_RETRY_FIRST_MS = 50
+const TOMBSTONE_RETRY_MAX_MS = 1_000
+const TOMBSTONE_RETRY_BUDGET_MS = 5_000
+const pendingTombstoneRemovals: string[] = []
+let tombstoneDrain: Promise<void> | undefined
+
 function recordLockTombstonePath(lockPath: string, owner: RecordLockOwner): string {
-  return `${lockPath}.${owner.token}.released`
+  return `${lockPath}.${owner.token}${RECORD_LOCK_TOMBSTONE_SUFFIX}`
 }
 
-async function unlinkSettled(path: string, settleMs: number): Promise<boolean> {
-  const deadline = Date.now() + settleMs
+function sleepUnref(delayMs: number): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, delayMs)
+    timer.unref()
+  })
+}
+
+async function removeTombstone(tombstonePath: string): Promise<void> {
+  const deadline = Date.now() + TOMBSTONE_RETRY_BUDGET_MS
+  let delayMs = TOMBSTONE_RETRY_FIRST_MS
   for (;;) {
     try {
-      await unlink(path)
-      return true
+      await unlink(tombstonePath)
+      return
     } catch (error) {
-      if (isMissingFileError(error)) return true
+      if (isMissingFileError(error)) return
       if (!isBusyFileError(error)) throw error
-      if (Date.now() >= deadline) return false
-      await sleep(5)
+      if (Date.now() + delayMs > deadline) return
+      await sleepUnref(delayMs)
+      delayMs = Math.min(delayMs * 2, TOMBSTONE_RETRY_MAX_MS)
     }
   }
 }
 
+async function drainTombstoneRemovals(): Promise<void> {
+  let tombstonePath = pendingTombstoneRemovals.shift()
+  while (tombstonePath !== undefined) {
+    await removeTombstone(tombstonePath).catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
+    tombstonePath = pendingTombstoneRemovals.shift()
+  }
+  tombstoneDrain = undefined
+}
+
 function scheduleTombstoneRemoval(tombstonePath: string): void {
-  void unlinkSettled(tombstonePath, BUSY_FILE_RETRY_MS)
-    .then(removed => {
-      if (!removed) reportError(new Error(`[@holo-js/session] Could not remove released file session lock marker "${tombstonePath}"; other processes ignore it.`), { capability: 'session', operation: 'file.releaseLock' })
-    })
-    .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
+  pendingTombstoneRemovals.push(tombstonePath)
+  tombstoneDrain ??= drainTombstoneRemovals()
+}
+
+async function removeLeftoverTombstone(tombstonePath: string): Promise<void> {
+  try {
+    await unlink(tombstonePath)
+  } catch (error) {
+    if (!isMissingFileError(error) && !isBusyFileError(error)) throw error
+  }
 }
 
 async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Promise<'retired' | 'absent' | 'busy'> {
@@ -536,7 +566,12 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
           await closeDirectory()
           break
         }
-        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+        if (!entry.isFile()) continue
+        if (entry.name.endsWith(RECORD_LOCK_TOMBSTONE_SUFFIX)) {
+          await removeLeftoverTombstone(join(root, entry.name))
+          continue
+        }
+        if (!entry.name.endsWith('.json')) continue
         const recordPath = join(root, entry.name)
         try {
           if (!(await lstat(recordPath)).isFile()) continue
