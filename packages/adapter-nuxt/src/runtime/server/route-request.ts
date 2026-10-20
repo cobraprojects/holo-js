@@ -1,7 +1,7 @@
 import type { H3Event } from 'h3'
 import { getHeaders, getRequestURL, readRawBody } from '#imports'
 
-export async function createRealtimeRequest(event: H3Event): Promise<Request> {
+export async function createWebRequest(event: H3Event): Promise<Request> {
   const headers = new Headers()
   for (const [key, value] of Object.entries(getHeaders(event))) {
     if (typeof value === 'string') {
