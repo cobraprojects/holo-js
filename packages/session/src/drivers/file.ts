@@ -3,6 +3,7 @@ import { constants as fsConstants, type Dir } from 'node:fs'
 import { mkdir as defaultMkdir, lstat, open, opendir, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
 
@@ -241,13 +242,6 @@ function recordLockTombstonePath(lockPath: string, owner: RecordLockOwner): stri
   return `${lockPath}.${owner.token}${RECORD_LOCK_TOMBSTONE_SUFFIX}`
 }
 
-function sleepUnref(delayMs: number): Promise<void> {
-  return new Promise(resolve => {
-    const timer = setTimeout(resolve, delayMs)
-    timer.unref()
-  })
-}
-
 async function removeTombstone(tombstonePath: string): Promise<void> {
   const deadline = Date.now() + TOMBSTONE_RETRY_BUDGET_MS
   let delayMs = TOMBSTONE_RETRY_FIRST_MS
@@ -259,7 +253,7 @@ async function removeTombstone(tombstonePath: string): Promise<void> {
       if (isMissingFileError(error)) return
       if (!isBusyFileError(error)) throw error
       if (Date.now() + delayMs > deadline) return
-      await sleepUnref(delayMs)
+      await delay(delayMs, undefined, { ref: false })
       delayMs = Math.min(delayMs * 2, TOMBSTONE_RETRY_MAX_MS)
     }
   }
