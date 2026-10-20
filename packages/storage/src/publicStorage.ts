@@ -3,6 +3,7 @@ import { type FileHandle, open, realpath, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { type FileContentInspection, fileContentSampleBytes, inspectFileContent } from '@holo-js/kernel/file-content'
 import { localStoragePathInternals, requestUrlInternals, resolveRequestUrl } from '@holo-js/kernel'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
 import type { NormalizedHoloStorageConfig } from './config'
 import { isTemporaryLocalStorageRequest, resolveTemporaryLocalStorageRequest } from './temporaryLocalStorage'
@@ -196,7 +197,8 @@ function resolveFallbackPublicStorageRequest(projectRoot: string, config: HoloSt
 function resolveStorageRequestUrls(request: Request): { visitorUrl: URL, routedUrl: URL } | null {
   try {
     return { visitorUrl: resolveRequestUrl(request), routedUrl: requestUrlInternals.resolveRoutedRequestUrl(request) }
-  } catch {
+  } catch (error) {
+    reportError(error, { capability: 'storage', operation: 'request.url' })
     return null
   }
 }

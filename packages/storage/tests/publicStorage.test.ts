@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { requestUrlInternals } from '@holo-js/kernel'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NormalizedHoloStorageConfig } from '../src/config'
 import { createPublicStorageResponse, normalizeModuleOptions } from '../src'
@@ -394,6 +395,29 @@ describe('createPublicStorageResponse behind a trusted proxy', () => {
     } finally {
       requestUrlInternals.configureForwardedRequestResolver(undefined)
       requestUrlInternals.provideConnectionAddress(undefined)
+    }
+  })
+
+  it('reports a forwarded origin the resolver rejects and still answers 404', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await mkdir(publicRoot, { recursive: true })
+    await writeFile(join(publicRoot, 'item.txt'), 'Public file')
+    const reports: HoloErrorReportContext[] = []
+    errorReportingInternals.configure({ report: (_error, context) => { reports.push(context) } })
+    requestUrlInternals.provideConnectionAddress(() => '10.0.0.1')
+    requestUrlInternals.configureForwardedRequestResolver(readHeader => ({ port: readHeader('x-forwarded-port') }))
+    try {
+      const response = await createPublicStorageResponse(
+        projectRoot,
+        storageConfig(publicRoot),
+        new Request('http://app.test/storage/item.txt', { headers: { 'x-forwarded-port': '99999' } }),
+      )
+      expect(response.status).toBe(404)
+      expect(reports).toEqual([{ capability: 'storage', operation: 'request.url' }])
+    } finally {
+      requestUrlInternals.configureForwardedRequestResolver(undefined)
+      requestUrlInternals.provideConnectionAddress(undefined)
+      errorReportingInternals.configure(undefined)
     }
   })
 })
