@@ -1065,6 +1065,38 @@ export default class Admin extends AdminEntity {
     expect(guest).toBe(false)
   })
 
+  it('keeps two concurrent requests isolated after a boot-time auth call in the root context', async () => {
+    const root = await createProject({ auth: true })
+    const options = {
+      authRequest: { appendResponseCookie: () => undefined },
+      processEnv: process.env,
+      preferCache: false,
+    }
+    const booted = await initializeHolo(root, options)
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    expect(await booted.auth?.check()).toBe(false)
+    const login = await booted.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => booted.auth!.loginUsingId(1))
+
+    const readAuthState = async (sessionId: string | undefined): Promise<boolean | undefined> => {
+      const runtime = await initializeHolo(root, {
+        ...options,
+        authRequest: {
+          appendResponseCookie: () => undefined,
+          getCookie: () => sessionId ? sessionCookieValue(sessionId) : undefined,
+        },
+      })
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      return runtime.auth?.check()
+    }
+    const [authenticated, guest] = await Promise.all([
+      Promise.resolve().then(() => readAuthState(login.sessionId)),
+      Promise.resolve().then(() => readAuthState(undefined)),
+    ])
+
+    expect(authenticated).toBe(true)
+    expect(guest).toBe(false)
+  })
+
   it('applies a reconfiguration that arrives while the runtime is still initializing', async () => {
     const root = await createProject({ auth: true })
     const runtime = await createHolo(root, {

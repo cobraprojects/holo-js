@@ -10,6 +10,7 @@ export interface AuthRequestAccessors {
 
 interface AuthContext {
   activate(): void
+  startScope?(): void
   getSessionId(guardName: string): string | undefined
   setSessionId(guardName: string, sessionId?: string): void
   getCachedUser(guardName: string): unknown
@@ -88,7 +89,10 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
     },
     setRequestAccessors(nextAccessors) {
       defaultAccessors = nextAccessors
-      if (!requestAccessorStorage.getStore()?.requestScoped) requestAccessorStorage.enterWith({ accessors: nextAccessors })
+      const current = requestAccessorStorage.getStore()
+      if (current?.requestScoped || current?.accessors === nextAccessors) return
+      requestAccessorStorage.enterWith({ accessors: nextAccessors })
+      context.startScope?.()
     },
     runWithRequestAccessors(nextAccessors, callback) {
       return requestAccessorStorage.run(

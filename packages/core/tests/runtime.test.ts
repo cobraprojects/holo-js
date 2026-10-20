@@ -2168,6 +2168,64 @@ export default async function boot() {
     await expect(initializeHoloAdapterProject(root)).resolves.toMatchObject({ projectRoot: root })
   })
 
+  it('boots a plugin module again in the next runtime when a boot still running during reset finishes late', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-slow-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-slow-boot', `
+export default {
+  id: 'slow-boot',
+  name: 'Slow Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreSlowBoots__ = (globalThis.__holoCoreSlowBoots__ ?? 0) + 1
+  await globalThis.__holoCoreSlowBootGate__()
+}
+`,
+    })
+    let markBootStarted: () => void = () => undefined
+    const bootStarted = new Promise<void>(resolve => { markBootStarted = resolve })
+    let releaseBoot: () => void = () => undefined
+    const bootGate = new Promise<void>(resolve => { releaseBoot = resolve })
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreSlowBoots__?: number
+      __holoCoreSlowBootGate__?: () => Promise<void>
+    }
+    runtimeGlobal.__holoCoreSlowBoots__ = 0
+    runtimeGlobal.__holoCoreSlowBootGate__ = async () => {
+      markBootStarted()
+      await bootGate
+    }
+
+    const firstInitialization = initializeHoloAdapterProject(root).catch(() => undefined)
+    await bootStarted
+    await resetOptionalHoloSubsystems()
+    releaseBoot()
+    await firstInitialization
+
+    await initializeHoloAdapterProject(root)
+    expect(runtimeGlobal.__holoCoreSlowBoots__).toBe(2)
+  })
+
   it('runs plugin boot modules once during adapter initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

@@ -15,6 +15,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 const bootedHoloPluginModules = new Set<string>()
+let bootGeneration = 0
 
 function resolveHoloPluginBootKey(projectRoot: string, bootModule: HoloPluginRuntimeModule): string {
   return [resolve(projectRoot), bootModule.plugin.packageName, bootModule.runtime].join('\0')
@@ -35,11 +36,13 @@ export async function bootConfiguredHoloPluginModule(
     ? bootModule.module.default
     : bootModule.module
   if (typeof candidate !== 'function') return
+  const generation = bootGeneration
   await candidate({ projectRoot, config: loadedConfig })
-  bootedHoloPluginModules.add(bootKey)
+  if (generation === bootGeneration) bootedHoloPluginModules.add(bootKey)
 }
 
 export function resetBootedHoloPluginModules(): void {
+  bootGeneration += 1
   bootedHoloPluginModules.clear()
 }
 
