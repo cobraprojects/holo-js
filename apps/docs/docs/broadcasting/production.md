@@ -10,8 +10,8 @@ With the `holo` driver, broadcasting depends on a long-running WebSocket worker 
 
 Realtime and Broadcast are not production-ready. The deployment settings below do not remove these limits:
 
-- Browser reconnection and resubscription, heartbeat handling, and dead-connection cleanup still need reliability work. Do not rely on uninterrupted live updates.
-- Presence membership can become stale after a worker crashes.
+- Browser reconnection and resubscription still need reliability work. Do not rely on uninterrupted live updates.
+- A worker that stops refreshing its Redis lease for 30 seconds, because it is stalled or can't reach Redis, loses its presence members from other workers' rosters. Those members stay out until their clients resubscribe. See [Run several workers](#run-several-workers).
 - Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
 
 These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
@@ -126,6 +126,10 @@ Each WebSocket connection can hold 100 channels and 100 realtime query subscript
 
 The worker also closes a connection with code `1008` when more than 4 MB of output is waiting to be sent to it, so a client that stops reading can't make the worker hold unbounded memory.
 
+### Dead connections
+
+On Node.js, the worker sends a WebSocket ping to each connection every 30 seconds. A connection that doesn't answer a ping, and sends nothing else before the next one, is closed. Browsers answer pings automatically. A client that doesn't answer them is disconnected within 60 seconds, well inside the 120-second activity timeout the worker advertises in `pusher:connection_established`.
+
 ### Errors
 
 The worker never sends internal error details to clients. It passes the original error to your [error reporter](/basics/errors#reporting-errors) and sends a generic message instead:
@@ -206,6 +210,8 @@ Every worker must point at the same Redis server and database. Put a load balanc
 Without `ioredis` installed, the worker refuses to start with scaling enabled.
 
 Redis shares broadcast events and presence members between workers. It doesn't share [realtime query](/realtime/) subscriptions: a realtime mutation refreshes only the subscribers connected to the worker that ran it.
+
+Each worker keeps a Redis lease that it refreshes every 10 seconds. When a worker stops refreshing for 30 seconds, because it crashed or lost Redis, the other workers remove its presence members and send `pusher_internal:member_removed` to their subscribers. A member that is also connected to a live worker stays listed. A crashed worker's members can stay listed for up to about 40 seconds.
 
 ## Next steps
 

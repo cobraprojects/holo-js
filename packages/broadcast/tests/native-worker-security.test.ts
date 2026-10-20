@@ -230,6 +230,7 @@ it('reports a presence synchronization failure as a subscription error and keeps
       adapter: {
         publish: async () => {}, subscribe: async () => () => {}, hashDelete: async () => {}, hashGetAll: async () => ({}), close: async () => {},
         hashSet: async () => { throw failure },
+        setWithExpiry: async () => {}, exists: async () => true,
       },
     },
   })
@@ -312,6 +313,8 @@ it('retries a presence member whose rollback delete failed when the socket disco
         hashSet: async (key, field, value) => { hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]])) },
         hashGetAll: async key => { if (outage.reads) redisDown(); return Object.fromEntries(hashes.get(key) ?? []) },
         hashDelete: async (key, field) => { if (outage.deletes) redisDown(); hashes.get(key)?.delete(field) },
+        setWithExpiry: async () => {},
+        exists: async () => true,
         close: async () => {},
       },
     },
@@ -330,6 +333,82 @@ it('retries a presence member whose rollback delete failed when the socket disco
   outage.deletes = false
   runtime.disconnectWebSocket('3.3')
   await expect.poll(presenceMembers).toEqual([])
+})
+
+it('keeps a presence member whose Redis delete failed on unsubscribe until the socket disconnects', async () => {
+  const hashes = new Map<string, Map<string, string>>()
+  const outage = { deletes: false }
+  const presenceMembers = () => [...hashes.values()].flatMap(members => [...members.keys()])
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+    channelAuth: { resolveUser: () => ({ id: 'native-user' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: () => ({ id: 'native-user' }) })] },
+    scaling: {
+      driver: 'redis', connection: 'shared', nodeId: 'node-1', eventChannel: 'events',
+      adapter: {
+        publish: async () => {},
+        subscribe: async () => () => {},
+        hashSet: async (key, field, value) => { hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]])) },
+        hashGetAll: async key => Object.fromEntries(hashes.get(key) ?? []),
+        hashDelete: async (key, field) => { if (outage.deletes) throw new Error('Redis connection lost'); hashes.get(key)?.delete(field) },
+        setWithExpiry: async () => {},
+        exists: async () => true,
+        close: async () => {},
+      },
+    },
+  })
+  onTestFinished(() => runtime.close())
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  const sent: Array<{ event: string, channel?: string, data: string }> = []
+  runtime.connectWebSocket({ socketId: '4.4', app, headers: new Headers(), send: payload => sent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
+  await runtime.receiveWebSocketMessage('4.4', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+  expect(sent.some(message => message.event === 'pusher_internal:subscription_succeeded')).toBe(true)
+  expect(presenceMembers()).toHaveLength(1)
+
+  outage.deletes = true
+  await expect(runtime.receiveWebSocketMessage('4.4', JSON.stringify({ event: 'pusher:unsubscribe', data: { channel: 'presence-room.1' } }))).rejects.toThrow('Redis connection lost')
+  expect(runtime.getStats()).toMatchObject({ presenceChannelCount: 1, subscribedChannelCount: 1 })
+  expect(presenceMembers()).toHaveLength(1)
+
+  outage.deletes = false
+  runtime.disconnectWebSocket('4.4')
+  await expect.poll(presenceMembers).toEqual([])
+  expect(runtime.getStats()).toMatchObject({ presenceChannelCount: 0, connectionCount: 0 })
+})
+
+it('reports a remote presence member that disappeared from Redis when a local subscriber joins', async () => {
+  const hashes = new Map<string, Map<string, string>>()
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+    channelAuth: { resolveUser: ({ headers }) => ({ id: headers.get('x-test-user') ?? 'anonymous' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: user => ({ id: (user as { id: string }).id }) })] },
+    scaling: {
+      driver: 'redis', connection: 'shared', nodeId: 'node-a', eventChannel: 'events',
+      adapter: {
+        publish: async () => {},
+        subscribe: async () => () => {},
+        hashSet: async (key, field, value) => { hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]])) },
+        hashGetAll: async key => Object.fromEntries(hashes.get(key) ?? []),
+        hashDelete: async (key, field) => { hashes.get(key)?.delete(field) },
+        setWithExpiry: async () => {},
+        exists: async () => true,
+        close: async () => {},
+      },
+    },
+  })
+  onTestFinished(() => runtime.close())
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  const observerSent: Array<{ event: string, channel?: string, data: string }> = []
+  runtime.connectWebSocket({ socketId: '5.5', app, headers: new Headers({ 'x-test-user': 'observer' }), send: payload => observerSent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
+  await runtime.receiveWebSocketMessage('5.5', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+  await runtime.receiveScalingMessage(JSON.stringify({ type: 'presence-member-added', originNodeId: 'node-b', appId: 'main', channel: 'presence-room.1', socketId: '7.7', member: { id: 'remote-user' } }))
+  expect(observerSent.some(message => message.event === 'pusher_internal:member_added' && JSON.parse(message.data).id === 'remote-user')).toBe(true)
+
+  const newcomerSent: Array<{ event: string, channel?: string, data: string }> = []
+  runtime.connectWebSocket({ socketId: '5.6', app, headers: new Headers({ 'x-test-user': 'newcomer' }), send: payload => newcomerSent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
+  await runtime.receiveWebSocketMessage('5.6', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+
+  expect(observerSent.filter(message => message.event === 'pusher_internal:member_removed').map(message => JSON.parse(message.data))).toEqual([{ user_id: 'remote-user' }])
+  const roster = JSON.parse(newcomerSent.find(message => message.event === 'pusher_internal:subscription_succeeded')!.data) as { presence: { ids: string[] } }
+  expect(roster.presence.ids).toEqual(['observer', 'newcomer'])
 })
 
 it('removes a socket whose connection_established send fails so its identifier can be reused', async () => {

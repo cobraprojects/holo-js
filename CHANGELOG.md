@@ -13,6 +13,8 @@
 - Report notification channel failures after a transaction commits through `exceptions.report`, with capability `notifications` and operation `channel.afterCommit`. Before, these failures were not reported at all.
 - `queue:listen` forwards `SIGINT` and `SIGTERM` to its worker and exits only after the worker closes, so no worker is left running after `queue:listen` stops. A restart waits for the old worker to close. A process error while the old worker stops ends `queue:listen` with that error instead of starting a replacement. See [Develop with queue:listen](apps/docs/docs/queue/workers.md#develop-with-queue-listen).
 - Holo CLI commands that run npm, pnpm, or yarn, such as dependency installs and the framework `prepare` and `sync` steps, launch on Windows. Before, they failed with `spawn npm ENOENT` because the package manager's `.cmd` shim can't be started without a shell.
+- Node.js Broadcast workers ping each WebSocket connection every 30 seconds and close a connection that sends nothing else before its next ping and doesn't answer the one before. Before, a connection that stopped answering stayed open indefinitely. See [Dead connections](apps/docs/docs/broadcasting/production.md#dead-connections).
+- Broadcast presence members are tied to a Redis lease that each worker refreshes every 10 seconds. When a worker stops refreshing for 30 seconds, other workers remove its presence members from their rosters, with `pusher_internal:member_removed` events, within about 40 seconds of the worker crashing. A member that is also connected to a live worker stays listed. Before, a crashed worker's members stayed listed indefinitely. See [Run several workers](apps/docs/docs/broadcasting/production.md#run-several-workers).
 
 ### Added
 

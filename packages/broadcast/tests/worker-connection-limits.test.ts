@@ -215,6 +215,8 @@ it('clears a presence channel from pending cleanup once Redis recovers and the c
           reachRedis()
           redis.hashes.get(key)?.delete(field)
         },
+        setWithExpiry: async () => { reachRedis() },
+        exists: async () => { reachRedis(); return true },
         close: async () => {},
       },
     },
@@ -284,6 +286,8 @@ it('counts presence channels whose failed subscription is still pending cleanup 
         hashSet: async () => { hashSetCalls += 1; redisDown() },
         hashGetAll: async () => redisDown(),
         hashDelete: async () => redisDown(),
+        setWithExpiry: async () => {},
+        exists: async () => true,
         close: async () => {},
       },
     },
