@@ -1,7 +1,7 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
-import { createHash, createHmac } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
 import { isAuthError } from './contracts'
 import type {
@@ -118,6 +118,7 @@ import {
   verifyTokenSecret,
 } from './runtime/secrets'
 import { parseSetCookieDefinition } from './runtime/setCookieParser'
+import { AUTH_TIMEBOX_MILLISECONDS, callTimebox } from './runtime/timebox'
 import {
   createRememberToken,
   decodeRememberRecaller,
@@ -498,13 +499,21 @@ async function ensureRememberRecaller(providerName: string, userId: string | num
   return rememberRecallerFor(adapter, user, token)
 }
 
-async function cycleRememberToken(providerName: string, userId: string | number): Promise<string | undefined> {
+async function rotateRememberToken(
+  providerName: string,
+  userId: string | number,
+): Promise<{ readonly adapter: ErasedAuthProviderAdapter, readonly user: unknown, readonly token: string } | undefined> {
   const { adapter } = getProviderAdapter(providerName)
   const user = await adapter.findById(userId)
   if (!user || !getRememberToken(adapter, user)) return undefined
   const token = createRememberToken()
   await requireRememberTokenUpdates(adapter, providerName)(user, token)
-  return rememberRecallerFor(adapter, user, token)
+  return { adapter, user, token }
+}
+
+async function cycleRememberToken(providerName: string, userId: string | number): Promise<string | undefined> {
+  const rotated = await rotateRememberToken(providerName, userId)
+  return rotated ? rememberRecallerFor(rotated.adapter, rotated.user, rotated.token) : undefined
 }
 
 async function guardHasSessionPayload(bindings: RuntimeBindings, guardName: string): Promise<boolean> {
@@ -887,27 +896,6 @@ function serializeUser(
   return Object.freeze(result) as SerializedAuthUser
 }
 
-function rehydrateSerializedUser(
-  user: SerializedAuthUser,
-  providerName: string,
-): SerializedAuthUser {
-  const restored = {
-    ...user,
-    id: user.id,
-  }
-  Object.defineProperty(restored, 'can', {
-    value: (action: string, target: AuthAuthorizationSubject) => resolveUserAuthorization(restored as SerializedAuthUser, action, target),
-    enumerable: false,
-    configurable: true,
-  })
-  Object.defineProperty(restored, AUTH_PROVIDER_MARKER, {
-    value: providerName,
-    enumerable: false,
-    configurable: true,
-  })
-  return Object.freeze(restored)
-}
-
 function getPasswordHash(
   adapter: ErasedAuthProviderAdapter,
   user: unknown,
@@ -920,17 +908,40 @@ function getPasswordHash(
   return typeof value === 'string' ? value : null
 }
 
+const dummyPasswordDigests = new WeakMap<AuthPasswordHasher, Promise<string>>()
+
+function dummyPasswordDigest(hasher: AuthPasswordHasher): Promise<string> {
+  const cached = dummyPasswordDigests.get(hasher)
+  if (cached) {
+    return cached
+  }
+
+  const digest = hasher.hash(randomBytes(32).toString('hex'))
+  dummyPasswordDigests.set(hasher, digest)
+  digest.catch(() => dummyPasswordDigests.delete(hasher))
+  return digest
+}
+
 async function verifyCredentialsForProvider(
   providerName: string,
   adapter: ErasedAuthProviderAdapter,
   credentials: AuthCredentials,
 ): Promise<Record<string, unknown> | null> {
-  const bindings = getRuntimeBindings()
-  const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(providerName))
-  const passwordHash = user ? getPasswordHash(adapter, user) : null
-  const passwordMatches = await bindings.passwordHasher.verify(credentials.password, passwordHash ?? '')
+  return await callTimebox(async (timebox) => {
+    const bindings = getRuntimeBindings()
+    const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(providerName))
+    const passwordHash = user ? getPasswordHash(adapter, user) : null
+    const passwordMatches = await bindings.passwordHasher.verify(
+      credentials.password,
+      passwordHash || await dummyPasswordDigest(bindings.passwordHasher),
+    )
+    if (!user || !passwordMatches) {
+      return null
+    }
 
-  return user && passwordMatches ? user : null
+    timebox.returnEarly()
+    return user
+  }, AUTH_TIMEBOX_MILLISECONDS)
 }
 
 function isEmailVerificationRequired(): boolean {
@@ -974,24 +985,40 @@ function createEmailVerificationRedirectRoute(user: AuthUser): string {
   return `${url.pathname}${url.search}${url.hash}`
 }
 
- function createImpersonationState(
+async function createImpersonationState(
   payload: SessionAuthPayload,
-): AuthImpersonationState | null {
+): Promise<AuthImpersonationState | null> {
   const impersonation = payload.impersonation
   if (!impersonation) {
+    return null
+  }
+
+  const user = await findSerializedUserById(payload.provider, payload.userId)
+  const actor = await findSerializedUserById(impersonation.actor.provider, impersonation.actor.userId)
+  const original = impersonation.original
+    ? await findSerializedUserById(impersonation.original.provider, impersonation.original.userId)
+    : null
+  if (!user || !actor || (impersonation.original && !original)) {
     return null
   }
 
   return Object.freeze({
     guard: payload.guard,
     actorGuard: impersonation.actor.guard,
-    user: rehydrateSerializedUser(payload.user, payload.provider),
-    actor: rehydrateSerializedUser(impersonation.actor.user, impersonation.actor.provider),
-    originalUser: impersonation.original
-      ? rehydrateSerializedUser(impersonation.original.user, impersonation.original.provider)
-      : null,
+    user,
+    actor,
+    originalUser: original,
     startedAt: new Date(impersonation.startedAt),
   })
+}
+
+async function findSerializedUserById(
+  providerName: string,
+  userId: string | number,
+): Promise<SerializedAuthUser | null> {
+  const { adapter } = getProviderAdapter(providerName)
+  const user = await adapter.findById(userId)
+  return user ? serializeUser(adapter, user, providerName) : null
 }
 
 async function authenticateAccessTokenRecord(
@@ -1197,10 +1224,6 @@ async function resolveUserFromGuard(
     if (typeof cached !== 'undefined') {
       return cached
     }
-
-    const restoredUser = rehydrateSerializedUser(payload.user, payload.provider)
-    bindings.context.setCachedUser(guardName, restoredUser)
-    return restoredUser
   }
 
   const { adapter } = getProviderAdapter(payload.provider)
@@ -1222,9 +1245,19 @@ async function resolveUserFromGuard(
     return null
   }
 
+  if (payload.impersonation && !await impersonationIdentitiesExist(payload.impersonation)) {
+    return await stopImpersonatingForGuard(guardName)
+  }
+
   const serialized = serializeUser(adapter, freshUser, payload.provider)
   bindings.context.setCachedUser(guardName, serialized)
   return serialized
+}
+
+async function impersonationIdentitiesExist(impersonation: SessionImpersonationPayload): Promise<boolean> {
+  if (!await findSerializedUserById(impersonation.actor.provider, impersonation.actor.userId)) return false
+  if (!impersonation.original) return true
+  return Boolean(await findSerializedUserById(impersonation.original.provider, impersonation.original.userId))
 }
 
 function ensureMultiFactorStore(): AuthMultiFactorStore {
@@ -1780,6 +1813,8 @@ async function completeMultiFactorChallenge(
   const expiresAt = state?.payload.multiFactorChallengeExpiresAt
   if (!state || !expiresAt) throwAuthError('multi_factor_challenge_missing', 'No multi-factor challenge is pending.')
   if (new Date(expiresAt).getTime() <= Date.now()) throwAuthError('multi_factor_challenge_expired', 'The multi-factor challenge has expired.')
+  const user = await findSerializedUserById(state.payload.provider, state.payload.userId)
+  if (!user) throwAuthError('auth_user_missing', 'The authenticated user no longer exists.')
   const credential = await credentialForPayload(state.payload)
   const bindings = getRuntimeBindings()
   const challengeSession = multiFactorChallengeSessionRuntime()
@@ -1830,12 +1865,12 @@ async function completeMultiFactorChallenge(
     reportError(error, { capability: 'auth', operation: 'multiFactor.clearRateLimit' })
   }
   try {
-    return await establishSessionForUser(state.payload.user, {
+    return await establishSessionForUser(user, {
       guard: guardName,
       provider: state.payload.provider,
       remember: state.payload.multiFactorRemember === true,
       preserveRemember: true,
-      payload: toSessionPayload(guardName, state.payload.provider, state.payload.user),
+      payload: toSessionPayload(guardName, state.payload.provider, user),
     })
   } catch (error) {
     let formerSession: AuthSessionRecord | null
@@ -1901,7 +1936,8 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
       const expiresAt = new Date(Date.now() + bindings.config.multiFactor.enrollmentTtl * 1000)
       const encrypted = encryptMultiFactorValue(JSON.stringify({ expiresAt: expiresAt.toISOString(), secret }), multiFactorEncryptionKey())
       await writeEnrollment(state, guardName, encrypted)
-      const account = typeof state.payload.user.email === 'string' ? state.payload.user.email : String(state.payload.userId)
+      const user = await findSerializedUserById(state.payload.provider, state.payload.userId)
+      const account = typeof user?.email === 'string' ? user.email : String(state.payload.userId)
       return Object.freeze({
         expiresAt,
         manualKey: secret,
@@ -2052,7 +2088,11 @@ async function impersonationForGuard(guardName: string): Promise<AuthImpersonati
     return null
   }
 
-  return createImpersonationState(state.payload)
+  const impersonation = await createImpersonationState(state.payload)
+  if (state.payload.impersonation && !impersonation) {
+    await stopImpersonatingForGuard(guardName)
+  }
+  return impersonation
 }
 
 async function stopImpersonatingForGuard(guardName: string): Promise<AuthenticatedAuthUser | null> {
@@ -2064,15 +2104,17 @@ async function stopImpersonatingForGuard(guardName: string): Promise<Authenticat
 
   const nextPayloads = { ...state.payloads }
   const storedOriginal = state.payload.impersonation.original
-  const restoredPayload = storedOriginal ? {
-    ...toSessionPayload(storedOriginal.guard, storedOriginal.provider, storedOriginal.user),
+  const originalUser = storedOriginal
+    ? await findSerializedUserById(storedOriginal.provider, storedOriginal.userId)
+    : null
+  const restoredPayload = storedOriginal && originalUser ? {
+    ...toSessionPayload(storedOriginal.guard, storedOriginal.provider, originalUser),
     ...(storedOriginal.revocation ? { revocation: storedOriginal.revocation } : {}),
   } : undefined
   const validOriginal = restoredPayload && bindings.sessionRevocations
     ? (await validSessionPayloads(bindings.sessionRevocations, bindings.context, { [guardName]: restoredPayload }))[guardName]
     : restoredPayload
-  const original = validOriginal ? storedOriginal : undefined
-  if (original && validOriginal) {
+  if (validOriginal && originalUser) {
     nextPayloads[guardName] = validOriginal
   } else {
     delete nextPayloads[guardName]
@@ -2084,17 +2126,16 @@ async function stopImpersonatingForGuard(guardName: string): Promise<Authenticat
     await writeExistingSession(bindings, state.record, writeSessionPayloads(state.record.data, nextPayloads))
   }
 
-  if (!original) {
+  if (!validOriginal || !originalUser) {
     await setRememberRecaller(bindings, guardName)
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
     return null
   }
 
-  const restored = rehydrateSerializedUser(original.user, original.provider)
   bindings.context.setSessionId(guardName, state.sessionId)
-  bindings.context.setCachedUser(guardName, restored)
-  return restored
+  bindings.context.setCachedUser(guardName, originalUser)
+  return originalUser
 }
 
 async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
@@ -2554,22 +2595,10 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
       })
       return result
     },
-    async resend(options: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } = {}): Promise<EmailVerificationTokenResult> {
+    async resend(options: { readonly guard?: string, readonly expiresAt?: Date } = {}): Promise<EmailVerificationTokenResult> {
       return unwrapExpectedAuthResult(await captureExpectedAuthResult(async () => {
         const guardName = options.guard ?? getDefaultGuardName()
-        let currentUser: AuthenticatedAuthUser | null
-        if (typeof options.email === 'string' && options.email.trim().length > 0) {
-          const { provider, adapter } = getGuardProviderAdapter(guardName)
-          const matchedUser = await adapter.findByCredentials({
-            email: options.email.trim(),
-          })
-          currentUser = matchedUser
-            ? serializeUser(adapter, matchedUser, provider)
-            : null
-        } else {
-          currentUser = await resolveUserFromGuard(guardName, { fresh: true })
-        }
-
+        const currentUser = await resolveUserFromGuard(guardName, { fresh: true })
         if (!currentUser) {
           throwAuthError('email_verification_user_missing', 'Sign in before requesting another verification email.', {
             guard: guardName,
@@ -2609,16 +2638,6 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
       }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure))
     },
   })
-}
-
-function createEmailVerificationResendInput(
-  email?: string,
-  options: AuthEmailVerificationSendOptions = {},
-): { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } {
-  return {
-    ...options,
-    ...(typeof email === 'string' ? { email } : {}),
-  }
 }
 
 async function requestPasswordResetUsingRuntime<TInput extends AuthPasswordResetRequestInput>(
@@ -2750,7 +2769,9 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
         })
       }
       const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
-      return updateUserRecord(record.provider, userId, { password })
+      const resetUser = await updateUserRecord(record.provider, userId, { password })
+      await rotateRememberToken(record.provider, userId)
+      return resetUser
     })
     if (!updated) {
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
@@ -3066,7 +3087,7 @@ export function getAuthRuntime(): AuthRuntimeFacade {
       ))
     },
     async requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(input: TInput, options?: AuthPasswordResetRequestOptions) {
-      return unwrapExpectedAuthResult(await requestPasswordResetUsingRuntime(input, options))
+      return unwrapExpectedAuthResult(await callTimebox(() => requestPasswordResetUsingRuntime(input, options), AUTH_TIMEBOX_MILLISECONDS))
     },
     async resetPassword<TInput extends AuthPasswordResetInput>(input: TInput) {
       return unwrapExpectedAuthResult(await resetPasswordUsingRuntime(input))
@@ -3074,11 +3095,11 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     verifyEmail(token: string) {
       return verification.consume(token)
     },
-    sendEmailVerification(email?: string, options?: AuthEmailVerificationSendOptions) {
-      return verification.resend(createEmailVerificationResendInput(email, options))
+    sendEmailVerification(options?: AuthEmailVerificationSendOptions) {
+      return verification.resend(options)
     },
-    resendEmailVerification(email?: string, options?: AuthEmailVerificationSendOptions) {
-      return verification.resend(createEmailVerificationResendInput(email, options))
+    resendEmailVerification(options?: AuthEmailVerificationSendOptions) {
+      return verification.resend(options)
     },
     hashPassword(password: string) {
       return getRuntimeBindings().passwordHasher.hash(password)
@@ -3174,26 +3195,12 @@ export async function needsPasswordRehash(digest: string): Promise<boolean> {
     : resolveNeedsPasswordRehash(createDefaultPasswordHasher(), digest)
 }
 
-export function sendEmailVerification(): Promise<EmailVerificationTokenResult>
-export function sendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
-export function sendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
-export function sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
-export function sendEmailVerification(
-  email?: string,
-  options?: AuthEmailVerificationSendOptions,
-): Promise<EmailVerificationTokenResult> {
-  return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
+export function sendEmailVerification(options?: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult> {
+  return getAuthRuntime().verification.resend(options)
 }
 
-export function resendEmailVerification(): Promise<EmailVerificationTokenResult>
-export function resendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
-export function resendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
-export function resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
-export function resendEmailVerification(
-  email?: string,
-  options?: AuthEmailVerificationSendOptions,
-): Promise<EmailVerificationTokenResult> {
-  return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
+export function resendEmailVerification(options?: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult> {
+  return getAuthRuntime().verification.resend(options)
 }
 
 export const authRuntimeInternals = {

@@ -385,14 +385,8 @@ export interface AuthFacade extends AuthGuardFacade {
     input: TInput,
   ): Promise<AuthenticatedAuthUser>
   verifyEmail(token: string): Promise<AuthenticatedAuthUser>
-  sendEmailVerification(): Promise<EmailVerificationTokenResult>
-  sendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
-  sendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
-  sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
+  sendEmailVerification(options?: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
+  resendEmailVerification(options?: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>
@@ -569,7 +563,7 @@ export interface AuthDeliveryHook {
 
 export interface AuthEmailVerificationFacade {
   create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
-  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<EmailVerificationTokenResult>
+  resend(options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
   consume(plainTextToken: string): Promise<AuthenticatedAuthUser>
 }
 

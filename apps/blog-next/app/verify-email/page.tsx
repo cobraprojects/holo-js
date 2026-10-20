@@ -51,10 +51,6 @@ function VerifyEmailPageContent() {
     try {
       const response = await fetch('/api/verify-email/resend', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(email ? { email } : {}),
       })
       const payload = await response.json()
       if (payload?.ok === true) {
