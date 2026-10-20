@@ -2729,10 +2729,357 @@ describe('@holo-js/media', () => {
   it('allows hostnames that resolve to IPv6 addresses embedding a public IPv4 address', async () => {
     const url = new URL('https://media.example.test/hero.jpg')
 
-    for (const address of ['64:ff9b::808:808', '2002:808:808::', '::808:808', '::ffff:0:808:808', '2001::f7f7:f7f7', '2001:db8::5efe:808:808']) {
+    for (const address of ['64:ff9b::808:808', '2002:808:808::', '::808:808', '::ffff:0:808:808', '2001::f7f7:f7f7', '2001:20::5efe:808:808']) {
       await expect(mediaAdderInternals.resolveRemoteMediaAddress(url, async () => [{ address, family: 6 }]))
         .resolves.toEqual({ address, family: 6 })
     }
+  })
+
+  it('fetches public IPv6-literal remote media without a DNS lookup', async () => {
+    const imageBytes = await createImageBuffer()
+    const lookups: string[] = []
+    const requestedAddresses: { address: string, family: number }[] = []
+    mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+      async (hostname) => {
+        lookups.push(hostname)
+        throw new Error('DNS must not be consulted for an IP literal')
+      },
+      async (_url, address) => {
+        requestedAddresses.push(address)
+        return new Response(new Uint8Array(imageBytes), { headers: { 'content-type': 'image/jpeg' } })
+      },
+    ))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'IPv6 Literal' })
+    const media = await post
+      .addMediaFromUrl('http://[2606:4700:4700::1111]/remote.jpg')
+      .toMediaCollection('images')
+
+    expect(media.fileName).toBe('remote.jpg')
+    expect(lookups).toEqual([])
+    expect(requestedAddresses).toEqual([{ address: '2606:4700:4700::1111', family: 6 }])
+  })
+
+  it('refuses loopback and private IPv6-literal remote media with the error of its resolved form', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Blocked IPv6 Literal' })
+    const requests: string[] = []
+    const recordRequest = async (url: URL) => {
+      requests.push(url.hostname)
+      return new Response(null)
+    }
+
+    for (const address of ['::1', '::', 'fc00::1', 'fd00::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '64:ff9b::7f00:1']) {
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => [{ address, family: 6 }],
+        recordRequest,
+      ))
+      const resolvedMessage = await getRejectionMessage(post.addMediaFromUrl('https://media.example.test/private.jpg').toMediaCollection('images'))
+
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => {
+          throw new Error('DNS must not be consulted for an IP literal')
+        },
+        recordRequest,
+      ))
+      const literalMessage = await getRejectionMessage(post.addMediaFromUrl(`https://[${address}]/private.jpg`).toMediaCollection('images'))
+
+      expect(literalMessage).toBe(resolvedMessage)
+      expect(literalMessage).toContain('must not resolve to local or private hosts')
+    }
+    expect(requests).toEqual([])
+  })
+
+  it('refuses IPv6 literals and resolved addresses in special-purpose ranges that are not globally reachable, with the same error', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Special-purpose IPv6' })
+    const requests: string[] = []
+    const recordRequest = async (url: URL) => {
+      requests.push(url.hostname)
+      return new Response(null)
+    }
+
+    for (const address of [
+      'fec0::1',
+      '100::1',
+      '100:0:0:1::1',
+      '2001:2::1',
+      '2001:5::1',
+      '2001:10::1',
+      '2001:db8::1',
+      '3fff::1',
+      '5f00::1',
+    ]) {
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => [{ address, family: 6 }],
+        recordRequest,
+      ))
+      const resolvedMessage = await getRejectionMessage(post.addMediaFromUrl('https://media.example.test/private.jpg').toMediaCollection('images'))
+
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => {
+          throw new Error('DNS must not be consulted for an IP literal')
+        },
+        recordRequest,
+      ))
+      const literalMessage = await getRejectionMessage(post.addMediaFromUrl(`https://[${address}]/private.jpg`).toMediaCollection('images'))
+
+      expect(literalMessage).toBe(resolvedMessage)
+      expect(literalMessage).toContain('must not resolve to local or private hosts')
+    }
+    expect(requests).toEqual([])
+  })
+
+  it('fetches globally reachable IPv6 literals and resolved addresses, including those inside the IETF protocol assignments block', async () => {
+    const imageBytes = await createImageBuffer()
+    const requestedAddresses: string[] = []
+    mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+      async (hostname) => {
+        if (hostname !== 'media.example.test') {
+          throw new Error(`DNS must not be consulted for an IP literal: ${hostname}`)
+        }
+        return [{ address: '2606:4700:4700::1111', family: 6 }]
+      },
+      async (_url, address) => {
+        requestedAddresses.push(address.address)
+        return new Response(new Uint8Array(imageBytes), { headers: { 'content-type': 'image/jpeg' } })
+      },
+    ))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Globally reachable IPv6' })
+    const literals = [
+      '2606:4700:4700::1111',
+      '2001:1::1',
+      '2001:1::2',
+      '2001:1::3',
+      '2001:3::1',
+      '2001:4:112::1',
+      '2001:20::1',
+      '2001:30::1',
+      '2620:4f:8000::1',
+    ]
+    for (const address of literals) {
+      await post.addMediaFromUrl(`https://[${address}]/remote.jpg`).toMediaCollection('images')
+    }
+    await post.addMediaFromUrl('https://media.example.test/remote.jpg').toMediaCollection('images')
+
+    expect(requestedAddresses).toEqual([...literals, '2606:4700:4700::1111'])
+  })
+
+  it('refuses IPv4 literals and resolved addresses in reserved and special-purpose ranges, with the same error', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Special-purpose IPv4' })
+    const requests: string[] = []
+    const recordRequest = async (url: URL) => {
+      requests.push(url.hostname)
+      return new Response(null)
+    }
+
+    for (const address of [
+      '240.0.0.1',
+      '255.255.255.255',
+      '192.0.0.1',
+      '192.0.0.8',
+      '192.0.0.170',
+      '192.0.0.171',
+      '192.88.99.2',
+    ]) {
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => [{ address, family: 4 }],
+        recordRequest,
+      ))
+      const resolvedMessage = await getRejectionMessage(post.addMediaFromUrl('https://media.example.test/private.jpg').toMediaCollection('images'))
+
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => {
+          throw new Error('DNS must not be consulted for an IP literal')
+        },
+        recordRequest,
+      ))
+      const literalMessage = await getRejectionMessage(post.addMediaFromUrl(`https://${address}/private.jpg`).toMediaCollection('images'))
+
+      expect(literalMessage).toBe(resolvedMessage)
+      expect(literalMessage).toContain('must not resolve to local or private hosts')
+    }
+    expect(requests).toEqual([])
+  })
+
+  it('fetches globally reachable IPv4 literals and resolved addresses, including the globally reachable /32s inside 192.0.0.0/24', async () => {
+    const imageBytes = await createImageBuffer()
+    const requestedAddresses: string[] = []
+    mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+      async (hostname) => {
+        if (hostname !== 'media.example.test') {
+          throw new Error(`DNS must not be consulted for an IP literal: ${hostname}`)
+        }
+        return [{ address: '1.1.1.1', family: 4 }]
+      },
+      async (_url, address) => {
+        requestedAddresses.push(address.address)
+        return new Response(new Uint8Array(imageBytes), { headers: { 'content-type': 'image/jpeg' } })
+      },
+    ))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Globally reachable IPv4' })
+    const literals = [
+      '8.8.8.8',
+      '192.0.0.9',
+      '192.0.0.10',
+      '192.31.196.1',
+      '192.52.193.1',
+      '192.175.48.1',
+    ]
+    for (const address of literals) {
+      await post.addMediaFromUrl(`https://${address}/remote.jpg`).toMediaCollection('images')
+    }
+    await post.addMediaFromUrl('https://media.example.test/remote.jpg').toMediaCollection('images')
+
+    expect(requestedAddresses).toEqual([...literals, '1.1.1.1'])
+  })
+
+  it('refuses IPv6 literals and resolved addresses outside global unicast 2000::/3, with the same error', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Reserved IPv6' })
+    const requests: string[] = []
+    const recordRequest = async (url: URL) => {
+      requests.push(url.hostname)
+      return new Response(null)
+    }
+
+    for (const address of [
+      '0100::1',
+      '1000::1',
+      '4000::1',
+      '8000::1',
+      'c000::1',
+      'e000::1',
+      'ff00::1',
+    ]) {
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => [{ address, family: 6 }],
+        recordRequest,
+      ))
+      const resolvedMessage = await getRejectionMessage(post.addMediaFromUrl('https://media.example.test/private.jpg').toMediaCollection('images'))
+
+      mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+        async () => {
+          throw new Error('DNS must not be consulted for an IP literal')
+        },
+        recordRequest,
+      ))
+      const literalMessage = await getRejectionMessage(post.addMediaFromUrl(`https://[${address}]/private.jpg`).toMediaCollection('images'))
+
+      expect(literalMessage).toBe(resolvedMessage)
+      expect(literalMessage).toContain('must not resolve to local or private hosts')
+    }
+    expect(requests).toEqual([])
+  })
+
+  it('fetches IPv6 literals and resolved addresses that embed a public IPv4 address outside 2000::/3', async () => {
+    const imageBytes = await createImageBuffer()
+    const requestedAddresses: string[] = []
+    mediaAdderInternals.setRemoteMediaDownloader(mediaAdderInternals.createRemoteMediaDownloader(
+      async (hostname) => {
+        if (hostname !== 'media.example.test') {
+          throw new Error(`DNS must not be consulted for an IP literal: ${hostname}`)
+        }
+        return [{ address: '64:ff9b::808:808', family: 6 }]
+      },
+      async (_url, address) => {
+        requestedAddresses.push(address.address)
+        return new Response(new Uint8Array(imageBytes), { headers: { 'content-type': 'image/jpeg' } })
+      },
+    ))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Embedded public IPv4' })
+    const literals = [
+      '64:ff9b::808:808',
+      '::ffff:808:808',
+      '::808:808',
+      '::ffff:0:808:808',
+    ]
+    for (const address of literals) {
+      await post.addMediaFromUrl(`https://[${address}]/remote.jpg`).toMediaCollection('images')
+    }
+    await post.addMediaFromUrl('https://media.example.test/remote.jpg').toMediaCollection('images')
+
+    expect(requestedAddresses).toEqual([...literals, '64:ff9b::808:808'])
   })
 
   it('pins remote media HTTP requests to the validated address', async () => {
