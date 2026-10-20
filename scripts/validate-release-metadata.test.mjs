@@ -16,6 +16,9 @@ afterEach(async () => {
   })))
 })
 
+const buildOrderFailure = '.github/workflows/release.yml must build packages with `node scripts/build-libraries.mjs` in an unconditional step without continue-on-error, before the publish step, so declarations resolve in dependency order.'
+const sharedJobFailure = '.github/workflows/release.yml must build and publish in one job, because the built packages must reach the publish step on the same filesystem.'
+
 const rejectOtherRefsRun = 'test "$GITHUB_REF" = refs/heads/main || { echo "::error::Releases publish only from main."; exit 1; }'
 
 const validReleaseWorkflow = [
@@ -33,7 +36,7 @@ const validReleaseWorkflow = [
   '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
   '        with:',
   '          ref: ${{ github.sha }}',
-  '      - run: bun run build',
+  '      - run: node scripts/build-libraries.mjs',
   '      - run: git config user.name "github-actions[bot]"',
   '      - run: git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
   '      - name: Publish changed packages with npm provenance',
@@ -219,14 +222,105 @@ test('release metadata requires the release workflow to run the guarded release 
 test('release metadata gives NPM_TOKEN only to the publish step', async () => {
   const root = await createTempRepo(completeRepo({
     '.github/workflows/release.yml': validReleaseWorkflow.replace(
-      '      - run: bun run build',
-      '      - run: bun run build\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}',
+      '      - run: node scripts/build-libraries.mjs',
+      '      - run: node scripts/build-libraries.mjs\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}',
     ),
   }))
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
     '.github/workflows/release.yml must give NPM_TOKEN only to the publish step.',
   ])
+})
+
+test('release metadata rejects the root build as the release build step', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('node scripts/build-libraries.mjs', 'bun run build'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    buildOrderFailure,
+  ])
+})
+
+test('release metadata runs the dependency-ordered build unconditionally', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(
+      '      - run: node scripts/build-libraries.mjs',
+      '      - if: false\n        run: node scripts/build-libraries.mjs',
+    ),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    buildOrderFailure,
+  ])
+})
+
+test('release metadata runs the dependency-ordered build before publishing', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow
+      .replace('      - run: node scripts/build-libraries.mjs\n', '')
+      .replace('      - run: git push origin --tags\n', '      - run: git push origin --tags\n      - run: node scripts/build-libraries.mjs\n'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    buildOrderFailure,
+  ])
+})
+
+test('release metadata rejects a dependency-ordered build that can fail without failing the release', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(
+      '      - run: node scripts/build-libraries.mjs',
+      '      - continue-on-error: true\n        run: node scripts/build-libraries.mjs',
+    ),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    buildOrderFailure,
+  ])
+})
+
+test('release metadata requires the build and the publish to share one job', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow
+      .replace('  publish:\n', '  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node scripts/build-libraries.mjs\n  publish:\n')
+      .replace('      - run: node scripts/build-libraries.mjs\n      - run: git config user.name', '      - run: git config user.name'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    sharedJobFailure,
+  ])
+})
+
+test('release metadata rejects a spaced step key that disables the build', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(
+      '      - run: node scripts/build-libraries.mjs',
+      '      - if : false\n        run: node scripts/build-libraries.mjs',
+    ),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [buildOrderFailure])
+})
+
+test('release metadata counts quoted job keys when requiring one job', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow
+      .replace('  publish:\n', '  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node scripts/build-libraries.mjs\n  "publish-again":\n')
+      .replace('      - run: node scripts/build-libraries.mjs\n      - run: git config user.name', '      - run: git config user.name'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [sharedJobFailure])
+})
+
+test('release metadata counts job headers that carry a trailing comment', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow
+      .replace('  publish:\n', '  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node scripts/build-libraries.mjs\n  publish: # Publish packages\n')
+      .replace('      - run: node scripts/build-libraries.mjs\n      - run: git config user.name', '      - run: git config user.name'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [sharedJobFailure])
 })
 
 test('release metadata requires the publish step to skip with a notice when NPM_TOKEN is not configured', async () => {
