@@ -8,11 +8,21 @@ import type * as SessionModule from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
 const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map() }))
+const tornLeaseReads = vi.hoisted(() => ({ armed: false }))
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof FsPromises>()
   const { windowsFsOverrides } = await import('./support/windows-fs')
-  return { ...actual, ...windowsFsOverrides(actual, windowsFs) }
+  return {
+    ...actual,
+    ...windowsFsOverrides(actual, windowsFs),
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const contents = await actual.readFile(...args)
+      if (!tornLeaseReads.armed || !String(args[0]).includes('owner.')) return contents
+      tornLeaseReads.armed = false
+      return String(contents).replace(/[^\n]/g, ' ')
+    },
+  }
 })
 
 type Driver = typeof SessionModule.fileSessionDriverInternals
@@ -162,6 +172,22 @@ describe('released file locks across processes', () => {
     expect(owner.heldRecordLockTokens.size).toBe(1)
 
     await holder()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
+
+  it('takes over when a waiter first reads a torn released lease at its final size', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    const waiter = owner.acquireRecordLock(recordPath, mkdir)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    tornLeaseReads.armed = true
+    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    await holder()
+    windowsFs.blockedUnlinkPrefixes.clear()
+
+    const release = await waiter
+    expect(tornLeaseReads.armed).toBe(false)
+    await release()
     expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 

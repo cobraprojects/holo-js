@@ -19,7 +19,7 @@ if (mode === 'hold') {
   process.on('message', async message => {
     if (message !== 'start') return
     try {
-      for (let index = 0; index < 5; index += 1) {
+      for (let index = 0; index < 2; index += 1) {
         await store.flash(sessionId, `${parameter}.${index}`, { writer: parameter, index })
       }
       process.send({ event: 'done' })

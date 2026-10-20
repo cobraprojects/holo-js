@@ -1,12 +1,20 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import Redis from 'ioredis'
 import { describe, expect, it } from 'vitest'
-import { createRedisSessionStore, type SessionRecord } from '../src'
+import { configureSessionRuntime, createFileSessionStore, createRedisSessionStore, getSessionRuntime, resetSessionRuntime, type SessionRecord } from '../src'
 import { createSessionRedisAdapter } from '../src/drivers/redis-adapter'
 
 const describeRealRedis = process.env.HOLO_SESSION_REAL_REDIS === '1'
   ? describe
   : describe.skip
+
+function withoutPrivateFlash(store: ReturnType<typeof createFileSessionStore>) {
+  const { rotate: _rotate, flash: _flash, take: _take, ...plain } = store
+  return plain
+}
 
 describeRealRedis('@holo-js/session real Redis usage', () => {
   it('writes, atomically flashes, takes, and deletes sessions through the public Redis store adapter', async () => {
@@ -105,7 +113,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await adapter.close()
     }
   }, 30_000)
-  it('sets a Redis expiry on every new session so abandoned sessions expire without a sweep', async () => {
+  it('stores each session under its own Redis key with no hash tag, and sets a Redis expiry on it', async () => {
     const prefix = `holo:session:${randomUUID()}:`
     const adapter = createSessionRedisAdapter({
       name: 'redis',
@@ -132,13 +140,87 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
         expiresAt: new Date(Date.now() + 60_000),
       })
 
-      const ttl = await raw.pttl(`${prefix}{holo-session}:${sessionId}`)
+      await expect(raw.keys(`${prefix}*`)).resolves.toEqual([`${prefix}holo:session:${sessionId}`])
+      const ttl = await raw.pttl(`${prefix}holo:session:${sessionId}`)
       expect(ttl).toBeGreaterThan(0)
       expect(ttl).toBeLessThanOrEqual(60_000)
     } finally {
       await store.delete(sessionId)
       await raw.quit()
       await adapter.close()
+    }
+  }, 30_000)
+  it('stores a session with the default empty prefix under the holo:session: namespace, never as a bare id', async () => {
+    const adapter = createSessionRedisAdapter({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      prefix: '',
+    })
+    const store = createRedisSessionStore(adapter)
+    const sessionId = randomUUID()
+    const raw = new Redis({ host: '127.0.0.1', port: 6379, db: 0 })
+    const now = new Date()
+
+    try {
+      await adapter.connect()
+      await store.write({
+        id: sessionId,
+        store: 'redis',
+        data: {},
+        createdAt: now,
+        lastActivityAt: now,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      await expect(raw.exists(`holo:session:${sessionId}`)).resolves.toBe(1)
+      await expect(raw.exists(sessionId)).resolves.toBe(0)
+    } finally {
+      await store.delete(sessionId)
+      await raw.quit()
+      await adapter.close()
+    }
+  }, 30_000)
+  it('lets exactly one of several concurrent rotations claim a replacement id on a Redis store', async () => {
+    const sourceDirectory = await mkdtemp(join(tmpdir(), 'session-redis-rotation-'))
+    const prefix = `holo:session:${randomUUID()}:`
+    const targetStore = { name: 'target', driver: 'redis' as const, connection: 'default', host: '127.0.0.1', port: 6379, db: 0, prefix }
+    const adapter = createSessionRedisAdapter(targetStore)
+    const cookie = { name: 'session', path: '/', secure: false, httpOnly: true, sameSite: 'lax' as const, partitioned: false, maxAge: 120 }
+    try {
+      await adapter.connect()
+      configureSessionRuntime({
+        config: {
+          driver: 'source',
+          stores: {
+            source: { name: 'source', driver: 'file', path: sourceDirectory },
+            target: targetStore,
+          },
+          cookie,
+          idleTimeout: 30,
+          absoluteLifetime: 120,
+          rememberMeLifetime: 1440,
+        },
+        stores: { source: withoutPrivateFlash(createFileSessionStore(sourceDirectory)), target: createRedisSessionStore(adapter) },
+      })
+      const session = getSessionRuntime()
+      const replacementId = `shared-${randomUUID()}`
+      const sources = await Promise.all(Array.from({ length: 4 }, (_, index) => session.create({ store: 'source', data: { index } })))
+      const results = await Promise.allSettled(sources.map(source => session.rotate(source.id, { store: 'target', newId: replacementId })))
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+      for (const result of results.filter(result => result.status === 'rejected')) {
+        expect(String(result.reason)).toContain('already exists')
+      }
+      const survivors = await Promise.all(sources.map(source => session.read(source.id, { store: 'source' })))
+      expect(survivors.filter(Boolean)).toHaveLength(3)
+      await expect(session.read(replacementId, { store: 'target' })).resolves.toMatchObject({ id: replacementId })
+    } finally {
+      resetSessionRuntime()
+      await adapter.close()
+      await rm(sourceDirectory, { recursive: true, force: true })
     }
   }, 30_000)
 })
