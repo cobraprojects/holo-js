@@ -1,7 +1,13 @@
+import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
+
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
 
-function escapeString(value: string): string {
-  return value.replaceAll('\'', '\'\'')
+function compileDialectStringLiteral(dialect: SchemaDefaultDialectName, value: string): string {
+  if (dialect === 'mysql') {
+    return compileMySQLStringLiteral(value)
+  }
+
+  return `'${value.replaceAll('\'', '\'\'')}'`
 }
 
 function compileBooleanLiteral(dialect: SchemaDefaultDialectName, value: boolean): string {
@@ -33,8 +39,8 @@ export function compileDialectDefaultLiteral(
   }
 
   if (typeof value === 'object') {
-    return `'${escapeString(JSON.stringify(value))}'`
+    return compileDialectStringLiteral(dialect, JSON.stringify(value))
   }
 
-  return `'${escapeString(String(value))}'`
+  return compileDialectStringLiteral(dialect, String(value))
 }

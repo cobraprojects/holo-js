@@ -7,6 +7,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
+import { currentPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
@@ -489,11 +490,13 @@ export class DatabaseContext {
     let committed: CommittedRootTransaction<T>
     try {
       await this._logger?.onTransactionStart?.(entry)
-      committed = await (this._adapter.supportsConcurrentTransactionScopes === true
+      const attempt = (): Promise<CommittedRootTransaction<T>> => this._adapter.supportsConcurrentTransactionScopes === true
         ? this._runtime.scheduler.transaction(runTransaction)
         : this._adapter.runWithTransactionScope
           ? this._runtime.scheduler.exclusive(runTransaction)
-          : runSerialized(this._runtime.rootTransactionQueue, () => this._runtime.scheduler.exclusive(runTransaction)))
+          : runSerialized(this._runtime.rootTransactionQueue, () => this._runtime.scheduler.exclusive(runTransaction))
+      const pinned = currentPinnedConnection(this._adapter)
+      committed = await (pinned ? serializeOnPinnedConnection(pinned, attempt) : attempt())
     } catch (error) {
       frame.open = false
       if (!commitStarted) {

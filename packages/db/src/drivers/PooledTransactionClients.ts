@@ -6,8 +6,15 @@ type ReleasableClient = {
   release?(): void
 }
 
+type ScopedClient<TClient> = {
+  client: TClient
+  closed: boolean
+  leases: number
+  released: boolean
+}
+
 export class PooledTransactionClients<TClient extends ReleasableClient> {
-  private readonly scope = new AsyncLocalStorage<TClient>()
+  private readonly scope = new AsyncLocalStorage<ScopedClient<TClient>>()
   private transactionClient?: TClient
 
   constructor(
@@ -17,20 +24,31 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
   ) {}
 
   get current(): TClient | undefined {
-    return this.scope.getStore() ?? this.transactionClient
+    const scoped = this.scope.getStore()
+    if (scoped && (!scoped.closed || scoped.leases > 0)) return scoped.client
+    return this.transactionClient
   }
 
   async run<T>(callback: () => Promise<T>): Promise<T> {
-    if (this.scope.getStore()) {
-      return callback()
-    }
-
-    const client = await this.acquireClient()
-    return this.scope.run(client, async () => {
+    const scoped = this.scope.getStore()
+    if (scoped && !scoped.closed) {
+      scoped.leases += 1
       try {
         return await callback()
       } finally {
-        this.releaseClient(client)
+        scoped.leases -= 1
+        this.releaseWhenIdle(scoped)
+      }
+    }
+
+    const client = await this.acquireClient()
+    const holder: ScopedClient<TClient> = { client, closed: false, leases: 0, released: false }
+    return this.scope.run(holder, async () => {
+      try {
+        return await callback()
+      } finally {
+        holder.closed = true
+        this.releaseWhenIdle(holder)
       }
     })
   }
@@ -55,7 +73,8 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
   }
 
   release(): void {
-    if (!this.scope.getStore()) {
+    const scoped = this.scope.getStore()
+    if (!scoped || (scoped.closed && scoped.leases === 0)) {
       this.disconnect()
     }
   }
@@ -65,6 +84,13 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
     this.transactionClient = undefined
     if (client) {
       this.releaseClient(client)
+    }
+  }
+
+  private releaseWhenIdle(scoped: ScopedClient<TClient>): void {
+    if (scoped.closed && scoped.leases === 0 && !scoped.released) {
+      scoped.released = true
+      this.releaseClient(scoped.client)
     }
   }
 

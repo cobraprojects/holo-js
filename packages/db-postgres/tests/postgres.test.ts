@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { Client } from 'pg'
+import { Client, types as pgTypes } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
   column, configureDB, createConnectionManager, createDialect, defineGeneratedTable,
@@ -15,7 +15,7 @@ const livePostgresConfig = {
   database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
 }
 
-describe('@holo-js/db-postgres', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres', () => {
   it.each([1, 4, 8])('completes overlapping transactions and ordinary queries with a four-client pool and %i admission slots', async maxConcurrentQueries => {
     const adapter = createPostgresAdapter({ config: {
       ...livePostgresConfig, max: 4, connectionTimeoutMillis: 500, idleTimeoutMillis: 30_000,
@@ -305,4 +305,79 @@ describe('@holo-js/db-postgres', () => {
       await admin.disconnect()
     }
   }, 30_000)
+})
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres date values', () => {
+  it.each([
+    { label: 'default types', types: undefined },
+    { label: 'custom types that delegate to pg', types: pgTypes },
+  ])('reads and writes date columns by calendar day regardless of the process time zone with $label', async ({ types }) => {
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'America/New_York'
+    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2, types } })
+    const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+    const tableName = `holo_date_${randomUUID().replaceAll('-', '')}`
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, day DATE NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${tableName} (id, day) VALUES (1, '2024-03-15'), (2, '2024-12-31')`)
+      const rows = (await db.queryCompiled({ sql: `SELECT id, day FROM ${tableName} ORDER BY id`, bindings: [] })).rows
+      expect(rows.map(row => row.day)).toEqual([new Date('2024-03-15T00:00:00Z'), new Date('2024-12-31T00:00:00Z')])
+
+      await db.executeCompiled({ sql: `INSERT INTO ${tableName} (id, day) VALUES ($1, $2)`, bindings: [3, rows[0]!.day] })
+      expect((await db.queryCompiled({ sql: `SELECT day::text AS day FROM ${tableName} WHERE id = $1`, bindings: [3] })).rows)
+        .toEqual([{ day: '2024-03-15' }])
+    } finally {
+      if (previousTimeZone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimeZone
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await db.disconnect()
+    }
+  })
+})
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres full date formats', () => {
+  it('round-trips BC dates, five-digit years, and infinite dates without shifting', async () => {
+    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+    const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+    const source = `holo_full_date_${randomUUID().replaceAll('-', '')}`
+    const copy = `${source}_copy`
+    try {
+      await adapter.execute(`CREATE TABLE ${source} (id INTEGER PRIMARY KEY, day DATE NOT NULL, at TIMESTAMP NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${copy} (id INTEGER PRIMARY KEY, day DATE NOT NULL, at TIMESTAMP NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${source} VALUES
+        (1, '0044-03-15 BC', '0044-03-15 10:00:00 BC'),
+        (2, '10000-01-01', '10000-01-01 00:00:00'),
+        (3, 'infinity', 'infinity'),
+        (4, '-infinity', '-infinity')`)
+
+      const rows = (await db.queryCompiled({ sql: `SELECT id, day, at FROM ${source} ORDER BY id`, bindings: [] })).rows
+      expect(rows.map(row => row.day)).toEqual([
+        new Date('-000043-03-15T00:00:00.000Z'),
+        new Date('+010000-01-01T00:00:00.000Z'),
+        Infinity,
+        -Infinity,
+      ])
+      expect(rows.map(row => row.at)).toEqual([
+        new Date('-000043-03-15T10:00:00.000Z'),
+        new Date('+010000-01-01T00:00:00.000Z'),
+        Infinity,
+        -Infinity,
+      ])
+
+      for (const row of rows) {
+        await db.executeCompiled({ sql: `INSERT INTO ${copy} (id, day, at) VALUES ($1, $2, $3)`, bindings: [row.id, row.day, row.at] })
+      }
+      expect((await db.queryCompiled({ sql: `SELECT day::text AS day, at::text AS at FROM ${copy} ORDER BY id`, bindings: [] })).rows)
+        .toEqual([
+          { day: '0044-03-15 BC', at: '0044-03-15 10:00:00 BC' },
+          { day: '10000-01-01', at: '10000-01-01 00:00:00' },
+          { day: 'infinity', at: 'infinity' },
+          { day: '-infinity', at: '-infinity' },
+        ])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${source}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${copy}`)
+      await db.disconnect()
+    }
+  })
 })

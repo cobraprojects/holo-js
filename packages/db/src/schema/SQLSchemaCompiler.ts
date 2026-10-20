@@ -6,6 +6,17 @@ import type { DDLOperation, DDLStatement } from './ddl'
 
 type IdentifierQuoter = (identifier: string) => string
 
+const REFERENTIAL_ACTIONS = new Set(['cascade', 'restrict', 'set null', 'no action'])
+
+function compileReferentialAction(clause: 'DELETE' | 'UPDATE', action: string): string {
+  const normalized = action.toLowerCase()
+  if (!REFERENTIAL_ACTIONS.has(normalized)) {
+    throw new SchemaError(`Foreign key ON ${clause} action "${action}" is not supported.`)
+  }
+
+  return `ON ${clause} ${normalized.toUpperCase()}`
+}
+
 export abstract class SQLSchemaCompiler {
   constructor(protected readonly quoteIdentifier: IdentifierQuoter) {}
 
@@ -154,11 +165,11 @@ export abstract class SQLSchemaCompiler {
     ]
 
     if (reference.onDelete) {
-      parts.push(`ON DELETE ${reference.onDelete.toUpperCase()}`)
+      parts.push(compileReferentialAction('DELETE', reference.onDelete))
     }
 
     if (reference.onUpdate) {
-      parts.push(`ON UPDATE ${reference.onUpdate.toUpperCase()}`)
+      parts.push(compileReferentialAction('UPDATE', reference.onUpdate))
     }
 
     return parts.join(' ')
@@ -256,11 +267,11 @@ export abstract class SQLSchemaCompiler {
       )
 
       if (column.references.onDelete) {
-        parts.push(`ON DELETE ${column.references.onDelete.toUpperCase()}`)
+        parts.push(compileReferentialAction('DELETE', column.references.onDelete))
       }
 
       if (column.references.onUpdate) {
-        parts.push(`ON UPDATE ${column.references.onUpdate.toUpperCase()}`)
+        parts.push(compileReferentialAction('UPDATE', column.references.onUpdate))
       }
     }
 

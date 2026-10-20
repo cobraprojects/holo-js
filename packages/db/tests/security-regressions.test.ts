@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { DB, SecurityError, resetDB } from '../src'
+import { DB, SchemaError, SecurityError, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -24,6 +25,69 @@ describe('native database security boundaries', () => {
     await expect(db.table(table).where('name', 'or 1=1' as never, 'Safe').get()).rejects.toThrow(SecurityError)
     await expect(db.table(table).orderBy('name desc; --' as never).get()).rejects.toThrow(SecurityError)
     expect(await db.table(table).select('id', 'name').get()).toEqual([{ id: 1, name: 'Safe' }])
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('allows only comparison operators in whereColumn on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    const User = defineModelFromTable(table)
+    await db.table(table).insert({ id: 1, name: 'Safe' })
+    await expect(db.table(table).whereColumn('id', '= 1 OR 1=1 --' as never, 'id').get()).rejects.toThrow(SecurityError)
+    await expect(db.table(table).whereColumn('id', 'in' as never, 'id').get()).rejects.toThrow(SecurityError)
+    await expect(db.table(table).whereColumn('id', 'between' as never, 'id').get()).rejects.toThrow(SecurityError)
+    await expect(User.whereColumn('id', '= 1 OR 1=1 --' as never, 'id').get()).rejects.toThrow(SecurityError)
+    expect(await db.table(table).whereColumn('id', '<=', 'id').whereColumn('name', 'like', 'name').count()).toBe(1)
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('stores schema default text as data, including backslashes and quotes on %s', async driver => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_default_${randomUUID().replaceAll('-', '')}`
+    const payload = `\\' OR 1=1 -- \\`
+    try {
+      await schema.createTable(name, table => {
+        table.integer('id').primaryKey()
+        table.string('note').default(payload)
+      })
+      await db.table(name).insert({ id: 1 })
+      expect(await db.table(name).select('note').get()).toEqual([{ note: payload }])
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+
+  it('rejects MySQL enum values with a backslash before creating the table', async () => {
+    const { schema } = await openDatabase('mysql')
+    const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
+    await expect(schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.enum('state', [`b' OR 1=1 -- \\`])
+    })).rejects.toThrow(SchemaError)
+    expect(await schema.hasTable(name)).toBe(false)
+  })
+
+  it.each(['sqlite', 'postgres'] as const)('stores enum values containing backslashes and quotes as data on %s', async driver => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
+    const values = ['a\\', `b' OR 1=1 -- \\`]
+    try {
+      await schema.createTable(name, table => {
+        table.integer('id').primaryKey()
+        table.enum('state', values)
+      })
+      await db.table(name).insert([{ id: 1, state: values[0] }, { id: 2, state: values[1] }])
+      expect(await db.table(name).select('state').orderBy('id').get()).toEqual([{ state: values[0] }, { state: values[1] }])
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects referential actions that are not SQL keywords on %s', async driver => {
+    const { schema, table } = await openDatabase(driver)
+    const name = `holo_action_${randomUUID().replaceAll('-', '')}`
+    await expect(schema.createTable(name, child => {
+      child.integer('id').primaryKey()
+      child.integer('owner_id')
+      child.foreign('owner_id').references('id').on(table.tableName).onDelete('cascade; DROP TABLE users; --' as never)
+    })).rejects.toThrow(SchemaError)
   })
 
   it('rejects malformed cursor tokens on both table and model queries', async () => {

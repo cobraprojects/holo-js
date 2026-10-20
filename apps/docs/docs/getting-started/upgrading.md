@@ -450,6 +450,18 @@ Check three behaviors when you upgrade:
 
 To retry a transaction after a deadlock or lock timeout, pass `attempts`. See [Retry deadlocks](/database/transactions#retry-deadlocks).
 
+### Query operators, date values, and foreign-key toggles
+
+Check three behaviors when you upgrade:
+
+- `whereColumn()` accepts only `=`, `!=`, `>`, `>=`, `<`, `<=`, and `like`. Laravel also accepts bitwise and regex operators here; Holo rejects them. Any other operator throws `SecurityError` when the query runs. Change a query that used another operator to one of the supported operators.
+- On PostgreSQL, `date` and `timestamp` values use `app.timezone` (default `UTC`) instead of the Node process's time zone. A `date` reads back as a `Date` at midnight in `app.timezone`, and a `Date` query value is sent with its offset, so the day doesn't change when you save it again. Before, `timestamp` values were read as UTC wall-clock time, so in an app whose `app.timezone` is not UTC they read back shifted; they now read back as saved. Holo doesn't rewrite existing rows. MySQL still uses UTC. Dates inside arrays are unchanged. The PostgreSQL adapter now sets its date and timestamp parsers on each query, so injected `client`, `pool`, and `createPool` objects parse them the same way as the built-in pool. Custom clients and pools must accept a query config object (`{ text, values, types }`) as `pg` does.
+- Foreign-key `onDelete()` and `onUpdate()` values other than `cascade`, `restrict`, `set null`, and `no action` throw `SchemaError`. MySQL `enum` values and string defaults that contain a backslash are now stored as written. Before, MySQL read the backslash as an escape, so the stored value could differ. Existing columns keep their stored values; check them with `SHOW COLUMNS` if they contain backslashes.
+- MySQL `enum` values can't contain a backslash or a NUL character. The schema build fails with `SchemaError` naming the value. Before, such a value broke `CREATE TABLE` or was stored altered.
+- On MySQL, queries with bindings run as server-side prepared statements, so a quote in a bound string can't end a SQL literal under `NO_BACKSLASH_ESCAPES`. Custom MySQL pools passed to `createMySQLAdapter()` must implement `execute()` for bound queries; the adapter throws a clear error otherwise. Each connection keeps at most 256 prepared statements, where mysql2 keeps 16000 by default. The server allows 16382 prepared statements in total, so many statement shapes, such as `IN` lists of different sizes, would otherwise exhaust it and block every connection. Change the cap with `maxPreparedStatements` in the pool options passed to `createMySQLAdapter()`.
+- A transaction started inside `withoutForeignKeyConstraints()` runs on the same pinned connection, one at a time. A transaction that reaches that connection after the callback has returned fails with `TransactionError` and writes nothing.
+- `withoutForeignKeyConstraints()` keeps every query in its callback on one pooled connection. The standalone `disableForeignKeyConstraints()` and `enableForeignKeyConstraints()` still change only the connection they run on. On PostgreSQL or MySQL, wrap the work in `withoutForeignKeyConstraints()` instead. See [Foreign key constraints](/database/migrations#withoutforeignkeyconstraints).
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

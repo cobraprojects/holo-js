@@ -1,5 +1,6 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Pool, types, type PoolClient, type PoolConfig } from 'pg'
+import { formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -21,8 +22,41 @@ function finalQueryResult(result: PostgresQueryResult | PostgresQueryResult[]): 
   return Array.isArray(result) ? result.at(-1) ?? { rows: [], rowCount: 0 } : result
 }
 
+function toDriverBinding(value: unknown, timeZone: string): unknown {
+  return value instanceof Date ? formatWithOffset(value, timeZone) : value
+}
+
+type TypeParserSource = {
+  getTypeParser(oid: number, format?: 'text' | 'binary'): (value: string) => unknown
+}
+
+type PostgresQueryConfig = {
+  text: string
+  values: unknown[]
+  types: TypeParserSource
+}
+
+function baseTypesOf(queryable: unknown): TypeParserSource {
+  const source = queryable as { _types?: TypeParserSource, options?: { types?: TypeParserSource } }
+  return source._types ?? source.options?.types ?? types
+}
+
+function applicationTypes(base: TypeParserSource, timeZone: string): TypeParserSource {
+  return {
+    getTypeParser(oid: number, format: 'text' | 'binary' = 'text') {
+      if (format === 'text' && oid === 1082) {
+        return (value: string) => parseCalendarDate(value, timeZone) ?? base.getTypeParser(oid, format)(value)
+      }
+      if (format === 'text' && oid === 1114) {
+        return (value: string) => parseWallClockTimestamp(value, timeZone) ?? base.getTypeParser(oid, format)(value)
+      }
+      return base.getTypeParser(oid, format)
+    },
+  }
+}
+
 export interface PostgresQueryableLike {
-  query(sql: string, bindings?: readonly unknown[]): Promise<PostgresQueryResult | PostgresQueryResult[]>
+  query(sql: string | PostgresQueryConfig, bindings?: readonly unknown[]): Promise<PostgresQueryResult | PostgresQueryResult[]>
 }
 
 export interface PostgresClientLike extends PostgresQueryableLike {
@@ -67,15 +101,7 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
 function createHoloPool(config?: PoolConfig): Pool {
-  const pool = new Pool({
-    ...config,
-    types: config?.types ?? {
-      getTypeParser(oid: number, format: 'text' | 'binary' = 'text') {
-        if (oid === 1114 && format === 'text') return (value: string) => new Date(`${value}Z`)
-        return types.getTypeParser(oid, format)
-      },
-    },
-  })
+  const pool = new Pool({ ...config })
   const sessions = new Set<PoolClient>()
   openPoolSessions.set(pool, sessions)
   pool.on('connect', (client) => {
@@ -305,7 +331,12 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
 
   private async queryResult(sql: string, bindings: readonly unknown[]): Promise<PostgresQueryResult> {
     const client = await this.getQueryable()
-    const result = await client.query(sql, bindings)
+    const timeZone = holoRuntimeInternals.getApplicationTimezone()
+    const result = await client.query({
+      text: sql,
+      values: bindings.map(value => toDriverBinding(value, timeZone)),
+      types: applicationTypes(baseTypesOf(client), timeZone),
+    })
     return finalQueryResult(result)
   }
 
