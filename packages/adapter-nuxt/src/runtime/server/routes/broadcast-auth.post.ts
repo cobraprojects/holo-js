@@ -1,6 +1,7 @@
-import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from '#imports'
+import { defineEventHandler } from '#imports'
 import { renderBroadcastAuthResponse } from '@holo-js/broadcast/auth'
 import { holo } from '../../composables'
+import { createWebRequest } from '../route-request'
 
 type BroadcastSigning = {
   readonly appKey?: string
@@ -33,19 +34,8 @@ export default defineEventHandler(async (event) => {
   const broadcast = app.config?.broadcast
   const connection = broadcast ? broadcast.connections[broadcast.default] : undefined
   const signing = resolveBroadcastSigning(connection)
-  const headers = new Headers()
-  for (const [key, value] of Object.entries(getHeaders(event))) {
-    if (typeof value === 'string') {
-      headers.set(key, value)
-    }
-  }
-  const request = new Request(getRequestURL(event, { xForwardedProto: false }), {
-    method: event.method,
-    headers,
-    body: await readRawBody(event),
-  })
 
-  return await renderBroadcastAuthResponse(request, {
+  return await renderBroadcastAuthResponse(await createWebRequest(event), {
     ...signing,
     resolveUser: async (_request, context) => {
       const guardAuth = context.guard ? auth?.guard(context.guard) : undefined
