@@ -161,3 +161,20 @@ it('pauses and resumes an event list without losing registrations or duplicating
   await transport.publish('Resumed', { event: 'feed.created' })
   await expect.poll(() => received).toEqual(['First', 'Resumed'])
 })
+
+it('resubscribes channels after the worker restarts at the same address and delivers events published afterward', async () => {
+  const transport = await startNativeTransport()
+  const delivered: string[] = []
+  transport.client.channel('feed').listen('feed.updated', payload => delivered.push(String(payload.title)))
+  await transport.client.connect()
+  await expect.poll(() => transport.subscriptions()).toBe(1)
+
+  await transport.stop()
+  await expect.poll(() => transport.client.getStatus()).toBe('disconnected')
+  await transport.restart()
+
+  await expect.poll(() => transport.subscriptions(), { timeout: 10_000 }).toBe(1)
+  await transport.publish('After restart')
+  await expect.poll(() => delivered, { timeout: 10_000 }).toEqual(['After restart'])
+  expect(transport.client.getStatus()).toBe('connected')
+}, 20_000)
