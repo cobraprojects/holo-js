@@ -17,6 +17,7 @@ export type TransactionMode = 'deferred' | 'immediate' | 'exclusive'
 
 export interface DatabaseTransactionOptions extends DatabaseOperationOptions {
   mode?: TransactionMode
+  attempts?: number
 }
 
 export type TransactionCallback = () => void | Promise<void>

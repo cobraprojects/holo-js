@@ -81,6 +81,10 @@ await DB.transaction(async (tx) => {
 
 If the outer transaction fails, everything is rolled back, including inner savepoints that succeeded. SQLite, PostgreSQL, and MySQL all support savepoints.
 
+A `transaction()` call on a connection object works the same way. If a service received the connection as a dependency and calls `transaction()` on it while a transaction is open, the call becomes a savepoint, so it can't commit the outer work early.
+
+Savepoints on one transaction run one at a time. If you start two with `Promise.all()`, the second waits until the first finishes.
+
 ## Run code after commit
 
 Use `DB.afterCommit()` for side effects that should only happen once the data is saved, like sending email or dispatching a job.
@@ -108,13 +112,16 @@ How the callbacks run:
 - `afterCommit` callbacks run in the order you registered them, after the outermost transaction commits.
 - Callbacks registered inside a nested transaction wait for the outer commit. If the nested transaction fails, its `afterCommit` callbacks are dropped and its `afterRollback` callbacks run right away.
 - `afterRollback` callbacks run in reverse order.
-- Callbacks run outside the transaction, so queries inside them see the committed data.
+- `afterCommit` callbacks run outside the transaction, so queries inside them see the committed data.
+- When a nested transaction rolls back, its `afterRollback` callbacks run inside the transaction that contains it, which is still open. Queries inside them join that transaction.
 - On transaction objects, the same methods exist as `tx.afterCommit()` and `tx.afterRollback()`.
 
 ::: warning
 Calling `DB.afterCommit()` or `DB.afterRollback()` outside a transaction throws a `TransactionError`.
 
-If an `afterCommit` callback throws, the data stays committed, but `DB.transaction()` rejects with a `TransactionError` and the remaining `afterCommit` callbacks are skipped. Handle errors inside the callback if the caller shouldn't see them.
+If an `afterCommit` callback throws, the data stays committed, `DB.transaction()` rejects with that same error, and the remaining `afterCommit` callbacks are skipped. Handle errors inside the callback if the caller shouldn't see them.
+
+A failed commit is different. If the database rejects the commit, the callbacks registered with `afterRollback()` don't run, because the outcome is unknown and the data may already be saved.
 :::
 
 ## Write transactions on SQLite
@@ -191,7 +198,7 @@ await DB.transaction(async (tx) => {
 
 ## Timeouts and cancellation
 
-Pass `timeoutMs` or an `AbortSignal` to stop a transaction that takes too long:
+Pass `timeoutMs` or an `AbortSignal` to limit how long a transaction may take to start:
 
 ```ts
 const controller = new AbortController()
@@ -201,7 +208,26 @@ await DB.transaction(async (tx) => {
 }, { timeoutMs: 5000, signal: controller.signal })
 ```
 
-`timeoutMs` must be a positive integer. A timeout or abort rolls the transaction back and throws a `TransactionError`.
+`timeoutMs` must be a positive integer. A timeout or abort before the transaction starts throws a `TransactionError`.
+
+These options don't cut off the callback. To limit a single raw query inside it, pass `timeoutMs` to `unsafeQuery()` as shown in [Timeouts and cancellation](/database/#timeouts-and-cancellation).
+
+::: warning
+Commit and rollback are never interrupted by `timeoutMs` or `signal`. Once the callback finishes, Holo waits for the database to answer. Interrupting a commit leaves its outcome unknown, so a timeout there could report a rollback for data the database already saved.
+:::
+
+## Retry deadlocks
+
+Pass `attempts` to run the transaction again when the database reports a deadlock, a lock wait timeout, or, on SQLite, a busy database. Holo rolls back the failed attempt before it starts the next one. The default is one attempt.
+
+```ts
+await DB.transaction(async (tx) => {
+  await tx.table('accounts').where('id', fromId).decrement('balance', amount)
+  await tx.table('accounts').where('id', toId).increment('balance', amount)
+}, { attempts: 3 })
+```
+
+The callback runs again from the start, so keep side effects out of it and use `afterCommit()` for them. Only the outermost transaction retries. When a deadlock happens inside a savepoint, the outer transaction is the one that retries. Other errors are never retried.
 
 ## Concurrent transactions
 
@@ -256,8 +282,9 @@ Every transaction method accepts an options object as its last argument.
 | Option | Type | What it does |
 | --- | --- | --- |
 | `mode` | `'deferred' \| 'immediate' \| 'exclusive'` | SQLite lock mode. Other drivers throw a `CapabilityError` |
-| `timeoutMs` | positive integer | Rolls back and throws a `TransactionError` when the transaction runs longer |
-| `signal` | `AbortSignal` | Rolls back and throws a `TransactionError` when aborted |
+| `attempts` | positive integer | Runs the transaction again after a deadlock, lock wait timeout, or busy SQLite database. Default `1` |
+| `timeoutMs` | positive integer | Throws a `TransactionError` when starting the transaction takes longer |
+| `signal` | `AbortSignal` | Throws a `TransactionError` when aborted before the transaction starts |
 
 Pass the connection name before the options when you use a named connection, as shown in [Transactions on a named connection](#transactions-on-a-named-connection).
 
