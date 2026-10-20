@@ -11,7 +11,7 @@ export function collectRelationKeys<TTable extends TableDefinition>(entities: re
   return [...new Set(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))]
 }
 
-export function chunkRelationKeys(keys: readonly unknown[]): unknown[][] {
+function chunkRelationKeys(keys: readonly unknown[]): unknown[][] {
   const chunks: unknown[][] = []
   for (let offset = 0; offset < keys.length; offset += RELATION_KEY_CHUNK_SIZE) {
     const chunk = keys.slice(offset, offset + RELATION_KEY_CHUNK_SIZE)
