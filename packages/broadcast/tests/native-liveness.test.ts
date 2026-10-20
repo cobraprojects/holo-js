@@ -60,7 +60,9 @@ async function connectPresenceClient(port: number, user: string) {
 
 it('pings a Node socket and terminates it when the socket stops answering within the advertised activity timeout', async () => {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-  onTestFinished(() => vi.useRealTimers())
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
   const worker = await startLivenessWorker()
   const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/main-key`, { autoPong: false })
   onTestFinished(() => socket.terminate())
@@ -80,7 +82,9 @@ it('pings a Node socket and terminates it when the socket stops answering within
 
 it('keeps a Node socket open while it answers protocol pings through the activity timeout', async () => {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-  onTestFinished(() => vi.useRealTimers())
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
   const worker = await startLivenessWorker()
   const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/main-key`)
   onTestFinished(() => socket.terminate())
