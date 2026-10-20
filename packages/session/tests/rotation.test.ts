@@ -46,6 +46,35 @@ it('rejects complete auth rotation on unsupported stores without changing the ex
   await expect(session.read('replacement')).resolves.toBeNull()
 })
 
+it('refuses a replacement id that already holds a session on a store without atomic rotation, leaving both sessions intact', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'session-rotation-'))
+  directories.push(directory)
+  const file = createFileSessionStore(directory)
+  const { rotate: _rotate, flash: _flash, take: _take, ...unsupported } = file
+  configureSessionRuntime({
+    config: { driver: 'file', stores: { file: { name: 'file', driver: 'file', path: directory } }, cookie: { name: 'session', path: '/', secure: false, httpOnly: true, sameSite: 'lax', partitioned: false, maxAge: 120 }, idleTimeout: 30, absoluteLifetime: 120, rememberMeLifetime: 1440 },
+    stores: { file: unsupported },
+  })
+  const session = getSessionRuntime()
+  const original = await session.create({ data: { identity: 'original' } })
+  const existing = await session.create({ data: { identity: 'existing' } })
+  await expect(session.rotate(original.id, { newId: existing.id })).rejects.toThrow('already exists')
+  await expect(session.read(original.id)).resolves.toEqual(original)
+  await expect(session.read(existing.id)).resolves.toEqual(existing)
+})
+
+it('mints a fresh id when rotation is not given one, so the new id is not reachable before rotation resolves', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'session-rotation-'))
+  directories.push(directory)
+  configureSessionRuntime({ config: { driver: 'file', stores: { file: { name: 'file', driver: 'file', path: directory } }, cookie: { name: 'session', path: '/', secure: false, httpOnly: true, sameSite: 'lax', partitioned: false, maxAge: 120 }, idleTimeout: 30, absoluteLifetime: 120, rememberMeLifetime: 1440 }, stores: { file: createFileSessionStore(directory) } })
+  const session = getSessionRuntime()
+  const original = await session.create({ data: { identity: 'original' } })
+  const rotated = await session.rotate(original.id)
+  expect(rotated.id).not.toBe(original.id)
+  await expect(session.read(original.id)).resolves.toBeNull()
+  await expect(session.read(rotated.id)).resolves.toMatchObject({ data: { identity: 'original' } })
+})
+
 it('keeps replacement data and renewal options precisely typed', () => {
   expectTypeOf<RotateSessionOptions['data']>().toEqualTypeOf<SessionRecord['data'] | undefined>()
   expectTypeOf<RotateSessionOptions['renewLifetime']>().toEqualTypeOf<boolean | undefined>()

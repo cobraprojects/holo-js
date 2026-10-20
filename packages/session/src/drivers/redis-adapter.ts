@@ -114,6 +114,7 @@ redis.call('HSET', KEYS[1], 'record', ARGV[2])
 return 1
 `
 
+const SESSION_KEY_NAMESPACE = 'holo:session:'
 const SET_SESSION_DATA_ATTEMPTS = 8
 const ROTATE_SESSION_ATTEMPTS = 8
 
@@ -354,7 +355,7 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
   }
 
   private qualifyKey(sessionId: string): string {
-    return `${this.prefix}${sessionId}`
+    return `${this.prefix}${SESSION_KEY_NAMESPACE}${sessionId}`
   }
 
   async connect(): Promise<void> {

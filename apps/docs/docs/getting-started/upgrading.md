@@ -433,11 +433,11 @@ Sessions written by 0.4 aren't readable by 0.3, because a session no longer stor
 
 ### Redis sessions use one key per session
 
-Each Redis session is stored under the store's `prefix` followed by the session ID, so every session is its own key and sessions spread across a Redis Cluster.
+Each Redis session is its own key: the store's `prefix`, then `holo:session:`, then the session ID. Sessions spread across a Redis Cluster, and they never sit under a bare session ID.
 
 - **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
 - **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
-- **Set a `prefix` on a shared Redis database.** Without one, each session key is the bare session ID, so keep the session store in its own database or give it a prefix.
+- **Set a `prefix` to share a Redis database.** Holo's `holo:session:` namespace keeps session keys apart from other data, and a `prefix` separates apps that use the same database.
 - **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops, or the delete fails, between the two steps, the old ID stays valid until its expiry. Under heavy concurrent writes to the same session, rotation falls back to reading the latest state, copying it, and deleting the old key without a check. A write or flash value that lands between that final read and the delete can be lost or kept on both IDs.
 
 ### Verification resend requires a signed-in user

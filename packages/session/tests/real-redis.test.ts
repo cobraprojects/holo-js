@@ -132,10 +132,44 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
         expiresAt: new Date(Date.now() + 60_000),
       })
 
-      await expect(raw.keys(`${prefix}*`)).resolves.toEqual([`${prefix}${sessionId}`])
-      const ttl = await raw.pttl(`${prefix}${sessionId}`)
+      await expect(raw.keys(`${prefix}*`)).resolves.toEqual([`${prefix}holo:session:${sessionId}`])
+      const ttl = await raw.pttl(`${prefix}holo:session:${sessionId}`)
       expect(ttl).toBeGreaterThan(0)
       expect(ttl).toBeLessThanOrEqual(60_000)
+    } finally {
+      await store.delete(sessionId)
+      await raw.quit()
+      await adapter.close()
+    }
+  }, 30_000)
+  it('stores a session with the default empty prefix under the holo:session: namespace, never as a bare id', async () => {
+    const adapter = createSessionRedisAdapter({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      prefix: '',
+    })
+    const store = createRedisSessionStore(adapter)
+    const sessionId = randomUUID()
+    const raw = new Redis({ host: '127.0.0.1', port: 6379, db: 0 })
+    const now = new Date()
+
+    try {
+      await adapter.connect()
+      await store.write({
+        id: sessionId,
+        store: 'redis',
+        data: {},
+        createdAt: now,
+        lastActivityAt: now,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      await expect(raw.exists(`holo:session:${sessionId}`)).resolves.toBe(1)
+      await expect(raw.exists(sessionId)).resolves.toBe(0)
     } finally {
       await store.delete(sessionId)
       await raw.quit()
