@@ -88,9 +88,10 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
       return requestAccessorStorage.getStore()?.requestScoped === true
     },
     setRequestAccessors(nextAccessors) {
-      defaultAccessors = nextAccessors
       const current = requestAccessorStorage.getStore()
-      if (current?.requestScoped || current?.accessors === nextAccessors) return
+      const previousAccessors = current ? current.accessors : defaultAccessors
+      defaultAccessors = nextAccessors
+      if (current?.requestScoped || previousAccessors === nextAccessors) return
       requestAccessorStorage.enterWith({ accessors: nextAccessors })
       context.adoptRequestScope?.()
     },

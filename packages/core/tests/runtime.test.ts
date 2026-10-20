@@ -2267,6 +2267,65 @@ export default async function boot() {
     expect(runtimeGlobal.__holoCoreDirectBoots__).toBe(1)
   })
 
+  it('boots a plugin module once when concurrent reconfigurations reach it while its boot is still running', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-concurrent-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-concurrent-boot', `
+export default {
+  id: 'concurrent-boot',
+  name: 'Concurrent Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreConcurrentBoots__ = (globalThis.__holoCoreConcurrentBoots__ ?? 0) + 1
+  await globalThis.__holoCoreConcurrentBootGate__()
+}
+`,
+    })
+    let markBootStarted: () => void = () => undefined
+    const bootStarted = new Promise<void>(resolve => { markBootStarted = resolve })
+    let releaseBoot: () => void = () => undefined
+    const bootGate = new Promise<void>(resolve => { releaseBoot = resolve })
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreConcurrentBoots__?: number
+      __holoCoreConcurrentBootGate__?: () => Promise<void>
+    }
+    runtimeGlobal.__holoCoreConcurrentBoots__ = 0
+    runtimeGlobal.__holoCoreConcurrentBootGate__ = async () => {
+      markBootStarted()
+      await bootGate
+    }
+    const config = await loadConfigDirectory(root)
+
+    const first = reconfigureOptionalHoloSubsystems(root, config)
+    await bootStarted
+    const second = reconfigureOptionalHoloSubsystems(root, config)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    releaseBoot()
+    await Promise.all([first, second])
+
+    expect(runtimeGlobal.__holoCoreConcurrentBoots__).toBe(1)
+  })
+
   it('runs plugin boot modules once during adapter initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

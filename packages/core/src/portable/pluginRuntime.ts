@@ -15,6 +15,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 const bootedHoloPluginModules = new Set<string>()
+const pendingHoloPluginBoots = new Map<string, Promise<void>>()
 let bootGeneration = 0
 
 function resolveHoloPluginBootKey(projectRoot: string, bootModule: HoloPluginRuntimeModule): string {
@@ -32,18 +33,29 @@ export async function bootConfiguredHoloPluginModule(
 ): Promise<void> {
   const bootKey = resolveHoloPluginBootKey(projectRoot, bootModule)
   if (bootedHoloPluginModules.has(bootKey)) return
+  const pending = pendingHoloPluginBoots.get(bootKey)
+  if (pending) return pending
   const candidate = isRecord(bootModule.module) && typeof bootModule.module.default !== 'undefined'
     ? bootModule.module.default
     : bootModule.module
   if (typeof candidate !== 'function') return
   const generation = bootGeneration
-  await candidate({ projectRoot, config: loadedConfig })
-  if (generation === bootGeneration) bootedHoloPluginModules.add(bootKey)
+  const boot = (async () => {
+    await candidate({ projectRoot, config: loadedConfig })
+    if (generation === bootGeneration) bootedHoloPluginModules.add(bootKey)
+  })()
+  pendingHoloPluginBoots.set(bootKey, boot)
+  try {
+    await boot
+  } finally {
+    if (pendingHoloPluginBoots.get(bootKey) === boot) pendingHoloPluginBoots.delete(bootKey)
+  }
 }
 
 export function resetBootedHoloPluginModules(): void {
   bootGeneration += 1
   bootedHoloPluginModules.clear()
+  pendingHoloPluginBoots.clear()
 }
 
 export async function loadConfiguredHoloPluginDefinitions(

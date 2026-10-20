@@ -1097,7 +1097,19 @@ export default class Admin extends AdminEntity {
     expect(guest).toBe(false)
   })
 
-  it('keeps an authenticated session when a request reinstalls its accessors after login', async () => {
+  it('keeps an authenticated session when a request reinstalls the same accessor object after login', async () => {
+    const root = await createProject({ auth: true })
+    const accessors = { appendResponseCookie: () => undefined, getCookie: () => undefined }
+    const runtime = await initializeHolo(root, { authRequest: accessors, processEnv: process.env, preferCache: false })
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    await runtime.auth?.loginUsingId(1)
+
+    await initializeHolo(root, { authRequest: accessors, processEnv: process.env, preferCache: false })
+
+    expect(await runtime.auth?.check()).toBe(true)
+  })
+
+  it('does not carry a session logged in from the root scope into a flow with different accessors', async () => {
     const root = await createProject({ auth: true })
     const runtime = await initializeHolo(root, {
       authRequest: { appendResponseCookie: () => undefined },
@@ -1105,18 +1117,18 @@ export default class Admin extends AdminEntity {
       preferCache: false,
     })
     await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
-    const cookies: string[] = []
-    const loginAccessors = { appendResponseCookie: (cookie: string) => { cookies.push(cookie) } }
-    await initializeHolo(root, { authRequest: loginAccessors, processEnv: process.env, preferCache: false })
     await runtime.auth?.loginUsingId(1)
 
-    await initializeHolo(root, {
-      authRequest: { appendResponseCookie: () => undefined, getCookie: () => undefined },
-      processEnv: process.env,
-      preferCache: false,
+    const guest = await Promise.resolve().then(async () => {
+      const flow = await initializeHolo(root, {
+        authRequest: { appendResponseCookie: () => undefined, getCookie: () => undefined },
+        processEnv: process.env,
+        preferCache: false,
+      })
+      return flow.auth?.check()
     })
 
-    expect(await runtime.auth?.check()).toBe(true)
+    expect(guest).toBe(false)
   })
 
   it('applies a reconfiguration that arrives while the runtime is still initializing', async () => {

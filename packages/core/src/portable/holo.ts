@@ -1794,7 +1794,6 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       notificationsMailer: notificationsRuntimeBindings?.mailer,
     })
     authContext = options.authContext ?? createRequestAwareAuthContext(authModule.createAsyncAuthContext(), options.authRequest)
-    authContext.setRequestAccessors?.(options.authRequest)
     authModule.authRuntimeInternals.configureRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
@@ -2160,6 +2159,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     },
     async [reconfigureRuntime](nextOptions) {
       bootOptions = nextOptions
+      activeAuthContext?.setRequestAccessors?.(nextOptions.authRequest)
       const configured = await runOptionalSubsystemsSerially(async () => {
         if (!runtime.initialized && !servicesBooting) return false
         await configureRuntimeSubsystems(nextOptions)

@@ -84,10 +84,6 @@ export function createMemoryAuthContext(): MemoryAuthContext {
   return context
 }
 
-function holdsAuthenticationState(scope: MemoryAuthContext): boolean {
-  return scope.sessionIds.size > 0 || scope.accessTokens.size > 0 || scope.rememberTokens.size > 0
-}
-
 export function createAsyncAuthContext(): AsyncAuthContext {
   const storage = new AsyncLocalStorage<MemoryAuthContext>()
   const resolveContext = (): MemoryAuthContext => {
@@ -107,8 +103,6 @@ export function createAsyncAuthContext(): AsyncAuthContext {
       }
     },
     adoptRequestScope() {
-      const current = storage.getStore()
-      if (current && holdsAuthenticationState(current)) return
       storage.enterWith(createMemoryAuthContext())
     },
     run(callback) {
