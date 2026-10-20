@@ -75,6 +75,31 @@ describe('Next termination shutdown', () => {
     expect(result.durationMs).toBeLessThan(10_000)
   }, 20_000)
 
+  it('closes a runtime that a request re-initializes while the server is still draining', async () => {
+    const result = await runChild(`
+      const { installNextShutdown } = await import(${JSON.stringify(shutdownSource)})
+      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+      const closeRuntime = (name) => async () => {
+        console.log('close:' + name)
+      }
+      const holdOpen = setInterval(() => {}, 1000)
+      installNextShutdown({ close: closeRuntime('A'), report: error => console.log('reported', error) })
+      process.on('SIGTERM', async () => {
+        console.log('drain:start')
+        await delay(20)
+        console.log('drain:reinitialize')
+        installNextShutdown({ close: closeRuntime('B'), report: error => console.log('reported', error) })
+        await delay(40)
+        process.exit(143)
+      })
+      process.on('exit', () => console.log('exit'))
+      console.log('ready')
+    `, { signalAfterReady: 'SIGTERM' })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'drain:start', 'close:A', 'drain:reinitialize', 'close:B', 'exit'])
+    expect(result.code).toBe(143)
+  }, 20_000)
+
   it('restores process.exit and signal listeners when uninstalled', () => {
     const originalExit = process.exit
     const sigtermListeners = process.listenerCount('SIGTERM')

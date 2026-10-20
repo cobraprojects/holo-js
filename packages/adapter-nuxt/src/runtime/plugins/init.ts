@@ -41,11 +41,13 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
   }
 
   nitroApp.hooks.hook('close', async () => {
-    const report = captureErrorReporter()
+    let report: ReturnType<typeof captureErrorReporter> | undefined
     try {
-      await (await project).runtime.shutdown()
+      const { runtime } = await project
+      report = captureErrorReporter()
+      await runtime.shutdown()
     } catch (error) {
-      report(error, { capability: 'nuxt', operation: 'shutdown' })
+      (report ?? captureErrorReporter())(error, { capability: 'nuxt', operation: 'shutdown' })
     }
   })
 })

@@ -86,6 +86,29 @@ describe('nuxt init plugin shutdown', () => {
     expect(reports).toEqual([failure])
   })
 
+  it('reports a failed shutdown during initialization through the reporter that initialization configures', async () => {
+    const failure = new Error('database pool closed during startup shutdown')
+    const reports: unknown[] = []
+    let finishInitialization: (value: unknown) => void = () => {}
+    initializeHoloAdapterProject.mockReturnValue(new Promise((resolve) => {
+      finishInitialization = resolve
+    }))
+
+    const plugin = await startPlugin()
+    const closing = plugin.close()
+    errorReportingInternals.configure({
+      report(error) {
+        reports.push(error)
+      },
+    })
+    finishInitialization({
+      runtime: { shutdown: vi.fn().mockRejectedValue(failure) },
+    })
+    await closing
+
+    expect(reports).toEqual([failure])
+  })
+
   it('stays silent when the runtime shuts down cleanly', async () => {
     const reports: unknown[] = []
     errorReportingInternals.configure({

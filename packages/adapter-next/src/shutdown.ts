@@ -15,6 +15,7 @@ const TERMINATION_SIGNALS: readonly TerminationSignal[] = ['SIGINT', 'SIGTERM']
 type ShutdownState = {
   installed: boolean
   options?: NextShutdownOptions
+  closed?: NextShutdownOptions
   signal?: TerminationSignal
   closing?: Promise<void>
   uninstall?: () => void
@@ -26,24 +27,35 @@ function shutdownState(): ShutdownState {
   return globalState.__holoNextShutdown__
 }
 
+function closeCurrent(): Promise<void> {
+  const state = shutdownState()
+  state.closing ??= closeUntilStable().finally(() => {
+    state.closing = undefined
+  })
+  return state.closing
+}
+
+async function closeUntilStable(): Promise<void> {
+  const state = shutdownState()
+  while (state.options && state.options !== state.closed) {
+    const current = state.options
+    state.closed = current
+    try {
+      await current.close()
+    } catch (error) {
+      current.report(error, { capability: 'next', operation: 'shutdown' })
+    }
+  }
+}
+
 export function installNextShutdown(options: NextShutdownOptions): () => void {
   const state = shutdownState()
   state.options = options
+  if (state.signal) void closeCurrent()
   if (state.installed) return state.uninstall ?? (() => {})
 
   state.installed = true
   const exit = process.exit
-  const closeOnce = (): Promise<void> => {
-    state.closing ??= (async () => {
-      try {
-        await state.options?.close()
-      } catch (error) {
-        state.options?.report(error, { capability: 'next', operation: 'shutdown' })
-      }
-    })()
-    return state.closing
-  }
-
   const onSignal = (signal: TerminationSignal) => {
     if (state.signal) return
     state.signal = signal
@@ -51,12 +63,12 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
     process.exitCode = code
     const deadline = setTimeout(() => exit.call(process, code), SHUTDOWN_DEADLINE_MS)
     deadline.unref()
-    setImmediate(() => void closeOnce())
+    setImmediate(() => void closeCurrent())
   }
   const listeners = TERMINATION_SIGNALS.map(signal => [signal, () => onSignal(signal)] as const)
   const patchedExit = ((code?: ExitCode) => {
     if (!state.signal) return exit.call(process, code)
-    void closeOnce().then(() => exit.call(process, code))
+    void closeCurrent().then(() => exit.call(process, code))
   }) as typeof process.exit
 
   process.exit = patchedExit
@@ -68,6 +80,7 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
     state.installed = false
     state.signal = undefined
     state.closing = undefined
+    state.closed = undefined
   }
 
   state.uninstall = uninstall
