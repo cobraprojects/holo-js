@@ -40,6 +40,7 @@
 
 ### Security
 
+- Raise the default scrypt password cost to N = 2^15, r = 8, p = 3 (about 32 MiB per hash, up from N = 2^14, r = 8, p = 1), following the OWASP Password Storage Cheat Sheet's equivalent setting for N = 2^17, r = 8, p = 1. A process runs at most four password hashes at once, so peak scrypt memory stays near 128 MiB whatever `UV_THREADPOOL_SIZE` is. A successful login replaces a digest made at older settings through the provider's `update()` method; a provider without `update()` keeps it, and a failed save does not fail the login. Digests made at N = 2^14, r = 8, p = 1 still verify. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#password-hashing-cost).
 - Harden remote-fetch address classification in `addMediaFromUrl()`. See [Add media from a URL](apps/docs/docs/media/index.md#addmediafromurl).
 - Keep hidden foreign keys out of Realtime patches. When a model hides, shows only some, casts, or appends attributes, or a handler changes visibility or appends attributes on the records it loads, Realtime re-runs the query instead of patching it when a belongs-to foreign key changes, so the hidden key can no longer reach subscribers through a patch. Plain models keep incremental patching. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#realtime-relations-honor-hidden-attributes).
 - Enforce the configured remember lifetime on the server using an authenticated expiry in each encrypted recaller. Replayed expired remember cookies cannot restore authentication.

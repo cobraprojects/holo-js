@@ -922,6 +922,40 @@ function dummyPasswordDigest(hasher: AuthPasswordHasher): Promise<string> {
   return digest
 }
 
+async function rehashPasswordAfterLogin({
+  adapter,
+  user,
+  password,
+  digest,
+  hasher,
+}: {
+  readonly adapter: ErasedAuthProviderAdapter
+  readonly user: unknown
+  readonly password: string
+  readonly digest: string | null | undefined
+  readonly hasher: AuthPasswordHasher
+}): Promise<void> {
+  if (!digest || !adapter.update) {
+    return
+  }
+
+  try {
+    if (!await resolveNeedsPasswordRehash(hasher, digest)) {
+      return
+    }
+
+    const replacement = await hasher.hash(password)
+    const current = await adapter.findById(adapter.getId(user))
+    if (!current || getPasswordHash(adapter, current) !== digest) {
+      return
+    }
+
+    await adapter.update(current, { password: replacement })
+  } catch (error) {
+    reportError(error, { capability: 'auth', operation: 'password.rehashOnLogin' })
+  }
+}
+
 async function verifyCredentialsForProvider(
   providerName: string,
   adapter: ErasedAuthProviderAdapter,
@@ -939,6 +973,13 @@ async function verifyCredentialsForProvider(
       return null
     }
 
+    await rehashPasswordAfterLogin({
+      adapter,
+      user,
+      password: credentials.password,
+      digest: passwordHash,
+      hasher: bindings.passwordHasher,
+    })
     timebox.returnEarly()
     return user
   }, AUTH_TIMEBOX_MILLISECONDS)

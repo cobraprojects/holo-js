@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { spawnSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID, scrypt as nodeScrypt, scryptSync } from 'node:crypto'
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
@@ -59,7 +59,24 @@ import {
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
 import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure } from '../src/runtime/sessionFailures'
+import { scryptPasswordHasherInternals } from '../src/runtime/scryptPasswordHasher'
 import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
+
+function createScryptDigestAt(
+  password: string,
+  params: { readonly N: number, readonly r: number, readonly p: number },
+  options: { readonly isParameterless?: boolean } = {},
+): string {
+  const salt = randomBytes(16)
+  const hash = scryptSync(password, salt, 64, {
+    cost: params.N,
+    blockSize: params.r,
+    parallelization: params.p,
+    maxmem: 64 * 1024 * 1024,
+  })
+  const prefix = options.isParameterless === true ? 'scrypt' : `scrypt$N=${params.N},r=${params.r},p=${params.p}`
+  return `${prefix}$${salt.toString('hex')}$${hash.toString('hex')}`
+}
 
 function importSpecifier(fromDirectory: string, targetPath: string): string {
   const specifier = relative(fromDirectory, targetPath).replaceAll('\\', '/')
@@ -1585,6 +1602,212 @@ describe('@holo-js/auth package runtime', () => {
     await expect(verifyPassword('secret-secret', digest)).resolves.toBe(true)
     await expect(verifyPassword('wrong-secret', digest)).resolves.toBe(false)
     await expect(needsPasswordRehash(digest)).resolves.toBe(false)
+  })
+
+  it('hashes new passwords at the hardened scrypt cost', async () => {
+    await configureRuntime()
+
+    const digest = await hashPassword('secret-secret')
+
+    expect(digest).toMatch(/^scrypt\$N=32768,r=8,p=3\$[0-9a-f]{32}\$[0-9a-f]{128}$/)
+    await expect(verifyPassword('secret-secret', digest)).resolves.toBe(true)
+    await expect(needsPasswordRehash(digest)).resolves.toBe(false)
+  })
+
+  it('hashes and verifies with Node default options', async () => {
+    resetAuthRuntime()
+
+    const digest = await hashPassword('secret-secret')
+
+    await expect(verifyPassword('secret-secret', digest)).resolves.toBe(true)
+    await expect(verifyPassword('wrong-secret', digest)).resolves.toBe(false)
+  })
+
+  it('returns false for a wrong password against a hardened digest', async () => {
+    await configureRuntime()
+    const digest = await hashPassword('secret-secret')
+
+    await expect(verifyPassword('wrong-secret', digest)).resolves.toBe(false)
+  })
+
+  it('limits concurrent scrypt operations to four while sixteen hashes complete', async () => {
+    resetAuthRuntime()
+    let active = 0
+    let peak = 0
+    scryptPasswordHasherInternals.setScrypt((password, salt, keyLength, options, callback) => {
+      active += 1
+      peak = Math.max(peak, active)
+      nodeScrypt(password, salt, keyLength, options, (error, derivedKey) => {
+        active -= 1
+        callback(error, derivedKey)
+      })
+    })
+
+    try {
+      const passwords = Array.from({ length: 16 }, (_, index) => `secret-${index}`)
+      const hashAndVerify = async (password: string) => verifyPassword(password, await hashPassword(password))
+      await expect(Promise.all(passwords.map(hashAndVerify)))
+        .resolves.toEqual(Array.from({ length: 16 }, () => true))
+      expect(peak).toBe(4)
+    } finally {
+      scryptPasswordHasherInternals.resetScrypt()
+    }
+  })
+
+  it('verifies a digest made at the previous cost, then stores the hardened digest on login', async () => {
+    const runtime = await configureRuntime()
+    const previousDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: previousDigest,
+      email_verified_at: new Date(),
+    })
+    await expect(verifyPassword('secret-secret', previousDigest)).resolves.toBe(true)
+    await expect(needsPasswordRehash(previousDigest)).resolves.toBe(true)
+
+    await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+
+    const stored = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toMatch(/^scrypt\$N=32768,r=8,p=3\$/)
+    await expect(verifyPassword('secret-secret', String(stored?.password))).resolves.toBe(true)
+  })
+
+  it('verifies a parameterless legacy digest at its original cost, then stores the hardened digest on login', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 }, { isParameterless: true })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+    await expect(verifyPassword('secret-secret', legacyDigest)).resolves.toBe(true)
+    await expect(needsPasswordRehash(legacyDigest)).resolves.toBe(true)
+
+    await login({ email: 'ava@example.com', password: 'secret-secret' })
+
+    const stored = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toMatch(/^scrypt\$N=32768,r=8,p=3\$/)
+    await expect(verifyPassword('secret-secret', String(stored?.password))).resolves.toBe(true)
+  })
+
+  it('authenticates a legacy-digest login through a provider without update() and skips the rehash', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+    const usersWithoutUpdate: Partial<typeof runtime.usersProvider> = { ...runtime.usersProvider }
+    delete usersWithoutUpdate.update
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      providers: { users: usersWithoutUpdate as typeof runtime.usersProvider, admins: runtime.adminsProvider },
+    })
+
+    let scryptCalls = 0
+    scryptPasswordHasherInternals.setScrypt((password, salt, keyLength, options, callback) => {
+      scryptCalls += 1
+      nodeScrypt(password, salt, keyLength, options, callback)
+    })
+    try {
+      await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).resolves.toMatchObject({
+        sessionId: expect.any(String),
+      })
+    } finally {
+      scryptPasswordHasherInternals.resetScrypt()
+    }
+
+    expect(scryptCalls).toBe(1)
+    const stored = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toBe(legacyDigest)
+  })
+
+  it('does not rewrite a legacy digest when the login password is wrong', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'wrong-secret' })).rejects.toThrow()
+
+    const stored = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toBe(legacyDigest)
+  })
+
+  it('does not overwrite a password reset that lands while a legacy-digest login is rehashing', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('old-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+    const resetDigest = await hashPassword('new-secret')
+    const users = runtime.usersProvider
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      providers: {
+        users: {
+          ...users,
+          async findByCredentials(credentials) {
+            const user = await users.findByCredentials(credentials)
+            await users.update!(user!, { password: resetDigest })
+            return user
+          },
+        },
+        admins: runtime.adminsProvider,
+      },
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'old-secret' })).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+
+    const stored = await users.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toBe(resetDigest)
+    await expect(verifyPassword('new-secret', String(stored?.password))).resolves.toBe(true)
+    await expect(verifyPassword('old-secret', String(stored?.password))).resolves.toBe(false)
+  })
+
+  it('keeps a legacy-digest login successful when the rehashed password cannot be saved', async () => {
+    const runtime = await configureRuntime()
+    const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 })
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: legacyDigest,
+      email_verified_at: new Date(),
+    })
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      providers: {
+        users: {
+          ...runtime.usersProvider,
+          async update() {
+            throw new Error('users table unavailable')
+          },
+        },
+        admins: runtime.adminsProvider,
+      },
+    })
+
+    await expect(login({ email: 'ava@example.com', password: 'secret-secret' })).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+
+    const stored = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(stored?.password).toBe(legacyDigest)
   })
 
   it('keeps auth field failure helpers candidate-only and immutable', () => {
@@ -4593,10 +4816,11 @@ describe('@holo-js/auth package runtime', () => {
   it('covers runtime helper branches for cookies, tokens, payloads, and async context', async () => {
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const digest = await hasher.hash('secret-secret')
-    const [, params, saltHex, hashHex] = digest.split('$')
-    const legacyDigest = `scrypt$${saltHex ?? ''}$${hashHex ?? ''}`
+    const [, params] = digest.split('$')
+    const legacyDigest = createScryptDigestAt('secret-secret', { N: 16_384, r: 8, p: 1 }, { isParameterless: true })
+    const [, saltHex, hashHex] = legacyDigest.split('$')
 
-    expect(params).toBe('N=16384,r=8,p=1')
+    expect(params).toBe('N=32768,r=8,p=3')
     await expect(hasher.verify('secret-secret', legacyDigest)).resolves.toBe(true)
     expect(hasher.needsRehash?.(legacyDigest)).toBe(true)
     await expect(hasher.verify('secret-secret', 'invalid')).resolves.toBe(false)
@@ -4610,9 +4834,10 @@ describe('@holo-js/auth package runtime', () => {
     await expect(hasher.verify('secret-secret', `scrypt$N=0,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
     await expect(hasher.verify('secret-secret', `scrypt$N=16384,r=16,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
     await expect(hasher.verify('secret-secret', `scrypt$ N = 16384 , r = 8 , p = 1 $${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(true)
-    expect(hasher.needsRehash?.(`scrypt$N=8192,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
-    expect(hasher.needsRehash?.(`scrypt$N=16384,r=4,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
-    expect(hasher.needsRehash?.(`scrypt$N=16384,r=8,p=0$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=16384,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=8192,r=8,p=3$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=32768,r=4,p=3$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=32768,r=8,p=0$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
     expect(hasher.needsRehash?.('invalid')).toBe(true)
     expect(authRuntimeInternals.verifyTokenSecret('secret', 'invalid')).toBe(false)
     expect(authRuntimeInternals.parsePlainTextToken('invalid')).toBeNull()

@@ -487,6 +487,14 @@ Check three behaviors when you upgrade:
 - A one-of-many relation (`latestOfMany`, `oldestOfMany`, `ofMany`, and the morph variants) whose column is `NULL` on every related row loads `null`, as in Laravel. Before, it loaded the first related row. To keep the old result, skip the `NULL` rows with a constraint: `scopeRelation(latestOfMany(() => Post, 'user_id', 'id', 'score'), query => query.whereNotNull('score'))`.
 - Eager loads run one query per 256 parent keys, except a relation whose constraint sets `limit()` or `offset()`, which runs as one query so the limit or offset applies to the whole load. A constraint callback passed to `with()` or `scopeRelation()` can run more than once: once per chunk, and for one-of-many relations once for the grouped lookup and once for the outer query. Don't count or log calls inside it.
 
+### Password hashing cost
+
+New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
+
+A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
+
+No migration is needed. A digest made with the old settings still verifies, and a successful login replaces it with a new digest through the provider's `update()` method. A provider without `update()` keeps its old digests. See [Authentication](/auth/).
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.
