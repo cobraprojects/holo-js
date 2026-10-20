@@ -15,7 +15,7 @@ const livePostgresConfig = {
   database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
 }
 
-describe('@holo-js/db-postgres', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres', () => {
   it.each([1, 4, 8])('completes overlapping transactions and ordinary queries with a four-client pool and %i admission slots', async maxConcurrentQueries => {
     const adapter = createPostgresAdapter({ config: {
       ...livePostgresConfig, max: 4, connectionTimeoutMillis: 500, idleTimeoutMillis: 30_000,
@@ -307,7 +307,7 @@ describe('@holo-js/db-postgres', () => {
   }, 30_000)
 })
 
-describe('@holo-js/db-postgres date values', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres date values', () => {
   it.each([
     { label: 'default types', types: undefined },
     { label: 'custom types that delegate to pg', types: pgTypes },
@@ -335,7 +335,7 @@ describe('@holo-js/db-postgres date values', () => {
   })
 })
 
-describe('@holo-js/db-postgres full date formats', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres full date formats', () => {
   it('round-trips BC dates, five-digit years, and infinite dates without shifting', async () => {
     const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
     const db = createDatabase({ adapter, dialect: createDialect('postgres') })

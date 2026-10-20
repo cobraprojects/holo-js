@@ -9,7 +9,7 @@ const liveMySQLConfig = {
   database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
 }
 
-describe('@holo-js/db-mysql prepared statement cache', () => {
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql prepared statement cache', () => {
   it('bounds the prepared statements a connection keeps, so distinct IN list sizes cannot exhaust the server', async () => {
     const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1 } })
     onTestFinished(() => adapter.disconnect())

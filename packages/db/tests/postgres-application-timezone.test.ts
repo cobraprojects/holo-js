@@ -5,9 +5,8 @@ import { Client, Pool, types as pgTypes } from 'pg'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createDatabase, createDialect } from '../src'
 
-describe('PostgreSQL date and timestamp values in app.timezone', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL date and timestamp values in app.timezone', () => {
   it('reads and writes calendar dates and wall-clock timestamps in app.timezone, not the process timezone', async () => {
-    const previousTimeZone = process.env.TZ
     configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
     process.env.TZ = 'America/New_York'
     const adapter = createPostgresAdapter({ config: {
@@ -43,7 +42,6 @@ describe('PostgreSQL date and timestamp values in app.timezone', () => {
         .toEqual([{ same: true }])
     } finally {
       resetConfigRuntime()
-      process.env.TZ = previousTimeZone
       await adapter.execute(`DROP TABLE IF EXISTS ${source}`)
       await adapter.execute(`DROP TABLE IF EXISTS ${copy}`)
       await db.disconnect()
@@ -72,7 +70,7 @@ async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>):
   }
 }
 
-describe('PostgreSQL dates in app.timezone at DST gaps and historical offsets', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL dates in app.timezone at DST gaps and historical offsets', () => {
   it.each([
     { zone: 'America/Santiago', day: '2026-09-06', instant: '2026-09-06T04:00:00.000Z' },
     { zone: 'America/Havana', day: '2026-03-08', instant: '2026-03-08T05:00:00.000Z' },
@@ -177,7 +175,7 @@ describe('PostgreSQL dates in app.timezone at DST gaps and historical offsets', 
   })
 })
 
-describe('PostgreSQL injected clients read dates in app.timezone', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL injected clients read dates in app.timezone', () => {
   it.each(['client', 'pool'] as const)('reads DATE and TIMESTAMP in app.timezone through an injected pg %s', async kind => {
     await withAppTimezone('Asia/Tokyo', async () => {
       const injected = kind === 'client' ? new Client(liveConfig) : new Pool({ ...liveConfig, max: 2 })
@@ -217,6 +215,29 @@ describe('PostgreSQL injected clients read dates in app.timezone', () => {
           sql: 'SELECT (($1::timestamp) AT TIME ZONE \'America/New_York\') = $2::timestamptz AS same',
           bindings: ['2024-11-03 01:30:00', row!.at],
         })).rows).toEqual([{ same: true }])
+      } finally {
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await db.disconnect()
+      }
+    })
+  })
+})
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL bindings keep sub-second precision in app.timezone', () => {
+  it.each(['UTC', 'Asia/Tokyo'])('round-trips a Date with milliseconds through TIMESTAMP and TIMESTAMPTZ in %s', async zone => {
+    await withAppTimezone(zone, async () => {
+      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+      const table = `holo_millis_${randomUUID().replaceAll('-', '')}`
+      const original = new Date('2024-03-15T10:00:00.600Z')
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL, instant TIMESTAMPTZ NOT NULL)`)
+        await db.executeCompiled({ sql: `INSERT INTO ${table} (id, at, instant) VALUES ($1, $2, $3)`, bindings: [1, original, original] })
+        const wall = zone === 'UTC' ? '2024-03-15 10:00:00.6' : '2024-03-15 19:00:00.6'
+        expect((await db.queryCompiled({ sql: `SELECT at::text AS at, instant = $2 AS same FROM ${table} WHERE id = $1`, bindings: [1, original] })).rows)
+          .toEqual([{ at: wall, same: true }])
+        expect((await db.queryCompiled({ sql: `SELECT instant FROM ${table} WHERE id = $1`, bindings: [1] })).rows)
+          .toEqual([{ instant: original }])
       } finally {
         await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
         await db.disconnect()

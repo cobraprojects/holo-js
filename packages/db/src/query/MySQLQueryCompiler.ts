@@ -13,7 +13,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
         return `${current}.${segment}`
       }
 
-      return `${current}."${segment.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+      return `${current}.${JSON.stringify(segment)}`
     }, '$')
 
     return this.createSqlStringLiteral(serializedPath)

@@ -104,6 +104,31 @@ describe.each(['postgres', 'mysql'] as const)('%s pooled transaction ownership',
     expect(clients[0]?.releases).toBe(1)
   })
 
+  it('keeps an adapter-wide lease when a nested lease of a closed scope finishes', async () => {
+    const fixture = createFixture(driver)
+    const { adapter, clients } = fixture
+    await adapter.beginTransaction()
+    let resume!: () => void
+    const resumed = new Promise<void>(resolve => { resume = resolve })
+    let lease!: Promise<void>
+
+    await adapter.runWithTransactionScope(async () => {
+      lease = adapter.runWithTransactionScope(async () => {
+        await resumed
+        await adapter.rollback()
+      })
+    })
+    expect(clients[0]?.releases).toBe(0)
+
+    resume()
+    await lease
+    expect(clients[0]?.releases).toBe(0)
+    expect(clients[1]?.releases).toBe(1)
+
+    await adapter.rollback()
+    expect(clients[0]?.releases).toBe(1)
+  })
+
   it('does not run work that starts after a scope exits on the client that scope released', async () => {
     const fixture = createFixture(driver)
     const { adapter, clients } = fixture

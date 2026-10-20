@@ -31,7 +31,7 @@ function openMySQLWithSqlMode(sqlMode: string | undefined) {
   return { db, schema }
 }
 
-describe.each(Object.entries(sqlModes))('MySQL literals under %s', (_label, sqlMode) => {
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1').each(Object.entries(sqlModes))('MySQL literals under %s', (_label, sqlMode) => {
   it('stores a string default containing backslashes and quotes exactly as written', async () => {
     const { db, schema } = openMySQLWithSqlMode(sqlMode)
     const name = `holo_mysql_default_${randomUUID().replaceAll('-', '')}`
@@ -78,6 +78,18 @@ describe.each(Object.entries(sqlModes))('MySQL literals under %s', (_label, sqlM
     await db.table(name).insert([{ id: 1, name: 'safe' }, { id: 2, name: 'other' }])
     expect(await db.table(name).select('id').where('name', '\' OR 1=1 -- ').get()).toEqual([])
     expect(await db.table(name).select('id').where('name', 'it\'s').get()).toEqual([])
+  })
+
+  it('matches JSON keys that contain newlines, tabs, and quotes exactly', async () => {
+    const { db, schema } = openMySQLWithSqlMode(sqlMode)
+    const name = `holo_mysql_json_ctl_${randomUUID().replaceAll('-', '')}`
+    onTestFinished(() => schema.dropTable(name))
+    await schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.json('settings')
+    })
+    await db.table(name).insert({ id: 1, settings: { 'a\nb\tc"d': 7 } })
+    expect(await db.table(name).whereJson('settings->a\nb\tc"d', 7).select('id').get()).toEqual([{ id: 1 }])
   })
 
   it('matches JSON keys that contain a backslash exactly', async () => {

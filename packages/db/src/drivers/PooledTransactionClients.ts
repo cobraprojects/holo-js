@@ -74,7 +74,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
 
   release(): void {
     const scoped = this.scope.getStore()
-    if (!scoped || scoped.closed) {
+    if (!scoped || (scoped.closed && scoped.leases === 0)) {
       this.disconnect()
     }
   }

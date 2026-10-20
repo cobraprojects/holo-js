@@ -116,7 +116,7 @@ async function runStatement(
     throw new Error('The MySQL driver must support prepared statements (execute) to run statements with bindings.')
   }
 
-  return queryable.execute(sql, bindings)
+  return queryable.execute(sql, bindings.map(value => value === undefined ? null : value))
 }
 
 function wrapMySQLClient(client: Connection | MySQLClientLike): MySQLClientLike {

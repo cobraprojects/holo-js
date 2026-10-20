@@ -55,7 +55,7 @@ function utcMillisOf(wall: WallClock): number {
 
 function offsetMillisAt(instant: Date, timeZone: string): number {
   const wholeSecond = Math.floor(instant.getTime() / 1000) * 1000
-  return utcMillisOf(wallClockAt(instant, timeZone)) - wholeSecond
+  return utcMillisOf({ ...wallClockAt(instant, timeZone), millisecond: 0 }) - wholeSecond
 }
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000
