@@ -96,6 +96,8 @@ const NAT64_WELL_KNOWN_PREFIX = Buffer.concat([Buffer.from([0x00, 0x64, 0xff, 0x
 const NAT64_LOCAL_USE_PREFIX = Buffer.from([0x00, 0x64, 0xff, 0x9b, 0x00, 0x01])
 const SIX_TO_FOUR_PREFIX = Buffer.from([0x20, 0x02])
 const IPV4_COMPATIBLE_PREFIX = Buffer.alloc(12)
+const TRANSLATED_IPV4_PREFIX = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0])
+const TEREDO_PREFIX = Buffer.from([0x20, 0x01, 0x00, 0x00])
 const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
   tmpdir(),
   resolve(process.cwd(), 'storage'),
@@ -667,24 +669,38 @@ function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
     return true
   }
 
-  const embeddedAddress = findEmbeddedIPv4Address(bytes)
-  return embeddedAddress !== null && BLOCKED_REMOTE_MEDIA_ADDRESSES.check(embeddedAddress, 'ipv4')
+  return findEmbeddedIPv4Addresses(bytes).some(embeddedAddress => BLOCKED_REMOTE_MEDIA_ADDRESSES.check(embeddedAddress, 'ipv4'))
 }
 
-function findEmbeddedIPv4Address(bytes: Buffer): string | null {
+function findEmbeddedIPv4Addresses(bytes: Buffer): string[] {
+  const embeddedAddresses: string[] = []
+
   if (bytes.subarray(0, 12).equals(NAT64_WELL_KNOWN_PREFIX)) {
-    return formatIPv4Octets(bytes.subarray(12, 16))
+    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
   }
 
   if (bytes.subarray(0, 2).equals(SIX_TO_FOUR_PREFIX)) {
-    return formatIPv4Octets(bytes.subarray(2, 6))
+    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(2, 6)))
   }
 
   if (bytes.subarray(0, 12).equals(IPV4_COMPATIBLE_PREFIX)) {
-    return formatIPv4Octets(bytes.subarray(12, 16))
+    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
   }
 
-  return null
+  if (bytes.subarray(0, 12).equals(TRANSLATED_IPV4_PREFIX)) {
+    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
+  }
+
+  if (bytes.subarray(0, 4).equals(TEREDO_PREFIX)) {
+    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16).map(octet => octet ^ 0xff)))
+  }
+
+  const interfaceIdentifierPrefix = bytes.readUInt16BE(8)
+  if ((interfaceIdentifierPrefix === 0x0000 || interfaceIdentifierPrefix === 0x0200) && bytes.readUInt16BE(10) === 0x5efe) {
+    embeddedAddresses.push(formatIPv4Octets(bytes.subarray(12, 16)))
+  }
+
+  return embeddedAddresses
 }
 
 function findIPv6Bytes(address: string): Buffer | null {

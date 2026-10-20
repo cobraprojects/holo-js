@@ -2704,6 +2704,9 @@ describe('@holo-js/media', () => {
       ['[2002:7f00:1::]', '127.0.0.1'],
       ['[2002:a9fe:a9fe::]', '169.254.169.254'],
       ['[::7f00:1]', '127.0.0.1'],
+      ['[::ffff:0:7f00:1]', '127.0.0.1'],
+      ['[2001::80ff:fffe]', '127.0.0.1'],
+      ['[2001:db8::5efe:7f00:1]', '127.0.0.1'],
     ] as const
 
     for (const [probe, ipv4] of probes) {
@@ -2717,7 +2720,7 @@ describe('@holo-js/media', () => {
   it('refuses hostnames that resolve to IPv6 addresses embedding a blocked IPv4 address', async () => {
     const url = new URL('https://media.example.test/hero.jpg')
 
-    for (const address of ['64:ff9b::7f00:1', '64:ff9b:1:7f00:0:100::', '2002:a9fe:a9fe::', '::c0a8:1']) {
+    for (const address of ['64:ff9b::7f00:1', '64:ff9b:1:7f00:0:100::', '2002:a9fe:a9fe::', '::c0a8:1', '::ffff:0:7f00:1', '2001::80ff:fffe', '2001:db8::5efe:7f00:1']) {
       await expect(mediaAdderInternals.resolveRemoteMediaAddress(url, async () => [{ address, family: 6 }]))
         .rejects.toThrow('must not resolve to local or private hosts')
     }
@@ -2726,7 +2729,7 @@ describe('@holo-js/media', () => {
   it('allows hostnames that resolve to IPv6 addresses embedding a public IPv4 address', async () => {
     const url = new URL('https://media.example.test/hero.jpg')
 
-    for (const address of ['64:ff9b::808:808', '2002:808:808::', '::808:808']) {
+    for (const address of ['64:ff9b::808:808', '2002:808:808::', '::808:808', '::ffff:0:808:808', '2001::f7f7:f7f7', '2001:db8::5efe:808:808']) {
       await expect(mediaAdderInternals.resolveRemoteMediaAddress(url, async () => [{ address, family: 6 }]))
         .resolves.toEqual({ address, family: 6 })
     }
