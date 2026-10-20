@@ -17,7 +17,6 @@ export function resetRealtimeRuntime(): void {
   state.bindings = undefined
   state.dependencySubscribers.clear()
   state.invalidationBatch = undefined
-  state.nextSubscriptionId = 0
   state.queryEntries.clear()
   state.unsubscribeFromDatabase = undefined
   state.refreshes.clear()

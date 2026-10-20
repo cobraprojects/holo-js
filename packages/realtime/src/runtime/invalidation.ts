@@ -254,12 +254,18 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
 const REMOTE_REFRESH_CONCURRENCY = 4
 const REMOTE_REFRESH_MIN_INTERVAL_MS = 100
 let activeRemoteRefreshes = 0
-const remoteRefreshWaiters: Array<() => void> = []
+let remoteRefreshGeneration = 0
+const remoteRefreshWaiters: Array<(acquired: boolean) => void> = []
 const queuedRemoteRefreshKeys = new Set<string>()
 const remoteRefreshLastRunAt = new Map<string, number>()
 const remoteRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export function resetRemoteRefreshSchedule(): void {
+  remoteRefreshGeneration += 1
+  activeRemoteRefreshes = 0
+  for (const waiter of remoteRefreshWaiters.splice(0)) {
+    waiter(false)
+  }
   for (const timer of remoteRefreshTimers.values()) {
     clearTimeout(timer)
   }
@@ -268,19 +274,23 @@ export function resetRemoteRefreshSchedule(): void {
   queuedRemoteRefreshKeys.clear()
 }
 
-function acquireRemoteRefreshSlot(): Promise<void> {
+function acquireRemoteRefreshSlot(): Promise<boolean> {
   if (activeRemoteRefreshes < REMOTE_REFRESH_CONCURRENCY) {
     activeRemoteRefreshes += 1
-    return Promise.resolve()
+    return Promise.resolve(true)
   }
 
-  return new Promise<void>(resolve => remoteRefreshWaiters.push(resolve))
+  return new Promise<boolean>(resolve => remoteRefreshWaiters.push(resolve))
 }
 
-function releaseRemoteRefreshSlot(): void {
+function releaseRemoteRefreshSlot(generation: number): void {
+  if (generation !== remoteRefreshGeneration) {
+    return
+  }
+
   const next = remoteRefreshWaiters.shift()
   if (next) {
-    next()
+    next(true)
     return
   }
 
@@ -295,11 +305,18 @@ async function refreshRemoteEntry(refreshKey: string): Promise<void> {
     return
   }
 
-  await acquireRemoteRefreshSlot()
-  queuedRemoteRefreshKeys.delete(refreshKey)
+  const generation = remoteRefreshGeneration
+  const acquired = await acquireRemoteRefreshSlot()
+  if (!acquired) {
+    return
+  }
+
+  if (generation === remoteRefreshGeneration) {
+    queuedRemoteRefreshKeys.delete(refreshKey)
+  }
   if (!getRuntimeState().queryEntries.has(refreshKey)) {
     remoteRefreshLastRunAt.delete(refreshKey)
-    releaseRemoteRefreshSlot()
+    releaseRemoteRefreshSlot(generation)
     return
   }
 
@@ -307,7 +324,7 @@ async function refreshRemoteEntry(refreshKey: string): Promise<void> {
   try {
     await scheduleRefreshKey(refreshKey)
   } finally {
-    releaseRemoteRefreshSlot()
+    releaseRemoteRefreshSlot(generation)
   }
 }
 
