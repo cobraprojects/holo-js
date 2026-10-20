@@ -3142,6 +3142,23 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await expect.poll(connections).toBe(baseline)
   })
 
+  it('reuses a retained real Redis rate-limit connection when the previous settings return', async () => {
+    const { root, connections, baseline } = await createRedisSecurityProject()
+    const hitWithCurrentStore = async () => getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await expect(hitWithCurrentStore()).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+    await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'replacement:' } } }")
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
+    await expect(hitWithCurrentStore()).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+    await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
+
+    await expect(hitWithCurrentStore()).resolves.toMatchObject({ snapshot: { attempts: 2 } })
+    expect(await connections()).toBe(baseline + 2)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
   it('serializes concurrent reconfigurations so each Redis session client is acquired once', async () => {
     const service = await startRedisService()
     const client = service.clients[0]

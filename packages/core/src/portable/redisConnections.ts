@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { releaseRedisAdapters } from './capabilityLifetimes'
 
 interface ManagedRedisAdapter {
-  connect?(): unknown
+  connect?(): void | Promise<void>
   close?(): void | Promise<void>
   disconnect?(): void | Promise<void>
 }
@@ -20,45 +20,51 @@ export interface ManagedRedisConnections<TConfig, TAdapter extends ManagedRedisA
 }
 
 export function createManagedRedisConnections<TConfig, TAdapter extends ManagedRedisAdapter>(
-  options: { readonly connect?: (adapter: TAdapter) => unknown } = {},
+  options: { readonly connect?: (adapter: TAdapter) => void | Promise<void> } = {},
 ): ManagedRedisConnections<TConfig, TAdapter> {
-  let committed: ManagedRedisConnection<TConfig, TAdapter>[] = []
-  let acquired: ManagedRedisConnection<TConfig, TAdapter>[] = []
+  let active: ManagedRedisConnection<TConfig, TAdapter>[] = []
+  let retained: ManagedRedisConnection<TConfig, TAdapter>[] = []
+  let claimed: ManagedRedisConnection<TConfig, TAdapter>[] = []
   let opened: TAdapter[] = []
-  let retired: TAdapter[] = []
+
+  const findSameConfig = (connections: readonly ManagedRedisConnection<TConfig, TAdapter>[], config: TConfig) =>
+    connections.find(connection => isDeepStrictEqual(connection.config, config))
 
   return {
     async acquire(config, createAdapter) {
-      const reusable = [...acquired, ...committed].find(connection => isDeepStrictEqual(connection.config, config))
+      const reusable = findSameConfig(claimed, config)
+        ?? findSameConfig(active, config)
+        ?? findSameConfig(retained, config)
       if (reusable) {
-        if (!acquired.includes(reusable)) acquired.push(reusable)
+        retained = retained.filter(connection => connection !== reusable)
+        if (!claimed.includes(reusable)) claimed.push(reusable)
         return reusable.adapter
       }
 
       const adapter = createAdapter(config)
       opened.push(adapter)
       await options.connect?.(adapter)
-      acquired.push({ config, adapter })
+      claimed.push({ config, adapter })
       return adapter
     },
     commit() {
-      retired = [...retired, ...committed.filter(connection => !acquired.includes(connection)).map(connection => connection.adapter)]
-      committed = acquired
-      acquired = []
+      retained = [...retained, ...active.filter(connection => !claimed.includes(connection))]
+      active = claimed
+      claimed = []
       opened = []
     },
     async discard() {
       const adapters = opened
-      acquired = []
+      claimed = []
       opened = []
       await releaseRedisAdapters(adapters)
     },
     async dispose() {
-      const adapters = [...committed.map(connection => connection.adapter), ...retired]
-      committed = []
-      acquired = []
+      const adapters = [...active, ...retained].map(connection => connection.adapter)
+      active = []
+      retained = []
+      claimed = []
       opened = []
-      retired = []
       await releaseRedisAdapters(adapters)
     },
   }

@@ -688,7 +688,10 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
   sessionModule: SessionModule,
 ): Promise<Readonly<Record<string, SessionStore>>> {
-  return createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule, createSessionRedisConnections())
+  const redisConnections = getSessionRedisConnections()
+  const stores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule, redisConnections)
+  redisConnections.commit()
+  return stores
 }
 
 function createCoreNotificationBroadcaster(
@@ -1661,10 +1664,10 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
         },
       })
       securityRedisConnections.commit()
-      await releaseManagedSecurityStore(existingManagedSecurityStore)
       getRuntimeState().securityRateLimitStore = ownedStore
         ? { store: ownedStore, redisBacked: Boolean(redisAdapter) }
         : undefined
+      await releaseManagedSecurityStore(existingManagedSecurityStore)
     } catch (error) {
       try {
         await securityRedisConnections.discard()
@@ -1680,6 +1683,21 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     await releaseManagedSecurityStore(existingManagedSecurityStore)
     existingSecurityModule?.resetSecurityRuntime()
   }
+
+  /* v8 ignore start -- redundant defensive guards after required-module loaders above */
+  if (authConfigured && !sessionModule) {
+    throw new Error('[@holo-js/core] Auth support requires @holo-js/session to be installed.')
+  }
+
+  const authModule = await loadAuthModule(authConfigured)
+  const authorizationModule = await loadAuthorizationModule()
+  let authContext: RuntimeAuthContext | undefined
+  const workosModule = authConfigUsesWorkosProviders(loadedConfig)
+    ? await loadWorkosModule(true)
+    : undefined
+  const clerkModule = authConfigUsesClerkProviders(loadedConfig)
+    ? await loadClerkModule(true)
+    : undefined
 
   const sessionRedisConnections = getSessionRedisConnections()
 
@@ -1701,21 +1719,6 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
   } else {
     sessionRedisConnections.commit()
   }
-
-  /* v8 ignore start -- redundant defensive guards after required-module loaders above */
-  if (authConfigured && !sessionModule) {
-    throw new Error('[@holo-js/core] Auth support requires @holo-js/session to be installed.')
-  }
-
-  const authModule = await loadAuthModule(authConfigured)
-  const authorizationModule = await loadAuthorizationModule()
-  let authContext: RuntimeAuthContext | undefined
-  const workosModule = authConfigUsesWorkosProviders(loadedConfig)
-    ? await loadWorkosModule(true)
-    : undefined
-  const clerkModule = authConfigUsesClerkProviders(loadedConfig)
-    ? await loadClerkModule(true)
-    : undefined
 
   if (authConfigured) {
     if (!authModule) {
@@ -1964,10 +1967,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     throwCapabilityFailures(failures)
   }
 
-  const applyOptionalSubsystems = async (
+  const applyOptionalSubsystems = (
     subsystemOptions: HoloRuntimeReconfigureOptions,
-  ): Promise<Awaited<ReturnType<typeof reconfigureOptionalHoloSubsystems>>> => {
-    const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+  ): Promise<OptionalSubsystemsResult> => runOptionalSubsystemsSerially(async () => {
+    const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
       authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
       authRequest: subsystemOptions.authRequest,
@@ -1978,7 +1981,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     activeAuthRuntime = optionalSubsystems.auth
     activeAuthContext = optionalSubsystems.authContext
     return optionalSubsystems
-  }
+  })
 
   const initializeRuntimeServices = async (): Promise<void> => {
     if (!shouldBootRuntimeServices(options.processEnv)) return
