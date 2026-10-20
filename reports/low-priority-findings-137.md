@@ -116,7 +116,7 @@ Filed on 2026-10-20 as the issues below, each with a failing regression test fir
 
 ## Resolution (2026-10-20)
 
-Audit-time dispositions above are kept as recorded. This table gives the orchestrator's outcome for each item and the issue that carries it. Rule applied: follow Laravel; keep hardening only where it is security.
+Audit-time dispositions above are kept as recorded. This table lists only the items with a separate resolution: a decision, a filed issue, or an open or wontfix outcome. Items 4, 6, 8, 9, 12 and 19 are already-fixed and items 10, 14, 17, 27 and 36 are rejected-by-decision; neither group has a row here or an issue. Rule applied: follow Laravel; keep hardening only where it is security.
 
 | Item | Audit disposition | Resolution | Issue |
 | --- | --- | --- | --- |
@@ -148,7 +148,7 @@ Audit-time dispositions above are kept as recorded. This table gives the orchest
 | 32 | insufficient-information | Wontfix: maintainability only, no behavior defect (closed 2026-10-20) | wontfix |
 | 33 | insufficient-information | Wontfix: maintainability only, no behavior defect (closed 2026-10-20) | wontfix |
 
-Items 10, 14, 17, 27 and 36 keep their audit dispositions (rejected-by-decision) and need no issue.
+Items 4, 6, 8, 9, 12 and 19 keep their audit disposition (already-fixed), and items 10, 14, 17, 27 and 36 keep theirs (rejected-by-decision). None needs an issue.
 
 ## Decisions needed
 
