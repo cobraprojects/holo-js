@@ -82,6 +82,7 @@ import {
   serializeAuthTimestamp,
 } from './authPersistence'
 import {
+  assertOutsidePluginBoot,
   bootConfiguredHoloPluginModule,
   loadConfiguredHoloPluginBootModules,
   loadConfiguredHoloPluginDefinitions,
@@ -2159,6 +2160,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       return runner ? runner(authRequest, callback) : callback()
     },
     async [reconfigureRuntime](nextOptions) {
+      assertOutsidePluginBoot(projectRoot, 'Holo runtime reconfiguration')
       bootOptions = nextOptions
       activeAuthContext?.setRequestAccessors?.(nextOptions.authRequest)
       const configured = await runOptionalSubsystemsSerially(async () => {
@@ -2169,6 +2171,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       if (configured) await bootHoloPluginModules(projectRoot, loadedConfig)
     },
     async initialize() {
+      assertOutsidePluginBoot(projectRoot, 'Holo runtime initialization')
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')
       const state = getRuntimeState()
       if (state.current) throw new Error('A Holo runtime is already initialized for this process.')
@@ -2180,6 +2183,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       })
     },
     async shutdown() {
+      assertOutsidePluginBoot(projectRoot, 'Holo runtime shutdown()')
       const state = getRuntimeState()
       if (state.transition?.runtime === runtime) {
         const { phase, outcome, settled } = state.transition
@@ -2234,6 +2238,7 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
   projectRoot: string,
   options: CreateHoloOptions = {},
 ): Promise<HoloRuntime<TCustom>> {
+  assertOutsidePluginBoot(projectRoot, 'Holo runtime initialization')
   const pendingShutdown = pendingRuntimeShutdown()
   if (pendingShutdown) await pendingShutdown
   const state = getRuntimeState()

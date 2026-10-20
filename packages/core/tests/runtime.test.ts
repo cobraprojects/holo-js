@@ -210,6 +210,16 @@ async function writeQueueConfig(root: string, contents: string): Promise<void> {
   await writeFile(join(root, 'config/queue.ts'), contents, 'utf8')
 }
 
+function settleWithin<TValue>(promise: Promise<TValue>, ms: number): Promise<TValue> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 async function writeRuntimePluginPackage(root: string, packageName: string, pluginContents: string, files: Record<string, string>): Promise<void> {
   const packageRoot = join(root, 'node_modules', ...packageName.split('/'))
   await mkdir(packageRoot, { recursive: true })
@@ -2167,6 +2177,135 @@ export default async function boot() {
     runtimeGlobal.__holoCoreResetDuringBoot__ = () => resetOptionalHoloSubsystems()
 
     await expect(initializeHoloAdapterProject(root)).resolves.toMatchObject({ projectRoot: root })
+  })
+
+  it('rejects a plugin boot hook that calls shutdown() instead of deadlocking initialization', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-shutdown-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-shutdown-boot', `
+export default {
+  id: 'shutdown-boot',
+  name: 'Shutdown Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreShutdownDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreShutdownDuringBoot__?: () => Promise<void> }
+    const runtime = await createHolo(root)
+    runtimeGlobal.__holoCoreShutdownDuringBoot__ = () => runtime.shutdown()
+
+    await expect(settleWithin(runtime.initialize(), 2000)).rejects.toThrow(/shutdown\(\) cannot run inside a plugin boot hook/)
+    expect(runtime.initialized).toBe(false)
+    expect(peekHolo()).toBeUndefined()
+  })
+
+  it('rejects a plugin boot hook that reconfigures the runtime instead of re-entering its own boot', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-reconfigure-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-reconfigure-boot', `
+export default {
+  id: 'reconfigure-boot',
+  name: 'Reconfigure Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreReconfigureBoots__ = (globalThis.__holoCoreReconfigureBoots__ ?? 0) + 1
+  await globalThis.__holoCoreReconfigureDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreReconfigureBoots__?: number
+      __holoCoreReconfigureDuringBoot__?: () => Promise<void>
+    }
+    runtimeGlobal.__holoCoreReconfigureBoots__ = 0
+    const runtime = await createHolo(root)
+    runtimeGlobal.__holoCoreReconfigureDuringBoot__ = () => reconfigureHoloRuntime(runtime, {})
+
+    await expect(settleWithin(runtime.initialize(), 2000)).rejects.toThrow(/reconfiguration cannot run inside a plugin boot hook/)
+    expect(runtimeGlobal.__holoCoreReconfigureBoots__).toBe(1)
+    expect(peekHolo()).toBeUndefined()
+  })
+
+  it('rejects a plugin boot hook that initializes the same project instead of waiting on its own boot', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-initialize-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-initialize-boot', `
+export default {
+  id: 'initialize-boot',
+  name: 'Initialize Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreInitializeDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreInitializeDuringBoot__?: () => Promise<unknown> }
+    runtimeGlobal.__holoCoreInitializeDuringBoot__ = () => initializeHolo(root)
+
+    await expect(settleWithin(initializeHolo(root), 2000)).rejects.toThrow(/initialization cannot run inside a plugin boot hook/)
+    expect(peekHolo()).toBeUndefined()
   })
 
   it('boots a plugin module again in the next runtime when a boot still running during reset finishes late', async () => {
