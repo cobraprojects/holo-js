@@ -1278,7 +1278,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     return deadSocketRefs
   }
 
-  function removePresenceSocketRefsLocal(appId: string, channel: string, socketRefs: readonly string[]): void {
+  function removePresenceSocketRefsLocal(appId: string, channel: string, socketRefs: readonly string[], excludeSocketId?: string): void {
     const key = composeSubscriptionKey(appId, channel)
     const roster = presenceMembers.get(key)
     const memberSockets = presenceSockets.get(key)
@@ -1300,7 +1300,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       const member = roster.get(memberId)
       roster.delete(memberId)
       if (member) {
-        deliverPresenceMemberRemovedLocal(appId, channel, member, undefined, memberId)
+        deliverPresenceMemberRemovedLocal(appId, channel, member, excludeSocketId, memberId)
       }
     }
     if (memberSockets.size === 0) {
@@ -1311,7 +1311,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
   }
 
-  async function reconcilePresenceEntries(appId: string, channel: string): Promise<Map<string, PresenceMember>> {
+  async function reconcilePresenceEntries(appId: string, channel: string, excludeSocketId?: string): Promise<Map<string, PresenceMember>> {
     if (!scaling) {
       return new Map()
     }
@@ -1325,7 +1325,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       await scaling.adapter.hashDelete(presenceKey, socketRef)
       entries.delete(socketRef)
     }
-    removePresenceSocketRefsLocal(appId, channel, deadSocketRefs)
+    removePresenceSocketRefsLocal(appId, channel, deadSocketRefs, excludeSocketId)
     return entries
   }
 
@@ -1484,7 +1484,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       socketRef,
       JSON.stringify(member),
     )
-    const merged = await reconcilePresenceEntries(app.appId, channel)
+    const merged = await reconcilePresenceEntries(app.appId, channel, socketId)
     const hasExistingMember = [...merged.entries()].some(([existingSocketRef, existingMember]) => {
       return existingSocketRef !== socketRef
         && resolvePresenceMemberId(existingMember, existingSocketRef) === memberId

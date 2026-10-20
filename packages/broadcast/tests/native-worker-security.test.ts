@@ -542,6 +542,47 @@ it('publishes an accepted whisper that is still in flight before shutdown closes
   expect(events).toEqual(['whisper-published', 'adapter-closed'])
 })
 
+it('reports a dead node presence member to existing subscribers only, never to a socket that is still joining', async () => {
+  const hashes = new Map<string, Map<string, string>>()
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+    channelAuth: { resolveUser: ({ headers }) => ({ id: headers.get('x-test-user') ?? 'anonymous' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: user => ({ id: (user as { id: string }).id }) })] },
+    scaling: {
+      driver: 'redis', connection: 'shared', nodeId: 'node-a', eventChannel: 'events',
+      liveness: { leaseTtlMs: 60_000, refreshIntervalMs: 60_000 },
+      adapter: {
+        publish: async () => {},
+        subscribe: async () => () => {},
+        hashSet: async (key, field, value) => { hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]])) },
+        hashGetAll: async key => Object.fromEntries(hashes.get(key) ?? []),
+        hashDelete: async (key, field) => { hashes.get(key)?.delete(field) },
+        setWithExpiry: async () => {},
+        exists: async key => !key.endsWith(':nodes:node-dead'),
+        close: async () => {},
+      },
+    },
+  })
+  onTestFinished(() => runtime.close())
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  const subscribe = JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } })
+  const connect = (socketId: string, user: string) => {
+    const sent: Array<{ event: string, channel?: string, data: string }> = []
+    runtime.connectWebSocket({ socketId, app, headers: new Headers({ 'x-test-user': user }), send: payload => sent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
+    return sent
+  }
+  const observerSent = connect('5.1', 'observer')
+  await runtime.receiveWebSocketMessage('5.1', subscribe)
+  await runtime.receiveScalingMessage(JSON.stringify({ type: 'presence-member-added', originNodeId: 'node-dead', appId: 'main', channel: 'presence-room.1', socketId: '7.7', member: { id: 'ghost-user' } }))
+
+  const joinerSent = connect('5.2', 'joiner')
+  await runtime.receiveWebSocketMessage('5.2', subscribe)
+
+  expect(joinerSent.some(message => message.event === 'pusher_internal:member_removed')).toBe(false)
+  const roster = JSON.parse(joinerSent.find(message => message.event === 'pusher_internal:subscription_succeeded')!.data) as { presence: { ids: string[] } }
+  expect(roster.presence.ids.slice().sort()).toEqual(['joiner', 'observer'])
+  expect(observerSent.filter(message => message.event === 'pusher_internal:member_removed').map(message => JSON.parse(message.data))).toEqual([{ user_id: 'ghost-user' }])
+})
+
 it('removes a socket whose connection_established send fails so its identifier can be reused', async () => {
   const runtime = createBroadcastWorkerRuntime({
     config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
