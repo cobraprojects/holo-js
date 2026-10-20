@@ -103,6 +103,27 @@ describe('session Redis behavior', () => {
     }
   }, 30_000)
 
+  it('completes rotation under continuous concurrent writes, removing the old id and keeping the data on the new id', async () => {
+    const { adapter, record } = await createStore()
+    const source = { ...record, id: randomUUID() }
+    const destination = { ...record, id: randomUUID(), data: { userId: 42, rotated: true } }
+    await adapter.set(source)
+    let writing = true
+    const writers = Array.from({ length: 4 }, async () => {
+      for (let round = 0; writing; round += 1) {
+        await adapter.flash(source.id, 'noise', round).catch(() => undefined)
+      }
+    })
+    try {
+      await adapter.rotate(source.id, destination)
+    } finally {
+      writing = false
+      await Promise.all(writers)
+    }
+    await expect(adapter.get(source.id)).resolves.toBeNull()
+    await expect(adapter.get(destination.id)).resolves.toEqual(destination)
+  }, 30_000)
+
   it('creates no new session when rotating from a missing session', async () => {
     const { adapter, record } = await createStore()
     await expect(adapter.rotate('missing', record)).rejects.toThrow('was not found')

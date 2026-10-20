@@ -391,14 +391,8 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
     const encoded = serializeSessionRecord(record)
     for (let attempt = 0; attempt < ROTATE_SESSION_ATTEMPTS; attempt += 1) {
-      const fields = readSessionFields(await this.client.eval(READ_SESSION_FIELDS_SCRIPT, 1, previousKey))
-      if (fields.length === 0) {
-        throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
-      }
-      const copied = await this.client.eval(COPY_SESSION_SCRIPT, 1, nextKey, encoded, ttlMs, ...fields)
-      if (copied === -1) {
-        throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
-      }
+      const fields = await this.readRotationSource(previousSessionId, previousKey)
+      await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
       const removed = await this.client.eval(DELETE_UNCHANGED_SESSION_SCRIPT, 1, previousKey, ...fields)
       if (removed === 1) return
       await this.client.del(nextKey)
@@ -406,7 +400,30 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
         throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
       }
     }
-    throw new Error(`[@holo-js/session] Session "${previousSessionId}" changed too often to rotate.`)
+    const fields = await this.readRotationSource(previousSessionId, previousKey)
+    await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+    await this.client.del(previousKey)
+  }
+
+  private async readRotationSource(previousSessionId: string, previousKey: string): Promise<readonly string[]> {
+    const fields = readSessionFields(await this.client.eval(READ_SESSION_FIELDS_SCRIPT, 1, previousKey))
+    if (fields.length === 0) {
+      throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
+    }
+    return fields
+  }
+
+  private async copyRotationTarget(
+    nextSessionId: string,
+    nextKey: string,
+    encoded: string,
+    ttlMs: number,
+    fields: readonly string[],
+  ): Promise<void> {
+    const copied = await this.client.eval(COPY_SESSION_SCRIPT, 1, nextKey, encoded, ttlMs, ...fields)
+    if (copied === -1) {
+      throw new Error(`[@holo-js/session] Session "${nextSessionId}" already exists.`)
+    }
   }
 
   async flash(sessionId: string, key: string, value: unknown): Promise<void> {
