@@ -83,7 +83,7 @@ export default defineModel('tags', {
 
 ## Reading pivot columns
 
-Every loaded related model gets a `pivot` property with the pivot row's columns. The pivot is typed from the pivot table's schema, so `is_primary` autocompletes:
+Every loaded related model gets a `pivot` property. It holds the two pivot keys, and for morph relations the morph type column, plus the columns you declare with [`withPivot()`](#declaring-writable-pivot-columns) and [`withTimestamps()`](#pivot-timestamps). Other pivot columns aren't loaded. The pivot is typed from the pivot table's schema, so `is_primary` autocompletes:
 
 ```ts
 const post = await Post.with('tags').findOrFail(1)
@@ -91,6 +91,16 @@ const post = await Post.with('tags').findOrFail(1)
 for (const tag of post.tags) {
   console.log(tag.name, tag.pivot.is_primary)
 }
+```
+
+Declare the columns on the relation to read them:
+
+```ts
+tags: belongsToMany(() => Tag, {
+  pivotTable: 'post_tags',
+  foreignPivotKey: 'post_id',
+  relatedPivotKey: 'tag_id',
+}).withPivot('is_primary')
 ```
 
 ### Declaring writable pivot columns

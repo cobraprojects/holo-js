@@ -16,7 +16,7 @@ This runs three queries in total, whether you have 10 posts or 10,000. Each post
 
 ## Why eager load
 
-Without `with()`, reading a relation inside a loop runs a query for every item. This is the "N+1" problem: 1 query for the posts, plus N queries for their authors. `with()` collects every key first and loads all the related rows in a single `WHERE ... IN (...)` query.
+Without `with()`, reading a relation inside a loop runs a query for every item. This is the "N+1" problem: 1 query for the posts, plus N queries for their authors. `with()` collects every key first and loads the related rows with a `WHERE ... IN (...)` query. The keys go in chunks of at most 256, so a relation loaded for thousands of parents runs one query per chunk. A constraint that calls `limit()` or `offset()` is the exception: it runs as one query, so the limit or offset applies to all parents together, as in Laravel.
 
 ## Eager loading
 

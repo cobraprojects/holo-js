@@ -59,6 +59,6 @@ export class ModelEventDispatcher<TTable extends TableDefinition> {
     const observerHandlers = observers
       .map(observer => (observer as Record<string, unknown>)[eventName])
       .filter((handler): handler is (...args: unknown[]) => unknown => typeof handler === 'function')
-    return [...(this.definition.events[eventName] ?? []), ...observerHandlers]
+    return [...(this.definition.events[eventName] ?? []) as readonly ((...args: unknown[]) => unknown)[], ...observerHandlers]
   }
 }

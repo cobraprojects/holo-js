@@ -135,7 +135,7 @@ user.latestPost?.title
 user.largestOrder?.total
 ```
 
-Each loads as a single model or `null`.
+Each loads as a single model or `null`. The database picks the row, so a relation whose column is `NULL` for every related row loads `null`.
 
 | Helper | Signature | Picks |
 | --- | --- | --- |

@@ -30,15 +30,15 @@ describe('pivot mutation integration', () => {
     resetDB()
   })
 
-  it('loads every pivot field without requiring withPivot', async () => {
-    const AllFieldsUser = defineModel(users, {
+  it('loads only the pivot keys without requiring withPivot', async () => {
+    const KeysOnlyUser = defineModel(users, {
       timestamps: false,
       relations: { roles: belongsToMany(() => Role, pivots, 'userId', 'roleId') },
     })
-    const user = await AllFieldsUser.findOrFail(1)
+    const user = await KeysOnlyUser.findOrFail(1)
     await user.attach('roles', 2)
-    const loaded = await AllFieldsUser.with('roles').findOrFail(1)
-    expect(loaded.roles[0]?.pivot).toEqual({ userId: 1, roleId: 2, note: 'default', rank: 0 })
+    const loaded = await KeysOnlyUser.with('roles').findOrFail(1)
+    expect(loaded.roles[0]?.pivot).toEqual({ userId: 1, roleId: 2 })
   })
 
   it('maintains and loads pivot timestamps on attachments and updates', async () => {
@@ -69,7 +69,7 @@ describe('pivot mutation integration', () => {
     const NamedTimedUser = defineModel(users, {
       timestamps: false,
       relations: {
-        roles: belongsToMany(() => Role, 'pivot_timed_memberships', 'userId', 'roleId').withTimestamps().as('membership'),
+        roles: belongsToMany(() => Role, 'pivot_timed_memberships', 'userId', 'roleId').withTimestamps().withPivot('approved').as('membership'),
       },
     })
     const named = await NamedTimedUser.with('roles').findOrFail(1)

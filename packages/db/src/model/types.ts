@@ -71,6 +71,14 @@ export interface ModelScopeMap<TTable extends TableDefinition = TableDefinition>
 
 export type RelationConstraintDefinition = (query: ModelQueryBuilder<TableDefinition>) => unknown
 
+type RelationConstraintCallback<TQuery> = { bivarianceHack(query: TQuery): unknown }['bivarianceHack']
+
+export type ScopedRelationConstraint<TRelation extends RelationDefinition>
+  = RelationConstraintCallback<ModelQueryBuilder<
+    RelatedTableOfRelation<TRelation>,
+    RelatedRelationsOfRelation<TRelation>
+  >>
+
 export interface ScopedRelationDefinition {
   readonly constraint?: RelationConstraintDefinition
 }
@@ -621,7 +629,10 @@ export type ModelLifecycleEventName
     | 'deleted'
     | 'replicating'
 
-export type ModelLifecycleEventHandler = (...args: readonly unknown[]) => unknown | Promise<unknown>
+export type ModelLifecycleEventHandler<
+  TTable extends TableDefinition = TableDefinition,
+  TRelations extends RelationMap = RelationMap,
+> = { bivarianceHack(entity: Entity<TTable, TRelations>): unknown | Promise<unknown> }['bivarianceHack']
 export type BuiltInCastName
   = | 'boolean'
     | 'number'
@@ -715,7 +726,7 @@ export interface DefineModelOptions<
   replicationExcludes?: readonly string[]
   softDeletes?: boolean
   deletedAtColumn?: ModelAttributeKey<TTable>
-  events?: Partial<Record<ModelLifecycleEventName, ModelLifecycleEventHandler | readonly ModelLifecycleEventHandler[]>>
+  events?: Partial<Record<ModelLifecycleEventName, ModelLifecycleEventHandler<TTable, TRelations> | readonly ModelLifecycleEventHandler<TTable, TRelations>[]>>
   observers?: readonly unknown[]
 }
 

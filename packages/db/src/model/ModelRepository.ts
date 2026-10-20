@@ -21,7 +21,7 @@ import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
-import { collectRelationKeys, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
+import { collectRelationKeys, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -2919,6 +2919,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' | 'hasOneOfMany' }>,
     constraint?: RelationConstraint,
   ): Promise<Map<unknown, Entity[]>> {
+    if (relation.kind === 'hasOneOfMany') {
+      return this.getOneOfManyEntitiesByParentKey(entities, relation, constraint)
+    }
+
     const localKeys = collectRelationKeys(entities, relation.localKey)
 
     if (localKeys.length === 0) {
@@ -2931,18 +2935,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.foreignKey,
     )
-    const grouped = groupRelation(relatedEntities, relation.foreignKey)
-
-    if (relation.kind === 'hasOneOfMany') {
-      const selected = new Map<unknown, Entity[]>()
-      for (const [key, bucket] of grouped.entries()) {
-        const chosen = this.selectOneOfManyEntity(bucket as [Entity, ...Entity[]], relation)
-        selected.set(key, [chosen])
-      }
-      return selected
-    }
-
-    return grouped
+    return groupRelation(relatedEntities, relation.foreignKey)
   }
 
   private async getMorphManyEntitiesByParentKey(
@@ -2956,23 +2949,17 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Map()
     }
 
-    const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
-      .where(relation.morphTypeColumn, this.getMorphTypeValue())
-      .where(relation.morphIdColumn, 'in', localKeys)
-      .get()
-    const grouped = groupRelation(relatedEntities, relation.morphIdColumn)
-
     if (relation.kind === 'morphOneOfMany') {
-      const selected = new Map<unknown, Entity[]>()
-      for (const [key, bucket] of grouped.entries()) {
-        const chosen = this.selectMorphOneOfManyEntity(bucket as [Entity, ...Entity[]], relation)
-        selected.set(key, [chosen])
-      }
-      return selected
+      return this.getOneOfManyEntitiesByParentKey(entities, relation, constraint)
     }
 
-    return grouped
+    const related = this.resolveRelatedRepository(relation.related)
+    const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
+    const relatedEntities = await loadRelationKeyChunks(localKeys, paginated, chunk => this.applyRelationConstraint(relation, related, constraint)
+      .where(relation.morphTypeColumn, this.getMorphTypeValue())
+      .where(relation.morphIdColumn, 'in', chunk)
+      .get())
+    return groupRelation(relatedEntities, relation.morphIdColumn)
   }
 
   private async getMorphToEntitiesByParentKey(
@@ -3004,9 +2991,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const grouped = new Map<unknown, Entity[]>()
 
     for (const group of groups.values()) {
-      const relatedEntities = await this.applyRelationConstraint(relation, group.repository, constraint)
-        .where(group.repository.definition.primaryKey, 'in', [...new Set(group.ids)])
-        .get()
+      const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, group.repository, constraint))
+      const relatedEntities = await loadRelationKeyChunks([...new Set(group.ids)], paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
+        .where(group.repository.definition.primaryKey, 'in', chunk)
+        .get())
       const relatedMap = new Map(
         relatedEntities.map(entity => [entity.get(group.repository.definition.primaryKey as never), entity]),
       )
@@ -3093,70 +3081,63 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     })
   }
 
-  private selectOneOfManyEntity(
-    entities: readonly [Entity, ...Entity[]],
-    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' }>,
-  ): Entity {
-    type ComparableValue = string | number | bigint | Date
-    let selected = entities[0]
+  private async getOneOfManyEntitiesByParentKey(
+    entities: readonly Entity<TTable>[],
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    constraint?: RelationConstraint,
+  ): Promise<Map<unknown, Entity[]>> {
+    const parentKeys = collectRelationKeys(entities, relation.localKey)
 
-    for (const entity of entities.slice(1)) {
-      const current = selected.toAttributes()[relation.aggregateColumn]
-      const candidate = entity.toAttributes()[relation.aggregateColumn]
-
-      if (current == null && candidate != null) {
-        selected = entity
-        continue
-      }
-
-      if (candidate == null) {
-        continue
-      }
-
-      const currentComparable = current as ComparableValue | null | undefined
-      const candidateComparable = candidate as ComparableValue
-
-      if (relation.aggregate === 'max'
-        ? candidateComparable > currentComparable!
-        : candidateComparable < currentComparable!) {
-        selected = entity
-      }
+    if (parentKeys.length === 0) {
+      return new Map()
     }
 
-    return selected
+    const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
+    const related = this.resolveRelatedRepository(relation.related)
+    const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
+    const latestEntities = await loadRelationKeyChunks(parentKeys, paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
+    const grouped = new Map<unknown, Entity[]>()
+
+    for (const [key, bucket] of groupRelation(latestEntities, parentColumn).entries()) {
+      grouped.set(key, [bucket[0]!])
+    }
+
+    return grouped
   }
 
-  private selectMorphOneOfManyEntity(
-    entities: readonly [Entity, ...Entity[]],
-    relation: Extract<RelationDefinition, { kind: 'morphOneOfMany' }>,
-  ): Entity {
-    type ComparableValue = string | number | bigint | Date
-    let selected = entities[0]
+  private createOneOfManyQuery(
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    related: ModelRepository,
+    parentColumn: string,
+    parentKeys: readonly unknown[],
+    constraint?: RelationConstraint,
+  ): ModelQueryBuilder {
+    const relatedTable = related.definition.table.tableName
+    const latestAlias = '__holo_latest'
+    const latestKey = '__holo_latest_key'
+    const latestValue = '__holo_latest_value'
+    const latestSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().reorder().limit().offset()
+    const scopedSource = relation.kind === 'morphOneOfMany'
+      ? latestSource.where(relation.morphTypeColumn, this.getMorphTypeValue())
+      : latestSource
+    const latestGroups = scopedSource
+      .where(parentColumn, 'in', parentKeys)
+      .select(`${parentColumn} as ${latestKey}`)
+    const latestQuery = relation.aggregate === 'max'
+      ? latestGroups.addSelectMax(latestValue, relation.aggregateColumn)
+      : latestGroups.addSelectMin(latestValue, relation.aggregateColumn)
+    const outer = this.applyRelationConstraint(relation, related, constraint)
+    const projected = outer.getTableQueryBuilder().getPlan().selections.length > 0
+    const scopedOuter = relation.kind === 'morphOneOfMany'
+      ? outer.where(`${relatedTable}.${relation.morphTypeColumn}`, this.getMorphTypeValue())
+      : outer
+    const joined = scopedOuter
+      .joinSub(latestQuery.groupBy(parentColumn), latestAlias, `${relatedTable}.${parentColumn}`, '=', `${latestAlias}.${latestKey}`)
+      .whereColumn(`${latestAlias}.${latestValue}`, '=', `${relatedTable}.${relation.aggregateColumn}`)
 
-    for (const entity of entities.slice(1)) {
-      const current = selected.toAttributes()[relation.aggregateColumn]
-      const candidate = entity.toAttributes()[relation.aggregateColumn]
-
-      if (current == null && candidate != null) {
-        selected = entity
-        continue
-      }
-
-      if (candidate == null) {
-        continue
-      }
-
-      const currentComparable = current as ComparableValue | null | undefined
-      const candidateComparable = candidate as ComparableValue
-
-      if (relation.aggregate === 'max'
-        ? candidateComparable > currentComparable!
-        : candidateComparable < currentComparable!) {
-        selected = entity
-      }
-    }
-
-    return selected
+    return projected
+      ? joined
+      : joined.select(...Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`))
   }
 
   private async getThroughEntitiesByParentKey(
@@ -3171,9 +3152,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const through = this.resolveThroughRepository(relation.through)
-    const throughEntities = await through.query()
-      .where(relation.firstKey, 'in', parentKeys)
-      .get()
+    const throughEntities = await loadRelationKeyChunks(parentKeys, false, chunk => through.query()
+      .where(relation.firstKey, 'in', chunk)
+      .get())
 
     if (throughEntities.length === 0) {
       return new Map()
@@ -3332,6 +3313,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       relation.relatedPivotKey,
       () => this.applyRelationConstraint(relation, this.resolveRelatedRepository(relation.related), constraint),
       relation.relatedKey,
+      this.getPivotSelection(relation, [relation.foreignPivotKey, relation.relatedPivotKey]),
     )
   }
 
@@ -3363,10 +3345,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Map()
     }
 
-    const pivotRows = await this.createMorphToManyPivotQuery(relation, this.getConnection())
+    const pivotSelection = this.getPivotSelection(relation, [relation.foreignPivotKey, relation.morphIdColumn, relation.morphTypeColumn])
+    const pivotRows = await loadRelationKeyChunks(parentKeys, false, chunk => this.createMorphToManyPivotQuery(relation, this.getConnection())
+      .select(...pivotSelection)
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
-      .where(relation.morphIdColumn, 'in', parentKeys)
-      .get<Record<string, unknown>>()
+      .where(relation.morphIdColumn, 'in', chunk)
+      .get<Record<string, unknown>>())
 
     const relatedIds = [...new Set(
       pivotRows
@@ -3415,9 +3399,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const pivotRows = await this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
-      .where(relation.foreignPivotKey, 'in', parentKeys)
-      .get<Record<string, unknown>>()
+    const pivotSelection = this.getPivotSelection(relation, [relation.foreignPivotKey, relation.morphIdColumn, relation.morphTypeColumn])
+    const pivotRows = await loadRelationKeyChunks(parentKeys, false, chunk => this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
+      .select(...pivotSelection)
+      .where(relation.foreignPivotKey, 'in', chunk)
+      .get<Record<string, unknown>>())
 
     const relatedIds = [...new Set(
       pivotRows
@@ -3485,6 +3471,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable, connection), connection).where(relation.morphTypeColumn, morphClass),
       relation,
     )
+  }
+
+  private getPivotSelection(relation: PivotRelationDefinition, keys: readonly string[]): readonly string[] {
+    return [...new Set([...keys, ...relation.pivotColumns])]
   }
 
   private applyPivotQueryConfig(
