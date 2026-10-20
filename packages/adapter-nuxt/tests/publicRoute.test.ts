@@ -10,6 +10,7 @@ import { Storage } from '@holo-js/storage/runtime'
 import { configureHoloRuntimeConfig, holo, resetHoloRuntimeConfig } from '../src/runtime/composables'
 import storageHandler from '../src/runtime/server/routes/storage'
 import { serve } from './support/http'
+import { configureSecurityRuntime, resetSecurityRuntime } from '../../security/src'
 
 const roots = new Set<string>()
 
@@ -50,13 +51,11 @@ function getRaw(base: string, target: string, headers: Record<string, string>): 
   })
 }
 
-function trustProxies(trustedProxies: readonly string[], peer: string): void {
+function trustProxies(trustedProxies: string[], peer: string): void {
   requestUrlInternals.provideConnectionAddress(() => peer)
-  requestUrlInternals.configureForwardedRequestResolver((readHeader, connectionAddress) => trustedProxies.includes(connectionAddress ?? '')
-    ? { protocol: readHeader('x-forwarded-proto') }
-    : {})
+  configureSecurityRuntime({ config: { trustedProxies } })
   onTestFinished(() => {
-    requestUrlInternals.configureForwardedRequestResolver(undefined)
+    resetSecurityRuntime()
     requestUrlInternals.provideConnectionAddress(undefined)
   })
 }

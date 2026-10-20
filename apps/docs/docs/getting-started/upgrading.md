@@ -29,7 +29,7 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 
 Public and temporary storage URLs read the scheme, host, port, and path prefix from forwarded headers only when `trustedProxies` lists the proxy, as [`resolveRequestUrl()`](/basics/security/cors-and-proxies#read-the-public-url) does. Before, the Nuxt storage route accepted `X-Forwarded-Proto` from any client, and the other forwarded headers were ignored.
 
-If your app runs behind a proxy that terminates TLS and serves temporary URLs, list the proxy. In Next.js, which doesn't expose the connection address, a list is ignored, so use `'*'` as described in [Trusted proxies](/basics/security/cors-and-proxies#next-js):
+If your Nuxt or SvelteKit app runs behind a proxy that terminates TLS and serves temporary URLs, list the proxy:
 
 ```ts [config/security.ts]
 import { defineSecurityConfig } from '@holo-js/security'

@@ -193,9 +193,9 @@ function resolveFallbackPublicStorageRequest(projectRoot: string, config: HoloSt
   return candidates.find(candidate => candidate && candidate.disk.name !== attemptedDiskName) ?? null
 }
 
-function resolveStorageRequestUrls(request: Request): { publicUrl: URL, routedUrl: URL } | null {
+function resolveStorageRequestUrls(request: Request): { visitorUrl: URL, routedUrl: URL } | null {
   try {
-    return { publicUrl: resolveRequestUrl(request), routedUrl: requestUrlInternals.resolveRoutedRequestUrl(request) }
+    return { visitorUrl: resolveRequestUrl(request), routedUrl: requestUrlInternals.resolveRoutedRequestUrl(request) }
   } catch {
     return null
   }
@@ -210,9 +210,9 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
   })
   const urls = resolveStorageRequestUrls(request)
   if (!urls) return createMissingFileResponse()
-  const { publicUrl, routedUrl } = urls
+  const { visitorUrl, routedUrl } = urls
   if (isTemporaryLocalStorageRequest(normalized, routedUrl)) {
-    const entry = resolveTemporaryLocalStorageRequest(projectRoot, normalized, routedUrl, publicUrl, appKey, request.method)
+    const entry = resolveTemporaryLocalStorageRequest(projectRoot, normalized, routedUrl, visitorUrl, appKey, request.method)
     if (!entry) return createMissingFileResponse()
     try {
       return await createLocalStorageFileResponse(projectRoot, entry.disk, entry.absolutePath, request, true) ?? createMissingFileResponse()

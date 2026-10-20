@@ -166,7 +166,7 @@ Set either option:
 
 With no options the link lasts 5 minutes. Holo keeps the lifetime between 1 second and 7 days.
 
-Behind a proxy that terminates HTTPS, list the proxy in `trustedProxies` so the link checks against the `https://` address visitors use. In Next.js, use `trustedProxies: '*'` instead. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
+Behind a proxy that terminates HTTPS, list the proxy in `trustedProxies`. Holo then reads the forwarded scheme, host, port, and path prefix from that proxy and checks the link against the address visitors use. Headers from any other client are ignored. In Next.js, use `trustedProxies: '*'` instead. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
 On `local` and `public` disks, Holo signs the link with your `APP_KEY` and serves it from your app's storage route. Anyone who changes the path, disk, or expiry gets a 404, and responses are sent with `Cache-Control: private, no-store`. Both `APP_KEY` and `APP_URL` must be set (see [Configuration](/getting-started/configuration)). On S3 disks, the link is a pre-signed S3 URL.
 

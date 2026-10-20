@@ -53,17 +53,17 @@ export function resolveTemporaryLocalStorageRequest(
   projectRoot: string,
   config: HoloStorageRuntimeConfig,
   routedUrl: URL,
-  signedUrl: URL,
+  visitorUrl: URL,
   appKey: string | undefined,
   method = 'GET',
 ): { disk: LocalDisk, absolutePath: string } | null {
   if (!appKey || !['GET', 'HEAD'].includes(method) || !isTemporaryLocalStorageRequest(config, routedUrl)) return null
-  if (signedUrl.searchParams.size !== 2) return null
-  const expires = signedUrl.searchParams.get('expires')
-  const suppliedSignature = signedUrl.searchParams.get('signature')
+  if (visitorUrl.searchParams.size !== 2) return null
+  const expires = visitorUrl.searchParams.get('expires')
+  const suppliedSignature = visitorUrl.searchParams.get('signature')
   if (!expires || !/^[1-9]\d*$/u.test(expires) || !Number.isSafeInteger(Number(expires)) || Number(expires) <= Math.floor(Date.now() / 1000)) return null
   if (!suppliedSignature || !/^[a-f0-9]{64}$/u.test(suppliedSignature)) return null
-  if (!timingSafeEqual(Buffer.from(suppliedSignature, 'hex'), signature(signedUrl, expires, appKey))) return null
+  if (!timingSafeEqual(Buffer.from(suppliedSignature, 'hex'), signature(visitorUrl, expires, appKey))) return null
   const prefix = `${config.routePrefix.replace(/\/+$/u, '')}/${temporaryRouteSegment}/`
   let segments: string[]
   try {
