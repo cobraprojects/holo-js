@@ -302,6 +302,22 @@ it('escapes app-provided mail content and rejects executable markdown links in r
   expect(html).not.toContain('<script>alert(1)</script>')
 })
 
+it('escapes a markdown link href once and keeps the label escaped once in real previews', async () => {
+  const mail = defineMail({
+    to: 'ava@example.com',
+    from: 'sender@example.com',
+    subject: 'Links',
+    markdown: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)',
+  })
+  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
+  const preview = await previewMail(mail)
+  expect(preview.html).toContain('<a href="https://example.test/?a=1&amp;b=2">Search</a>')
+  expect(preview.html).toContain('<a href="https://example.test/b">A &amp; B</a>')
+  expect(preview.html).toContain('bad')
+  expect(preview.html).not.toContain('&amp;amp;')
+  expect(preview.html).not.toContain('javascript:')
+})
+
 it('reports a real SMTP rejection with the native mailer context', async () => {
   const provider = await startSmtpProvider(true)
   let finalized = false
