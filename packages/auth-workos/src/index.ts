@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
 import type { AuthEstablishedSession } from '@holo-js/auth'
+import { resolveRequestUrl } from '@holo-js/kernel'
 import { cookie, parseCookieHeader } from '@holo-js/session'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/auth'
 export {
@@ -497,12 +498,16 @@ function createWorkosState(): string {
   return randomBytes(32).toString('base64url')
 }
 
+function isHttpsRequest(request: Request): boolean {
+  return resolveRequestUrl(request).protocol === 'https:'
+}
+
 function createStateCookie(providerName: string, state: string, request: Request): string {
   return cookie(getWorkosStateCookieName(providerName), state, {
     httpOnly: true,
     maxAge: WORKOS_STATE_COOKIE_MAX_AGE_SECONDS,
     sameSite: 'lax',
-    secure: new URL(request.url).protocol === 'https:',
+    secure: isHttpsRequest(request) || undefined,
   })
 }
 
@@ -511,7 +516,7 @@ function clearStateCookie(providerName: string, request: Request): string {
     expires: new Date(0),
     httpOnly: true,
     sameSite: 'lax',
-    secure: new URL(request.url).protocol === 'https:',
+    secure: isHttpsRequest(request) || undefined,
   })
 }
 
@@ -949,8 +954,9 @@ async function authenticateWorkosCode(
   const sessionId = getStringField(session ?? {}, 'id')
     ?? getStringField(payload, 'sessionId', 'session_id')
     ?? (accessToken ? getJwtStringClaim(accessToken, 'sid') : undefined)
-    ?? accessToken
-    ?? code
+  if (!sessionId) {
+    throw new Error('[@holo-js/auth-workos] WorkOS callback did not include a session id.')
+  }
 
   return Object.freeze({
     sessionId,
