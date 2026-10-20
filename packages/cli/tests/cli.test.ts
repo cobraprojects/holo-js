@@ -1,7 +1,7 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { basename, dirname, extname, join, resolve } from 'node:path'
@@ -9106,11 +9106,11 @@ export default {
 
     const generatedTsconfigPath = join(projectRoot, '.holo-js/generated/tsconfig.json')
     const generatedRegistryPath = join(projectRoot, '.holo-js/generated/registry.json')
-    const firstTsconfigStat = await stat(generatedTsconfigPath)
     const firstRegistryStat = await stat(generatedRegistryPath)
     const firstRegistry = JSON.parse(await readFile(generatedRegistryPath, 'utf8')) as { generatedAt: string }
 
-    await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
+    const pastTime = new Date(Date.now() - 60_000)
+    await utimes(generatedTsconfigPath, pastTime, pastTime)
 
     await (async () => {
       await runProjectPrepare(projectRoot)
@@ -9120,7 +9120,7 @@ export default {
     const secondRegistryStat = await stat(generatedRegistryPath)
     const secondRegistry = JSON.parse(await readFile(generatedRegistryPath, 'utf8')) as { generatedAt: string }
 
-    expect(secondTsconfigStat.mtimeMs).toBe(firstTsconfigStat.mtimeMs)
+    expect(secondTsconfigStat.mtimeMs).toBe(pastTime.getTime())
     expect(secondRegistryStat.mtimeMs).toBeGreaterThanOrEqual(firstRegistryStat.mtimeMs)
     expect(typeof firstRegistry.generatedAt).toBe('string')
     expect(typeof secondRegistry.generatedAt).toBe('string')

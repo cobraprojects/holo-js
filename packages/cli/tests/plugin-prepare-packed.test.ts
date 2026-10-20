@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runCli } from '../src/cli'
 import type { IoStreams } from '../src/cli-types'
 import { runProjectPrepare } from '../src/dev'
@@ -169,21 +169,17 @@ async function runPublicHoloLifecycle(
     child.once('error', reject)
     child.once('close', (code, signal) => resolvePromise({ code, signal }))
   })
-  const deadline = Date.now() + 20_000
-  let observed = false
-
   try {
-    while (Date.now() < deadline) {
+    const observed = await vi.waitFor(async () => {
       const lifecycle = await readLifecycle(projectRoot).catch(() => undefined)
       if (lifecycle?.command === command && lifecycle.kind === 'full') {
-        observed = true
-        break
+        return true
       }
       if (child.exitCode !== null) {
-        break
+        return false
       }
-      await new Promise(resolvePromise => setTimeout(resolvePromise, 50))
-    }
+      throw new Error('Public holo lifecycle is not prepared yet.')
+    }, { timeout: 20_000, interval: 50 }).catch(() => false)
 
     if (!observed) {
       throw new Error(`Public holo ${command} did not prepare the plugin.\nstdout:\n${stdout}\nstderr:\n${stderr}`)

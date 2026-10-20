@@ -60,11 +60,12 @@ it('observes real source edits and excludes generated artifacts, dependency file
   }
   for (const path of excluded) await write(root, path, 'excluded')
   await write(root, 'server/models/escaped/Outside.ts', 'escaped')
-  await new Promise(resolve => setTimeout(resolve, 300))
-  const unexpected = changes.filter(change => !included.includes(change.path))
+  const barrier = waitForChange('server/models/Barrier.ts', 'created')
+  await write(root, 'server/models/Barrier.ts')
+  await barrier
+  const unexpected = changes.filter(change => ![...included, 'server/models/Barrier.ts'].includes(change.path))
   expect(unexpected, JSON.stringify(unexpected)).toEqual([])
   watcher.close()
-  await new Promise(resolve => setTimeout(resolve, 100))
   const observed = changes.length
   await write(root, 'config/app.ts', 'after close')
   await new Promise(resolve => setTimeout(resolve, 300))
@@ -98,9 +99,10 @@ it('observes real file creation and deletion and switches to newly configured di
   const nestedCreated = waitForChange('src/models/new/nested/Added.ts', 'created')
   await write(root, 'src/models/new/nested/Added.ts')
   await nestedCreated
-  await new Promise(resolve => setTimeout(resolve, 100))
-  changes.length = 0
+  const observedBefore = changes.length
+  const barrier = waitForChange('src/models/new/nested/Barrier.ts', 'created')
   await write(root, 'server/models/New.ts', 'obsolete')
-  await new Promise(resolve => setTimeout(resolve, 300))
-  expect(changes).toEqual([])
+  await write(root, 'src/models/new/nested/Barrier.ts')
+  await barrier
+  expect(changes.slice(observedBefore).map(change => change.path)).toEqual(['src/models/new/nested/Barrier.ts'])
 })
