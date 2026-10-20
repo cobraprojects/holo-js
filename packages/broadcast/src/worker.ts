@@ -1848,6 +1848,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     if (message.type === 'database-invalidation') {
+      if (message.originNodeId === getProcessScalingNodeId()) {
+        return
+      }
+
       if (typeof message.appId !== 'string' || !servedAppIds.includes(message.appId)) {
         return
       }

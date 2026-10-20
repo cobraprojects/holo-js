@@ -227,6 +227,55 @@ it('publishes one invalidation per mutation and does not refresh from its own wr
   expect(received).toEqual([])
 }, 30_000)
 
+it('does not refresh from its own write when the worker has an explicit node id and the app sender shares its process', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const config = normalizeBroadcastConfig({
+    default: 'main',
+    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    worker: { host: '127.0.0.1', port: 1, scaling: { driver: 'redis', connection: 'shared' } },
+  })
+  const redisConfig = normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: redisPort } } })
+  const sender = workerInternals.createScalingInvalidationSender({
+    config: config.worker.scaling as Exclude<typeof config.worker.scaling, false>,
+    redis: redisConfig,
+    appId: 'app',
+  })
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  onTestFinished(async () => {
+    unsubscribeSender()
+    await sender.close()
+  })
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  const received: unknown[] = []
+  await startScoresWorker(db, redisPort, {
+    nodeId: 'worker-explicit',
+    databaseInvalidation: {
+      connect: bridge.connect,
+      receive: async invalidation => {
+        received.push(invalidation)
+        await bridge.receive(invalidation)
+      },
+    },
+  })
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const subscriber = client.duplicate()
+  onTestFinished(() => subscriber.disconnect())
+  const messages: string[] = []
+  subscriber.on('message', (_channel: string, message: string) => { messages.push(message) })
+  await subscriber.subscribe('holo:broadcast:scaling:shared:events')
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => messages.filter(message => JSON.parse(message).type === 'database-invalidation').length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(messages.filter(message => JSON.parse(message).type === 'database-invalidation')).toHaveLength(1)
+  expect(received).toEqual([])
+}, 30_000)
+
 async function subscribeToScalingEvents(redis: Awaited<ReturnType<typeof startRedisService>>) {
   const client = redis.clients[0]
   if (!client) throw new Error('No native Redis client available')
