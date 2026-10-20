@@ -139,7 +139,7 @@ async function readRecordLockIdentity(lockPath: string, previous?: RecordLockIde
   const identity = await stat(identityPath).catch(() => undefined)
   if (!identity) return undefined
   let owner: RecordLockOwner | undefined
-  if (fileName && previous?.fileName === fileName && previous.device === identity.dev && previous.inode === identity.ino && previous.size === identity.size) {
+  if (fileName && previous?.owner && previous.fileName === fileName && previous.device === identity.dev && previous.inode === identity.ino && previous.size === identity.size) {
     owner = previous.owner
   } else if (fileName) {
     try {
