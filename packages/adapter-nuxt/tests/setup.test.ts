@@ -11,6 +11,7 @@ import { createNativeNuxt, registeredServerPlugins } from './support/nuxt'
 import {
   linkInstalledDependenciesForPackage,
   provisionTempPackage,
+  symlinkPackageDependency,
   stagePublishedPackage,
 } from '../../../tests/support/published-package'
 
@@ -167,26 +168,26 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
           packageJsonPath: join(source, 'package.json'),
         })
         await provisionTempPackage(source, target)
-        await symlink(target, join(tempNodeModulesRoot, packageName))
+        await symlinkPackageDependency(tempRootNodeModules, `@holo-js/${packageName}`, target)
       }
-      await symlink(dbPackageRoot, join(tempNodeModulesRoot, 'db'))
-      await symlink(kernelPackageRoot, join(tempNodeModulesRoot, 'kernel'))
-      await symlink(adapterSharedPackageRoot, join(tempNodeModulesRoot, 'adapter-shared'))
-      await symlink(authPackageRoot, join(tempNodeModulesRoot, 'auth'))
-      await symlink(cachePackageRoot, join(tempNodeModulesRoot, 'cache'))
-      await symlink(configPackageRoot, join(tempNodeModulesRoot, 'config'))
-      await symlink(corePackageRoot, join(tempNodeModulesRoot, 'core'))
-      await symlink(mailPackageRoot, join(tempNodeModulesRoot, 'mail'))
-      await symlink(mediaPackageRoot, join(tempNodeModulesRoot, 'media'))
-      await symlink(notificationsPackageRoot, join(tempNodeModulesRoot, 'notifications'))
-      await symlink(securityPackageRoot, join(tempNodeModulesRoot, 'security'))
-      await symlink(sessionPackageRoot, join(tempNodeModulesRoot, 'session'))
-      await symlink(validationPackageRoot, join(tempNodeModulesRoot, 'validation'))
-      await symlink(broadcastPackageRoot, join(tempNodeModulesRoot, 'broadcast'))
-      await symlink(eventsPackageRoot, join(tempNodeModulesRoot, 'events'))
-      await symlink(queuePackageRoot, join(tempNodeModulesRoot, 'queue'))
-      await symlink(queueDbPackageRoot, join(tempNodeModulesRoot, 'queue-db'))
-      await symlink(storagePackageRoot, join(tempNodeModulesRoot, 'storage'))
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/db', dbPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/kernel', kernelPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/adapter-shared', adapterSharedPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/auth', authPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/cache', cachePackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/config', configPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/core', corePackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/mail', mailPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/media', mediaPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/notifications', notificationsPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/security', securityPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/session', sessionPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/validation', validationPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/broadcast', broadcastPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/events', eventsPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/queue', queuePackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/queue-db', queueDbPackageRoot)
+      await symlinkPackageDependency(tempRootNodeModules, '@holo-js/storage', storagePackageRoot)
 
       await runPackageBuild(resolve(packageDir, '../kernel/node_modules/.bin/tsup'), [], kernelPackageRoot)
       await runPackageBuild(resolve(packageDir, '../config/node_modules/.bin/tsup'), [], configPackageRoot)

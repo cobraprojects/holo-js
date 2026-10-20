@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { collectLibraryBuilds } from '../../scripts/build-libraries.mjs'
@@ -37,12 +37,49 @@ export function stageWorkspacePackagesSync(
   return packages.map(({ name, directory }) => ({ name, directory }))
 }
 
+const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..')
+
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
 }
 
 function isWorkspaceDependency(dependencyName: string): boolean {
   return dependencyName.startsWith('@holo-js/')
+}
+
+function workspacePackageDirectories(): Map<string, string> {
+  const packagesRoot = join(REPOSITORY_ROOT, 'packages')
+  const directories = new Map<string, string>()
+  for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
+    const directory = join(packagesRoot, entry.name)
+    const manifestPath = join(directory, 'package.json')
+    if (!entry.isDirectory() || !existsSync(manifestPath)) continue
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageManifest
+    if (manifest.name) directories.set(manifest.name, directory)
+  }
+  return directories
+}
+
+function hasEntry(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined
+}
+
+function readWorkspaceDependencies(packageJsonPath: string): Array<{ name: string, directory: string }> {
+  const directories = workspacePackageDirectories()
+  const found = new Map<string, string>()
+  const visit = (manifestPath: string): void => {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageManifest
+    const declared = { ...manifest.dependencies, ...manifest.peerDependencies }
+    for (const dependencyName of Object.keys(declared).filter(isWorkspaceDependency)) {
+      if (found.has(dependencyName)) continue
+      const directory = directories.get(dependencyName)
+      if (!directory) continue
+      found.set(dependencyName, directory)
+      visit(join(directory, 'package.json'))
+    }
+  }
+  visit(packageJsonPath)
+  return [...found].map(([name, directory]) => ({ name, directory }))
 }
 
 export function readExternalDependencyNames(packageJsonPath: string): string[] {
@@ -106,6 +143,10 @@ export async function linkInstalledDependenciesForPackage(options: {
       resolveInstalledDependencyRoot(options.repoRoot, dependencyName),
     )
   }
+  for (const { name, directory } of readWorkspaceDependencies(options.packageJsonPath)) {
+    if (hasEntry(join(options.nodeModulesRoot, ...name.split('/')))) continue
+    await symlinkPackageDependency(options.nodeModulesRoot, name, directory)
+  }
 }
 
 export function linkInstalledDependenciesForPackageSync(options: {
@@ -125,6 +166,10 @@ export function linkInstalledDependenciesForPackageSync(options: {
       dependencyName,
       resolveInstalledDependencyRoot(options.repoRoot, dependencyName),
     )
+  }
+  for (const { name, directory } of readWorkspaceDependencies(options.packageJsonPath)) {
+    if (hasEntry(join(options.nodeModulesRoot, ...name.split('/')))) continue
+    symlinkPackageDependencySync(options.nodeModulesRoot, name, directory)
   }
 }
 
@@ -170,6 +215,7 @@ async function stagePublishedPackageContents(
   targetDir: string,
   distDir: string,
 ): Promise<void> {
+  await rm(targetDir, { recursive: true, force: true })
   await mkdir(targetDir, { recursive: true })
   const manifestText = readFileSync(join(sourceDir, 'package.json'), 'utf8')
   const manifest = JSON.parse(manifestText) as PackageManifest
