@@ -13,6 +13,7 @@ Realtime and Broadcast are not production-ready. The deployment settings below d
 - Browsers reconnect with backoff after a socket closes or fails, and then resubscribe. A browser whose network drops without the socket closing reconnects only when the operating system reports the close, so live updates can pause until then.
 - A worker that stops refreshing its Redis lease for 30 seconds, because it is stalled or can't reach Redis, loses its presence members from other workers' rosters. Those members stay out until their clients resubscribe. See [Run several workers](#run-several-workers).
 - Without Redis scaling, a write made in another process, such as your web app or a queue worker, does not refresh Realtime queries on this worker. With Redis scaling, it does. See [Run several workers](#run-several-workers).
+- Realtime queries that use `.cache()` on the cache-database store can stall on re-entrant invalidation. Tracked in [#234](https://github.com/cobraprojects/holo-js/issues/234).
 
 These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
 
