@@ -1228,9 +1228,19 @@ async function resolveUserFromGuard(
     return null
   }
 
+  if (payload.impersonation && !await impersonationIdentitiesExist(payload.impersonation)) {
+    return await stopImpersonatingForGuard(guardName)
+  }
+
   const serialized = serializeUser(adapter, freshUser, payload.provider)
   bindings.context.setCachedUser(guardName, serialized)
   return serialized
+}
+
+async function impersonationIdentitiesExist(impersonation: SessionImpersonationPayload): Promise<boolean> {
+  if (!await findSerializedUserById(impersonation.actor.provider, impersonation.actor.userId)) return false
+  if (!impersonation.original) return true
+  return Boolean(await findSerializedUserById(impersonation.original.provider, impersonation.original.userId))
 }
 
 function ensureMultiFactorStore(): AuthMultiFactorStore {

@@ -116,6 +116,7 @@
 
 ### Compatibility and upgrade requirements
 
+- **Sessions don't cross between 0.3 and 0.4.** A session written by 0.4 isn't readable by 0.3, so a mixed-version rolling deploy or a rollback signs users out. See [Sessions don't cross between 0.3 and 0.4](apps/docs/docs/getting-started/upgrading.md#sessions-dont-cross-between-03-and-04).
 - **Add a nullable `remember_token` column to each auth provider table** and hide it on the model. New scaffolds and the example apps include it, and the scaffolded sessions table no longer has `remember_token_hash`. `issueRememberMeToken()`, `consumeRememberMeToken()`, `RememberTokenOptions` and `SessionRecord.rememberTokenHash` are removed from `@holo-js/session`. Custom auth providers need `getRememberToken(user)` and `updateRememberToken(user, token)` for remember me. See [Per-user remember-me tokens](apps/docs/docs/getting-started/upgrading.md#per-user-remember-me-tokens).
 - Broadcast clients that relied on close code `4001` after a refused subscription must handle `pusher:subscription_error`. Channel rules served by `holo broadcast:work` no longer receive a `null` user for unsigned subscriptions. See [Broadcast subscription errors](apps/docs/docs/getting-started/upgrading.md#broadcast-subscription-errors-and-channel-authorization).
 - **Run `npx holo config:cache` again after upgrading** if you use the config cache. Caches from 0.3.x and earlier are ignored, and the app loads `config/*.ts` until the cache is rebuilt. The cache now holds secrets, so keep it out of version control.
