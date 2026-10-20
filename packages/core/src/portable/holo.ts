@@ -59,7 +59,8 @@ import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
 import { acquireSessionStores } from './sessionCapabilityLifetime'
-import { releaseSessionAdapters, releaseSecurityResources, throwCapabilityFailures } from './capabilityLifetimes'
+import { throwCapabilityFailures } from './capabilityLifetimes'
+import { createManagedResources, holdOperations, type ManagedResources, type ResourceLease } from './managedResources'
 import { preloadDiscoveredModelModules, preloadGeneratedSchemaModule } from './discoveryRuntime'
 import { loadInstalledFeatureConfigContributions } from './configRuntime'
 import {
@@ -244,6 +245,24 @@ type SecurityRedisAdapterModule = Pick<typeof SecurityRedisFeature,
 
 type SessionRedisAdapter = ReturnType<SessionRedisAdapterModule['createSessionRedisAdapter']>
 
+type SecurityRedisAdapterConfig = Parameters<SecurityRedisAdapterModule['createSecurityRedisAdapter']>[0]
+
+type SessionRedisAdapterConfig = Parameters<SessionRedisAdapterModule['createSessionRedisAdapter']>[0]
+
+type SecurityRateLimitStore = ReturnType<SecurityModule['createRateLimitStoreFromConfig']>
+
+type SecurityRateLimitConfig = LoadedHoloConfig['security']['rateLimit']
+
+type SecurityResources = {
+  readonly adapters: ManagedResources<SecurityRedisAdapterConfig, SecurityRedisAdapter>
+  readonly stores: ManagedResources<SecurityRateLimitConfig, SecurityRateLimitStore>
+}
+
+type SessionRedisConnections = ManagedResources<SessionRedisAdapterConfig, SessionRedisAdapter>
+type DatabaseInvalidationSenderConfig = Parameters<BroadcastModule['workerInternals']['createScalingInvalidationSender']>[0]
+type DatabaseInvalidationSender = ReturnType<BroadcastModule['workerInternals']['createScalingInvalidationSender']>
+type DatabaseInvalidationSenders = ManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>
+
 type SessionRedisAdapterModule = Pick<typeof SessionRedisFeature,
   | 'createSessionRedisAdapter'
 >
@@ -374,7 +393,72 @@ const {
   getRuntimeState,
   restoreOptionalSubsystemRuntimeBindings,
   snapshotOptionalSubsystemRuntimeBindings,
-} = createRuntimeStateAccessors<HoloRuntime, SecurityRedisAdapter, SessionRedisAdapter>()
+} = createRuntimeStateAccessors<HoloRuntime, SecurityResources, SessionRedisConnections, DatabaseInvalidationSenders>()
+
+function getSecurityResources(): SecurityResources {
+  const state = getRuntimeState()
+  state.securityResources ??= {
+    adapters: createManagedResources<SecurityRedisAdapterConfig, SecurityRedisAdapter>(),
+    stores: createManagedResources<SecurityRateLimitConfig, SecurityRateLimitStore>(),
+  }
+  return state.securityResources
+}
+
+function getSessionRedisConnections(): SessionRedisConnections {
+  const state = getRuntimeState()
+  state.sessionRedisConnections ??= createManagedResources<SessionRedisAdapterConfig, SessionRedisAdapter>({
+    connect: adapter => adapter.connect(),
+  })
+  return state.sessionRedisConnections
+}
+
+async function rethrowAfterCleanup(error: unknown, cleanup: () => Promise<void>, message: string): Promise<never> {
+  try {
+    await cleanup()
+  } catch (cleanupError) {
+    throw new AggregateError([error, cleanupError], message)
+  }
+  throw error
+}
+
+async function acquireManagedSecurityStore<TCustom extends HoloConfigMap>(
+  securityModule: SecurityModule,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+  projectRoot: string,
+  resources: SecurityResources,
+): Promise<SecurityRateLimitStore> {
+  const { rateLimit } = loadedConfig.security
+  if (rateLimit.driver !== 'redis') {
+    const lease = await resources.stores.acquire(rateLimit, () => securityModule.createRateLimitStoreFromConfig(loadedConfig.security, { projectRoot }))
+    return holdOperations(lease.value, lease)
+  }
+
+  const securityRedisAdapterModule = await loadSecurityRedisAdapterModule(true)
+  const adapterLease = await resources.adapters.acquire(rateLimit.redis, config => securityRedisAdapterModule.createSecurityRedisAdapter(config))
+  return holdOperations(
+    securityModule.createRateLimitStoreFromConfig(loadedConfig.security, { projectRoot, redisAdapter: adapterLease.value }),
+    adapterLease,
+  )
+}
+
+async function commitSecurityResources(resources: SecurityResources): Promise<void> {
+  await Promise.all([resources.adapters.commit(), resources.stores.commit()])
+}
+
+async function discardSecurityResources(resources: SecurityResources): Promise<void> {
+  await Promise.all([resources.adapters.discard(), resources.stores.discard()])
+}
+
+async function disposeSecurityResources(resources: SecurityResources | undefined): Promise<void> {
+  await Promise.all([resources?.adapters.dispose(), resources?.stores.dispose()])
+}
+
+function runOptionalSubsystemsSerially<TValue>(task: () => Promise<TValue>): Promise<TValue> {
+  const state = getRuntimeState()
+  const run = (state.optionalSubsystemsTurn ?? Promise.resolve()).then(task)
+  state.optionalSubsystemsTurn = run.then(() => undefined, () => undefined)
+  return run
+}
 
 const BROADCAST_PUBLISH_TIMEOUT_MS = 10_000
 
@@ -632,22 +716,33 @@ function resolveListenerExport(
   return Object.values(exports).find((value): value is EventsFeature.ListenerDefinition => hasListenerDefinitionMarker(value) || eventsModule.isListenerDefinition(value))
 }
 
+const heldSessionStores = new WeakMap<ResourceLease<SessionRedisAdapter>, CoreSessionStoreBinding>()
+
+function heldSessionStore(
+  lease: ResourceLease<SessionRedisAdapter>,
+  createStore: () => CoreSessionStoreBinding,
+): CoreSessionStoreBinding {
+  const existing = heldSessionStores.get(lease)
+  if (existing) return existing
+  const store = holdOperations(createStore(), lease)
+  heldSessionStores.set(lease, store)
+  return store
+}
+
 /* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
 async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
   sessionModule: SessionModule,
-): Promise<{
-  readonly stores: Readonly<Record<string, CoreSessionStoreBinding>>
-  readonly redisAdapters: readonly SessionRedisAdapter[]
-}> {
-  return acquireSessionStores(projectRoot, loadedConfig, {
+  redisConnections: SessionRedisConnections,
+): Promise<Readonly<Record<string, CoreSessionStoreBinding>>> {
+  return acquireSessionStores<CoreSessionStoreBinding>(projectRoot, loadedConfig, {
     createFileStore: root => sessionModule.createFileSessionStore(root),
     createDatabaseStore: (table, connection) => sessionModule.createDatabaseSessionStore(createCoreDatabaseSessionAdapter(table, connection)),
-    createRedisStore: adapter => sessionModule.createRedisSessionStore(adapter),
-    async createRedisAdapter(config) {
+    async acquireRedisStore(config) {
       const module = await loadSessionRedisAdapterModule(true)
-      return module.createSessionRedisAdapter(config)
+      const lease = await redisConnections.acquire(config, adapterConfig => module.createSessionRedisAdapter(adapterConfig))
+      return heldSessionStore(lease, () => sessionModule.createRedisSessionStore(lease.value))
     },
   })
 }
@@ -658,7 +753,20 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
   sessionModule: SessionModule,
 ): Promise<Readonly<Record<string, SessionStore>>> {
-  return (await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)).stores
+  const redisConnections = getSessionRedisConnections()
+  try {
+    const stores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule, redisConnections)
+    await redisConnections.commit()
+    return stores
+  } catch (error) {
+    return rethrowAfterCleanup(error, () => redisConnections.discard(), 'Session acquisition and cleanup failed.')
+  }
+}
+
+function getDatabaseInvalidationSenders(): DatabaseInvalidationSenders {
+  const state = getRuntimeState()
+  state.databaseInvalidationSenders ??= createManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>()
+  return state.databaseInvalidationSenders
 }
 
 async function configureDatabaseInvalidationScaling(
@@ -666,27 +774,27 @@ async function configureDatabaseInvalidationScaling(
   loadedConfig: LoadedHoloConfig,
 ): Promise<void> {
   const state = getRuntimeState()
-  const previous = state.databaseInvalidationSender
-  state.databaseInvalidationSender = undefined
-  await previous?.close()
+  const senders = getDatabaseInvalidationSenders()
+  state.databaseInvalidationUnsubscribe?.()
+  state.databaseInvalidationUnsubscribe = undefined
 
   const scaling = loadedConfig.broadcast.worker.scaling
-  if (!scaling) {
-    return
+  if (scaling) {
+    try {
+      const lease = await senders.acquire(
+        { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis },
+        broadcastModule.workerInternals.createScalingInvalidationSender,
+      )
+      state.databaseInvalidationUnsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => {
+        await lease.hold(() => lease.value.publish(invalidation))
+      })
+    } catch (error) {
+      await senders.discard()
+      throw error
+    }
   }
 
-  const sender = broadcastModule.workerInternals.createScalingInvalidationSender({
-    config: scaling,
-    queue: loadedConfig.queue,
-    redis: loadedConfig.redis,
-  })
-  const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
-  state.databaseInvalidationSender = {
-    async close() {
-      unsubscribe()
-      await sender.close()
-    },
-  }
+  await senders.commit()
 }
 
 function createCoreNotificationBroadcaster(
@@ -1412,22 +1520,45 @@ type RuntimeAuthContext = ReturnType<AuthModule['createAsyncAuthContext']> & {
   runWithRequestAccessors?<TValue>(accessors: NonNullable<CreateHoloOptions['authRequest']>, callback: () => TValue): TValue
 }
 
-export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
-  projectRoot: string,
-  loadedConfig: LoadedHoloConfig<TCustom>,
-  options: {
-    readonly renderView?: HoloServerViewRenderer
-    readonly authRequest?: CreateHoloOptions['authRequest']
-    readonly authorizationError?: CreateHoloOptions['authorizationError']
-    readonly authContext?: RuntimeAuthContext
-  } = {},
-): Promise<{
+type OptionalSubsystemsOptions = {
+  readonly renderView?: HoloServerViewRenderer
+  readonly authRequest?: CreateHoloOptions['authRequest']
+  readonly authorizationError?: CreateHoloOptions['authorizationError']
+  readonly authContext?: RuntimeAuthContext
+}
+
+type OptionalSubsystemsResult = {
   readonly queueModule?: QueueModule
   readonly session?: HoloSessionRuntimeBinding
   readonly auth?: HoloAuthRuntimeBinding
   readonly authContext?: RuntimeAuthContext
-	}> {
+}
+
+export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+  options: OptionalSubsystemsOptions = {},
+): Promise<OptionalSubsystemsResult> {
+  const optionalSubsystems = await runOptionalSubsystemsSerially(() => configureOptionalHoloSubsystems(projectRoot, loadedConfig, options))
+  await bootHoloPluginModules(projectRoot, loadedConfig)
+  return optionalSubsystems
+}
+
+async function bootHoloPluginModules<TCustom extends HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+): Promise<void> {
   const pluginDefinitions = await loadConfiguredHoloPluginDefinitions(projectRoot, resolveLoadedPluginNames(loadedConfig))
+  for (const bootModule of await loadConfiguredHoloPluginBootModules(projectRoot, pluginDefinitions)) {
+    await bootConfiguredHoloPluginModule(projectRoot, loadedConfig, bootModule)
+  }
+}
+
+async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+  options: OptionalSubsystemsOptions,
+): Promise<OptionalSubsystemsResult> {
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
   const cacheModule = await loadCacheModule(cacheConfigured, projectRoot)
   const cacheConfig = loadedConfig.cache
@@ -1595,47 +1726,18 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   const sessionModule = sessionConfigured || csrfConfigured
     ? await loadSessionModule(true)
     : undefined
-  const existingManagedSecurityRedisAdapter = getRuntimeState().securityRedisAdapter
   const existingManagedSecurityStore = getRuntimeState().securityRateLimitStore
+  const securityResources = getSecurityResources()
 
   if (securityModule) {
-    const existingSecurityBindings = securityModule.getSecurityRuntimeBindings()
-    const existingSecurityStore = existingSecurityBindings?.rateLimitStore
-    const shouldReuseExistingSecurityStore = Boolean(existingSecurityStore)
+    const existingSecurityStore = securityModule.getSecurityRuntimeBindings()?.rateLimitStore
+    const reusesExternalSecurityStore = Boolean(existingSecurityStore)
       && existingSecurityStore !== existingManagedSecurityStore
-    let nextManagedSecurityRedisAdapter: SecurityRedisAdapter | undefined
-    let rateLimitStore: ReturnType<typeof securityModule.createRateLimitStoreFromConfig> | undefined
-    let configuredSecurityRuntime = false
 
     try {
-      if (
-        !shouldReuseExistingSecurityStore
-        && loadedConfig.security.rateLimit.driver === 'redis'
-      ) {
-        const securityRedisAdapterModule = await loadSecurityRedisAdapterModule(true)
-        nextManagedSecurityRedisAdapter = securityRedisAdapterModule.createSecurityRedisAdapter(
-          loadedConfig.security.rateLimit.redis,
-        )
-      }
-
-      rateLimitStore = shouldReuseExistingSecurityStore
+      const rateLimitStore = reusesExternalSecurityStore
         ? existingSecurityStore
-        : securityModule.createRateLimitStoreFromConfig(loadedConfig.security, {
-          projectRoot,
-          ...(nextManagedSecurityRedisAdapter ? { redisAdapter: nextManagedSecurityRedisAdapter } : {}),
-        })
-
-      const previousStore = existingManagedSecurityStore !== rateLimitStore
-        ? existingManagedSecurityStore
-        : undefined
-      const previousAdapter = existingManagedSecurityRedisAdapter !== nextManagedSecurityRedisAdapter
-        ? existingManagedSecurityRedisAdapter
-        : undefined
-      if (previousStore || previousAdapter) {
-        getRuntimeState().securityRedisAdapter = undefined
-        getRuntimeState().securityRateLimitStore = undefined
-        await releaseSecurityResources(previousStore, previousAdapter)
-      }
+        : await acquireManagedSecurityStore(securityModule, loadedConfig, projectRoot, securityResources)
 
       securityModule.configureSecurityRuntime({
         config: loadedConfig.security,
@@ -1663,29 +1765,21 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
           return undefined
         },
       })
-      configuredSecurityRuntime = true
-      getRuntimeState().securityRedisAdapter = nextManagedSecurityRedisAdapter
-      getRuntimeState().securityRateLimitStore = shouldReuseExistingSecurityStore ? undefined : rateLimitStore
+      getRuntimeState().securityRateLimitStore = reusesExternalSecurityStore ? undefined : rateLimitStore
+      await commitSecurityResources(securityResources)
     } catch (error) {
-      try {
-        await releaseSecurityResources(
-          !configuredSecurityRuntime && rateLimitStore !== existingSecurityBindings?.rateLimitStore ? rateLimitStore : undefined,
-          nextManagedSecurityRedisAdapter !== existingManagedSecurityRedisAdapter ? nextManagedSecurityRedisAdapter : undefined,
-        )
-      } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Security acquisition and cleanup failed.')
-      }
-      throw error
+      await rethrowAfterCleanup(
+        error,
+        () => discardSecurityResources(securityResources),
+        'Security acquisition and cleanup failed.',
+      )
     }
-  } else if (existingManagedSecurityRedisAdapter || existingManagedSecurityStore) {
+  } else if (existingManagedSecurityStore) {
     const existingSecurityModule = await loadSecurityModule()
-    getRuntimeState().securityRedisAdapter = undefined
     getRuntimeState().securityRateLimitStore = undefined
-    await releaseSecurityResources(existingManagedSecurityStore, existingManagedSecurityRedisAdapter)
+    await commitSecurityResources(securityResources)
     existingSecurityModule?.resetSecurityRuntime()
   }
-
-  const existingManagedSessionRedisAdapters = getRuntimeState().sessionRedisAdapters
 
   /* v8 ignore start -- redundant defensive guards after required-module loaders above */
   if (authConfigured && !sessionModule) {
@@ -1702,34 +1796,20 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     ? await loadClerkModule(true)
     : undefined
 
+  const sessionRedisConnections = getSessionRedisConnections()
+
   if (sessionModule) {
-    let managedSessionStores: Awaited<ReturnType<typeof createCoreManagedSessionStores>> | undefined
-
     try {
-      managedSessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)
-
-      const sessionBindings = { config: loadedConfig.session, stores: managedSessionStores.stores, appKey: loadedConfig.app.key }
+      const sessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule, sessionRedisConnections)
+      const sessionBindings = { config: loadedConfig.session, stores: sessionStores, appKey: loadedConfig.app.key }
       sessionModule.configureSessionRuntime(sessionBindings)
-
-      if (existingManagedSessionRedisAdapters) {
-        getRuntimeState().sessionRedisAdapters = undefined
-        await releaseSessionAdapters(existingManagedSessionRedisAdapters)
-      }
       getRuntimeState().sessionRuntimeBindings = sessionBindings
-      getRuntimeState().sessionRedisAdapters = managedSessionStores.redisAdapters.length > 0
-        ? managedSessionStores.redisAdapters
-        : undefined
+      await sessionRedisConnections.commit()
     } catch (error) {
-      try {
-        if (managedSessionStores) await releaseSessionAdapters(managedSessionStores.redisAdapters)
-      } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Session configuration and cleanup failed.')
-      }
-      throw error
+      await rethrowAfterCleanup(error, () => sessionRedisConnections.discard(), 'Session configuration and cleanup failed.')
     }
-  } else if (existingManagedSessionRedisAdapters) {
-    await releaseSessionAdapters(existingManagedSessionRedisAdapters)
-    getRuntimeState().sessionRedisAdapters = undefined
+  } else {
+    await sessionRedisConnections.commit()
   }
 
   if (authConfigured) {
@@ -1754,7 +1834,6 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       notificationsMailer: notificationsRuntimeBindings?.mailer,
     })
     authContext = options.authContext ?? createRequestAwareAuthContext(authModule.createAsyncAuthContext(), options.authRequest)
-    authContext.setRequestAccessors?.(options.authRequest)
     authModule.authRuntimeInternals.configureRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
@@ -1816,10 +1895,6 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     authorizationModule.authorizationInternals.resetAuthorizationAuthIntegration()
   }
 
-  for (const bootModule of await loadConfiguredHoloPluginBootModules(projectRoot, pluginDefinitions)) {
-    await bootConfiguredHoloPluginModule(projectRoot, loadedConfig, bootModule)
-  }
-
   return Object.freeze({
     /* v8 ignore next -- only toggles shape when queue support is absent */
     ...(queueModule ? { queueModule } : {}),
@@ -1829,7 +1904,11 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   })
 }
 
-export async function resetOptionalHoloSubsystems(): Promise<void> {
+export function resetOptionalHoloSubsystems(): Promise<void> {
+  return runOptionalSubsystemsSerially(disposeOptionalHoloSubsystems)
+}
+
+async function disposeOptionalHoloSubsystems(): Promise<void> {
   const projectRoot = getRuntimeState().current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   const failures: unknown[] = []
   const disposals: readonly (() => void | Promise<void>)[] = [
@@ -1841,11 +1920,11 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
     async () => (await loadAuthModule())?.resetAuthRuntime(),
     async () => {
       const state = getRuntimeState()
-      const adapters = state.sessionRedisAdapters ?? []
-      state.sessionRedisAdapters = undefined
+      const connections = state.sessionRedisConnections
+      state.sessionRedisConnections = undefined
       state.sessionRuntimeBindings = undefined
       try {
-        await releaseSessionAdapters(adapters)
+        await connections?.dispose()
       } finally {
         (await loadSessionModule())?.resetSessionRuntime()
       }
@@ -1853,12 +1932,11 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
     async () => {
       const state = getRuntimeState()
       const securityModule = await loadSecurityModule()
-      const store = state.securityRateLimitStore
-      const adapter = state.securityRedisAdapter
-      state.securityRedisAdapter = undefined
+      const resources = state.securityResources
+      state.securityResources = undefined
       state.securityRateLimitStore = undefined
       try {
-        await releaseSecurityResources(store, adapter)
+        await disposeSecurityResources(resources)
       } finally {
         securityModule?.resetSecurityRuntime()
       }
@@ -1867,9 +1945,11 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
     async () => (await loadBroadcastModule(false, projectRoot))?.resetBroadcastRuntime(),
     async () => {
       const state = getRuntimeState()
-      const sender = state.databaseInvalidationSender
-      state.databaseInvalidationSender = undefined
-      await sender?.close()
+      state.databaseInvalidationUnsubscribe?.()
+      state.databaseInvalidationUnsubscribe = undefined
+      const senders = state.databaseInvalidationSenders
+      state.databaseInvalidationSenders = undefined
+      await senders?.dispose()
     },
     async () => (await loadMailModule())?.resetMailRuntime(),
     () => resetOptionalStorageRuntime(),
@@ -1977,10 +2057,11 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     throwCapabilityFailures(failures)
   }
 
-  const applyOptionalSubsystems = async (
-    subsystemOptions: HoloRuntimeReconfigureOptions,
-  ): Promise<Awaited<ReturnType<typeof reconfigureOptionalHoloSubsystems>>> => {
-    const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+  let bootOptions: HoloRuntimeReconfigureOptions = options
+  let servicesBooting = false
+
+  const configureRuntimeSubsystems = async (subsystemOptions: HoloRuntimeReconfigureOptions): Promise<OptionalSubsystemsResult> => {
+    const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
       authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
       authRequest: subsystemOptions.authRequest,
@@ -1990,12 +2071,23 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     activeSessionRuntime = optionalSubsystems.session
     activeAuthRuntime = optionalSubsystems.auth
     activeAuthContext = optionalSubsystems.authContext
+    activeAuthContext?.setRequestAccessors?.(subsystemOptions.authRequest)
     return optionalSubsystems
   }
 
   const initializeRuntimeServices = async (): Promise<void> => {
     if (!shouldBootRuntimeServices(options.processEnv)) return
-    await applyOptionalSubsystems(options)
+    servicesBooting = true
+    try {
+      await bootRuntimeServices()
+    } finally {
+      servicesBooting = false
+    }
+  }
+
+  const bootRuntimeServices = async (): Promise<void> => {
+    await runOptionalSubsystemsSerially(() => configureRuntimeSubsystems(bootOptions))
+    await bootHoloPluginModules(projectRoot, loadedConfig)
     const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
       ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
         ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
@@ -2115,7 +2207,14 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       return runner ? runner(authRequest, callback) : callback()
     },
     async [reconfigureRuntime](nextOptions) {
-      await applyOptionalSubsystems(nextOptions)
+      bootOptions = nextOptions
+      activeAuthContext?.setRequestAccessors?.(nextOptions.authRequest)
+      const configured = await runOptionalSubsystemsSerially(async () => {
+        if (!runtime.initialized && !servicesBooting) return false
+        await configureRuntimeSubsystems(nextOptions)
+        return true
+      })
+      if (configured) await bootHoloPluginModules(projectRoot, loadedConfig)
     },
     async initialize() {
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')

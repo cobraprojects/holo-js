@@ -409,6 +409,12 @@ Social sign-in no longer signs in as an existing user whose email isn't verified
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
+### WorkOS sign-in requires a session ID
+
+WorkOS sign-in no longer uses the access token or the authorization code as the session ID. Before, when WorkOS's response had no session ID, sign-in succeeded and `logoutWithWorkos()` sent that token or code to WorkOS as `session_id`. Now the callback fails with `workos_auth_failed` and creates no session. WorkOS AuthKit always returns a session ID in the WorkOS session ID shape (`session_` followed by letters, digits, `_` or `-`), so this only affects malformed responses. Sessions created before the upgrade keep the old value until they expire. Logging out of them ends the local session only: logout sends a stored value to WorkOS only when it has the shape of a WorkOS session ID, and a token or code never does.
+
+The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `true`, even over HTTP, and behind a trusted proxy that terminates TLS when `X-Forwarded-Proto` is `https`.
+
 ### Sessions don't cross between 0.3 and 0.4
 
 Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
@@ -490,6 +496,10 @@ Check three behaviors when you upgrade:
 - `pivot` on a many-to-many relation holds only the pivot keys and the columns declared with `withPivot()` and `withTimestamps()`. Before, it held every pivot column. Add `withPivot('column')` for each column your code reads from `pivot`. A custom pivot model from `using()` receives the same columns, so add `'id'` to `withPivot()` if you read the pivot's `id`.
 - A one-of-many relation (`latestOfMany`, `oldestOfMany`, `ofMany`, and the morph variants) whose column is `NULL` on every related row loads `null`, as in Laravel. Before, it loaded the first related row. To keep the old result, skip the `NULL` rows with a constraint: `scopeRelation(latestOfMany(() => Post, 'user_id', 'id', 'score'), query => query.whereNotNull('score'))`.
 - Eager loads run one query per 256 parent keys, except a relation whose constraint sets `limit()` or `offset()`, which runs as one query so the limit or offset applies to the whole load. A constraint callback passed to `with()` or `scopeRelation()` can run more than once: once per chunk, and for one-of-many relations once for the grouped lookup and once for the outer query. Don't count or log calls inside it.
+
+### MySQL `ssl` with a connection URL
+
+A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
 
 ## Earlier 0.3.x releases
 
