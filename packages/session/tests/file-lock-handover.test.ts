@@ -69,7 +69,7 @@ async function releaseAcquisition(acquisition: Acquisition): Promise<void> {
   const release = acquisition.release
   if (!release || acquisition.released) throw new Error(`${acquisition.label} does not hold the lock`)
   acquisition.released = true
-  await advanceUntilSettled(release())
+  await settleHolderOperation(release())
 }
 
 function blockRenames(label: string): void {
@@ -113,20 +113,25 @@ async function advanceTo(waiter: Acquisition, time: number): Promise<void> {
 async function advanceUntilSettled<T>(operation: Promise<T>): Promise<T> {
   let done = false
   const finished = operation.finally(() => { done = true })
+  let sleeping = nextSleep()
+  while (!done) {
+    await Promise.race([sleeping, finished])
+    if (done) break
+    sleeping = nextSleep()
+    await vi.advanceTimersByTimeAsync(STEP_MS)
+  }
+  return await finished
+}
+
+async function settleHolderOperation<T>(operation: Promise<T>): Promise<T> {
   const waiterPath = pendingPaths.get('waiter')
+  if (!waiterPath) return await advanceUntilSettled(operation)
   let resume = (): void => undefined
-  if (waiterPath) windowsFs.pausedRenameSources.set(waiterPath, new Promise<void>(resolve => { resume = () => resolve() }))
+  windowsFs.pausedRenameSources.set(waiterPath, new Promise<void>(resolve => { resume = () => resolve() }))
   try {
-    let sleeping = nextSleep()
-    while (!done) {
-      await Promise.race([sleeping, finished])
-      if (done) break
-      sleeping = nextSleep()
-      await vi.advanceTimersByTimeAsync(STEP_MS)
-    }
-    return await finished
+    return await advanceUntilSettled(operation)
   } finally {
-    if (waiterPath) windowsFs.pausedRenameSources.delete(waiterPath)
+    windowsFs.pausedRenameSources.delete(waiterPath)
     resume()
   }
 }
@@ -160,7 +165,7 @@ describe('file session lock handover under a fake clock', () => {
 
   it('times out a stuck holder after the stall deadline', async () => {
     const holder = startAcquisition('holder')
-    await advanceUntilSettled(holder.ready)
+    await settleHolderOperation(holder.ready)
     const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     await asleep
@@ -195,7 +200,7 @@ describe('file session lock handover under a fake clock', () => {
 
   it('restarts the stall deadline when the lock changes hands', async () => {
     const first = startAcquisition('first')
-    await advanceUntilSettled(first.ready)
+    await settleHolderOperation(first.ready)
     const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     blockRenames('waiter')
@@ -207,7 +212,7 @@ describe('file session lock handover under a fake clock', () => {
 
     await releaseAcquisition(first)
     const second = startAcquisition('second')
-    await advanceUntilSettled(second.ready)
+    await settleHolderOperation(second.ready)
     const attemptsAtHandover = renameAttempts('waiter')
     await tickUntil(waiter, () => renameAttempts('waiter') > attemptsAtHandover)
     expect(renameAttempts('waiter')).toBeGreaterThan(attemptsAtHandover)
@@ -227,7 +232,7 @@ describe('file session lock handover under a fake clock', () => {
 
   it('gives up at the hard cap while the lock keeps changing hands', async () => {
     let holder = startAcquisition('holder-0')
-    await advanceUntilSettled(holder.ready)
+    await settleHolderOperation(holder.ready)
     const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     blockRenames('waiter')
@@ -239,7 +244,7 @@ describe('file session lock handover under a fake clock', () => {
       expect(waiter.settled).toBe(false)
       await releaseAcquisition(holder)
       holder = startAcquisition(`holder-${cycle}`)
-      await advanceUntilSettled(holder.ready)
+      await settleHolderOperation(holder.ready)
     }
 
     await advanceTo(waiter, startedAt + HARD_CAP_MS + STEP_MS)
@@ -251,7 +256,7 @@ describe('file session lock handover under a fake clock', () => {
 
   it('times out instead of acquiring when a reclaim finishes past the hard cap', async () => {
     let holder = startAcquisition('holder-0')
-    await advanceUntilSettled(holder.ready)
+    await settleHolderOperation(holder.ready)
     const asleep = nextSleep()
     const waiter = startAcquisition('waiter')
     blockRenames('waiter')
@@ -263,7 +268,7 @@ describe('file session lock handover under a fake clock', () => {
       expect(waiter.settled).toBe(false)
       await releaseAcquisition(holder)
       holder = startAcquisition(`holder-${cycle}`)
-      await advanceUntilSettled(holder.ready)
+      await settleHolderOperation(holder.ready)
     }
 
     await advanceTo(waiter, startedAt + 28_500)
