@@ -47,7 +47,7 @@ Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Impl
 | # | Candidate | Disposition | Evidence and notes |
 | --- | --- | --- | --- |
 | 12 | MySQL DDL default/index identifier escaping | already-fixed | Identifiers pass `assertValidIdentifierSegment` before quoting (`packages/db/src/schema/SQLSchemaCompiler.ts:236-240,287-296`; index names via `generatedNames.ts`). Defaults with quote, backslash, newline, NUL and JSON round-tripped exactly on live MySQL (`packages/db/src/core/mysqlStringLiteral.ts:1-12` switches to a hex literal). Probe deleted. |
-| 13 | MySQL URL handling drops ssl | reproduced | `packages/db-mysql/src/index.ts:378-379` (URL branch passes only `{ uri }`) versus `:380-387` (structured branch passes `ssl`). Live MySQL: structured `ssl` gives a TLS cipher, the URL path gives plaintext. Laravel's URL parser merges query and primary config, so configured options survive. **Proposed ticket:** db-mysql — pass `ssl` into the URI branch. Not app-facing. The other dropped pool options (`max`, timeouts, `application_name`) are a separate decision. |
+| 13 | Connection option handling gap (security-sensitive; details in private advisory GHSA-6wfv-hrh5-rr58) | reproduced | `packages/db-mysql` connection-option handling for URL configuration. Laravel's URL parser merges query and primary config, so configured options survive. **Proposed ticket:** db-mysql — fix tracked privately (not in #214). Not app-facing. |
 | 14 | chunk/cursor fallback loads the full result | rejected-by-decision | ADR-0002: joined, grouped, distinct and union shapes keep full-result fallback. |
 | 15 | Bulk insert is not chunked | reproduced | `packages/db/src/query/TableQueryBuilder.ts:2134-2160` builds one statement for all rows. Pivot inserts are batched (`packages/db/src/model/PivotMutation.ts:108`, budget 900). Probes: SQLite 3,300 × 10 (33,000 binds) fails with zero rows written; MySQL 7,000 × 10 fails the same way. Laravel's `insert` is also one call with no chunking. **Decision (2026-10-20):** rejected. No bulk-insert splitting, as Laravel does not split either. |
 | 16 | Pivot `sync([1,1])` may duplicate associations | reproduced | `packages/db/src/model/PivotMutation.ts:133-141` keeps duplicate ids and `:43-69` snapshots `current`, so each duplicate becomes an insert. Without a unique key it writes two rows; with the usual unique key it throws and rolls back. Laravel's `formatRecordsList` keys by id, so duplicates collapse. `attach` is deliberately different and matches Laravel's `formatAttachRecords` (`packages/db/tests/pivot-mutations-integration.test.ts:153-169`). **Proposed ticket:** packages/db — dedupe ids in `sync` only (last attributes win). Not app-facing. |
@@ -99,7 +99,8 @@ Filed on 2026-10-20 as the issues below, each with a failing regression test fir
 | --- | --- | --- | --- |
 | auth-workos | 2, 5 | state-cookie Secure = configured OR https (https via `resolveRequestUrl`); remove both session-id fallbacks; fail closed when WorkOS returns no session id (contract unchanged) | #212 |
 | session | 3 | per-session Redis keys, no hash tag; ADR-0012 update; upgrade note | #213 |
-| db-mysql, db | 13, 16, 18 | URL keeps `ssl`; `sync` dedupes ids; model-query `update`, `updateJson`, `increment`, `decrement` set `updated_at`; `upsert` sets `created_at` and `updated_at`; soft-delete models: query `delete()` and `restore()` set `updated_at` with `deleted_at` (upgrade note) | #214 |
+| db-mysql | 13 | connection option handling gap; fix tracked privately (details in private advisory GHSA-6wfv-hrh5-rr58) | private |
+| db | 16, 18 | `sync` dedupes ids; model-query `update`, `updateJson`, `increment`, `decrement` set `updated_at`; `upsert` sets `created_at` and `updated_at`; soft-delete models: query `delete()` and `restore()` set `updated_at` with `deleted_at` (upgrade note) | #214 |
 | media | 20 | remote-fetch address classification hardening; ADR-0016 hardening record | #215 |
 | storage-s3 | 21 | `Content-Type` on PUT and multipart create | #216 |
 | mail | 23 | href escaped once | #217 |
@@ -125,7 +126,7 @@ Audit-time dispositions above are kept as recorded. This table lists only the it
 | 5 | reproduced | Implement: remove the access-token and authorization-code session-id fallbacks; fail closed when WorkOS returns no session id (`WorkosVerifiedSession.sessionId` unchanged) | #212 |
 | 7 | reproduced | Rejected: no per-request upstream revocation check (not Laravel) | closed with decision |
 | 11 | insufficient-information | Implement: CSRF enabled by default, with upgrade note | #219 |
-| 13 | reproduced | Implement: URL branch keeps ssl | #214 |
+| 13 | reproduced | Connection option handling gap (details in private advisory GHSA-6wfv-hrh5-rr58); fix tracked privately, not in #214 | private |
 | 15 | reproduced | Rejected: no bulk-insert splitting (Laravel does not split) | closed with decision |
 | 16 | reproduced | Implement: sync dedupes ids; attach unchanged | #214 |
 | 18 | reproduced | Implement: model-query `update`, `updateJson`, `increment` and `decrement` set `updated_at`; `upsert` sets `created_at` and `updated_at`; soft-delete models: query `delete()` and `restore()` set `updated_at` with `deleted_at`; upgrade note | #214 |
