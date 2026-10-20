@@ -1516,6 +1516,65 @@ export default {
     await expect(holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).rejects.toThrow('missing-dependency')
   })
 
+  it('writes a login rehash to the connection of an auth model declared on a second connection', async () => {
+    const root = await createProject({ auth: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const current = await hasher.hash('old-secret')
+    const next = await hasher.hash('new-secret')
+    const secondaryPath = join(root, 'secondary.sqlite')
+    const seed = new DatabaseSync(secondaryPath)
+    seed.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, password TEXT, email_verified_at TEXT, created_at TEXT, updated_at TEXT)')
+    seed.prepare('INSERT INTO users (id, name, email, password, email_verified_at) VALUES (?, ?, ?, ?, ?)')
+      .run(1, 'Ava', 'ava@example.com', current, '2026-01-01T00:00:00.000Z')
+    seed.close()
+
+    await writeFile(join(root, 'config/database.ts'), `
+import { defineDatabaseConfig } from ${databaseEntry}
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: { driver: 'sqlite', url: ${JSON.stringify(join(root, 'database.sqlite'))} },
+    secondary: { driver: 'sqlite', url: ${JSON.stringify(secondaryPath)} },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/models/User.ts'), `
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+const users = defineGeneratedTable('users', {
+  id: column.integer().primaryKey(),
+  name: column.string().nullable(),
+  email: column.string(),
+  password: column.string().nullable(),
+  email_verified_at: column.timestamp().nullable(),
+  created_at: column.timestamp().nullable(),
+  updated_at: column.timestamp().nullable(),
+})
+export default defineModel(users, { connectionName: 'secondary', fillable: ['email', 'name', 'password'], guarded: ['id'] })
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    await runtime.initialize()
+    const users = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers.users
+    if (!users) {
+      throw new Error('users provider is missing')
+    }
+    const rehashPasswordIfUnchanged = Reflect.get(users, Symbol.for('holo.auth.rehashPasswordIfUnchanged')) as
+      (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
+    const user = await users.findByCredentials({ email: 'ava@example.com' })
+
+    await expect(rehashPasswordIfUnchanged.call(users, user, current, next)).resolves.toBe(true)
+
+    const check = new DatabaseSync(secondaryPath)
+    const row = check.prepare('SELECT password, updated_at FROM users WHERE id = 1').get() as { password: string, updated_at: string | null }
+    check.close()
+    expect(row.password).toBe(next)
+    expect(row.updated_at).not.toBeNull()
+  })
+
   it('filters hosted-auth profile writes and honors model auth input hooks', async () => {
     const root = await createProject({
       auth: true,

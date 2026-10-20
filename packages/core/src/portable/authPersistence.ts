@@ -548,6 +548,10 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
           readonly tableName?: string
           readonly columns?: Readonly<Record<string, unknown>>
         }
+        readonly primaryKey?: string
+        readonly connectionName?: string
+        readonly timestamps?: boolean
+        readonly updatedAtColumn?: string
         readonly guarded?: readonly string[]
       }
       query?(): AuthModelQuery
@@ -754,17 +758,26 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         return markProviderUser(persisted ?? await model.update(id, values), providerName)
       },
       [REHASH_PASSWORD_IF_UNCHANGED]: async (user: unknown, expectedDigest: string, newDigest: string) => {
-        const table = model.definition?.table?.tableName
-        const values = sanitizeAuthWriteInput({
-          password: newDigest,
-          updated_at: serializeAuthTimestamp(new Date(), DB.connection().getDriver()),
-        })
-        if (!table || typeof values.password !== 'string') {
+        const definition = model.definition
+        const table = definition?.table?.tableName
+        const primaryKey = definition?.primaryKey
+        if (!table || !primaryKey) {
           return false
         }
 
-        const result = await DB.table(table)
-          .where('id', getEntityAttributes(user).id as string | number)
+        const connectionName = definition?.connectionName
+        const values = sanitizeAuthWriteInput({
+          password: newDigest,
+          ...definition?.timestamps && definition.updatedAtColumn
+            ? { [definition.updatedAtColumn]: serializeAuthTimestamp(new Date(), DB.connection(connectionName).getDriver()) }
+            : {},
+        })
+        if (typeof values.password !== 'string') {
+          return false
+        }
+
+        const result = await DB.table(table, connectionName)
+          .where(primaryKey, getEntityAttributes(user)[primaryKey] as string | number)
           .where('password', expectedDigest)
           .update(values)
         return (result.affectedRows ?? 0) > 0
