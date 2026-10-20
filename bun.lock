@@ -960,7 +960,6 @@
         "@holo-js/kernel": "catalog:",
         "@holo-js/queue": "catalog:",
         "@holo-js/storage": "catalog:",
-        "file-type": "catalog:",
         "sharp": "catalog:",
       },
       "devDependencies": {
@@ -1162,7 +1161,6 @@
       "version": "0.3.28",
       "dependencies": {
         "@holo-js/kernel": "catalog:",
-        "file-type": "catalog:",
         "valibot": "catalog:",
       },
       "devDependencies": {
