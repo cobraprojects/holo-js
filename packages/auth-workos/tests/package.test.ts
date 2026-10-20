@@ -1075,6 +1075,25 @@ describe('@holo-js/auth-workos', () => {
     expect(login.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
   })
 
+  it('clears the WorkOS state cookie with Secure over http when the session cookie is configured Secure', async () => {
+    await configureRuntime({ sessionCookieSecure: true })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: createUnsignedJwt({ sid: 'session_clear_state_cookie' }),
+      user: { id: 'workos_clear_state', email: 'clear-state@app.test', emailVerified: true },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const login = await loginWithWorkos(new Request('http://app.test/login'))
+    const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
+    const stateCookie = login.headers.get('set-cookie')?.split(';', 1)[0]
+
+    const callback = await completeWorkosAuth(new Request(`http://app.test/api/auth/workos/callback?code=code_clear_state&state=${state}`, {
+      headers: { cookie: stateCookie ?? '' },
+    }))
+
+    expect(callback.error).toBeNull()
+    const cleared = callback.data?.authSession?.cookies.find(cookie => cookie.startsWith('holo_workos_dashboard_state=;'))
+    expect(cleared).toMatch(SECURE_COOKIE_FLAG)
+  })
+
   it('treats X-Forwarded-Proto as https for the WorkOS state cookie only from a trusted proxy', async () => {
     await configureRuntime()
     configureSecurityRuntime({ config: { trustedProxies: ['198.51.100.4'] } })
@@ -1346,6 +1365,34 @@ describe('@holo-js/auth-workos', () => {
     const positive = await completeWorkosAuth(await createWorkosCallbackRequest('code_positive_control'))
     expect(positive.error).toBeNull()
     expect((await readdir(runtime.sessionPath)).length).toBeGreaterThan(sessionFilesBefore.length)
+  })
+
+  it('takes the session id from a session_id claim when the access token has no sid', async () => {
+    await configureRuntime()
+    const accessToken = createUnsignedJwt({ session_id: 'session_claim_only' })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: accessToken,
+      user: {
+        id: 'workos_session_claim',
+        email: 'session-claim@app.test',
+        emailVerified: true,
+      },
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }))
+
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_session_claim'))
+    expect(callback.error).toBeNull()
+    expect(callback.data?.session.sessionId).toBe('session_claim_only')
+    const sessionCookie = callback.data?.authSession?.cookies[0]?.split(';', 1)[0]
+
+    const response = await logoutWithWorkos(new Request('https://app.test/logout', {
+      headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+    }))
+    expect(new URL(response.headers.get('location') ?? '').searchParams.get('session_id')).toBe('session_claim_only')
   })
 
   it.each([
