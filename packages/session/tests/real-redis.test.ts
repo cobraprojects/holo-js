@@ -105,7 +105,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await adapter.close()
     }
   }, 30_000)
-  it('sets a Redis expiry on every new session so abandoned sessions expire without a sweep', async () => {
+  it('stores each session under its own Redis key with no hash tag, and sets a Redis expiry on it', async () => {
     const prefix = `holo:session:${randomUUID()}:`
     const adapter = createSessionRedisAdapter({
       name: 'redis',
@@ -132,7 +132,8 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
         expiresAt: new Date(Date.now() + 60_000),
       })
 
-      const ttl = await raw.pttl(`${prefix}{holo-session}:${sessionId}`)
+      await expect(raw.keys(`${prefix}*`)).resolves.toEqual([`${prefix}${sessionId}`])
+      const ttl = await raw.pttl(`${prefix}${sessionId}`)
       expect(ttl).toBeGreaterThan(0)
       expect(ttl).toBeLessThanOrEqual(60_000)
     } finally {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { canTrustTestCertificates, startRedisService } from './support/redis'
-import type { SessionRecord } from '../src/contracts'
+import type { SessionRecord, SessionStoreTakeResult } from '../src/contracts'
 import { createSessionRedisAdapter } from '../src/drivers/redis-adapter'
 
 async function createStore(options: { cluster?: boolean; socket?: boolean; url?: boolean; tls?: boolean } = {}) {
@@ -68,7 +68,7 @@ describe('session Redis behavior', () => {
     await expect(adapter.get(record.id)).resolves.toMatchObject({ data: { refreshed: true } })
   })
 
-  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('atomically rotates sessions and private flash data through %j', async options => {
+  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
     const { adapter, record } = await createStore(options)
     const rotated = { ...record, id: randomUUID() }
     await adapter.set(record)
@@ -80,6 +80,34 @@ describe('session Redis behavior', () => {
     await adapter.rotate(rotated.id, { ...rotated, data: { refreshed: true } })
     await expect(adapter.get(rotated.id)).resolves.toMatchObject({ data: { refreshed: true } })
   }, 30_000)
+
+  it('consumes a flash value exactly once when it is taken while its session rotates', async () => {
+    const { adapter, record } = await createStore()
+    for (let round = 0; round < 25; round += 1) {
+      const source = { ...record, id: randomUUID() }
+      const destination = { ...record, id: randomUUID() }
+      await adapter.set(source)
+      await adapter.flash(source.id, 'once', round)
+      const takenFromSource: SessionStoreTakeResult[] = []
+      let rotating = true
+      await Promise.all([
+        adapter.rotate(source.id, destination).finally(() => { rotating = false }),
+        ...Array.from({ length: 4 }, async () => {
+          while (rotating) takenFromSource.push(await adapter.take(source.id, 'once'))
+        }),
+      ])
+      const takenFromDestination = await adapter.take(destination.id, 'once')
+      expect([...takenFromSource, takenFromDestination].filter(result => result.found)).toHaveLength(1)
+      await expect(adapter.get(source.id)).resolves.toBeNull()
+      await adapter.del(destination.id)
+    }
+  }, 30_000)
+
+  it('creates no new session when rotating from a missing session', async () => {
+    const { adapter, record } = await createStore()
+    await expect(adapter.rotate('missing', record)).rejects.toThrow('was not found')
+    await expect(adapter.get(record.id)).resolves.toBeNull()
+  })
 
   it('keeps both sessions and their flashes intact when rotation would overwrite a destination', async () => {
     const { adapter, record } = await createStore()
@@ -120,7 +148,7 @@ describe('session Redis behavior', () => {
     const client = service.clients[0]
     if (!client) throw new Error('Expected Redis client')
     for (const payload of ['{', JSON.stringify({ ...record, createdAt: 'not-a-date' }), JSON.stringify({ ...record, data: [] }), JSON.stringify({ ...record, expiresAt: 42 })]) {
-      await client.hset(`${prefix}{holo-session}:${record.id}`, 'record', payload)
+      await client.hset(`${prefix}${record.id}`, 'record', payload)
       await expect(adapter.get(record.id)).resolves.toBeNull()
     }
     await adapter.set(record)

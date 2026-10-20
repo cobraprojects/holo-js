@@ -415,6 +415,15 @@ The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `tru
 
 Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
 
+### Redis sessions use one key per session
+
+Each Redis session is stored under the store's `prefix` followed by the session ID, so every session is its own key and sessions spread across a Redis Cluster.
+
+- **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
+- **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
+- **Set a `prefix` on a shared Redis database.** Without one, each session key is the bare session ID, so keep the session store in its own database or give it a prefix.
+- **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops between the two steps, the old ID stays valid until its expiry.
+
 ### Verification resend requires a signed-in user
 
 `resendEmailVerification()` and `sendEmailVerification()` no longer take an email address, and `verification.resend()` no longer accepts `email`. A new link always goes to the signed-in user, and without one the call throws `email_verification_user_missing` with status 401. The unauthenticated resend is gone, so a guest can no longer ask for a link by typing an address.
