@@ -159,6 +159,54 @@ describe('managed resources', () => {
     expect(closed).toEqual([])
   })
 
+  it('never closes a resource while a hold that starts during dispose is still running', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
+    const only = await resources.acquire('only', config => createRecordingResource(config, closed))
+    await resources.commit()
+
+    const disposing = resources.dispose()
+    let closedWhileRunning: boolean | undefined
+    let outcome: Promise<string> | Error
+    try {
+      outcome = only.hold(() => new Promise<string>(resolve => {
+        setTimeout(() => {
+          closedWhileRunning = closed.includes('only')
+          resolve('done')
+        }, 10)
+      }))
+    } catch (error) {
+      outcome = error instanceof Error ? error : new Error(String(error))
+    }
+    if (outcome instanceof Error) {
+      expect(outcome.message).toMatch(/closed|disposed/)
+    } else {
+      await expect(outcome).resolves.toBe('done')
+      expect(closedWhileRunning).toBe(false)
+    }
+    await disposing
+    expect(closed).toEqual(['only'])
+  })
+
+  it('rejects dispose when a held resource fails to close during disposal', async () => {
+    const resources = createManagedResources<string, { readonly name: string, close(): Promise<void> }>()
+    const failing = await resources.acquire('failing', name => ({
+      name,
+      async close() {
+        throw new Error('close failed during disposal')
+      },
+    }))
+    await resources.commit()
+    let settle: () => void = () => undefined
+    const operation = failing.hold(() => new Promise<void>(resolve => { settle = resolve }))
+
+    const disposing = resources.dispose()
+    settle()
+    await operation
+
+    await expect(disposing).rejects.toThrow('close failed during disposal')
+  })
+
   it('holds a resource for each store operation through a held store until the operation settles', async () => {
     const closed: string[] = []
     const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()

@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import { reportError } from '@holo-js/kernel/error-reporting'
-import { releaseManagedResources } from './capabilityLifetimes'
+import { releaseManagedResources, throwCapabilityFailures } from './capabilityLifetimes'
 
 export interface ReleasableResource {
   close?(): void | Promise<void>
@@ -22,12 +22,15 @@ export interface ManagedResources<TConfig, TValue extends ReleasableResource> {
   dispose(): Promise<void>
 }
 
+type ManagedResourceState = 'open' | 'draining' | 'closing'
+
 interface ManagedResourceEntry<TConfig, TValue> {
   readonly config: TConfig
   readonly value: TValue
   readonly lease: ResourceLease<TValue>
   pending: number
-  onClosed?: () => void
+  state: ManagedResourceState
+  onDrained?: () => void
 }
 
 export function createManagedResources<TConfig, TValue extends ReleasableResource>(
@@ -37,32 +40,42 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
   let retained: ManagedResourceEntry<TConfig, TValue>[] = []
   let claimed: ManagedResourceEntry<TConfig, TValue>[] = []
   let opened: ManagedResourceEntry<TConfig, TValue>[] = []
-  let draining: ManagedResourceEntry<TConfig, TValue>[] = []
   let disposing = false
+  let disposalFailures: unknown[] = []
   const releasing = new Set<Promise<void>>()
 
   const findSameConfig = (entries: readonly ManagedResourceEntry<TConfig, TValue>[], config: TConfig) =>
     entries.find(entry => isDeepStrictEqual(entry.config, config))
 
-  const closeWhenIdle = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
+  const track = (promise: Promise<void>): void => {
+    releasing.add(promise)
+    promise.then(() => releasing.delete(promise))
+  }
+
+  const startClose = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
+    const reportOnly = !disposing
+    entry.state = 'closing'
     retained = retained.filter(candidate => candidate !== entry)
-    draining = draining.filter(candidate => candidate !== entry)
-    const release = releaseManagedResources([entry.value])
-      .catch(error => reportError(error, {
-        capability: 'runtime',
-        operation: 'releaseReplacedResource',
-      }))
-      .finally(() => {
-        releasing.delete(release)
-        entry.onClosed?.()
+    const close = releaseManagedResources([entry.value])
+      .catch(error => {
+        if (!reportOnly) {
+          disposalFailures.push(error)
+          return
+        }
+        reportError(error, {
+          capability: 'runtime',
+          operation: 'releaseReplacedResource',
+        })
       })
-    releasing.add(release)
+      .finally(() => entry.onDrained?.())
+    track(close)
   }
 
   const finishOperation = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
     entry.pending -= 1
-    const awaitingIdle = retained.includes(entry) || draining.includes(entry)
-    if (entry.pending === 0 && awaitingIdle && !claimed.includes(entry)) closeWhenIdle(entry)
+    if (entry.pending !== 0 || entry.state === 'closing') return
+    const awaitingClose = entry.state === 'draining' || (retained.includes(entry) && !claimed.includes(entry))
+    if (awaitingClose) startClose(entry)
   }
 
   const createEntry = (config: TConfig, value: TValue): ManagedResourceEntry<TConfig, TValue> => {
@@ -70,9 +83,11 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       config,
       value,
       pending: 0,
+      state: 'open',
       lease: {
         value,
         hold<TResult>(operation: () => TResult): TResult {
+          if (entry.state === 'closing') throw new Error('[@holo-js/core] The managed resource is closed.')
           entry.pending += 1
           let result: TResult
           try {
@@ -130,18 +145,22 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
     },
     async dispose() {
       disposing = true
+      disposalFailures = []
       const entries = [...active, ...retained, ...claimed, ...opened]
       active = []
       retained = []
       claimed = []
       opened = []
-      const idle = entries.filter(entry => entry.pending === 0)
-      for (const entry of entries.filter(candidate => candidate.pending > 0)) {
-        draining.push(entry)
-        releasing.add(new Promise<void>(resolve => { entry.onClosed = resolve }))
+      for (const entry of entries) {
+        if (entry.pending === 0) {
+          startClose(entry)
+          continue
+        }
+        entry.state = 'draining'
+        track(new Promise<void>(resolve => { entry.onDrained = resolve }))
       }
-      await Promise.all([...releasing])
-      await releaseManagedResources(idle.map(entry => entry.value))
+      while (releasing.size > 0) await Promise.all([...releasing])
+      throwCapabilityFailures(disposalFailures)
     },
   }
 }
