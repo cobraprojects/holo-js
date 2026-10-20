@@ -386,13 +386,9 @@ function getSecurityRedisConnections(): SecurityRedisConnections {
   return state.securityRedisConnections
 }
 
-function createSessionRedisConnections(): SessionRedisConnections {
-  return createManagedRedisConnections({ connect: adapter => adapter.connect() })
-}
-
 function getSessionRedisConnections(): SessionRedisConnections {
   const state = getRuntimeState()
-  state.sessionRedisConnections ??= createSessionRedisConnections()
+  state.sessionRedisConnections ??= createManagedRedisConnections({ connect: adapter => adapter.connect() })
   return state.sessionRedisConnections
 }
 

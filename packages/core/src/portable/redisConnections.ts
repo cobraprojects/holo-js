@@ -36,7 +36,6 @@ export function createManagedRedisConnections<TConfig, TAdapter extends ManagedR
         ?? findSameConfig(active, config)
         ?? findSameConfig(retained, config)
       if (reusable) {
-        retained = retained.filter(connection => connection !== reusable)
         if (!claimed.includes(reusable)) claimed.push(reusable)
         return reusable.adapter
       }
@@ -48,8 +47,9 @@ export function createManagedRedisConnections<TConfig, TAdapter extends ManagedR
       return adapter
     },
     commit() {
-      retained = [...retained, ...active.filter(connection => !claimed.includes(connection))]
+      const previouslyOpen = [...active, ...retained]
       active = claimed
+      retained = previouslyOpen.filter(connection => !active.includes(connection))
       claimed = []
       opened = []
     },
