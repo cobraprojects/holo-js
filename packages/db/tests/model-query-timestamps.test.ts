@@ -1,5 +1,5 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   column, configureDB, createConnectionManager, createDatabase, createDialect, resetDB,
 } from '../src'
@@ -267,6 +267,41 @@ describe('model query mutations apply updated_at like Laravel', () => {
     await post.restore()
     expect(retrievals).toBe(1)
     expect(post.get('deleted_at')).toBeNull()
+  })
+
+  it('marks the soft delete as persisted, so a restore on the same instance writes a fresh updated_at', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const db = await openModelDatabase()
+    const posts = postsTable()
+    await seedPost(db, posts)
+    const Post = defineModelFromTable(posts, { softDeletes: true, fillable: ['title'] })
+
+    vi.setSystemTime(new Date('2024-01-01T00:00:00.000Z'))
+    const post = await Post.findOrFail(1)
+    await post.delete()
+    expect(post.isDirty()).toBe(false)
+
+    vi.setSystemTime(new Date('2024-06-01T00:00:00.000Z'))
+    await post.restore()
+    const restoredAt = new Date('2024-06-01T00:00:00.000Z').getTime()
+    expect(post.get('updated_at').getTime()).toBe(restoredAt)
+    expect((await Post.findOrFail(1)).get('updated_at').getTime()).toBe(restoredAt)
+    expect(post.isDirty()).toBe(false)
+  })
+
+  it('keeps a caller-set updated_at made after a soft delete when the model is restored', async () => {
+    const db = await openModelDatabase()
+    const posts = postsTable()
+    await seedPost(db, posts)
+    const Post = defineModelFromTable(posts, { softDeletes: true, fillable: ['title'] })
+    const explicit = new Date('2021-06-01T00:00:00.000Z')
+
+    const post = await Post.findOrFail(1)
+    await post.delete()
+    post.forceFill({ updated_at: explicit } as never)
+    await post.restore()
+    expect((await Post.findOrFail(1)).get('updated_at')).toEqual(explicit)
   })
 
   it('bumps updated_at with deleted_at on query delete and restore, and force delete still removes the row', async () => {

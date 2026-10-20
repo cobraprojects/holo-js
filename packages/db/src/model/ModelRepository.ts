@@ -1835,6 +1835,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
         entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) } as never)
+        entity.syncOriginalAttributes(Object.keys(written))
         await this.dispatchEvent('trashed', entity)
       } else {
         await this.queryWithoutGlobalScopes().where(primaryKey, id).delete()
@@ -1869,10 +1870,13 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       await this.dispatchCancelableEvent('restoring', entity)
       entity.forceFill({ [deletedAtColumn]: null } as never)
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
-      this.applyWriteMutators(entity, [...new Set([...Object.keys(entity.getDirty()), deletedAtColumn])])
-      const written = { ...entity.getDirty(), [deletedAtColumn]: entity.get(deletedAtColumn as never) }
+      this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
+      const written = entity.getDirty()
       const dirty = this.sanitizeWritePayload(written, 'update', false, false)
-      await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
+      if (Object.keys(dirty).length > 0) {
+        await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
+      }
+
       entity.recordChanges(written)
       entity.forceFill(this.normalizeFromStorage(dirty))
       entity.finishSave()
