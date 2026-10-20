@@ -207,6 +207,28 @@ describe('managed resources', () => {
     await expect(disposing).rejects.toThrow('close failed during disposal')
   })
 
+  it('rejects a hold through a replaced idle resource while its close is running', async () => {
+    let finishClose: () => void = () => undefined
+    const closing = new Promise<void>(resolve => { finishClose = resolve })
+    const resources = createManagedResources<string, { readonly name: string, close(): Promise<void> }>()
+    const first = await resources.acquire('first', name => ({
+      name,
+      async close() {
+        await closing
+      },
+    }))
+    await resources.commit()
+    await resources.acquire('second', config => createRecordingResource(config, []))
+
+    const committing = resources.commit()
+    let ran = false
+    expect(() => first.hold(() => { ran = true })).toThrow(/closed/)
+    expect(ran).toBe(false)
+
+    finishClose()
+    await committing
+  })
+
   it('holds a resource for each store operation through a held store until the operation settles', async () => {
     const closed: string[] = []
     const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()

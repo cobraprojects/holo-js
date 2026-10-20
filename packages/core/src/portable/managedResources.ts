@@ -24,6 +24,8 @@ export interface ManagedResources<TConfig, TValue extends ReleasableResource> {
 
 type ManagedResourceState = 'open' | 'draining' | 'closing'
 
+type CloseFailureHandler = (error: unknown) => void
+
 interface ManagedResourceEntry<TConfig, TValue> {
   readonly config: TConfig
   readonly value: TValue
@@ -31,6 +33,7 @@ interface ManagedResourceEntry<TConfig, TValue> {
   pending: number
   state: ManagedResourceState
   onDrained?: () => void
+  onFailure?: CloseFailureHandler
 }
 
 export function createManagedResources<TConfig, TValue extends ReleasableResource>(
@@ -52,30 +55,31 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
     promise.then(() => releasing.delete(promise))
   }
 
-  const startClose = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
-    const reportOnly = !disposing
+  const reportReplacedResourceFailure: CloseFailureHandler = error => reportError(error, {
+    capability: 'runtime',
+    operation: 'releaseReplacedResource',
+  })
+
+  const startClose = (entry: ManagedResourceEntry<TConfig, TValue>, onFailure: CloseFailureHandler): Promise<void> => {
     entry.state = 'closing'
     retained = retained.filter(candidate => candidate !== entry)
-    const close = releaseManagedResources([entry.value])
-      .catch(error => {
-        if (!reportOnly) {
-          disposalFailures.push(error)
-          return
-        }
-        reportError(error, {
-          capability: 'runtime',
-          operation: 'releaseReplacedResource',
-        })
-      })
+    return releaseManagedResources([entry.value])
+      .catch(onFailure)
       .finally(() => entry.onDrained?.())
-    track(close)
+  }
+
+  const retireEntry = (entry: ManagedResourceEntry<TConfig, TValue>, onFailure: CloseFailureHandler): Promise<void> => {
+    if (entry.pending === 0) return startClose(entry, onFailure)
+    entry.state = 'draining'
+    entry.onFailure = onFailure
+    return new Promise<void>(resolve => { entry.onDrained = resolve })
   }
 
   const finishOperation = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
     entry.pending -= 1
     if (entry.pending !== 0 || entry.state === 'closing') return
     const awaitingClose = entry.state === 'draining' || (retained.includes(entry) && !claimed.includes(entry))
-    if (awaitingClose) startClose(entry)
+    if (awaitingClose) track(startClose(entry, entry.onFailure ?? reportReplacedResourceFailure))
   }
 
   const createEntry = (config: TConfig, value: TValue): ManagedResourceEntry<TConfig, TValue> => {
@@ -133,15 +137,19 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       retained = previouslyOpen.filter(entry => !active.includes(entry))
       const idle = retained.filter(entry => entry.pending === 0)
       retained = retained.filter(entry => entry.pending > 0)
-      await releaseManagedResources(idle.map(entry => entry.value))
+      const failures: unknown[] = []
+      await Promise.all(idle.map(entry => retireEntry(entry, error => { failures.push(error) })))
+      throwCapabilityFailures(failures)
     },
     async discard() {
       const revivedIdle = claimed.filter(entry => retained.includes(entry) && entry.pending === 0)
       retained = retained.filter(entry => !revivedIdle.includes(entry))
-      const values = [...opened, ...revivedIdle].map(entry => entry.value)
+      const entries = [...opened, ...revivedIdle]
       claimed = []
       opened = []
-      await releaseManagedResources(values)
+      const failures: unknown[] = []
+      await Promise.all(entries.map(entry => retireEntry(entry, error => { failures.push(error) })))
+      throwCapabilityFailures(failures)
     },
     async dispose() {
       disposing = true
@@ -152,12 +160,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       claimed = []
       opened = []
       for (const entry of entries) {
-        if (entry.pending === 0) {
-          startClose(entry)
-          continue
-        }
-        entry.state = 'draining'
-        track(new Promise<void>(resolve => { entry.onDrained = resolve }))
+        track(retireEntry(entry, error => { disposalFailures.push(error) }))
       }
       while (releasing.size > 0) await Promise.all([...releasing])
       throwCapabilityFailures(disposalFailures)
