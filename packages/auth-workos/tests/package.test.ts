@@ -1,7 +1,7 @@
 import { createNativeHostedAuthPersistence } from '../../auth/tests/support/native-hosted-persistence'
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFileSessionStore } from '../../session/src'
@@ -92,6 +92,8 @@ function completeWorkosSessionFixture(session: WorkosSessionFixture | null): Wor
   }
 }
 
+const SECURE_COOKIE_FLAG = /;\s*Secure\s*(;|$)/
+
 const sessionDirectories: string[] = []
 
 function createSessionStore() {
@@ -108,6 +110,7 @@ async function createIdentityStore() {
 
 async function configureRuntime(options: {
   emailVerificationRequired?: boolean
+  sessionCookieSecure?: boolean
   workosGuard?: 'web' | 'admin' | 'api'
   defaultWorkosProvider?: string
   includeWorkosConfig?: boolean
@@ -131,7 +134,7 @@ async function configureRuntime(options: {
       cookie: {
         name: 'holo_session',
         path: '/',
-        secure: false,
+        secure: options.sessionCookieSecure === true,
         httpOnly: true,
         sameSite: 'lax',
         partitioned: false,
@@ -206,6 +209,7 @@ async function configureRuntime(options: {
 
   return {
     persistence,
+    sessionPath,
     sessionStore,
     usersProvider,
     adminsProvider,
@@ -1054,6 +1058,56 @@ describe('@holo-js/auth-workos', () => {
     expect(register.headers.get('set-cookie')).toContain('holo_workos_dashboard_state=')
   })
 
+  it('marks the WorkOS state cookie Secure when the session cookie is configured Secure, even over http', async () => {
+    await configureRuntime({ sessionCookieSecure: true })
+
+    const login = await loginWithWorkos(new Request('http://app.test/login'))
+
+    expect(login.headers.get('set-cookie')).toContain('holo_workos_dashboard_state=')
+    expect(login.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
+  })
+
+  it('marks the WorkOS state cookie Secure on https requests with the default session cookie', async () => {
+    await configureRuntime()
+
+    const login = await loginWithWorkos(new Request('https://app.test/login'))
+
+    expect(login.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
+  })
+
+  it('clears the WorkOS state cookie with Secure over http when the session cookie is configured Secure', async () => {
+    await configureRuntime({ sessionCookieSecure: true })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: createUnsignedJwt({ sid: 'session_clear_state_cookie' }),
+      user: { id: 'workos_clear_state', email: 'clear-state@app.test', emailVerified: true },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const login = await loginWithWorkos(new Request('http://app.test/login'))
+    const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
+    const stateCookie = login.headers.get('set-cookie')?.split(';', 1)[0]
+
+    const callback = await completeWorkosAuth(new Request(`http://app.test/api/auth/workos/callback?code=code_clear_state&state=${state}`, {
+      headers: { cookie: stateCookie ?? '' },
+    }))
+
+    expect(callback.error).toBeNull()
+    const cleared = callback.data?.authSession?.cookies.find(cookie => cookie.startsWith('holo_workos_dashboard_state=;'))
+    expect(cleared).toMatch(SECURE_COOKIE_FLAG)
+  })
+
+  it('treats X-Forwarded-Proto as https for the WorkOS state cookie only from a trusted proxy', async () => {
+    await configureRuntime()
+    configureSecurityRuntime({ config: { trustedProxies: ['198.51.100.4'] } })
+    const forwardedHeaders = { 'x-forwarded-proto': 'https' }
+
+    requestUrlInternals.provideConnectionAddress(() => '198.51.100.4')
+    const trusted = await loginWithWorkos(new Request('http://app.test/login', { headers: forwardedHeaders }))
+    expect(trusted.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
+
+    requestUrlInternals.provideConnectionAddress(() => '203.0.113.66')
+    const untrusted = await loginWithWorkos(new Request('http://app.test/login', { headers: forwardedHeaders }))
+    expect(untrusted.headers.get('set-cookie')).not.toMatch(SECURE_COOKIE_FLAG)
+  })
+
   it('sends WorkOS the client IP resolved through trusted proxies, never a spoofed forwarded address', async () => {
     await configureRuntime()
     const sentAddresses: unknown[] = []
@@ -1160,7 +1214,7 @@ describe('@holo-js/auth-workos', () => {
     await configureRuntime()
     const profiles = [
       {
-        session: { id: 'nested-session' },
+        session: { id: 'session_nested' },
         user: {
           id: 'camel-profile',
           email: 'camel@app.test',
@@ -1196,8 +1250,13 @@ describe('@holo-js/auth-workos', () => {
         headers: { 'content-type': 'application/json' },
       }))
       const result = await completeWorkosAuth(request)
-      expect(result.error).toBeNull()
-      expect(result.data?.session.sessionId).toBe(index === 0 ? 'nested-session' : `profile-code-${index}`)
+      if (index === 0) {
+        expect(result.error).toBeNull()
+        expect(result.data?.session.sessionId).toBe('session_nested')
+      } else {
+        expect(result.data).toBeNull()
+        expect(result.error?.code).toBe('workos_auth_failed')
+      }
     }
   })
 
@@ -1261,6 +1320,172 @@ describe('@holo-js/auth-workos', () => {
       headers: plainCookie ? { cookie: plainCookie } : undefined,
     }))
     expect(new URL(plainResponse.headers.get('location') ?? '').searchParams.has('return_to')).toBe(false)
+  })
+
+  it.each([
+    ['an opaque access token', { access_token: 'opaque_access_token_secret' }],
+    ['no token', {}],
+  ])('fails closed when WorkOS returns %s and no session id, creating no Holo session', async (_label, tokens) => {
+    const runtime = await configureRuntime()
+    const sessionFilesBefore = (await readdir(runtime.sessionPath)).sort()
+    const respondWith = (payload: Readonly<Record<string, unknown>>) => vi.stubGlobal('fetch', async () => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }))
+
+    respondWith({
+      ...tokens,
+      user: {
+        id: 'workos_no_session_id',
+        email: 'no-session-id@app.test',
+        emailVerified: true,
+      },
+    })
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_no_session_id'))
+
+    expect(callback.data).toBeNull()
+    expect(callback.error?.code).toBe('workos_auth_failed')
+    expect(callback.error?.message).toContain('session id')
+    expect(JSON.stringify(callback)).not.toContain('opaque_access_token_secret')
+    expect(JSON.stringify(callback)).not.toContain('code_no_session_id')
+    expect(await runtime.usersProvider.findByCredentials({ email: 'no-session-id@app.test' })).toBeNull()
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_no_session_id')).toBeNull()
+    expect((await readdir(runtime.sessionPath)).sort()).toEqual(sessionFilesBefore)
+
+    const logout = await logoutWithWorkos(new Request('https://app.test/logout'))
+    expect(logout.status).toBe(303)
+    expect(logout.headers.get('location')).toBe('https://app.test/')
+
+    respondWith({
+      access_token: createUnsignedJwt({ sid: 'session_positive_control' }),
+      user: { id: 'workos_positive_control', email: 'positive-control@app.test', emailVerified: true },
+    })
+    const positive = await completeWorkosAuth(await createWorkosCallbackRequest('code_positive_control'))
+    expect(positive.error).toBeNull()
+    expect((await readdir(runtime.sessionPath)).length).toBeGreaterThan(sessionFilesBefore.length)
+  })
+
+  it('fails closed when the WorkOS session id lacks the session_ prefix', async () => {
+    const runtime = await configureRuntime()
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      session: { id: 'opaque-session-id' },
+      user: { id: 'workos_unprefixed', email: 'unprefixed@app.test', emailVerified: true },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_unprefixed'))
+
+    expect(callback.data).toBeNull()
+    expect(callback.error?.code).toBe('workos_auth_failed')
+    expect(await runtime.usersProvider.findByCredentials({ email: 'unprefixed@app.test' })).toBeNull()
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_unprefixed')).toBeNull()
+  })
+
+  it('writes no user, identity, or session when the request URL cannot be resolved for the state cookie', async () => {
+    const runtime = await configureRuntime()
+    configureSecurityRuntime({ config: { trustedProxies: ['198.51.100.4'] } })
+    requestUrlInternals.provideConnectionAddress(() => '198.51.100.4')
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: createUnsignedJwt({ sid: 'session_bad_forwarded_host' }),
+      user: { id: 'workos_bad_host', email: 'bad-host@app.test', emailVerified: true },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_bad_host', { 'x-forwarded-host': 'bad host/' }))
+
+    expect(callback.data).toBeNull()
+    expect(callback.error?.code).toBe('workos_auth_failed')
+    expect(await runtime.usersProvider.findByCredentials({ email: 'bad-host@app.test' })).toBeNull()
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_bad_host')).toBeNull()
+  })
+
+  it('takes the session id from a session_id claim when the access token has no sid', async () => {
+    await configureRuntime()
+    const accessToken = createUnsignedJwt({ session_id: 'session_claim_only' })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: accessToken,
+      user: {
+        id: 'workos_session_claim',
+        email: 'session-claim@app.test',
+        emailVerified: true,
+      },
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }))
+
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_session_claim'))
+    expect(callback.error).toBeNull()
+    expect(callback.data?.session.sessionId).toBe('session_claim_only')
+    const sessionCookie = callback.data?.authSession?.cookies[0]?.split(';', 1)[0]
+
+    const response = await logoutWithWorkos(new Request('https://app.test/logout', {
+      headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+    }))
+    expect(new URL(response.headers.get('location') ?? '').searchParams.get('session_id')).toBe('session_claim_only')
+  })
+
+  it.each([
+    ['an access token', 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl'],
+    ['an opaque access token', 'opaque_access_token_secret'],
+    ['an authorization code', 'code_01_authorization_secret'],
+  ])('logs out locally and never sends %s upstream as the session id', async (_label, storedSessionId) => {
+    const runtime = await configureRuntime()
+    const now = new Date()
+    await runtime.sessionStore.write({
+      id: 'legacy-workos-session',
+      store: 'file',
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          authenticatedAt: now.toISOString(),
+          userId: 1,
+          user: { id: 1 },
+          workos: { provider: 'dashboard', sessionId: storedSessionId },
+        },
+      },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web', 'legacy-workos-session')
+
+    const response = await logoutWithWorkos(new Request('https://app.test/logout'))
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('https://app.test/')
+    expect(response.headers.get('location')).not.toContain(storedSessionId)
+    expect(response.headers.get('set-cookie')).toContain('holo_session=;')
+  })
+
+  it('sends a stored WorkOS session id upstream in the hosted logout URL', async () => {
+    const runtime = await configureRuntime()
+    const now = new Date()
+    await runtime.sessionStore.write({
+      id: 'workos-session',
+      store: 'file',
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          userId: 1,
+          authenticatedAt: now.toISOString(),
+          user: { id: 1 },
+          workos: { provider: 'dashboard', sessionId: 'session_01HZ8V3K1ARTE0A3XQ7B2Q9ZCD' },
+        },
+      },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web', 'workos-session')
+
+    const response = await logoutWithWorkos(new Request('https://app.test/logout'))
+
+    expect(new URL(response.headers.get('location') ?? '').searchParams.get('session_id')).toBe('session_01HZ8V3K1ARTE0A3XQ7B2Q9ZCD')
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
@@ -2198,7 +2423,7 @@ describe('@holo-js/auth-workos', () => {
     await runtime.usersProvider.create({ email: 'callback-conflict@app.test' })
     const request = await createWorkosCallbackRequest()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
-      session_id: 'callback-conflict-session',
+      session_id: 'session_callback_conflict',
       user: {
         id: 'callback-conflict',
         email: 'callback-conflict@app.test',

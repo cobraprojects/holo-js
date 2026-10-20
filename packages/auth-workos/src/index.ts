@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
 import type { AuthEstablishedSession } from '@holo-js/auth'
+import { resolveRequestUrl } from '@holo-js/kernel'
 import { cookie, parseCookieHeader } from '@holo-js/session'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/auth'
 export {
@@ -121,6 +122,7 @@ const WORKOS_AUTHORIZE_URL = `${WORKOS_API_BASE_URL}/user_management/authorize`
 const WORKOS_AUTHENTICATE_URL = `${WORKOS_API_BASE_URL}/user_management/authenticate`
 const WORKOS_LOGOUT_URL = `${WORKOS_API_BASE_URL}/user_management/sessions/logout`
 const WORKOS_STATE_COOKIE_MAX_AGE_SECONDS = 300
+const WORKOS_SESSION_ID_PATTERN = /^session_[A-Za-z0-9_-]+$/
 const workosDefaultProviderRuntimeCache = new Map<string, WorkosProviderRuntime>()
 const workosJwksCache: Parameters<typeof authRuntimeInternals.jwt.resolveCachedJwk>[0] = new Map()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
@@ -497,12 +499,16 @@ function createWorkosState(): string {
   return randomBytes(32).toString('base64url')
 }
 
+function isHttpsRequest(request: Request): boolean {
+  return resolveRequestUrl(request).protocol === 'https:'
+}
+
 function createStateCookie(providerName: string, state: string, request: Request): string {
   return cookie(getWorkosStateCookieName(providerName), state, {
     httpOnly: true,
     maxAge: WORKOS_STATE_COOKIE_MAX_AGE_SECONDS,
     sameSite: 'lax',
-    secure: new URL(request.url).protocol === 'https:',
+    secure: isHttpsRequest(request) || undefined,
   })
 }
 
@@ -511,7 +517,7 @@ function clearStateCookie(providerName: string, request: Request): string {
     expires: new Date(0),
     httpOnly: true,
     sameSite: 'lax',
-    secure: new URL(request.url).protocol === 'https:',
+    secure: isHttpsRequest(request) || undefined,
   })
 }
 
@@ -625,7 +631,16 @@ function createWorkosSessionPayload<TUserAttributes extends WorkosUserAttributes
   })
 }
 
-function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosLogoutSession | null {
+type WorkosStoredSession = {
+  readonly provider: string
+  readonly sessionId?: string
+}
+
+function isWorkosSessionId(value: unknown): value is string {
+  return typeof value === 'string' && WORKOS_SESSION_ID_PATTERN.test(value)
+}
+
+function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosStoredSession | null {
   if (!payload || typeof payload !== 'object' || !('workos' in payload)) {
     return null
   }
@@ -637,13 +652,13 @@ function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosL
 
   const provider = (workos as { readonly provider?: unknown }).provider
   const sessionId = (workos as { readonly sessionId?: unknown }).sessionId
-  if (provider !== providerName || typeof sessionId !== 'string' || !sessionId.trim()) {
+  if (provider !== providerName) {
     return null
   }
 
   return Object.freeze({
     provider,
-    sessionId,
+    ...(isWorkosSessionId(sessionId) ? { sessionId } : {}),
   })
 }
 
@@ -949,8 +964,10 @@ async function authenticateWorkosCode(
   const sessionId = getStringField(session ?? {}, 'id')
     ?? getStringField(payload, 'sessionId', 'session_id')
     ?? (accessToken ? getJwtStringClaim(accessToken, 'sid') : undefined)
-    ?? accessToken
-    ?? code
+    ?? (accessToken ? getJwtStringClaim(accessToken, 'session_id') : undefined)
+  if (!isWorkosSessionId(sessionId)) {
+    throw new Error('[@holo-js/auth-workos] WorkOS callback did not include a valid session id.')
+  }
 
   return Object.freeze({
     sessionId,
@@ -1101,7 +1118,7 @@ function createWorkosHostedAuthRedirect(
   }
 }
 
-async function readCurrentWorkosLogoutSession(guard: string, providerName: string): Promise<WorkosLogoutSession | null> {
+async function readCurrentWorkosLogoutSession(guard: string, providerName: string): Promise<WorkosStoredSession | null> {
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const sessionId = bindings.context.getSessionId(guard)
   if (!sessionId) {
@@ -1137,7 +1154,9 @@ export async function logoutWithWorkos(
     const response = new Response(null, {
       status: 303,
       headers: {
-        Location: createLogoutUrl(workosSession.sessionId, request, options.returnTo),
+        Location: workosSession.sessionId
+          ? createLogoutUrl(workosSession.sessionId, request, options.returnTo)
+          : createWorkosReturnUrl(options.returnTo?.trim() || '/', request),
       },
     })
     for (const cookie of local.cookies) {
@@ -1188,6 +1207,7 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
       )
     }
 
+    const stateCookieClear = clearStateCookie(providerConfig.name, request)
     const session = await authenticateWorkosCode(request, code, providerConfig)
     const authenticated = await syncIdentity(session, providerConfig.name, {
       user: options.user,
@@ -1210,7 +1230,7 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
         ...authSession,
         cookies: Object.freeze([
           ...authSession.cookies,
-          clearStateCookie(providerConfig.name, request),
+          stateCookieClear,
         ]),
       }),
     } as const))
