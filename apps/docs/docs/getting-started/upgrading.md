@@ -25,6 +25,22 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 - Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
 - When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
 
+### Temporary URLs behind a proxy
+
+Public and temporary storage URLs read the scheme, host, port, and path prefix from forwarded headers only when `trustedProxies` lists the proxy, as [`resolveRequestUrl()`](/basics/security/cors-and-proxies#read-the-public-url) does. Before, the Nuxt storage route accepted `X-Forwarded-Proto` from any client, and the other forwarded headers were ignored.
+
+If your Nuxt or SvelteKit app runs behind a proxy that terminates TLS and serves temporary URLs, list the proxy:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['10.0.0.1'],
+})
+```
+
+Without that, the app sees `http`, and a temporary URL signed with `https://` returns 404. Public files keep working because their path doesn't depend on the scheme.
+
 ### Realtime subscription isolation
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
@@ -500,6 +516,14 @@ Check three behaviors when you upgrade:
 ### MySQL `ssl` with a connection URL
 
 A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
+
+### Password hashing cost
+
+New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
+
+A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
+
+No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
 
 ## Earlier 0.3.x releases
 
