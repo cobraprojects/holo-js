@@ -83,7 +83,7 @@ If a service fails to start, the ones already started are shut down again in rev
 
 Holo starts once per server process. In development, `holo dev` restarts the dev server when a change needs it (for example a new dependency or a config change).
 
-In development, your framework can apply the configuration again while the server keeps running. Holo keeps using the Redis connections for rate limits and sessions as long as their settings stay the same. If you change one of those settings, requests that are already running finish on the old connection, and Holo closes it when they finish.
+In development, your framework can apply the configuration again while the server keeps running. Holo keeps using the Redis connections for rate limits and sessions as long as their settings stay the same. If you change one of those settings, operations that are already using the old connection finish on it, and Holo closes it once they do.
 
 ## The CLI runs the same code
 

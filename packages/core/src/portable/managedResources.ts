@@ -50,7 +50,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
 
   const finishOperation = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
     entry.pending -= 1
-    if (entry.pending === 0 && retained.includes(entry)) closeWhenIdle(entry)
+    if (entry.pending === 0 && retained.includes(entry) && !claimed.includes(entry)) closeWhenIdle(entry)
   }
 
   const createEntry = (config: TConfig, value: TValue): ManagedResourceEntry<TConfig, TValue> => {
@@ -108,7 +108,9 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       await releaseManagedResources(idle.map(entry => entry.value))
     },
     async discard() {
-      const values = opened.map(entry => entry.value)
+      const revivedIdle = claimed.filter(entry => retained.includes(entry) && entry.pending === 0)
+      retained = retained.filter(entry => !revivedIdle.includes(entry))
+      const values = [...opened, ...revivedIdle].map(entry => entry.value)
       claimed = []
       opened = []
       await releaseManagedResources(values)

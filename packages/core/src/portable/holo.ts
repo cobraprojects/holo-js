@@ -59,7 +59,7 @@ import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './r
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
 import { acquireSessionStores } from './sessionCapabilityLifetime'
 import { throwCapabilityFailures } from './capabilityLifetimes'
-import { createManagedResources, holdOperations, type ManagedResources } from './managedResources'
+import { createManagedResources, holdOperations, type ManagedResources, type ResourceLease } from './managedResources'
 import { preloadDiscoveredModelModules, preloadGeneratedSchemaModule } from './discoveryRuntime'
 import { loadInstalledFeatureConfigContributions } from './configRuntime'
 import {
@@ -712,6 +712,19 @@ function resolveListenerExport(
 }
 
 /* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
+const heldSessionStores = new WeakMap<ResourceLease<SessionRedisAdapter>, CoreSessionStoreBinding>()
+
+function heldSessionStore(
+  lease: ResourceLease<SessionRedisAdapter>,
+  createStore: () => CoreSessionStoreBinding,
+): CoreSessionStoreBinding {
+  const existing = heldSessionStores.get(lease)
+  if (existing) return existing
+  const store = holdOperations(createStore(), lease)
+  heldSessionStores.set(lease, store)
+  return store
+}
+
 async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
@@ -724,7 +737,7 @@ async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
     async acquireRedisStore(config) {
       const module = await loadSessionRedisAdapterModule(true)
       const lease = await redisConnections.acquire(config, adapterConfig => module.createSessionRedisAdapter(adapterConfig))
-      return holdOperations(sessionModule.createRedisSessionStore(lease.value), lease)
+      return heldSessionStore(lease, () => sessionModule.createRedisSessionStore(lease.value))
     },
   })
 }

@@ -3193,6 +3193,28 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await expect.poll(connections).toBe(baseline)
   })
 
+  it('returns the same session store object while an unchanged Redis configuration keeps its connection', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    if (!port) throw new Error('The native Redis service did not start')
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port}, db: 0 } } })
+`)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: { primary: { driver: 'redis', connection: 'default' } } })
+`, 'utf8')
+
+    const first = await holoRuntimeInternals.createCoreSessionStores(root, await loadConfigDirectory(root), sessionModule)
+    const second = await holoRuntimeInternals.createCoreSessionStores(root, await loadConfigDirectory(root), sessionModule)
+
+    expect(second.primary).toBe(first.primary)
+    await resetHoloRuntime()
+  })
+
   it('serializes concurrent reconfigurations so each Redis session client is acquired once', async () => {
     const service = await startRedisService()
     const client = service.clients[0]

@@ -63,6 +63,45 @@ describe('managed resources', () => {
     expect(closed.sort()).toEqual(['first', 'second'])
   })
 
+  it('keeps a revived resource open when its replaced operation settles before the pass that revived it commits', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
+    const first = await resources.acquire('first', config => createRecordingResource(config, closed))
+    await resources.commit()
+    let settle: () => void = () => undefined
+    const operation = first.hold(() => new Promise<void>(resolve => { settle = resolve }))
+    await resources.acquire('second', config => createRecordingResource(config, closed))
+    await resources.commit()
+
+    await resources.acquire('first', config => createRecordingResource(config, closed))
+    settle()
+    await operation
+    await Promise.resolve()
+    expect(closed).toEqual([])
+
+    await resources.commit()
+    await resources.dispose()
+    expect(closed.sort()).toEqual(['first', 'second'])
+  })
+
+  it('closes a discarded revival once the operation that still holds it settles', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
+    const first = await resources.acquire('first', config => createRecordingResource(config, closed))
+    await resources.commit()
+    let settle: () => void = () => undefined
+    const operation = first.hold(() => new Promise<void>(resolve => { settle = resolve }))
+    await resources.acquire('second', config => createRecordingResource(config, closed))
+    await resources.commit()
+    await resources.acquire('first', config => createRecordingResource(config, closed))
+    await resources.discard()
+    expect(closed).toEqual([])
+
+    settle()
+    await operation
+    await expect.poll(() => closed).toEqual(['first'])
+  })
+
   it('holds a resource for each store operation through a held store until the operation settles', async () => {
     const closed: string[] = []
     const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
