@@ -378,6 +378,12 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     )
   }
 
+  async writeIfAbsent(record: SessionRecord): Promise<boolean> {
+    const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
+    const created = await this.client.eval(COPY_SESSION_SCRIPT, 1, this.qualifyKey(record.id), serializeSessionRecord(record), ttlMs)
+    return created === 1
+  }
+
   async del(sessionId: string): Promise<void> {
     await this.client.del(this.qualifyKey(sessionId))
   }

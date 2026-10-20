@@ -545,6 +545,19 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
     async write(record) {
       await writeRecordAtomically(root, record, makeDirectory)
     },
+    async writeIfAbsent(record) {
+      await makeDirectory(root, { recursive: true, mode: 0o700 })
+      const recordPath = getRecordPath(root, record.id)
+      const release = await acquireRecordLock(recordPath, makeDirectory)
+      try {
+        if (await readActiveRecord(recordPath)) return false
+        await writePathAtomically(recordPath, serializeRecord(record))
+        await rm(getFlashPath(recordPath), { force: true })
+        return true
+      } finally {
+        await release()
+      }
+    },
     async delete(sessionId) {
       await makeDirectory(root, { recursive: true, mode: 0o700 })
       const recordPath = getRecordPath(root, sessionId)

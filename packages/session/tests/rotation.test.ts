@@ -75,6 +75,45 @@ it('mints a fresh id when rotation is not given one, so the new id is not reacha
   await expect(session.read(rotated.id)).resolves.toMatchObject({ data: { identity: 'original' } })
 })
 
+function withoutPrivateFlash(store: ReturnType<typeof createFileSessionStore>) {
+  const { rotate: _rotate, flash: _flash, take: _take, ...plain } = store
+  return plain
+}
+
+it('lets exactly one of several concurrent rotations claim a replacement id on another store', async () => {
+  const sourceDirectory = await mkdtemp(join(tmpdir(), 'session-rotation-source-'))
+  const targetDirectory = await mkdtemp(join(tmpdir(), 'session-rotation-target-'))
+  directories.push(sourceDirectory, targetDirectory)
+  const cookie = { name: 'session', path: '/', secure: false, httpOnly: true, sameSite: 'lax' as const, partitioned: false, maxAge: 120 }
+  configureSessionRuntime({
+    config: {
+      driver: 'source',
+      stores: {
+        source: { name: 'source', driver: 'file', path: sourceDirectory },
+        target: { name: 'target', driver: 'file', path: targetDirectory },
+      },
+      cookie,
+      idleTimeout: 30,
+      absoluteLifetime: 120,
+      rememberMeLifetime: 1440,
+    },
+    stores: { source: withoutPrivateFlash(createFileSessionStore(sourceDirectory)), target: createFileSessionStore(targetDirectory) },
+  })
+  const session = getSessionRuntime()
+  const sources = await Promise.all(Array.from({ length: 4 }, (_, index) => session.create({ store: 'source', data: { index } })))
+  const results = await Promise.allSettled(sources.map(source => session.rotate(source.id, { store: 'target', newId: 'shared-replacement' })))
+  const fulfilled = results.filter(result => result.status === 'fulfilled')
+  const rejected = results.filter(result => result.status === 'rejected')
+  expect(fulfilled).toHaveLength(1)
+  expect(rejected).toHaveLength(3)
+  for (const result of rejected) {
+    expect(String(result.reason)).toContain('already exists')
+  }
+  const survivors = await Promise.all(sources.map(source => session.read(source.id, { store: 'source' })))
+  expect(survivors.filter(Boolean)).toHaveLength(3)
+  await expect(session.read('shared-replacement', { store: 'target' })).resolves.toMatchObject({ id: 'shared-replacement' })
+})
+
 it('keeps replacement data and renewal options precisely typed', () => {
   expectTypeOf<RotateSessionOptions['data']>().toEqualTypeOf<SessionRecord['data'] | undefined>()
   expectTypeOf<RotateSessionOptions['renewLifetime']>().toEqualTypeOf<boolean | undefined>()
