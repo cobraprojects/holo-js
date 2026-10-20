@@ -163,9 +163,7 @@ export function createBroadcastRealtimeTransport(options: {
       return
     }
 
-    subscription.sentOn = socket
-    subscription.currentSnapshot = undefined
-    socket.send(JSON.stringify({
+    const frame = JSON.stringify({
       event: 'holo:realtime',
       data: {
         id: subscription.id,
@@ -173,7 +171,10 @@ export function createBroadcastRealtimeTransport(options: {
         name: subscription.name,
         args: subscription.args,
       },
-    }))
+    })
+    subscription.sentOn = socket
+    subscription.currentSnapshot = undefined
+    socket.send(frame)
   }
 
   const handleMessage = (event: { readonly data: unknown }): void => {
@@ -256,9 +257,18 @@ export function createBroadcastRealtimeTransport(options: {
         })
       },
       onOpen(socket) {
-        for (const subscription of subscriptions.values()) {
-          sendSubscribe(subscription, socket)
+        for (const [id, subscription] of [...subscriptions]) {
+          if (!subscriptions.has(id)) {
+            continue
+          }
+          try {
+            sendSubscribe(subscription, socket)
+          } catch (error) {
+            subscriptions.delete(id)
+            subscription.onError(error)
+          }
         }
+        closeSocketIfIdle()
       },
       onMessage: handleMessage,
       onDisconnect(error) {

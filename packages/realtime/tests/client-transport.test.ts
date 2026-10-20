@@ -45,6 +45,12 @@ function installFakeRealtimeBroadcast() {
   return fakeRealtimeSockets
 }
 
+function subscribeNames(socket: FakeRealtimeSocket): string[] {
+  return socket.frames
+    .filter(frame => (frame.data as { action?: string }).action === 'subscribe')
+    .map(frame => (frame.data as { name: string }).name)
+}
+
 afterEach(() => {
   resetRealtimeClientRuntime()
   vi.restoreAllMocks()
@@ -170,6 +176,51 @@ describe('@holo-js/realtime broadcast client transport', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(errors).toEqual([])
     expect(recovered.frames.map(frame => (frame.data as { name: string }).name)).toEqual(['records.list', 'orders.list'])
+  })
+
+  it('reports a subscription that cannot be serialized and still replays the others after a reconnect', async () => {
+    vi.useFakeTimers()
+    const sockets = installFakeRealtimeBroadcast()
+    const transport = createBroadcastRealtimeTransport()
+    const rejected: unknown[] = []
+    const snapshots: unknown[] = []
+    transport.subscribe('records.broken', { id: 1n }, () => {}, error => rejected.push(error))
+    transport.subscribe('records.list', {}, snapshot => snapshots.push(snapshot.data), () => {})
+    await vi.advanceTimersByTimeAsync(0)
+    sockets[0]!.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rejected).toHaveLength(1)
+
+    sockets[0]!.receive('holo:realtime:snapshot', { id: 'realtime.2', snapshot: { data: ['before'], version: 1 } })
+    sockets[0]!.close()
+    await vi.advanceTimersByTimeAsync(500)
+    const recovered = sockets[1]!
+    recovered.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(recovered.frames.map(frame => (frame.data as { name: string }).name)).toEqual(['records.list'])
+    expect(rejected).toHaveLength(1)
+  })
+
+  it('does not replay a subscription that a failing sibling removed during the same reconnect', async () => {
+    vi.useFakeTimers()
+    const sockets = installFakeRealtimeBroadcast()
+    const transport = createBroadcastRealtimeTransport()
+    let leaveSecond = () => {}
+    transport.subscribe('records.broken', { id: 1n }, () => {}, () => leaveSecond())
+    const second = transport.subscribe('orders.list', {}, () => {}, () => {})
+    leaveSecond = second
+    transport.subscribe('records.list', {}, () => {}, () => {})
+    await vi.advanceTimersByTimeAsync(0)
+    sockets[0]!.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscribeNames(sockets[0]!)).toEqual(['records.list'])
+    sockets[0]!.close()
+    await vi.advanceTimersByTimeAsync(500)
+
+    const recovered = sockets[1]!
+    recovered.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscribeNames(recovered)).toEqual(['records.list'])
   })
 
   it('stops reconnecting when the last subscription is removed during a backoff wait', async () => {
