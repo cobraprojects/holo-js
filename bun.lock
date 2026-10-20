@@ -1144,6 +1144,9 @@
     "packages/storage-s3": {
       "name": "@holo-js/storage-s3",
       "version": "0.3.28",
+      "dependencies": {
+        "@holo-js/kernel": "catalog:",
+      },
       "devDependencies": {
         "@holo-js/storage": "catalog:",
         "@types/node": "catalog:",
