@@ -2,11 +2,16 @@ import { randomBytes, scrypt as nodeScrypt, timingSafeEqual, type ScryptOptions 
 import type { AuthPasswordHasher } from '../contracts'
 
 const SCRYPT_PREFIX = 'scrypt'
-const SCRYPT_TARGET_N = 16_384
+const SCRYPT_TARGET_N = 32_768
 const SCRYPT_TARGET_R = 8
-const SCRYPT_TARGET_P = 1
+const SCRYPT_TARGET_P = 3
+const SCRYPT_LEGACY_N = 16_384
+const SCRYPT_LEGACY_R = 8
+const SCRYPT_LEGACY_P = 1
 const SCRYPT_KEY_LENGTH = 64
 const SCRYPT_KEY_HEX_LENGTH = SCRYPT_KEY_LENGTH * 2
+const SCRYPT_MAX_MEMORY_BYTES = 64 * 1024 * 1024
+const SCRYPT_MAX_CONCURRENT_OPERATIONS = 4
 const HEX_PATTERN = /^(?:[0-9a-f]{2})+$/i
 type ScryptParams = { readonly N: number, readonly r: number, readonly p: number }
 type ScryptFunction = (
@@ -17,8 +22,11 @@ type ScryptFunction = (
   callback: (error: Error | null, derivedKey: Buffer) => void,
 ) => void
 const SCRYPT_TARGET_PARAMS: ScryptParams = { N: SCRYPT_TARGET_N, r: SCRYPT_TARGET_R, p: SCRYPT_TARGET_P }
+const SCRYPT_LEGACY_PARAMS: ScryptParams = { N: SCRYPT_LEGACY_N, r: SCRYPT_LEGACY_R, p: SCRYPT_LEGACY_P }
 const defaultScrypt = nodeScrypt as ScryptFunction
 let scrypt = defaultScrypt
+let activeScryptOperations = 0
+const waitingScryptSlotResolvers: Array<() => void> = []
 
 function encodeScryptParams(params: ScryptParams): string {
   return `N=${params.N},r=${params.r},p=${params.p}`
@@ -75,7 +83,7 @@ function parseScryptDigest(digest: string): {
       return null
     }
 
-    return { params: SCRYPT_TARGET_PARAMS, legacy: true, saltHex: paramsOrSaltHex, hashHex: saltOrHashHex }
+    return { params: SCRYPT_LEGACY_PARAMS, legacy: true, saltHex: paramsOrSaltHex, hashHex: saltOrHashHex }
   }
   if (!isHex(saltOrHashHex) || !isHex(maybeHashHex) || maybeHashHex.length !== SCRYPT_KEY_HEX_LENGTH) {
     return null
@@ -85,10 +93,34 @@ function parseScryptDigest(digest: string): {
   return params ? { params, legacy: false, saltHex: saltOrHashHex, hashHex: maybeHashHex } : null
 }
 
-async function deriveScryptKey(password: string, salt: Buffer, keyLength: number, params: ScryptParams): Promise<Buffer> {
-  const options = { cost: params.N, blockSize: params.r, parallelization: params.p } satisfies ScryptOptions
+async function runWithScryptSlot<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
+  if (activeScryptOperations < SCRYPT_MAX_CONCURRENT_OPERATIONS) {
+    activeScryptOperations += 1
+  } else {
+    await new Promise<void>(resolve => waitingScryptSlotResolvers.push(resolve))
+  }
 
-  return await new Promise<Buffer>((resolve, reject) => {
+  try {
+    return await operation()
+  } finally {
+    const next = waitingScryptSlotResolvers.shift()
+    if (next) {
+      next()
+    } else {
+      activeScryptOperations -= 1
+    }
+  }
+}
+
+async function deriveScryptKey(password: string, salt: Buffer, keyLength: number, params: ScryptParams): Promise<Buffer> {
+  const options = {
+    cost: params.N,
+    blockSize: params.r,
+    parallelization: params.p,
+    maxmem: SCRYPT_MAX_MEMORY_BYTES,
+  } satisfies ScryptOptions
+
+  return await runWithScryptSlot(() => new Promise<Buffer>((resolve, reject) => {
     scrypt(password, salt, keyLength, options, (error, derivedKey) => {
       if (error) {
         reject(error)
@@ -97,7 +129,7 @@ async function deriveScryptKey(password: string, salt: Buffer, keyLength: number
 
       resolve(derivedKey)
     })
-  })
+  }))
 }
 
 export function createScryptPasswordHasher(): AuthPasswordHasher {

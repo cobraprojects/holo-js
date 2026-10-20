@@ -404,7 +404,8 @@ describe('auth runtime utilities', () => {
       expect(hasher.needsRehash?.(invalid)).toBe(true)
     }
     expect(hasher.needsRehash?.(digest)).toBe(false)
-    expect(hasher.needsRehash?.(digest.replace('N=16384,r=8,p=1', 'x=1,N=16384,r=8,p=1'))).toBe(false)
+    expect(hasher.needsRehash?.(digest.replace('N=32768,r=8,p=3', 'x=1,N=32768,r=8,p=3'))).toBe(false)
+    expect(hasher.needsRehash?.(digest.replace('N=32768,r=8,p=3', 'N=32768,r=8,p=1'))).toBe(true)
 
     const invalidParams = Object.assign(new Error('invalid params'), { code: 'ERR_CRYPTO_INVALID_SCRYPT_PARAMS' })
     scryptPasswordHasherInternals.setScrypt((_password, _salt, _length, _options, callback) => {
