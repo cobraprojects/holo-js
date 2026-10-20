@@ -2226,6 +2226,47 @@ export default async function boot() {
     expect(runtimeGlobal.__holoCoreSlowBoots__).toBe(2)
   })
 
+  it('boots plugin modules when optional subsystems are reconfigured directly', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-direct-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-direct-boot', `
+export default {
+  id: 'direct-boot',
+  name: 'Direct Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreDirectBoots__ = (globalThis.__holoCoreDirectBoots__ ?? 0) + 1
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreDirectBoots__?: number }
+    runtimeGlobal.__holoCoreDirectBoots__ = 0
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    expect(runtimeGlobal.__holoCoreDirectBoots__).toBe(1)
+  })
+
   it('runs plugin boot modules once during adapter initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

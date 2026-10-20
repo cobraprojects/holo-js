@@ -711,7 +711,6 @@ function resolveListenerExport(
   return Object.values(exports).find((value): value is EventsFeature.ListenerDefinition => hasListenerDefinitionMarker(value) || eventsModule.isListenerDefinition(value))
 }
 
-/* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
 const heldSessionStores = new WeakMap<ResourceLease<SessionRedisAdapter>, CoreSessionStoreBinding>()
 
 function heldSessionStore(
@@ -725,6 +724,7 @@ function heldSessionStore(
   return store
 }
 
+/* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
 async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
@@ -1495,12 +1495,14 @@ type OptionalSubsystemsResult = {
   readonly authContext?: RuntimeAuthContext
 }
 
-export function reconfigureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
+export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
   options: OptionalSubsystemsOptions = {},
 ): Promise<OptionalSubsystemsResult> {
-  return runOptionalSubsystemsSerially(() => configureOptionalHoloSubsystems(projectRoot, loadedConfig, options))
+  const optionalSubsystems = await runOptionalSubsystemsSerially(() => configureOptionalHoloSubsystems(projectRoot, loadedConfig, options))
+  await bootHoloPluginModules(projectRoot, loadedConfig)
+  return optionalSubsystems
 }
 
 async function bootHoloPluginModules<TCustom extends HoloConfigMap>(
@@ -2008,10 +2010,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     throwCapabilityFailures(failures)
   }
 
-  let subsystemOptions: HoloRuntimeReconfigureOptions = options
+  let bootOptions: HoloRuntimeReconfigureOptions = options
   let servicesBooting = false
 
-  const configureRuntimeSubsystems = async (): Promise<OptionalSubsystemsResult> => {
+  const configureRuntimeSubsystems = async (subsystemOptions: HoloRuntimeReconfigureOptions): Promise<OptionalSubsystemsResult> => {
     const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
       authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
@@ -2036,7 +2038,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   }
 
   const bootRuntimeServices = async (): Promise<void> => {
-    await runOptionalSubsystemsSerially(configureRuntimeSubsystems)
+    await runOptionalSubsystemsSerially(() => configureRuntimeSubsystems(bootOptions))
     await bootHoloPluginModules(projectRoot, loadedConfig)
     const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
       ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
@@ -2157,10 +2159,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       return runner ? runner(authRequest, callback) : callback()
     },
     async [reconfigureRuntime](nextOptions) {
-      subsystemOptions = nextOptions
+      bootOptions = nextOptions
       const configured = await runOptionalSubsystemsSerially(async () => {
         if (!runtime.initialized && !servicesBooting) return false
-        await configureRuntimeSubsystems()
+        await configureRuntimeSubsystems(nextOptions)
         return true
       })
       if (configured) await bootHoloPluginModules(projectRoot, loadedConfig)
