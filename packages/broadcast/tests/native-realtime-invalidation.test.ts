@@ -366,3 +366,26 @@ it('leaves no publisher registered and no Redis connection open when the Node we
   await expect.poll(connections).toBe(baseline)
   void db
 }, 30_000)
+
+it('holds one Redis connection for a publish-only scaling adapter and a second one once it subscribes', async () => {
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+  const baseline = await connections()
+  const publisher = await workerInternals.createRedisScalingAdapter({ host: '127.0.0.1', port: redisPort, db: 0 })
+  onTestFinished(() => publisher.close())
+
+  await publisher.publish('holo:broadcast:scaling:shared:events', '{}')
+  await expect.poll(connections).toBe(baseline + 1)
+
+  const subscriber = await workerInternals.createRedisScalingAdapter({ host: '127.0.0.1', port: redisPort, db: 0 })
+  onTestFinished(() => subscriber.close())
+  await subscriber.subscribe('holo:broadcast:scaling:shared:events', () => undefined)
+  await expect.poll(connections).toBe(baseline + 3)
+  await subscriber.close()
+  await publisher.close()
+  await expect.poll(connections).toBe(baseline)
+}, 30_000)

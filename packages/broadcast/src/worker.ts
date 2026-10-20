@@ -891,7 +891,11 @@ async function createRedisScalingAdapter(
     )
   }
   const commandClient = createClient()
-  const subscriberClient = createClient()
+  let subscriberClient: RedisScalingClientLike | undefined
+  const openSubscriberClient = (): RedisScalingClientLike => {
+    subscriberClient ??= createClient()
+    return subscriberClient
+  }
   const listeners = new Map<string, (channel: string, payload: string) => void>()
 
   return Object.freeze({
@@ -904,14 +908,15 @@ async function createRedisScalingAdapter(
           onMessage(payload)
         }
       }
+      const client = openSubscriberClient()
       listeners.set(channel, listener)
-      subscriberClient.on('message', listener)
-      await subscriberClient.subscribe(channel)
+      client.on('message', listener)
+      await client.subscribe(channel)
       return async () => {
         const existing = listeners.get(channel)
         if (existing) {
-          await subscriberClient.unsubscribe(channel)
-          subscriberClient.off('message', existing)
+          await client.unsubscribe(channel)
+          client.off('message', existing)
           listeners.delete(channel)
         }
       }
@@ -932,10 +937,13 @@ async function createRedisScalingAdapter(
       return (await commandClient.exists(key)) > 0
     },
     async close() {
-      try {
-        await subscriberClient.quit()
-      } catch {
-        subscriberClient.disconnect()
+      if (subscriberClient) {
+        const opened = subscriberClient
+        try {
+          await opened.quit()
+        } catch {
+          opened.disconnect()
+        }
       }
       try {
         await commandClient.quit()
