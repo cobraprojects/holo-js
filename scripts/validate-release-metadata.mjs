@@ -97,6 +97,17 @@ async function collectReleaseWorkflowFailures(root) {
   if (tokenSteps.length !== 1 || !/\bbun run release\b/.test(tokenSteps[0])) {
     failures.push(`${releaseWorkflowPath} must give NPM_TOKEN only to the publish step.`)
   }
+  const buildIndex = steps.findIndex(step => /^\s*run: node scripts\/build-libraries\.mjs\s*$/m.test(step))
+  const publishIndex = steps.findIndex(step => step.includes('release:skip-build'))
+  const buildIsConditional = buildIndex !== -1 && /^(?:if|continue-on-error)\s*:|\n {8}(?:if|continue-on-error)\s*:/.test(steps[buildIndex])
+  const buildFollowsPublish = publishIndex !== -1 && buildIndex > publishIndex
+  if (buildIndex === -1 || buildIsConditional || buildFollowsPublish) {
+    failures.push(`${releaseWorkflowPath} must build packages with \`node scripts/build-libraries.mjs\` in an unconditional step without continue-on-error, before the publish step, so declarations resolve in dependency order.`)
+  }
+  const jobHeaders = (workflow.split(/^jobs:\s*$/m)[1] ?? '').match(/^ {2}(?:[\w-]+|"[^"\n]+"|'[^'\n]+')\s*:(?:\s+#.*)?\s*$/gm) ?? []
+  if (jobHeaders.length !== 1) {
+    failures.push(`${releaseWorkflowPath} must build and publish in one job, because the built packages must reach the publish step on the same filesystem.`)
+  }
   if (!/::notice\b/.test(workflow) || !/-z "\$NODE_AUTH_TOKEN"/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must skip the publish with a notice, not fail, when NPM_TOKEN is not configured.`)
   }
