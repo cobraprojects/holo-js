@@ -11,6 +11,7 @@ import { createCoreSessionRevocationStore } from '../src/portable/authSessionRev
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
+import { reconfigureHoloRuntime } from '../src/portable'
 
 function holoCookieValue(setCookie: string): string {
   return Object.values(parseCookieHeader(setCookie.split(';', 1)[0]))[0] ?? ''
@@ -1032,6 +1033,122 @@ export default class Admin extends AdminEntity {
     expect(await secondCookie).toBe('session-second')
   })
 
+  it('keeps the first request after boot and reload isolated from boot-time and concurrent auth state', async () => {
+    const root = await createProject({ auth: true })
+    const options = {
+      authRequest: { appendResponseCookie: () => undefined },
+      processEnv: process.env,
+      preferCache: false,
+    }
+    const booted = await initializeHolo(root, options)
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    const login = await booted.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => booted.auth!.loginUsingId(1))
+    await initializeHolo(root, options)
+
+    const readAuthState = async (sessionId: string | undefined): Promise<boolean | undefined> => {
+      const runtime = await initializeHolo(root, {
+        ...options,
+        authRequest: {
+          appendResponseCookie: () => undefined,
+          getCookie: () => sessionId ? sessionCookieValue(sessionId) : undefined,
+        },
+      })
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      return runtime.auth?.check()
+    }
+    const [authenticated, guest] = await Promise.all([
+      Promise.resolve().then(() => readAuthState(login.sessionId)),
+      Promise.resolve().then(() => readAuthState(undefined)),
+    ])
+
+    expect(authenticated).toBe(true)
+    expect(guest).toBe(false)
+  })
+
+  it('keeps two concurrent requests isolated after a boot-time auth call in the root context', async () => {
+    const root = await createProject({ auth: true })
+    const options = {
+      authRequest: { appendResponseCookie: () => undefined },
+      processEnv: process.env,
+      preferCache: false,
+    }
+    const booted = await initializeHolo(root, options)
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    expect(await booted.auth?.check()).toBe(false)
+    const login = await booted.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => booted.auth!.loginUsingId(1))
+
+    const readAuthState = async (sessionId: string | undefined): Promise<boolean | undefined> => {
+      const runtime = await initializeHolo(root, {
+        ...options,
+        authRequest: {
+          appendResponseCookie: () => undefined,
+          getCookie: () => sessionId ? sessionCookieValue(sessionId) : undefined,
+        },
+      })
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      return runtime.auth?.check()
+    }
+    const [authenticated, guest] = await Promise.all([
+      Promise.resolve().then(() => readAuthState(login.sessionId)),
+      Promise.resolve().then(() => readAuthState(undefined)),
+    ])
+
+    expect(authenticated).toBe(true)
+    expect(guest).toBe(false)
+  })
+
+  it('keeps an authenticated session when a request reinstalls the same accessor object after login', async () => {
+    const root = await createProject({ auth: true })
+    const accessors = { appendResponseCookie: () => undefined, getCookie: () => undefined }
+    const runtime = await initializeHolo(root, { authRequest: accessors, processEnv: process.env, preferCache: false })
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    await runtime.auth?.loginUsingId(1)
+
+    await initializeHolo(root, { authRequest: accessors, processEnv: process.env, preferCache: false })
+
+    expect(await runtime.auth?.check()).toBe(true)
+  })
+
+  it('does not carry a session logged in from the root scope into a flow with different accessors', async () => {
+    const root = await createProject({ auth: true })
+    const runtime = await initializeHolo(root, {
+      authRequest: { appendResponseCookie: () => undefined },
+      processEnv: process.env,
+      preferCache: false,
+    })
+    await DB.table('users').insert({ email: 'ava@example.com', name: 'Ava' })
+    await runtime.auth?.loginUsingId(1)
+
+    const guest = await Promise.resolve().then(async () => {
+      const flow = await initializeHolo(root, {
+        authRequest: { appendResponseCookie: () => undefined, getCookie: () => undefined },
+        processEnv: process.env,
+        preferCache: false,
+      })
+      return flow.auth?.check()
+    })
+
+    expect(guest).toBe(false)
+  })
+
+  it('applies a reconfiguration that arrives while the runtime is still initializing', async () => {
+    const root = await createProject({ auth: true })
+    const runtime = await createHolo(root, {
+      authRequest: { appendResponseCookie: () => undefined, getCookie: name => `${name}-boot` },
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    const initializing = runtime.initialize()
+    await reconfigureHoloRuntime(runtime, {
+      authRequest: { appendResponseCookie: () => undefined, getCookie: name => `${name}-reconfigured` },
+    })
+    await initializing
+
+    expect(authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')).toBe('session-reconfigured')
+    await runtime.shutdown()
+  })
+
   it('runs adapter requests against the currently configured auth context', async () => {
     const root = await createProject({ auth: true })
     const project = await initializeHoloAdapterProject(root, {
@@ -1514,6 +1631,65 @@ export default {
     })
 
     await expect(holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).rejects.toThrow('missing-dependency')
+  })
+
+  it('writes a login rehash to the connection of an auth model declared on a second connection', async () => {
+    const root = await createProject({ auth: true })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const current = await hasher.hash('old-secret')
+    const next = await hasher.hash('new-secret')
+    const secondaryPath = join(root, 'secondary.sqlite')
+    const seed = new DatabaseSync(secondaryPath)
+    seed.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, password TEXT, email_verified_at TEXT, created_at TEXT, updated_at TEXT)')
+    seed.prepare('INSERT INTO users (id, name, email, password, email_verified_at) VALUES (?, ?, ?, ?, ?)')
+      .run(1, 'Ava', 'ava@example.com', current, '2026-01-01T00:00:00.000Z')
+    seed.close()
+
+    await writeFile(join(root, 'config/database.ts'), `
+import { defineDatabaseConfig } from ${databaseEntry}
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: { driver: 'sqlite', url: ${JSON.stringify(join(root, 'database.sqlite'))} },
+    secondary: { driver: 'sqlite', url: ${JSON.stringify(secondaryPath)} },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/models/User.ts'), `
+import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+const users = defineGeneratedTable('users', {
+  id: column.integer().primaryKey(),
+  name: column.string().nullable(),
+  email: column.string(),
+  password: column.string().nullable(),
+  email_verified_at: column.timestamp().nullable(),
+  created_at: column.timestamp().nullable(),
+  updated_at: column.timestamp().nullable(),
+})
+export default defineModel(users, { connectionName: 'secondary', fillable: ['email', 'name', 'password'], guarded: ['id'] })
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    await runtime.initialize()
+    const users = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers.users
+    if (!users) {
+      throw new Error('users provider is missing')
+    }
+    const rehashPasswordIfUnchanged = Reflect.get(users, Symbol.for('holo.auth.rehashPasswordIfUnchanged')) as
+      (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
+    const user = await users.findByCredentials({ email: 'ava@example.com' })
+
+    await expect(rehashPasswordIfUnchanged.call(users, user, current, next)).resolves.toBe(true)
+
+    const check = new DatabaseSync(secondaryPath)
+    const row = check.prepare('SELECT password, updated_at FROM users WHERE id = 1').get() as { password: string, updated_at: string | null }
+    check.close()
+    expect(row.password).toBe(next)
+    expect(row.updated_at).not.toBeNull()
   })
 
   it('filters hosted-auth profile writes and honors model auth input hooks', async () => {
