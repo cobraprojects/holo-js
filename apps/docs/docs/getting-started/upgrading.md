@@ -388,6 +388,32 @@ Social sign-in no longer signs in as an existing user whose email isn't verified
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
+### Sessions don't cross between 0.3 and 0.4
+
+Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
+
+### Verification resend requires a signed-in user
+
+`resendEmailVerification()` and `sendEmailVerification()` no longer take an email address, and `verification.resend()` no longer accepts `email`. A new link always goes to the signed-in user, and without one the call throws `email_verification_user_missing` with status 401. The unauthenticated resend is gone, so a guest can no longer ask for a link by typing an address.
+
+Update the resend route and its page:
+
+- Call `resendEmailVerification()` with no arguments. Users are signed in after `login()`, including unverified users, so the verification page can post to the route without an address.
+- Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
+- Delete the old `emailVerificationResend` limiter keyed by email and the resend form schema, and stop posting `email` from the page.
+
+### Password reset cycles remember tokens
+
+A successful password reset now replaces the user's `remember_token`, as Laravel does. Remember-me cookies issued before the reset stop restoring. Browsers that are still signed in keep their sessions. The column already exists, so no migration is needed.
+
+### Failed logins and reset-link requests take at least 200 ms
+
+Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
+
+### User records load on every request
+
+`auth.user()` reads the user from the provider once per request, and session records no longer store a copy of the user. Existing sessions keep working, and the stored copy is ignored. Users who were deleted or changed are reflected on their next request. Your provider's `findById()` now runs on each request that reads the user.
+
 ### Cache flushes clear the whole store
 
 `cache.flush()` and `npx holo cache:clear` now delete everything in the store, as Laravel does, and a key `prefix` no longer limits them. A Redis store flushes its whole Redis database, a `database` store empties its cache table, and a `file` store empties its folder. If your Redis cache shares a database with queues or sessions, move it to its own database before you flush, or the flush deletes that data too.

@@ -1,4 +1,4 @@
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+import { defineSecurityConfig, limit } from '@holo-js/security'
 
 export default defineSecurityConfig({
   trustedProxies: ['127.0.0.1', '::1'],
@@ -21,13 +21,7 @@ export default defineSecurityConfig({
     limiters: {
       login: limit.perMinute(5).define(),
       register: limit.perHour(10).define(),
-      emailVerificationResend: limit.perMinute(1).by(({ request, values }) => {
-        const email = typeof values?.email === 'string'
-          ? values.email.trim().toLowerCase()
-          : 'unknown'
-
-        return `email:${email}|client:${ip(request)}`
-      }),
+      emailVerificationResend: limit.perMinute(6).define(),
     },
   },
 })

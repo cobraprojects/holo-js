@@ -224,6 +224,8 @@ Expected failures throw a `ValidationException`, so your form shows them like an
 | Identifier already registered | `email` | A user with this email already exists. | 422 |
 | `password` and `passwordConfirmation` differ | both fields | | 422 |
 
+A failed login takes at least 200 ms whether or not the account exists, as Laravel does, so the response time doesn't reveal which emails have accounts. A successful login isn't delayed.
+
 ## Remember the user
 
 Pass `remember: true` to keep the user signed in after the browser closes. The `loginForm` above already sends it from a checkbox.
