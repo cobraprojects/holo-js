@@ -86,6 +86,7 @@
 - Allow only `=`, `!=`, `>`, `>=`, `<`, `<=`, and `like` in `whereColumn()`. Other operators throw `SecurityError` instead of being written into the SQL text. Reject foreign-key `onDelete()` and `onUpdate()` values other than `cascade`, `restrict`, `set null`, and `no action` with `SchemaError`. Write MySQL string defaults and JSON paths that contain a backslash as hexadecimal literals, so their stored text doesn't depend on `NO_BACKSLASH_ESCAPES`. Reject MySQL enum values with a backslash or NUL character with `SchemaError`. Run MySQL queries with bindings as server-side prepared statements, so a quote in a bound string can't end a SQL literal under `NO_BACKSLASH_ESCAPES`. Each MySQL connection keeps at most 256 prepared statements, so distinct statement shapes can't exhaust the server's `max_prepared_stmt_count`. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#query-operators-date-values-and-foreign-key-toggles).
 - Pad failed logins and every reset-link request to at least 200 ms, as Laravel's timebox does, so response timing doesn't reveal whether an account exists. Successful logins are not delayed.
 - Password reset cycles the user's remember token, as Laravel does. Remember-me cookies issued before the reset stop restoring, and browsers that are still signed in keep their sessions.
+- `db-mysql`: keep the configured `ssl` option when a URL is set. Before, `ssl` was dropped when `url` was set. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#mysql-ssl-with-a-connection-url).
 
 ### Changed
 

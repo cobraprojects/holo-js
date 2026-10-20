@@ -487,6 +487,10 @@ Check three behaviors when you upgrade:
 - A one-of-many relation (`latestOfMany`, `oldestOfMany`, `ofMany`, and the morph variants) whose column is `NULL` on every related row loads `null`, as in Laravel. Before, it loaded the first related row. To keep the old result, skip the `NULL` rows with a constraint: `scopeRelation(latestOfMany(() => Post, 'user_id', 'id', 'score'), query => query.whereNotNull('score'))`.
 - Eager loads run one query per 256 parent keys, except a relation whose constraint sets `limit()` or `offset()`, which runs as one query so the limit or offset applies to the whole load. A constraint callback passed to `with()` or `scopeRelation()` can run more than once: once per chunk, and for one-of-many relations once for the grouped lookup and once for the outer query. Don't count or log calls inside it.
 
+### MySQL `ssl` with a connection URL
+
+A MySQL connection that sets `ssl` next to `url` now uses that setting. Before, it was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.
