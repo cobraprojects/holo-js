@@ -92,3 +92,34 @@ it('coalesces a burst of remote invalidations for one table and limits concurren
   }
   expect(maxActive).toBeLessThanOrEqual(4)
 }, 30_000)
+
+it('limits a sustained remote write loop to about one refresh per 100 ms and always delivers the final state', async () => {
+  const { adapter, db } = await openRealtimeDatabase()
+  let runs = 0
+  let lastScore: unknown
+  const sustained = query({
+    name: 'records.sustained',
+    access: 'public',
+    handler: async () => {
+      runs += 1
+      const score = await db.table('records').where('id', 1).value('score')
+      lastScore = score
+      return { score }
+    },
+  })
+  await subscribeRealtimeQuery(sustained)
+  const before = runs
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  const received: Promise<void>[] = []
+
+  for (let value = 1; value <= 50; value += 1) {
+    await adapter.execute(`UPDATE records SET score = ${value} WHERE id = 1`)
+    received.push(bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] }))
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await Promise.all(received)
+  await new Promise(resolve => setTimeout(resolve, 400))
+
+  expect(runs - before).toBeLessThanOrEqual(7)
+  expect(lastScore).toBe(50)
+}, 30_000)

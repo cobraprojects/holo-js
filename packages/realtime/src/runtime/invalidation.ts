@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
   EMPTY_TABLE_DEPENDENCIES,
@@ -251,9 +252,21 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
 }
 
 const REMOTE_REFRESH_CONCURRENCY = 4
+const REMOTE_REFRESH_MIN_INTERVAL_MS = 100
 let activeRemoteRefreshes = 0
 const remoteRefreshWaiters: Array<() => void> = []
 const queuedRemoteRefreshKeys = new Set<string>()
+const remoteRefreshLastRunAt = new Map<string, number>()
+const remoteRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+export function resetRemoteRefreshSchedule(): void {
+  for (const timer of remoteRefreshTimers.values()) {
+    clearTimeout(timer)
+  }
+  remoteRefreshTimers.clear()
+  remoteRefreshLastRunAt.clear()
+  queuedRemoteRefreshKeys.clear()
+}
 
 function acquireRemoteRefreshSlot(): Promise<void> {
   if (activeRemoteRefreshes < REMOTE_REFRESH_CONCURRENCY) {
@@ -284,11 +297,33 @@ async function refreshRemoteEntry(refreshKey: string): Promise<void> {
 
   await acquireRemoteRefreshSlot()
   queuedRemoteRefreshKeys.delete(refreshKey)
+  if (!getRuntimeState().queryEntries.has(refreshKey)) {
+    remoteRefreshLastRunAt.delete(refreshKey)
+    releaseRemoteRefreshSlot()
+    return
+  }
+
+  remoteRefreshLastRunAt.set(refreshKey, Date.now())
   try {
     await scheduleRefreshKey(refreshKey)
   } finally {
     releaseRemoteRefreshSlot()
   }
+}
+
+function scheduleDeferredRemoteRefresh(refreshKey: string, delayMs: number): void {
+  const timer = setTimeout(() => {
+    remoteRefreshTimers.delete(refreshKey)
+    if (queuedRemoteRefreshKeys.has(refreshKey)) {
+      return
+    }
+
+    queuedRemoteRefreshKeys.add(refreshKey)
+    refreshRemoteEntry(refreshKey).catch((error: unknown) => {
+      reportError(error, { capability: 'realtime', operation: 'subscription.remoteRefresh' })
+    })
+  }, delayMs)
+  remoteRefreshTimers.set(refreshKey, timer)
 }
 
 async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly string[]): Promise<void> {
@@ -315,6 +350,17 @@ async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly s
 
   const refreshes: Promise<void>[] = []
   for (const refreshKey of refreshKeys) {
+    if (remoteRefreshTimers.has(refreshKey)) {
+      continue
+    }
+
+    const now = Date.now()
+    const lastRunAt = remoteRefreshLastRunAt.get(refreshKey)
+    if (lastRunAt !== undefined && now - lastRunAt < REMOTE_REFRESH_MIN_INTERVAL_MS) {
+      scheduleDeferredRemoteRefresh(refreshKey, lastRunAt + REMOTE_REFRESH_MIN_INTERVAL_MS - now)
+      continue
+    }
+
     if (queuedRemoteRefreshKeys.has(refreshKey)) {
       continue
     }

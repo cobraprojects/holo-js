@@ -1,4 +1,5 @@
 import type { RealtimeRuntimeBindings } from '../contracts'
+import { resetRemoteRefreshSchedule } from './invalidation'
 import { getRuntimeState } from './state'
 
 export function configureRealtimeRuntime(bindings?: RealtimeRuntimeBindings): void {
@@ -7,6 +8,7 @@ export function configureRealtimeRuntime(bindings?: RealtimeRuntimeBindings): vo
 
 export function resetRealtimeRuntime(): void {
   const state = getRuntimeState()
+  resetRemoteRefreshSchedule()
   state.unsubscribeFromDatabase?.()
   if (state.invalidationBatch) {
     clearTimeout(state.invalidationBatch.timer)
