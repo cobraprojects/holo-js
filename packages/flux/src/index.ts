@@ -518,7 +518,11 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
         continue
       }
 
+      const flushedSocket = connection?.socket
       void authorizeSubscription(state).then((auth) => {
+        if (connection?.socket !== flushedSocket || channels.get(`${state.kind}:${state.name}`) !== state) {
+          return
+        }
         sendMessage({
           event: 'pusher:subscribe',
           data: {
@@ -527,7 +531,9 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
           },
         })
       }, () => {
-        state.subscribed = false
+        if (connection?.socket === flushedSocket) {
+          state.subscribed = false
+        }
       })
     }
   }

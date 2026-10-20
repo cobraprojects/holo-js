@@ -10,7 +10,7 @@ With the `holo` driver, broadcasting depends on a long-running WebSocket worker 
 
 Realtime and Broadcast are not production-ready. The deployment settings below do not remove these limits:
 
-- Browser reconnection and resubscription still need reliability work. Do not rely on uninterrupted live updates.
+- Browsers reconnect with backoff after a socket closes or fails, and then resubscribe. A browser whose network drops without the socket closing reconnects only when the operating system reports the close, so live updates can pause until then.
 - A worker that stops refreshing its Redis lease for 30 seconds, because it is stalled or can't reach Redis, loses its presence members from other workers' rosters. Those members stay out until their clients resubscribe. See [Run several workers](#run-several-workers).
 - Without Redis scaling, a write made in another process, such as your web app or a queue worker, does not refresh Realtime queries on this worker. With Redis scaling, it does. See [Run several workers](#run-several-workers).
 

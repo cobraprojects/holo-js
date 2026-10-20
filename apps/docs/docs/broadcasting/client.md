@@ -229,6 +229,8 @@ Broadcast notifications send to the channel names returned by the notifiable's `
 
 `useFluxConnectionStatus` reports the WebSocket state: `idle`, `connecting`, `connected`, or `disconnected`.
 
+Flux reconnects by itself after the WebSocket closes or fails. The status reads `disconnected` while it waits and `connected` once the socket opens again. It then rejoins your channels and authorizes private and presence channels again. Calling `flux.disconnect()` stops the reconnects.
+
 ::: code-group
 
 ```tsx [Next.js]
@@ -304,7 +306,7 @@ order.leaveChannel()
 | `flux.channel(name)` | A public channel subscription. |
 | `flux.private(name)` | A private channel subscription. |
 | `flux.presence(name)` | A presence channel subscription with `members`, `here()`, `joining()`, and `leaving()`. |
-| `flux.connect()` / `flux.disconnect()` | Open or close the WebSocket. |
+| `flux.connect()` / `flux.disconnect()` | Open or close the WebSocket. `disconnect()` also stops automatic reconnection. |
 | `flux.getStatus()` | The current connection status. |
 | `flux.onStatusChange(callback)` | Subscribe to status changes. Returns an unsubscribe function. |
 
