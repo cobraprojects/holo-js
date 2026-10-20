@@ -258,6 +258,32 @@ describe('bounded relation loading', () => {
     expect(Object.keys(loaded.toAttributes()).sort()).toEqual(['id', 'userId'])
   })
 
+  it('applies a one-of-many offset once, to the outer eager query', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }, { id: 2, name: 'Amina' }, { id: 3, name: 'Salma' }])
+    await db.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A' },
+      { id: 11, userId: 2, title: 'Post B' },
+      { id: 12, userId: 3, title: 'Post C' },
+    ])
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        latestPost: latestOfMany(() => Post, 'userId'),
+      },
+    })
+
+    const loaded = await User.with('latestPost', query => query.orderBy('id').offset(1).limit(10)).orderBy('id').get()
+
+    expect(loaded.map(user => user.getRelation<Entity<TableDefinition>>('latestPost')?.get('title') ?? null))
+      .toEqual([null, 'Post B', 'Post C'])
+  })
+
   it('applies a limit to the whole eager load across key chunks', async () => {
     const User = await seedUsersWithOnePostEach(300)
     const loaded = await User.with('posts', query => query.orderBy('id').limit(5)).get()

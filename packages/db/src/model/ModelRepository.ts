@@ -3116,7 +3116,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const latestAlias = '__holo_latest'
     const latestKey = '__holo_latest_key'
     const latestValue = '__holo_latest_value'
-    const latestSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().reorder()
+    const latestSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().reorder().limit().offset()
     const scopedSource = relation.kind === 'morphOneOfMany'
       ? latestSource.where(relation.morphTypeColumn, this.getMorphTypeValue())
       : latestSource
