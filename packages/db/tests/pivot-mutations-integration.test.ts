@@ -135,7 +135,7 @@ describe('pivot mutation integration', () => {
   it('rolls back earlier updates and inserts when a later duplicate insert fails', async () => {
     const user = await User.findOrFail(1)
     await user.attach('roles', 1, { note: 'original' })
-    await expect(user.sync('roles', [2, 2])).rejects.toThrow()
+    await expect(user.attach('roles', [2, 2])).rejects.toThrow()
     await user.load('roles')
     expect(user.getRelation<Entity<typeof roles>[]>('roles').map(role => role.get('id'))).toEqual([1])
     await expect(user.sync('roles', { 1: { note: 'changed' }, 2: { note: null } })).rejects.toThrow()
@@ -159,6 +159,15 @@ describe('pivot mutation integration', () => {
     expect(logs.every(log => log.bindings.length <= 900)).toBe(true)
     await user.load('roles')
     expect(user.getRelation('roles')).toEqual([])
+  })
+
+  it('dedupes repeated ids in sync so each related row is written once and the last attributes win', async () => {
+    const user = await User.findOrFail(1)
+    expect(await user.sync('roles', [1, 1])).toEqual({ attached: [1], detached: [], updated: [] })
+    expect(await user.sync('roles', { 1: {}, 2: { note: 'first' }, '02': { note: 'last' } })).toEqual({ attached: [2], detached: [], updated: [] })
+    const loaded = await User.with('roles').findOrFail(1)
+    expect(loaded.roles.map(role => role.get('id'))).toEqual([1, 2])
+    expect(loaded.roles.map(role => role.pivot?.note)).toEqual(['default', 'last'])
   })
 
   it('retrieves constrained relations in batches while retaining duplicate pivots and independent pivot attributes', async () => {

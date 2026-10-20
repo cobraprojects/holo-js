@@ -218,6 +218,12 @@ class EntityBase<
     return this
   }
 
+  syncOriginalAttributes(keys: readonly string[]): this {
+    const snapshot = snapshotAttributes(Object.fromEntries(keys.map(key => [key, this.#attributes[key]])))
+    Object.assign(this.#original, snapshot)
+    return this
+  }
+
   syncChanges(): this {
     this.#changes = { ...this.getDirty() }
     return this
