@@ -88,7 +88,7 @@ Errors Holo catches in background work, such as failing queue hooks, background 
 
 ### Next.js servers close Holo resources on shutdown
 
-When a Next.js server receives `SIGINT` or `SIGTERM`, it now closes Holo's database, Redis, queue, and other connections after it finishes in-flight requests, then exits. The process waits up to 30 seconds from the signal for requests to finish and connections to close, so give your process manager at least that long to stop the server. For example, set `terminationGracePeriodSeconds` in Kubernetes or `TimeoutStopSec` in systemd. Nuxt already closed Holo resources on shutdown and now reports a failed close through `exceptions.report`. No code changes are required. See [Stop the server](/deployment/#stop-the-server).
+When a Next.js server receives `SIGINT` or `SIGTERM`, it now starts closing Holo's database, Redis, queue, and other connections right away, then exits once the close finishes or 30 seconds after the signal. Requests still running at that point can fail if they use those connections, so remove the server from your load balancer before you send the signal. Give your process manager at least 30 seconds to stop the server. For example, set `terminationGracePeriodSeconds` in Kubernetes or `TimeoutStopSec` in systemd. Nuxt already closed Holo resources on shutdown and now reports a failed close through `exceptions.report`. No code changes are required. See [Stop the server](/deployment/#stop-the-server).
 
 ### Unexpected SvelteKit errors
 

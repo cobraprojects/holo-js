@@ -12,6 +12,7 @@ type ChildResult = {
   readonly code: number | null
   readonly stdout: string
   readonly stderr: string
+  readonly durationMs: number
 }
 
 function runChild(script: string, options: { readonly signalAfterReady?: NodeJS.Signals } = {}): Promise<ChildResult> {
@@ -21,6 +22,7 @@ function runChild(script: string, options: { readonly signalAfterReady?: NodeJS.
       env: { ...process.env, DB_DRIVER: 'sqlite', DB_URL: ':memory:', DB_SQLITE_URL: ':memory:' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    const startedAt = Date.now()
     let stdout = ''
     let stderr = ''
     let signalled = false
@@ -37,7 +39,7 @@ function runChild(script: string, options: { readonly signalAfterReady?: NodeJS.
       stderr += chunk
     })
     child.on('error', reject)
-    child.on('close', code => resolvePromise({ code, stdout, stderr }))
+    child.on('close', code => resolvePromise({ code, stdout, stderr, durationMs: Date.now() - startedAt }))
   })
 }
 
@@ -48,6 +50,31 @@ const prelude = `
 `
 
 describe('Next termination shutdown', () => {
+  it('closes Holo and lets the process end when a server drains on SIGTERM without calling exit', async () => {
+    const result = await runChild(`
+      const http = await import('node:http')
+      const { installNextShutdown } = await import(${JSON.stringify(shutdownSource)})
+      const server = http.createServer((request, response) => response.end('ok')).listen(0)
+      const databaseHandle = setInterval(() => {}, 1000)
+      installNextShutdown({
+        close: async () => {
+          clearInterval(databaseHandle)
+          console.log('close:done')
+        },
+        report: error => console.log('reported', error),
+      })
+      process.on('SIGTERM', () => {
+        console.log('server:drain')
+        server.close()
+      })
+      console.log('ready')
+    `, { signalAfterReady: 'SIGTERM' })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'server:drain', 'close:done'])
+    expect(result.code).toBe(143)
+    expect(result.durationMs).toBeLessThan(10_000)
+  }, 20_000)
+
   it('restores process.exit and signal listeners when uninstalled', () => {
     const originalExit = process.exit
     const sigtermListeners = process.listenerCount('SIGTERM')
@@ -85,7 +112,7 @@ describe('Next termination shutdown', () => {
     expect(result.code).toBe(143)
   })
 
-  it('closes after a host listener that was registered before Holo has run to completion', async () => {
+  it('closes at the signal even while another SIGTERM listener is still draining', async () => {
     const result = await runChild(`
       ${prelude}
       process.once('SIGTERM', async () => {
@@ -104,43 +131,47 @@ describe('Next termination shutdown', () => {
       holdOpen()
     `, { signalAfterReady: 'SIGTERM' })
 
-    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'host:drain', 'host:drained', 'close:done'])
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'host:drain', 'close:done', 'host:drained'])
     expect(result.code).toBe(143)
   })
 
-  it('exits with the signal exit code after closing when no other handler is installed', async () => {
+  it('exits with the signal exit code once close releases the open handles when no other handler is installed', async () => {
     const result = await runChild(`
       ${prelude}
+      const databaseHandle = holdOpen()
       installNextShutdown({
         close: async () => {
+          clearInterval(databaseHandle)
           console.log('close:done')
         },
         report: error => console.log('reported', error),
       })
       console.log('ready')
-      holdOpen()
     `, { signalAfterReady: 'SIGTERM' })
 
     expect(result.stdout.trim().split('\n')).toEqual(['ready', 'close:done'])
     expect(result.code).toBe(143)
+    expect(result.durationMs).toBeLessThan(10_000)
   })
 
   it('reports a failed close through the injected reporter and still exits', async () => {
     const result = await runChild(`
       ${prelude}
+      const databaseHandle = holdOpen()
       installNextShutdown({
         close: async () => {
+          clearInterval(databaseHandle)
           throw new Error('redis closed during shutdown')
         },
         report: (error, context) => console.log('reported', context.capability, context.operation, error.message),
       })
       console.log('ready')
-      holdOpen()
     `, { signalAfterReady: 'SIGINT' })
 
     expect(result.stdout.trim().split('\n')).toEqual(['ready', 'reported next shutdown redis closed during shutdown'])
     expect(result.code).toBe(130)
-  })
+    expect(result.durationMs).toBeLessThan(10_000)
+  }, 20_000)
 
   it('leaves exits that are not caused by a termination signal alone', async () => {
     const result = await runChild(`

@@ -33,28 +33,30 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
 
   state.installed = true
   const exit = process.exit
-  const closeThenExit = (code: ExitCode): void => {
+  const closeOnce = (): Promise<void> => {
     state.closing ??= (async () => {
       try {
         await state.options?.close()
       } catch (error) {
         state.options?.report(error, { capability: 'next', operation: 'shutdown' })
       }
-      exit(code)
     })()
+    return state.closing
   }
 
   const onSignal = (signal: TerminationSignal) => {
     if (state.signal) return
     state.signal = signal
     const code = 128 + constants.signals[signal]
-    setTimeout(() => exit.call(process, code), SHUTDOWN_DEADLINE_MS)
-    if (process.listenerCount(signal) === 1) closeThenExit(code)
+    process.exitCode = code
+    const deadline = setTimeout(() => exit.call(process, code), SHUTDOWN_DEADLINE_MS)
+    deadline.unref()
+    setImmediate(() => void closeOnce())
   }
   const listeners = TERMINATION_SIGNALS.map(signal => [signal, () => onSignal(signal)] as const)
   const patchedExit = ((code?: ExitCode) => {
     if (!state.signal) return exit.call(process, code)
-    closeThenExit(code)
+    void closeOnce().then(() => exit.call(process, code))
   }) as typeof process.exit
 
   process.exit = patchedExit
