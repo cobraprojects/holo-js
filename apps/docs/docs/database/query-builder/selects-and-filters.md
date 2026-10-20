@@ -376,7 +376,7 @@ const results = await DB.table('posts')
 
 ### whereColumn()
 
-Compare one column to another column instead of to a value. The operator cannot be `in`, `not in`, `between`, or `not between`.
+Compare one column to another column instead of to a value. The operator must be `=`, `!=`, `>`, `>=`, `<`, `<=`, or `like`. Any other operator throws a `SecurityError` when the query runs.
 
 ```ts
 const overBudget = await DB.table('projects')

@@ -759,12 +759,17 @@ export async function assertExampleAppAuthFlow({
   assert.equal(unverifiedLogin.json.data?.redirectTo, `/verify-email?email=${encodeURIComponent(email)}`)
 
   const resendOutputStart = getOutput().length
+  const unauthenticatedResend = await fetchAuthJson('/api/verify-email/resend', {
+    method: 'POST',
+    jar: createCookieJar(),
+    allowFailure: true,
+  })
+  assert.equal(unauthenticatedResend.response.status, 401)
+  assert.equal(unauthenticatedResend.json.ok, false)
+
   const resent = await fetchAuthJson('/api/verify-email/resend', {
     method: 'POST',
-    body: JSON.stringify({ email }),
-    headers: {
-      'content-type': 'application/json',
-    },
+    jar: pendingVerificationJar,
   })
   assert.equal(resent.json.ok, true)
   assert.equal(resent.json.data?.message, 'A fresh verification email has been sent.')
@@ -796,16 +801,28 @@ export async function assertExampleAppAuthFlow({
 
   const alreadyVerifiedResend = await fetchAuthJson('/api/verify-email/resend', {
     method: 'POST',
-    fields: {
-      email,
-    },
-    headers: {
-      'x-forwarded-for': '127.0.0.226',
-    },
+    jar: pendingVerificationJar,
+    allowFailure: true,
   })
-  assert.equal(alreadyVerifiedResend.response.status, 200)
-  assert.equal(alreadyVerifiedResend.json.ok, true)
-  assert.equal(alreadyVerifiedResend.json.data?.message, 'A fresh verification email has been sent.')
+  assert.equal(alreadyVerifiedResend.response.status, 409)
+  assert.equal(alreadyVerifiedResend.json.ok, false)
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const repeatedResend = await fetchAuthJson('/api/verify-email/resend', {
+      method: 'POST',
+      jar: pendingVerificationJar,
+      allowFailure: true,
+    })
+    assert.equal(repeatedResend.response.status, 409)
+  }
+
+  const throttledResend = await fetchAuthJson('/api/verify-email/resend', {
+    method: 'POST',
+    jar: pendingVerificationJar,
+    allowFailure: true,
+  })
+  assert.equal(throttledResend.response.status, 429)
+  assert.equal(throttledResend.json.ok, false)
 
   const consumedVerification = await fetchAuthJson('/api/verify-email', {
     method: 'POST',
@@ -1006,16 +1023,14 @@ export async function assertExampleAppAuthFlow({
     assert.doesNotMatch(rememberedJar.header(), new RegExp(`(?:^|;\\s*)${escapeRegExp(rememberCookieName)}=`))
   }
 
-  const staleRememberUser = await fetchAuthJson('/api/auth/user', {
+  const copiedRememberUser = await fetchAuthJson('/api/auth/user', {
     headers: {
       cookie: rememberOnlyCookie,
     },
   })
-  if (!usesSvelteKitActions) {
-    assert.equal(staleRememberUser.json.authenticated, false)
-    assert.equal(staleRememberUser.json.user, null)
-  }
-  assert.equal(staleRememberUser.json.guard, 'web')
+  assert.equal(copiedRememberUser.json.authenticated, true)
+  assert.equal(copiedRememberUser.json.guard, 'web')
+  assert.equal(copiedRememberUser.json.user?.email, email)
 
   const loggedOut = await fetchAuthJson('/api/logout', {
     method: 'POST',
@@ -1042,6 +1057,14 @@ export async function assertExampleAppAuthFlow({
   assert.equal(staleSessionUser.json.authenticated, false)
   assert.equal(staleSessionUser.json.guard, 'web')
   assert.equal(staleSessionUser.json.user, null)
+
+  const rememberedAfterLogout = await fetchAuthJson('/api/auth/user', {
+    headers: {
+      cookie: rememberOnlyCookie,
+    },
+  })
+  assert.equal(rememberedAfterLogout.json.authenticated, false)
+  assert.equal(rememberedAfterLogout.json.user, null)
 
   if (checkPages) {
     const loggedOutHome = await fetchAuthText('/', {

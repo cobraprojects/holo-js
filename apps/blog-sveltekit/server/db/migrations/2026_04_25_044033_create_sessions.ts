@@ -10,7 +10,6 @@ export default defineMigration({
       table.timestamp('last_activity_at')
       table.timestamp('expires_at')
       table.timestamp('invalidated_at').nullable()
-      table.string('remember_token_hash').nullable()
       table.index(['expires_at'])
     })
   },

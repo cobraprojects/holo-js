@@ -109,83 +109,107 @@ On the page, read `token` from the URL and submit it, either automatically on lo
 
 ## Resend the email
 
-The `emailVerificationRoute` from login includes the user's email, so your page can offer a "Send again" button that posts it:
+Resending works only for a signed-in user, and it sends the link to that user's own address. The unverified user is signed in after login, so the verification page can offer a "Send again" button that posts to a route which checks the session first. Rate limit that route per user, so one account can't flood its own inbox:
 
 ::: code-group
 
 ```ts [Next.js]
 // app/api/verify-email/resend/route.ts
-import { resendEmailVerification } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { resendEmailVerification, user } from '@holo-js/auth'
+import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 import { serializeValidationException } from '@holo-js/validation'
-import { resendEmailVerificationForm } from '@/lib/schemas/auth'
 
-export async function POST(request: Request) {
-  const input = await validate(request, resendEmailVerificationForm, {
-    throttle: 'emailVerificationResend',
-  })
-
-  try {
-    await resendEmailVerification(input.email)
-  } catch (error) {
-    if (!serializeValidationException(error)) throw error
+export async function POST() {
+  const current = await user()
+  if (!current) {
+    return Response.json({ ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }, { status: 401 })
   }
 
-  return Response.json({ ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } })
+  try {
+    await rateLimit('emailVerificationResend', { key: `user:${String(current.id)}` })
+    await resendEmailVerification()
+  } catch (error) {
+    if (error instanceof SecurityRateLimitError) {
+      return Response.json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
+    }
+
+    const payload = serializeValidationException(error)
+    if (!payload) throw error
+    return Response.json(payload, { status: payload.status })
+  }
+
+  return Response.json({ ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } })
 }
 ```
 
 ```ts [Nuxt]
 // server/api/verify-email/resend.post.ts
-import { resendEmailVerification } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { resendEmailVerification, user } from '@holo-js/auth'
+import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 import { serializeValidationException } from '@holo-js/validation'
-import { resendEmailVerificationForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
-  const input = await validate(event, resendEmailVerificationForm, {
-    throttle: 'emailVerificationResend',
-  })
-
-  try {
-    await resendEmailVerification(input.email)
-  } catch (error) {
-    if (!serializeValidationException(error)) throw error
+  const current = await user()
+  if (!current) {
+    setResponseStatus(event, 401)
+    return { ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }
   }
 
-  return { ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } }
+  try {
+    await rateLimit('emailVerificationResend', { key: `user:${String(current.id)}` })
+    await resendEmailVerification()
+  } catch (error) {
+    if (error instanceof SecurityRateLimitError) {
+      setResponseStatus(event, 429)
+      return { ok: false, status: 429, errors: { _root: [error.message] } }
+    }
+
+    const payload = serializeValidationException(error)
+    if (!payload) throw error
+    setResponseStatus(event, payload.status)
+    return payload
+  }
+
+  return { ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } }
 })
 ```
 
 ```ts [SvelteKit]
 // src/routes/api/verify-email/resend/+server.ts
 import { json } from '@sveltejs/kit'
-import { resendEmailVerification } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { resendEmailVerification, user } from '@holo-js/auth'
+import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 import { serializeValidationException } from '@holo-js/validation'
-import { resendEmailVerificationForm } from '$lib/schemas/auth'
 
-export async function POST({ request }: { request: Request }) {
-  const input = await validate(request, resendEmailVerificationForm, {
-    throttle: 'emailVerificationResend',
-  })
-
-  try {
-    await resendEmailVerification(input.email)
-  } catch (error) {
-    if (!serializeValidationException(error)) throw error
+export async function POST() {
+  const current = await user()
+  if (!current) {
+    return json({ ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }, { status: 401 })
   }
 
-  return json({ ok: true, status: 200, data: { message: 'If that address needs verifying, we sent a new link.' } })
+  try {
+    await rateLimit('emailVerificationResend', { key: `user:${String(current.id)}` })
+    await resendEmailVerification()
+  } catch (error) {
+    if (error instanceof SecurityRateLimitError) {
+      return json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
+    }
+
+    const payload = serializeValidationException(error)
+    if (!payload) throw error
+    return json(payload, { status: payload.status })
+  }
+
+  return json({ ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } })
 }
 ```
 
 :::
 
-These routes always answer the same way, so nobody can use them to find out which emails have accounts. They also need an `emailVerificationResend` rate limiter in `config/security.ts`, which the installer doesn't add:
+The route needs a limiter named `emailVerificationResend` in `config/security.ts`, which the installer doesn't add. Six sends per minute per user is enough for a slow human and too few for a script:
 
 ```ts [config/security.ts]
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+import { defineSecurityConfig, limit } from '@holo-js/security'
 
 export default defineSecurityConfig({
   // ...csrf and the rest of rateLimit stay as they are
@@ -193,10 +217,7 @@ export default defineSecurityConfig({
     limiters: {
       login: limit.perMinute(5).define(),
       register: limit.perHour(10).define(),
-      emailVerificationResend: limit.perMinute(1).by(({ request, values }) => {
-        const email = typeof values?.email === 'string' ? values.email.trim().toLowerCase() : 'unknown'
-        return `email:${email}|client:${ip(request)}`
-      }),
+      emailVerificationResend: limit.perMinute(6).define(),
     },
   },
 })
@@ -204,12 +225,12 @@ export default defineSecurityConfig({
 
 See [Rate Limiting](/basics/security/rate-limiting) for limiter options.
 
-Call `resendEmailVerification()` with no arguments to send to the signed-in user. `sendEmailVerification()` does exactly the same thing; use whichever name reads better.
+`resendEmailVerification()` and `sendEmailVerification()` do the same thing; use whichever name reads better. Neither accepts an email address. Without a signed-in user they throw `email_verification_user_missing` with status 401, so a guest can't use them to send mail to an address they type in.
 
-Each new link is valid for one hour. Pass `{ expiresAt }` as the second argument to change that:
+Each new link is valid for one hour. Pass `{ expiresAt }` to change that:
 
 ```ts
-await sendEmailVerification(undefined, { expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+await sendEmailVerification({ expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
 ```
 
 ## Require a verified email
@@ -260,7 +281,7 @@ These throw a `ValidationException`, so they show up in forms like any validatio
 | --- | --- | --- | --- |
 | `email_verification_token_invalid` | The token is wrong or already used | `token` | 422 |
 | `email_verification_token_expired` | The link expired, or the user's email changed after it was sent | `token` | 422 |
-| `email_verification_user_missing` | Resend found no user | `_root` | 401 |
+| `email_verification_user_missing` | Resend has no signed-in user | `_root` | 401 |
 | `email_already_verified` | Resend for a verified user | `_root` | 409 |
 
 ## Lower-level API
@@ -271,11 +292,11 @@ These throw a `ValidationException`, so they show up in forms like any validatio
 import { verification } from '@holo-js/auth'
 
 await verification.create(user)
-await verification.resend({ email: 'ava@example.com' })
+await verification.resend()
 await verification.consume(token)
 ```
 
-`create()` and `resend()` accept `{ guard, expiresAt }`, and both replace the user's previous link and send the email. `consume()` is what `verifyEmail()` calls.
+`create()` and `resend()` accept `{ guard, expiresAt }`, and both replace the user's previous link and send the email. `resend()` sends to the signed-in user only. `consume()` is what `verifyEmail()` calls.
 
 ## Next steps
 

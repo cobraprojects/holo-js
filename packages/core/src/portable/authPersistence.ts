@@ -585,6 +585,12 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         getPasswordHash() {
           return throwPendingSchema()
         },
+        getRememberToken() {
+          return throwPendingSchema()
+        },
+        async updateRememberToken() {
+          return throwPendingSchema()
+        },
         getEmailVerifiedAt() {
           return throwPendingSchema()
         },
@@ -765,6 +771,16 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       getPasswordHash(user: unknown) {
         const value = getEntityAttributes(user).password
         return typeof value === 'string' ? value : null
+      },
+      getRememberToken(user: unknown) {
+        const value = getEntityAttributes(user).remember_token
+        return typeof value === 'string' ? value : null
+      },
+      async updateRememberToken(user: unknown, token: string) {
+        const values = { remember_token: token }
+        if (!await saveAuthEntity(user, values)) {
+          await model.update(getEntityAttributes(user).id, values)
+        }
       },
       getEmailVerifiedAt(user: unknown) {
         const value = getEntityAttributes(user).email_verified_at

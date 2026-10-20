@@ -393,7 +393,7 @@ await DB.unsafeQuery(DB.raw('select 1'), 'analytics', { timeoutMs: 2000 })
 
 ## Timeouts and cancellation
 
-Raw queries and [transactions](/database/transactions) accept `timeoutMs` (a positive integer in milliseconds) and an `AbortSignal`:
+Raw queries accept `timeoutMs` (a positive integer in milliseconds) and an `AbortSignal`. [Transactions](/database/transactions) accept the same options to limit how long they take to start, but never interrupt a commit or rollback:
 
 ```ts
 const controller = new AbortController()
@@ -428,7 +428,7 @@ All database errors extend `DatabaseError` and carry a `code` string. Import the
 | `ConfigurationError` | `CONFIGURATION_ERROR` | A connection name is unknown or a setting is invalid |
 | `SecurityError` | `SECURITY_ERROR` | Raw SQL is used without `allowUnsafeRawSql` |
 | `CapabilityError` | `CAPABILITY_ERROR` | The driver doesn't support a feature, such as SQLite transaction modes on PostgreSQL |
-| `TransactionError` | `TRANSACTION_ERROR` | A transaction times out, is aborted, or a commit callback fails |
+| `TransactionError` | `TRANSACTION_ERROR` | A transaction can't start before its timeout or abort, a rollback callback fails, or a callback is registered outside a transaction |
 | `SchemaError` | `SCHEMA_ERROR` | A schema or migration operation is invalid |
 | `RelationError` | `RELATION_ERROR` | A relationship is misconfigured |
 | `ModelNotFoundException` | `MODEL_NOT_FOUND` | `findOrFail()` and similar methods find nothing. Has `statusCode: 404` |

@@ -1,7 +1,7 @@
-import type { CookieOptions } from './cookieSerialization'
+import type { CookieSerializationOptions } from './cookieSerialization'
 
-type ParsedSetCookieOptions = {
-  -readonly [TKey in keyof CookieOptions]?: CookieOptions[TKey]
+type ParsedSetCookieSerializationOptions = {
+  -readonly [TKey in keyof CookieSerializationOptions]?: CookieSerializationOptions[TKey]
 }
 
 function parseCookieAttribute(rawAttribute: string): {
@@ -20,7 +20,7 @@ function parseCookieAttribute(rawAttribute: string): {
   return { key, value }
 }
 
-function parseSameSite(value: string): CookieOptions['sameSite'] | undefined {
+function parseSameSite(value: string): CookieSerializationOptions['sameSite'] | undefined {
   const normalized = value.toLowerCase()
   if (normalized === 'lax' || normalized === 'strict' || normalized === 'none') {
     return normalized
@@ -29,13 +29,18 @@ function parseSameSite(value: string): CookieOptions['sameSite'] | undefined {
   return undefined
 }
 
-function applyCookieAttribute(options: ParsedSetCookieOptions, rawAttribute: string): void {
+function applyCookieAttribute(options: ParsedSetCookieSerializationOptions, rawAttribute: string): void {
   const attribute = parseCookieAttribute(rawAttribute)
   if (!attribute) {
     return
   }
 
   switch (attribute.key) {
+    case 'max-age': {
+      const seconds = Number(attribute.value)
+      if (/^-?\d+$/.test(attribute.value) && Number.isSafeInteger(seconds)) options.maxAge = seconds
+      break
+    }
     case 'path':
       options.path = attribute.value
       break
@@ -71,7 +76,7 @@ function decodeCookieName(value: string): string | null {
 
 export function parseSetCookieDefinition(header: string): {
   readonly name: string
-  readonly options: CookieOptions
+  readonly options: CookieSerializationOptions
 } | null {
   const attributeSeparator = header.indexOf(';')
   const nameValue = attributeSeparator === -1 ? header : header.slice(0, attributeSeparator)
@@ -80,7 +85,7 @@ export function parseSetCookieDefinition(header: string): {
     return null
   }
 
-  const options: ParsedSetCookieOptions = {}
+  const options: ParsedSetCookieSerializationOptions = {}
 
   for (const rawAttribute of attributeSeparator === -1 ? [] : header.slice(attributeSeparator + 1).split(';')) {
     applyCookieAttribute(options, rawAttribute)

@@ -224,6 +224,8 @@ Expected failures throw a `ValidationException`, so your form shows them like an
 | Identifier already registered | `email` | A user with this email already exists. | 422 |
 | `password` and `passwordConfirmation` differ | both fields | | 422 |
 
+A failed login takes at least 200 ms whether or not the account exists, as Laravel does, so the response time doesn't reveal which emails have accounts. A successful login isn't delayed.
+
 ## Remember the user
 
 Pass `remember: true` to keep the user signed in after the browser closes. The `loginForm` above already sends it from a checkbox.
@@ -505,7 +507,7 @@ const active = await impersonation()
 await stopImpersonating()
 ```
 
-`actorGuard` is the guard the admin is signed in on. It defaults to the guard you call `impersonate()` on. You can't start impersonating while already impersonating. `stopImpersonating()` restores the previous user on that guard, or signs the guard out if there was none.
+`actorGuard` is the guard the admin is signed in on. It defaults to the guard you call `impersonate()` on. You can't start impersonating while already impersonating. `stopImpersonating()` restores the previous user on that guard, or signs the guard out if there was none. Impersonation never sets a remember-me cookie, so `remember: true` throws `impersonation_remember_unsupported`.
 
 ## Reference
 

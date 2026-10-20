@@ -33,7 +33,6 @@ async function resendVerificationEmail() {
   try {
     const payload = await $fetch('/api/verify-email/resend', {
       method: 'POST',
-      body: email ? { email } : {},
     })
     if (payload?.ok === true) {
       resendMessage.value = payload.data?.message ?? 'A fresh verification email has been sent.'

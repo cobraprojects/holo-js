@@ -387,11 +387,17 @@ function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOption
       const event = getCurrentSvelteKitRequestEvent()
       return event?.request.headers.get(name) ?? undefined
     },
+    canAppendResponseCookie() {
+      return Boolean(getCurrentSvelteKitRequestEvent())
+    },
     appendResponseCookie(cookie: string) {
       const event = getCurrentSvelteKitRequestEvent()
+      if (!event) {
+        throw Object.assign(new Error('Authentication cookies cannot be set outside an active SvelteKit request.'), { code: 'cookie_write_unavailable' })
+      }
       const parsed = parseResponseCookie(cookie)
-      if (!event || !parsed) {
-        return
+      if (!parsed) {
+        throw new Error('[@holo-js/adapter-sveltekit] An authentication cookie could not be parsed.')
       }
 
       event.cookies.set(parsed.name, parsed.value, parsed.options)

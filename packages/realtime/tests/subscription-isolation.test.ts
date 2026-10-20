@@ -40,7 +40,7 @@ async function configureAuthenticatedSubscriptions(context: AuthRuntimeContext) 
 }
 
 it.each(['authenticated', 'public'] as const)('isolates identical %s subscriptions for different users and anonymous callers', async (require) => {
-  const context = createAsyncAuthContext()
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
   const configuredContext = { ...context, getSessionId: (guard: string) => context.getSessionId(guard) }
   const persistence = await configureAuthenticatedSubscriptions(configuredContext)
   const authorized: Array<string | number | undefined> = []
@@ -166,7 +166,7 @@ it('keeps mutation patches and backfills inside each caller database', async () 
 })
 
 it('retains each caller across independent memory auth contexts', async () => {
-  const context = authRuntimeInternals.createMemoryAuthContext()
+  const context = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
   const persistence = await configureAuthenticatedSubscriptions(context)
   const query = defineRealtimeQuery({
     access: 'authenticated',
@@ -178,7 +178,7 @@ it('retains each caller across independent memory auth contexts', async () => {
     config: persistence.loadedConfig.auth,
     providers: persistence.providers,
     session: getSessionRuntime(),
-    context: authRuntimeInternals.createMemoryAuthContext(),
+    context: Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined }),
   })
   await getAuthRuntime().guard('web').loginUsingId(20)
   const second = await subscribeRealtimeQuery(query)
@@ -210,8 +210,29 @@ it('reruns queries that observe a different database from the runtime binding', 
 })
 
 
+it('authorizes a remembered user from a read-only realtime request without writing cookies', async () => {
+  const context = createRequestAwareAuthContext(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const remembered = await context.run(() => getAuthRuntime().guard('web').loginUsingId(10, { remember: true }))
+  const rememberName = `${getSessionRuntime().sessionCookie('').split('=')[0]}_remember`
+  const rememberValue = getSessionRuntime().rememberMeCookie(JSON.stringify({ web: JSON.parse(remembered.rememberToken!) })).split(';', 1)[0]!.slice(rememberName.length + 1)
+  const accessors = {
+    getCookie: async (name: string) => name === rememberName ? rememberValue : undefined,
+    getHeader: async () => undefined,
+    appendResponseCookie: async () => { throw new Error('realtime authorization must not write cookies') },
+    redirectResponse: async () => { throw new Error('realtime authorization must not redirect') },
+  }
+  configureRealtimeRuntime({ db: () => persistence.db, runWithAuthRequestAccessors: context.runWithRequestAccessors })
+  const query = defineRealtimeQuery({
+    access: 'public',
+    handler: async ({ auth, db }) => await db.table('users').where('id', auth?.user.id ?? 0).select('id', 'name').get(),
+  })
+  const subscription = await subscribeRealtimeQuery(query, {}, {}, { authRequest: accessors })
+  expect(subscription.current.data).toEqual([{ id: 10, name: 'Ava' }])
+})
+
 it('captures credentials resolved through request accessors before the request ends', async () => {
-  const context = createRequestAwareAuthContext(createAsyncAuthContext())
+  const context = createRequestAwareAuthContext(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
   const persistence = await configureAuthenticatedSubscriptions(context)
   const sessions = await Promise.all([10, 20].map(id => context.run(async () => {
     await getAuthRuntime().guard('web').loginUsingId(id)

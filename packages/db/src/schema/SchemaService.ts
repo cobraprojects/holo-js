@@ -1,3 +1,5 @@
+import { currentPinnedConnection, runPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
@@ -185,11 +187,40 @@ export class SchemaService {
   async withoutForeignKeyConstraints<TResult>(
     callback: () => TResult | Promise<TResult>,
   ): Promise<TResult> {
-    await this.disableForeignKeyConstraints()
+    const adapter = this.connection.getAdapter()
+    if (currentPinnedConnection(adapter)) {
+      return callback()
+    }
+
+    return runPinnedConnection(adapter, () => (adapter.runWithTransactionScope
+      ? adapter.runWithTransactionScope(() => this.runWithoutForeignKeyConstraints(callback))
+      : this.runWithoutForeignKeyConstraints(callback)))
+  }
+
+  private async restoreForeignKeyConstraints(): Promise<void> {
     try {
+      await this.enableForeignKeyConstraints()
+    } catch (error) {
+      await this.connection.getAdapter().execute(this.createForeignKeyConstraintStatement(true).sql)
+      reportError(error, { capability: 'db', operation: 'schema.restoreForeignKeys' })
+    }
+  }
+
+  private async runWithoutForeignKeyConstraints<TResult>(
+    callback: () => TResult | Promise<TResult>,
+  ): Promise<TResult> {
+    const pinned = currentPinnedConnection(this.connection.getAdapter())!
+    try {
+      await this.disableForeignKeyConstraints()
       return await callback()
     } finally {
-      await this.enableForeignKeyConstraints()
+      await serializeOnPinnedConnection(pinned, async () => {
+        try {
+          await this.restoreForeignKeyConstraints()
+        } finally {
+          pinned.active = false
+        }
+      })
     }
   }
 

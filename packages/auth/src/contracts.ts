@@ -21,6 +21,7 @@ export const AUTH_ERROR_CODES = [
   'impersonation_actor_required',
   'impersonation_nested_unsupported',
   'impersonation_already_active',
+  'impersonation_remember_unsupported',
   'registration_identifier_taken',
   'auth_user_missing',
   'provider_resolution_required',
@@ -384,14 +385,8 @@ export interface AuthFacade extends AuthGuardFacade {
     input: TInput,
   ): Promise<AuthenticatedAuthUser>
   verifyEmail(token: string): Promise<AuthenticatedAuthUser>
-  sendEmailVerification(): Promise<EmailVerificationTokenResult>
-  sendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
-  sendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
-  sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
-  resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
+  sendEmailVerification(options?: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
+  resendEmailVerification(options?: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>
@@ -409,6 +404,8 @@ type AuthProviderAdapterBase<TUser> = {
   matchesUser?(user: unknown): boolean
   getId(user: TUser): string | number
   getPasswordHash?(user: TUser): string | null | undefined
+  getRememberToken?(user: TUser): string | null | undefined
+  updateRememberToken?(user: TUser, token: string): Promise<void>
   getEmailVerifiedAt?(user: TUser): Date | string | null | undefined
 }
 
@@ -566,7 +563,7 @@ export interface AuthDeliveryHook {
 
 export interface AuthEmailVerificationFacade {
   create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
-  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<EmailVerificationTokenResult>
+  resend(options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
   consume(plainTextToken: string): Promise<AuthenticatedAuthUser>
 }
 
@@ -577,7 +574,6 @@ export interface AuthSessionRecord {
   readonly createdAt: Date
   readonly lastActivityAt: Date
   readonly expiresAt: Date
-  readonly rememberTokenHash?: string
 }
 
 export interface AuthSessionRuntime {
@@ -603,14 +599,6 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<void>
-  issueRememberMeToken(
-    sessionId: string,
-    options?: { readonly store?: string },
-  ): Promise<string>
-  consumeRememberMeToken?(
-    token: string,
-    options?: { readonly store?: string },
-  ): Promise<AuthSessionRecord | null>
   flash?(sessionId: string, key: string, value: unknown, options?: { readonly store?: string }): Promise<void>
   take?<TValue = unknown>(sessionId: string, key: string, options?: { readonly store?: string }): Promise<TValue | undefined>
   cookie?(
@@ -626,16 +614,19 @@ export interface AuthSessionRuntime {
     value: string,
     options?: Record<string, unknown>,
   ): string
+  rememberMeLifetimeMinutes?(): number
   decryptCookie(name: string, value: string): string | undefined
 }
 
 export interface AuthRuntimeContext {
+  getRequestScope?(): object
   getSessionId(guardName: string): string | undefined
   setSessionId(guardName: string, sessionId?: string): void
   getCachedUser(guardName: string): AuthenticatedAuthUser | null | undefined
   setCachedUser(guardName: string, user: AuthenticatedAuthUser | null): void
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  canAppendResponseCookie?(): boolean | Promise<boolean>
   appendResponseCookie?(cookie: string): void | Promise<void>
   redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
   getAccessToken?(guardName: string): string | undefined

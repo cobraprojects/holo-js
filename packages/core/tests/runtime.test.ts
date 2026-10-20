@@ -2367,15 +2367,15 @@ export default defineSessionConfig({
     expect((await sessions.read(existing.id))?.data).toEqual({ 'auth.web': 'user-1', _token: await csrf.token(request) })
 
     const remembered = await sessions.create({ data: { 'auth.web': 'user-2' } })
-    const rememberCookie = sessions.rememberMeCookie(await sessions.issueRememberMeToken(remembered.id)).split(';', 1)[0]!
+    const rememberCookie = sessions.rememberMeCookie(remembered.id).split(';', 1)[0]!
     const rememberedRequest = new Request('https://runtime.test/form', { headers: { cookie: rememberCookie } })
     const rememberedResponse = await svelteKitCsrfProtection()({
       event: { url: new URL(rememberedRequest.url), request: rememberedRequest, cookies: { get: () => undefined, set: () => undefined } },
       resolve: () => new Response('page'),
     })
 
-    expect(rememberedResponse.headers.getSetCookie().some(cookie => cookie.startsWith('holo_session='))).toBe(false)
-    expect((await sessions.read(remembered.id))?.data._token).toBe(await csrf.token(rememberedRequest))
+    expect(rememberedResponse.headers.getSetCookie().some(cookie => cookie.startsWith('holo_session='))).toBe(true)
+    expect((await sessions.read(remembered.id))?.data._token).toBeUndefined()
   })
 
   it('clears security runtime bindings when the security config file is removed', async () => {
@@ -2733,7 +2733,7 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
     expect(registered).not.toHaveProperty('password')
     const userId = registered.id
     if (userId === undefined) throw new Error('Registration did not return its generated user id')
-    const established = await runtime.runWithAuthRequestAccessors({}, () => auth.loginUsingId(userId))
+    const established = await runtime.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => auth.loginUsingId(userId))
     await runtime.runWithAuthRequestAccessors({ getCookie: name => name === 'holo_session' ? sessionCookieValue(established.sessionId) : undefined }, async () => {
       expect(await auth.id()).toBe(registered.id)
       expect(await defaultRateLimitKey(new Request('https://runtime.test/requests'))).toBe('user:1')

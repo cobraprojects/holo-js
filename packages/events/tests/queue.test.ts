@@ -142,7 +142,7 @@ describe('@holo-js/events queue integration', () => {
     }))
   })
 
-  it('runs mixed sync and queued listeners through the real queue path with sync-first ordering', async () => {
+  it('runs mixed sync and queued listeners through the real queue path in registration order', async () => {
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))

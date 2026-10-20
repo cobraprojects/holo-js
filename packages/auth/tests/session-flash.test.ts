@@ -23,8 +23,8 @@ const users: AuthProviderAdapter<TestUser> = {
   async findByCredentials() {
     return null
   },
-  async findById() {
-    return null
+  async findById(id) {
+    return { email: `user-${String(id)}@app.test`, id: Number(id) }
   },
   getId(user) {
     return user.id
@@ -43,7 +43,6 @@ function record(sessionId: string, guard: 'admin' | 'web'): AuthSessionRecord {
         authenticatedAt: now.toISOString(),
         guard,
         provider: 'users',
-        user: { email: `${guard}@app.test`, id: guard === 'web' ? 1 : 2 },
         userId: guard === 'web' ? 1 : 2,
       },
     },
@@ -92,9 +91,6 @@ function configure(context: AuthRuntimeContext = authRuntimeInternals.createMemo
       },
       ...(atomic ? { flash: flashAtomic, take: takeValue } : {}),
       async invalidate() {},
-      async issueRememberMeToken() {
-        return 'remember-token'
-      },
       async read(sessionId) {
         return records.get(sessionId) ?? null
       },

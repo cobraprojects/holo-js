@@ -185,7 +185,7 @@ async function configureRuntime(options: {
       users: usersProvider,
       admins: adminsProvider,
     },
-    context: authRuntimeInternals.createMemoryAuthContext(),
+    context: Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined }),
   })
 
   const identityStore = persistence.identityStore
@@ -1749,7 +1749,7 @@ describe('@holo-js/auth-workos', () => {
         users: usersProvider,
         admins: adminsProvider,
       },
-      context: authRuntimeInternals.createMemoryAuthContext(),
+      context: Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined }),
     })
     configureWorkosAuthRuntime({
       identityStore,

@@ -35,7 +35,7 @@ function createFixture(driver: 'postgres' | 'mysql', direct = false) {
   function postgresClient() {
     const client = createClient()
     return {
-      async query(sql: string) { return { rows: client.query(sql), rowCount: 1 } },
+      async query(sql: string | { text: string }) { return { rows: client.query(typeof sql === 'string' ? sql : sql.text), rowCount: 1 } },
       release: client.release,
       end: client.end,
     }
@@ -101,6 +101,49 @@ describe.each(['postgres', 'mysql'] as const)('%s pooled transaction ownership',
     await adapter.query('SELECT root')
     expect(fixture.poolQueries).toBe(1)
     await adapter.disconnect()
+    expect(clients[0]?.releases).toBe(1)
+  })
+
+  it('keeps an adapter-wide lease when a nested lease of a closed scope finishes', async () => {
+    const fixture = createFixture(driver)
+    const { adapter, clients } = fixture
+    await adapter.beginTransaction()
+    let resume!: () => void
+    const resumed = new Promise<void>(resolve => { resume = resolve })
+    let lease!: Promise<void>
+
+    await adapter.runWithTransactionScope(async () => {
+      lease = adapter.runWithTransactionScope(async () => {
+        await resumed
+        await adapter.rollback()
+      })
+    })
+    expect(clients[0]?.releases).toBe(0)
+
+    resume()
+    await lease
+    expect(clients[0]?.releases).toBe(0)
+    expect(clients[1]?.releases).toBe(1)
+
+    await adapter.rollback()
+    expect(clients[0]?.releases).toBe(1)
+  })
+
+  it('does not run work that starts after a scope exits on the client that scope released', async () => {
+    const fixture = createFixture(driver)
+    const { adapter, clients } = fixture
+    let resume!: () => void
+    const resumed = new Promise<void>(resolve => { resume = resolve })
+    let later!: Promise<number | undefined>
+
+    await adapter.runWithTransactionScope(async () => {
+      later = resumed.then(() => clientId(adapter))
+    })
+    expect(clients[0]?.releases).toBe(1)
+
+    resume()
+    expect(await later).toBeUndefined()
+    expect(fixture.poolQueries).toBe(1)
     expect(clients[0]?.releases).toBe(1)
   })
 

@@ -9,7 +9,6 @@ export type SessionIdentityPayload = {
   readonly guard: string
   readonly provider: string
   readonly userId: string | number
-  readonly user: SerializedAuthUser
 }
 
 export type SessionImpersonationPayload = {
@@ -22,6 +21,8 @@ export type SessionAuthPayload = SessionIdentityPayload & {
   readonly authenticatedAt: string
   readonly impersonation?: SessionImpersonationPayload
   readonly multiFactorChallengeExpiresAt?: string
+  readonly multiFactorRemember?: true
+  readonly viaRemember?: true
 }
 
 export type SessionAuthPayloadMap = Readonly<Record<string, SessionAuthPayload>>
@@ -29,9 +30,9 @@ export type SessionAuthPayloadMap = Readonly<Record<string, SessionAuthPayload>>
 export function toSessionIdentityPayload(
   guard: string,
   provider: string,
-  user: SerializedAuthUser,
+  userId: string | number,
 ): SessionIdentityPayload {
-  return Object.freeze({ guard, provider, userId: user.id, user })
+  return Object.freeze({ guard, provider, userId })
 }
 
 export function toSessionPayload(
@@ -40,12 +41,14 @@ export function toSessionPayload(
   user: SerializedAuthUser,
   impersonation?: SessionImpersonationPayload,
   multiFactorChallengeExpiresAt?: string,
+  multiFactorRemember?: boolean,
 ): SessionAuthPayload {
   return Object.freeze({
-    ...toSessionIdentityPayload(guard, provider, user),
+    ...toSessionIdentityPayload(guard, provider, user.id),
     authenticatedAt: new Date().toISOString(),
     ...(impersonation ? { impersonation } : {}),
     ...(multiFactorChallengeExpiresAt ? { multiFactorChallengeExpiresAt } : {}),
+    ...(multiFactorChallengeExpiresAt && multiFactorRemember ? { multiFactorRemember: true as const } : {}),
   })
 }
 
@@ -58,9 +61,6 @@ function isSessionIdentityPayload(value: unknown): value is SessionIdentityPaylo
     && typeof value.provider === 'string'
     && 'userId' in value
     && (typeof value.userId === 'string' || typeof value.userId === 'number')
-    && 'user' in value
-    && value.user !== null
-    && typeof value.user === 'object'
 }
 
 function isSessionImpersonationPayload(value: unknown): value is SessionImpersonationPayload {
@@ -80,6 +80,7 @@ function isSessionAuthPayload(value: unknown): value is SessionAuthPayload {
     && Number.isFinite(Date.parse(value.authenticatedAt))
     && (!('impersonation' in value) || typeof value.impersonation === 'undefined' || isSessionImpersonationPayload(value.impersonation))
     && (!('multiFactorChallengeExpiresAt' in value) || typeof value.multiFactorChallengeExpiresAt === 'string')
+    && (!('viaRemember' in value) || value.viaRemember === undefined || value.viaRemember === true)
 }
 
 export function readSessionPayloads(record: AuthSessionRecord | null | undefined): SessionAuthPayloadMap | null {
@@ -130,7 +131,7 @@ export function writeSessionPayloads(
 
 export function stripImpersonation(payload: SessionAuthPayload): SessionIdentityPayload {
   return Object.freeze({
-    ...toSessionIdentityPayload(payload.guard, payload.provider, payload.user),
+    ...toSessionIdentityPayload(payload.guard, payload.provider, payload.userId),
     ...(payload.revocation ? { revocation: payload.revocation } : {}),
   })
 }

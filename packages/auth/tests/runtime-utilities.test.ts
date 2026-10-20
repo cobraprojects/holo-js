@@ -253,7 +253,8 @@ describe('auth runtime utilities', () => {
     await expect(redirectResponse(bindings, '/login', 303)).rejects.toBeInstanceOf(AuthResponseInterrupt)
     expect(redirects).toEqual([['/login', 303]])
     await expect(redirectResponse({ context: {} }, '/login')).rejects.toThrow('cannot redirect')
-    await expect(appendResponseCookies({ context: {} }, ['ignored=1'])).resolves.toBeUndefined()
+    await expect(appendResponseCookies({ context: {} }, ['ignored=1'])).rejects.toMatchObject({ code: 'cookie_write_unavailable' })
+    await expect(appendResponseCookies({ context: {} }, [])).resolves.toBeUndefined()
 
     expect(parseBearerToken('Bearer token')).toBe('token')
     expect(parseBearerToken('bearer   spaced ')).toBe('spaced')
@@ -324,7 +325,7 @@ describe('auth runtime utilities', () => {
       },
     }
     const cookies = buildLogoutCookies(bindings, 'web', { clearSessionCookies: true })
-    expect(cookies).toHaveLength(4)
+    expect(cookies).toHaveLength(3)
     expect(cookies).toContainEqual(expect.stringContaining('workos_session='))
     expect(cookies).toContainEqual(expect.stringContaining('clerk_session='))
     expect(forgetDefaultRememberCookie(bindings)).toContain('holo_remember=')

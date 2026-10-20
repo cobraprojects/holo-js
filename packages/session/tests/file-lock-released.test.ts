@@ -73,9 +73,9 @@ describe('released file locks across processes', () => {
     expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
-  it('keeps every lease reclaimable by its owner after more than 1,024 failed releases', async () => {
+  it('keeps every lease reclaimable by its owner after failed releases, with no state beyond one retry each', async () => {
     const owner = await loadProcess()
-    const paths = Array.from({ length: 1_025 }, (_, index) => join(root, `session-${index}.json`))
+    const paths = Array.from({ length: 3 }, (_, index) => join(root, `session-${index}.json`))
     const holders: Array<() => Promise<void>> = []
     for (const path of paths) holders.push(await owner.acquireRecordLock(path, mkdir))
 
@@ -83,12 +83,17 @@ describe('released file locks across processes', () => {
     windowsFs.blockedWritePrefixes.add(root)
     await Promise.all(holders.map(release => release()))
     expect(owner.heldRecordLockTokens.size).toBe(0)
+    expect(owner.pendingRecordLockReleaseRetries.size).toBe(paths.length)
+
+    await Promise.all(owner.pendingRecordLockReleaseRetries)
+    expect(owner.pendingRecordLockReleaseRetries.size).toBe(0)
 
     windowsFs.blockedUnlinkPrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
     for (const path of paths) await (await owner.acquireRecordLock(path, mkdir))()
     expect(owner.heldRecordLockTokens.size).toBe(0)
-  }, 60_000)
+    expect(owner.pendingRecordLockReleaseRetries.size).toBe(0)
+  }, 15_000)
 
   it('an I/O error on unlink rejects the release, keeps no held state, and the owner reclaims after recovery', async () => {
     const owner = await loadProcess()

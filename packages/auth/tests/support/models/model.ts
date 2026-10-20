@@ -11,13 +11,14 @@ export const authModelColumns = {
   password: column.string().nullable(),
   avatar: column.string().nullable(),
   email_verified_at: column.timestamp().nullable(),
+  remember_token: column.string().nullable(),
   created_at: column.timestamp().defaultNow(),
   updated_at: column.timestamp().defaultNow(),
 }
 
 export function createAuthModel(tableName: string) {
   return defineModel(defineGeneratedTable(tableName, authModelColumns), {
-    hidden: ['password', 'avatar', 'created_at', 'updated_at'],
+    hidden: ['password', 'remember_token', 'avatar', 'created_at', 'updated_at'],
     appended: ['avatarUrl'],
     accessors: { avatarUrl: (_value, entity) => entity.toAttributes().avatar ?? null },
   })

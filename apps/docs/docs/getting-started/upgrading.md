@@ -29,6 +29,11 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
 
+### Realtime relations honor hidden attributes
+
+Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. The same applies to a root model that sets those rules and loads a belongs-to relation: Holo re-runs the query when the foreign key changes. A handler that calls `makeHidden()`, `makeVisible()`, `setHidden()`, `setVisible()`, `append()`, `setAppends()`, or `withoutAppends()` on the records it loads gets the same re-run. No code changes are required. Subscriptions to those relations and queries run the handler more often. Relations to plain related models keep incremental patching.
+
+
 ### Model scope grouping
 
 Review model queries and relation constraints that use `orWhere()`. Caller conditions, each global scope, and the soft-delete filter now form separate groups joined with `AND`. Queries can no longer use `OR` to reach foreign-tenant or deleted rows, and instance writes remain limited to their target row. Existing method signatures are unchanged.
@@ -221,6 +226,12 @@ New dispatch options: `.afterCommit()` on a dispatch, and `afterCommit: true` on
 
 Queued mail, notifications, and event listeners accept `tries` and `backoff`, and `queue:work` and `queue:listen` accept `--tries` and `--backoff`. These jobs still run once unless you set `tries`. The worker's `--backoff` applies only to jobs that don't set their own `backoff`.
 
+### Event listener order and after-commit notification failures
+
+Event listeners run in registration order, with sync and queued listeners interleaved. Before, every sync listener ran first and queued listeners were sent after them. If a listener depended on running after the queued listeners, move it after them or change it to a queued listener. A listener that throws stops the dispatch, so listeners registered after it don't run. See [Order and errors](/events/listeners#order-and-errors).
+
+A notification channel that fails after a transaction commits is reported through `exceptions.report` with capability `notifications` and operation `channel.afterCommit`. Before, it was dropped without a report. Configure `exceptions.report` if you want these failures in your error tracker. See [Reporting errors](/basics/errors#reporting-errors).
+
 ### Framework peer dependencies
 
 Holo adapters now use your app's framework packages as peer dependencies instead of installing their own copies. Before you install 0.4.0, upgrade your framework to a release that fixes its published security advisories:
@@ -291,6 +302,55 @@ Cookies set by 0.3.x can't be read after the upgrade. Every user is signed out o
 
 If you call `sessionCookie()` or `rememberMeCookie()` from `@holo-js/session` directly, they now encrypt the value. Don't read the session ID or remember-me token back from the cookie yourself. Use [Auth](/auth/session-and-cookies) to resolve the current session. CSRF tokens from `csrf.token()` and `csrf.input()` are now random values with no signature, and are no longer the same string as the `XSRF-TOKEN` cookie value. Both are still accepted in the `_token` field and the `X-CSRF-TOKEN` header.
 
+### Per-user remember-me tokens
+
+Remember me now works like Laravel's: each user has one `remember_token`, and the user stays signed in for `rememberMeLifetime` even after their session expires. Add the column to every table an auth provider reads from, such as `users` and `admins`:
+
+```bash
+npx holo make:migration add_remember_token_to_users
+```
+
+```ts [server/db/migrations/2026_10_19_000000_add_remember_token_to_users.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.table('users', (table) => {
+      table.string('remember_token').nullable()
+    })
+  },
+  async down({ schema }) {
+    await schema.table('users', (table) => {
+      table.dropColumn('remember_token')
+    })
+  },
+})
+```
+
+Add `remember_token` to the model's `hidden` list so it never reaches the browser:
+
+```ts [server/models/User.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', {
+  fillable: ['name', 'email', 'password', 'avatar'],
+  hidden: ['password', 'remember_token'],
+})
+```
+
+Behavior changes to expect:
+
+- `logout()` gives the user a new remember token, so remember-me cookies on every device stop working. Other devices with an active session stay signed in until that session ends. Use `logoutOtherDevices()` to end those too.
+- Changing the user's password also stops their remember-me cookies.
+- Signing in without remember me clears that browser's remember-me cookie but keeps the user's token, so a copy of the cookie keeps working until `logout()`, `logoutOtherDevices()`, or a password change.
+- With multi-factor auth, the remember-me cookie is set after the user passes the challenge, not when they enter their password.
+- A custom `AuthRuntimeContext` can report whether it can set cookies with `canAppendResponseCookie()`. Auth checks it before any side effect. Without it, Auth uses whether `appendResponseCookie` exists.
+- A custom `AuthRuntimeContext` that omits `appendResponseCookie` can no longer log users in or out. The calls throw `cookie_write_unavailable`, the same error a read-only Next.js render raises. Provide a response cookie writer in every request context that signs users in or out.
+- Confirming multi-factor enrollment ends remember-me cookies issued before it, so the user signs in with the challenge the next time. The browser that confirmed enrollment stays signed in.
+
+The sessions table no longer uses `remember_token_hash`. You can leave the column in place or drop it. `issueRememberMeToken()` and `consumeRememberMeToken()` are removed from `@holo-js/session`, and session records no longer have `rememberTokenHash`. `rememberMeCookie()` is unchanged.
+
+If you wrote a custom auth provider, add `getRememberToken(user)` and `updateRememberToken(user, token)` to it. Without `updateRememberToken`, `remember: true` and `logout()` for users who have a token throw an `AuthError` with the code `runtime_unconfigured`.
 ### Rate-limit windows are fixed in every driver
 
 Every rate-limit driver now uses the same window. A window starts with a key's first attempt and lasts `decaySeconds`. Rejected attempts count but don't extend it. Before, the Redis driver counted attempts over a sliding window that rejected attempts extended. See [How the window works](/basics/security/rate-limiting#how-the-window-works).
@@ -328,6 +388,32 @@ Social sign-in no longer signs in as an existing user whose email isn't verified
 
 Email verification links now only verify the address they were sent to. If a user changes their email, links sent to the old address fail with `email_verification_token_expired`.
 
+### Sessions don't cross between 0.3 and 0.4
+
+Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
+
+### Verification resend requires a signed-in user
+
+`resendEmailVerification()` and `sendEmailVerification()` no longer take an email address, and `verification.resend()` no longer accepts `email`. A new link always goes to the signed-in user, and without one the call throws `email_verification_user_missing` with status 401. The unauthenticated resend is gone, so a guest can no longer ask for a link by typing an address.
+
+Update the resend route and its page:
+
+- Call `resendEmailVerification()` with no arguments. Users are signed in after `login()`, including unverified users, so the verification page can post to the route without an address.
+- Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
+- Delete the old `emailVerificationResend` limiter keyed by email and the resend form schema, and stop posting `email` from the page.
+
+### Password reset cycles remember tokens
+
+A successful password reset now replaces the user's `remember_token`, as Laravel does. Remember-me cookies issued before the reset stop restoring. Browsers that are still signed in keep their sessions. The column already exists, so no migration is needed.
+
+### Failed logins and reset-link requests take at least 200 ms
+
+Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
+
+### User records load on every request
+
+`auth.user()` reads the user from the provider once per request, and session records no longer store a copy of the user. Existing sessions keep working, and the stored copy is ignored. Users who were deleted or changed are reflected on their next request. Your provider's `findById()` now runs on each request that reads the user.
+
 ### Cache flushes clear the whole store
 
 `cache.flush()` and `npx holo cache:clear` now delete everything in the store, as Laravel does, and a key `prefix` no longer limits them. A Redis store flushes its whole Redis database, a `database` store empties its cache table, and a `file` store empties its folder. If your Redis cache shares a database with queues or sessions, move it to its own database before you flush, or the flush deletes that data too.
@@ -353,6 +439,28 @@ redis: {
 ```
 
 Entries written with `put()` or `remember()` expire on their own. Entries written with `forever()` stay in the old database until you remove them, so clear that database with your Redis tools once the cache has moved. On a Redis Cluster, `flush()` clears every primary node, so give the cache its own cluster. Give each app its own folder or cache tables for the `file` and `database` stores. See [Cache drivers](/cache/drivers#redis).
+
+### Transaction nesting and commit errors
+
+Check three behaviors when you upgrade:
+
+- A `transaction()` call on a connection object made while a transaction is open on that connection now becomes a savepoint. Before, it started a second transaction that could commit the outer work early. If you relied on that early commit, move the work out of the outer callback.
+- When an `afterCommit` callback throws, `DB.transaction()` rejects with that same error. It used to reject with a `TransactionError` wrapping it. Update any `catch` that checked for `TransactionError` in that case.
+- `timeoutMs` and `signal` on a transaction only limit how long it takes to start. Commit and rollback are never interrupted. If you relied on a timeout to abandon a slow commit, the commit now finishes. See [Timeouts and cancellation](/database/transactions#timeouts-and-cancellation).
+
+To retry a transaction after a deadlock or lock timeout, pass `attempts`. See [Retry deadlocks](/database/transactions#retry-deadlocks).
+
+### Query operators, date values, and foreign-key toggles
+
+Check three behaviors when you upgrade:
+
+- `whereColumn()` accepts only `=`, `!=`, `>`, `>=`, `<`, `<=`, and `like`. Laravel also accepts bitwise and regex operators here; Holo rejects them. Any other operator throws `SecurityError` when the query runs. Change a query that used another operator to one of the supported operators.
+- On PostgreSQL, `date` and `timestamp` values use `app.timezone` (default `UTC`) instead of the Node process's time zone. A `date` reads back as a `Date` at midnight in `app.timezone`, and a `Date` query value is sent with its offset, so the day doesn't change when you save it again. Before, `timestamp` values were read as UTC wall-clock time, so in an app whose `app.timezone` is not UTC they read back shifted; they now read back as saved. Holo doesn't rewrite existing rows. MySQL still uses UTC. Dates inside arrays are unchanged. The PostgreSQL adapter now sets its date and timestamp parsers on each query, so injected `client`, `pool`, and `createPool` objects parse them the same way as the built-in pool. Custom clients and pools must accept a query config object (`{ text, values, types }`) as `pg` does.
+- Foreign-key `onDelete()` and `onUpdate()` values other than `cascade`, `restrict`, `set null`, and `no action` throw `SchemaError`. MySQL `enum` values and string defaults that contain a backslash are now stored as written. Before, MySQL read the backslash as an escape, so the stored value could differ. Existing columns keep their stored values; check them with `SHOW COLUMNS` if they contain backslashes.
+- MySQL `enum` values can't contain a backslash or a NUL character. The schema build fails with `SchemaError` naming the value. Before, such a value broke `CREATE TABLE` or was stored altered.
+- On MySQL, queries with bindings run as server-side prepared statements, so a quote in a bound string can't end a SQL literal under `NO_BACKSLASH_ESCAPES`. Custom MySQL pools passed to `createMySQLAdapter()` must implement `execute()` for bound queries; the adapter throws a clear error otherwise. Each connection keeps at most 256 prepared statements, where mysql2 keeps 16000 by default. The server allows 16382 prepared statements in total, so many statement shapes, such as `IN` lists of different sizes, would otherwise exhaust it and block every connection. Change the cap with `maxPreparedStatements` in the pool options passed to `createMySQLAdapter()`.
+- A transaction started inside `withoutForeignKeyConstraints()` runs on the same pinned connection, one at a time. A transaction that reaches that connection after the callback has returned fails with `TransactionError` and writes nothing.
+- `withoutForeignKeyConstraints()` keeps every query in its callback on one pooled connection. The standalone `disableForeignKeyConstraints()` and `enableForeignKeyConstraints()` still change only the connection they run on. On PostgreSQL or MySQL, wrap the work in `withoutForeignKeyConstraints()` instead. See [Foreign key constraints](/database/migrations#withoutforeignkeyconstraints).
 
 ## Earlier 0.3.x releases
 
@@ -560,6 +668,10 @@ npm run build
 ```
 
 Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4 and `ip()` calls from step 7. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
+
+### Give custom auth contexts a request scope
+
+If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
 
 ## Next steps
 

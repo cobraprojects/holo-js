@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { DatabaseError, HydrationError } from '../core/errors'
+import { isUniqueConstraintError } from '../model/constraintErrors'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
@@ -30,6 +31,10 @@ export class MigrationLease {
 
   async acquire(): Promise<boolean> {
     await this.ensureTable()
+    return this.tryAcquire(true)
+  }
+
+  private async tryAcquire(retryAfterRelease: boolean): Promise<boolean> {
     const current = await this.read()
     if (current) {
       if (current.expiresAt > Date.now()) {
@@ -57,6 +62,10 @@ export class MigrationLease {
     } catch (error) {
       if (await this.read()) {
         return false
+      }
+
+      if (retryAfterRelease && isUniqueConstraintError(error)) {
+        return this.tryAcquire(false)
       }
 
       throw error
