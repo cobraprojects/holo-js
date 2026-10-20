@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createManagedResources, holdOperations } from '../src/portable/managedResources'
+import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
 
 function createRecordingResource(name: string, closed: string[]): { readonly name: string, close(): Promise<void> } {
   return {
@@ -227,6 +228,30 @@ describe('managed resources', () => {
 
     finishClose()
     await committing
+  })
+
+  it('resolves a reconfiguration whose replaced idle resource fails to close, keeps the new resource active, and reports the failure', async () => {
+    const reported: unknown[] = []
+    const previous = errorReportingInternals.configure({ report: error => { reported.push(error) } })
+    try {
+      const resources = createManagedResources<string, { readonly name: string, close(): Promise<void> }>()
+      await resources.acquire('old', name => ({
+        name,
+        async close() {
+          throw new Error('old close failed')
+        },
+      }))
+      await resources.commit()
+      const next = await resources.acquire('new', config => createRecordingResource(config, []))
+
+      await expect(resources.commit()).resolves.toBeUndefined()
+
+      expect(next.hold(() => 'serving')).toBe('serving')
+      expect(reported).toEqual([expect.objectContaining({ message: 'old close failed' })])
+      await resources.dispose()
+    } finally {
+      errorReportingInternals.configure(previous)
+    }
   })
 
   it('holds a resource for each store operation through a held store until the operation settles', async () => {

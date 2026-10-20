@@ -137,9 +137,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       retained = previouslyOpen.filter(entry => !active.includes(entry))
       const idle = retained.filter(entry => entry.pending === 0)
       retained = retained.filter(entry => entry.pending > 0)
-      const failures: unknown[] = []
-      await Promise.all(idle.map(entry => retireEntry(entry, error => { failures.push(error) })))
-      throwCapabilityFailures(failures)
+      await Promise.all(idle.map(entry => retireEntry(entry, reportReplacedResourceFailure)))
     },
     async discard() {
       const revivedIdle = claimed.filter(entry => retained.includes(entry) && entry.pending === 0)
