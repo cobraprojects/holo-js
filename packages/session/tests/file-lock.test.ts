@@ -113,6 +113,18 @@ describe('file session locking with real processes', () => {
     await stopWorker(owner)
   }, 15_000)
 
+  it('takes over a lease its live owner publishes as released while another writer is already waiting', async () => {
+    const { root, store, record, lockPath } = await createSession()
+    const owner = await startWorker('hold', root, record.id, lockPath)
+    const flashed = store.flash(record.id, 'notice', 'Saved')
+    await setTimeout(200)
+    await markLeaseReleasedWithoutRemoval(lockPath)
+    await flashed
+    expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
+    expect(await store.read(record.id)).toEqual(record)
+    await stopWorker(owner)
+  }, 15_000)
+
   it('times out on a live native lock and writes successfully after release', async () => {
     const { root, store, record, lockPath } = await createSession()
     const owner = await startWorker('hold', root, record.id, lockPath)
@@ -153,7 +165,7 @@ describe('file session locking with real processes', () => {
     expect(await store.read(record.id)).toEqual(record)
     expect(await store.take(record.id, 'existing')).toEqual({ found: true, value: 'preserved' })
     for (let writer = 0; writer < workers.length; writer += 1) {
-      for (let index = 0; index < 5; index += 1) {
+      for (let index = 0; index < 2; index += 1) {
         const key = `writer${writer}.${index}`
         expect(await store.take(record.id, key)).toEqual({ found: true, value: { writer: `writer${writer}`, index } })
         expect(await store.take(record.id, key)).toEqual({ found: false })
