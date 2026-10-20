@@ -175,7 +175,7 @@ export const GET = (async (event) => {
 return await logoutWithWorkos(request, { returnTo: '/goodbye' })
 ```
 
-Holo ends the WorkOS session with the session ID WorkOS returns at sign-in. WorkOS always returns one. Logout sends a stored value upstream only when it has the shape of a WorkOS session ID (`session_` followed by letters, digits, `_` or `-`). Any other stored value ends the local session only. If a response has none, sign-in fails with `workos_auth_failed` and no session is created, rather than sending the access token or authorization code to WorkOS in its place.
+Holo ends the WorkOS session with the session ID WorkOS returns at sign-in. WorkOS always returns one, in the WorkOS session ID shape. Logout sends a stored value upstream only when it has the shape of a WorkOS session ID (`session_` followed by letters, digits, `_` or `-`). Any other stored value ends the local session only. If a response has none, sign-in fails with `workos_auth_failed` and no session is created, rather than sending the access token or authorization code to WorkOS in its place.
 
 If the current session didn't come from WorkOS, it just redirects to `/`. Show the WorkOS logout button only for WorkOS users by checking `provider`:
 

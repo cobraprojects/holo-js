@@ -1214,7 +1214,7 @@ describe('@holo-js/auth-workos', () => {
     await configureRuntime()
     const profiles = [
       {
-        session: { id: 'nested-session' },
+        session: { id: 'session_nested' },
         user: {
           id: 'camel-profile',
           email: 'camel@app.test',
@@ -1252,7 +1252,7 @@ describe('@holo-js/auth-workos', () => {
       const result = await completeWorkosAuth(request)
       if (index === 0) {
         expect(result.error).toBeNull()
-        expect(result.data?.session.sessionId).toBe('nested-session')
+        expect(result.data?.session.sessionId).toBe('session_nested')
       } else {
         expect(result.data).toBeNull()
         expect(result.error?.code).toBe('workos_auth_failed')
@@ -1365,6 +1365,38 @@ describe('@holo-js/auth-workos', () => {
     const positive = await completeWorkosAuth(await createWorkosCallbackRequest('code_positive_control'))
     expect(positive.error).toBeNull()
     expect((await readdir(runtime.sessionPath)).length).toBeGreaterThan(sessionFilesBefore.length)
+  })
+
+  it('fails closed when the WorkOS session id lacks the session_ prefix', async () => {
+    const runtime = await configureRuntime()
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      session: { id: 'opaque-session-id' },
+      user: { id: 'workos_unprefixed', email: 'unprefixed@app.test', emailVerified: true },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_unprefixed'))
+
+    expect(callback.data).toBeNull()
+    expect(callback.error?.code).toBe('workos_auth_failed')
+    expect(await runtime.usersProvider.findByCredentials({ email: 'unprefixed@app.test' })).toBeNull()
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_unprefixed')).toBeNull()
+  })
+
+  it('writes no user, identity, or session when the request URL cannot be resolved for the state cookie', async () => {
+    const runtime = await configureRuntime()
+    configureSecurityRuntime({ config: { trustedProxies: ['198.51.100.4'] } })
+    requestUrlInternals.provideConnectionAddress(() => '198.51.100.4')
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: createUnsignedJwt({ sid: 'session_bad_forwarded_host' }),
+      user: { id: 'workos_bad_host', email: 'bad-host@app.test', emailVerified: true },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+
+    const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_bad_host', { 'x-forwarded-host': 'bad host/' }))
+
+    expect(callback.data).toBeNull()
+    expect(callback.error?.code).toBe('workos_auth_failed')
+    expect(await runtime.usersProvider.findByCredentials({ email: 'bad-host@app.test' })).toBeNull()
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_bad_host')).toBeNull()
   })
 
   it('takes the session id from a session_id claim when the access token has no sid', async () => {
@@ -2391,7 +2423,7 @@ describe('@holo-js/auth-workos', () => {
     await runtime.usersProvider.create({ email: 'callback-conflict@app.test' })
     const request = await createWorkosCallbackRequest()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
-      session_id: 'callback-conflict-session',
+      session_id: 'session_callback_conflict',
       user: {
         id: 'callback-conflict',
         email: 'callback-conflict@app.test',

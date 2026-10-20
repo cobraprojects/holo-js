@@ -965,8 +965,8 @@ async function authenticateWorkosCode(
     ?? getStringField(payload, 'sessionId', 'session_id')
     ?? (accessToken ? getJwtStringClaim(accessToken, 'sid') : undefined)
     ?? (accessToken ? getJwtStringClaim(accessToken, 'session_id') : undefined)
-  if (!sessionId) {
-    throw new Error('[@holo-js/auth-workos] WorkOS callback did not include a session id.')
+  if (!isWorkosSessionId(sessionId)) {
+    throw new Error('[@holo-js/auth-workos] WorkOS callback did not include a valid session id.')
   }
 
   return Object.freeze({
@@ -1207,6 +1207,7 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
       )
     }
 
+    const stateCookieClear = clearStateCookie(providerConfig.name, request)
     const session = await authenticateWorkosCode(request, code, providerConfig)
     const authenticated = await syncIdentity(session, providerConfig.name, {
       user: options.user,
@@ -1229,7 +1230,7 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
         ...authSession,
         cookies: Object.freeze([
           ...authSession.cookies,
-          clearStateCookie(providerConfig.name, request),
+          stateCookieClear,
         ]),
       }),
     } as const))
