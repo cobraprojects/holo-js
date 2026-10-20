@@ -585,6 +585,13 @@ function createScalingNodeId(): string {
   return normalizeRequiredString(`${process.env.HOSTNAME ?? 'node'}-${randomUUID()}`, 'Broadcast worker node id')
 }
 
+let processScalingNodeId: string | undefined
+
+function getProcessScalingNodeId(): string {
+  processScalingNodeId ??= createScalingNodeId()
+  return processScalingNodeId
+}
+
 function resolveScalingEventChannel(connection: string): string {
   return `holo:broadcast:scaling:${connection}:events`
 }
@@ -2489,7 +2496,7 @@ export async function startBroadcastWorker(
     ? Object.freeze({
         driver: 'redis' as const,
         connection: scalingConnectionName!,
-        nodeId: runtimeBindings.nodeId ?? createScalingNodeId(),
+        nodeId: runtimeBindings.nodeId ?? getProcessScalingNodeId(),
         eventChannel: resolveScalingEventChannel(scalingConnectionName!),
         liveness: runtimeBindings.scalingLiveness,
         adapter: await (runtimeBindings.createScalingAdapter
@@ -2787,14 +2794,14 @@ export async function startBroadcastWorker(
   })
 }
 
-export function createScalingInvalidationSender(input: {
+function createScalingInvalidationSender(input: {
   readonly config: NormalizedBroadcastWorkerScalingConfig
   readonly queue?: NormalizedHoloQueueConfig
   readonly redis?: NormalizedHoloRedisConfig
 }): { publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
   const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
   const eventChannel = resolveScalingEventChannel(connectionName)
-  const nodeId = createScalingNodeId()
+  const nodeId = getProcessScalingNodeId()
   let adapter: Promise<BroadcastScalingAdapter> | undefined
   const openAdapter = (): Promise<BroadcastScalingAdapter> => {
     adapter ??= createRedisScalingAdapter(resolveRedisScalingConnection(input.queue, connectionName, input.redis))

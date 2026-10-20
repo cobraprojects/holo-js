@@ -9,9 +9,9 @@ import WebSocket from 'ws'
 import { expect, it, onTestFinished } from 'vitest'
 import { normalizeRedisConfig } from '@holo-js/kernel'
 import { createSQLiteAdapter } from '../../db-sqlite/src'
-import { configureDB, createConnectionManager, createDatabase, createDialect, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
+import { configureDB, createConnectionManager, createDatabase, createDialect, queryCacheInternals, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
 import { startRedisService } from '../../session/tests/support/redis'
-import { normalizeBroadcastConfig, startBroadcastWorker } from '../src'
+import { normalizeBroadcastConfig, startBroadcastWorker, workerInternals } from '../src'
 import { query } from '../../realtime/src'
 import { configureRealtimeRuntime, executeRealtimeQuery, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../../realtime/src/server'
 
@@ -62,7 +62,11 @@ async function writeFromAnotherProcess(filename: string, score: number, redisPor
   if (code !== 0) throw new Error(childErrors || `Invalidation writer exited with ${String(code)}`)
 }
 
-async function startScoresWorker(db: Awaited<ReturnType<typeof openScoresDatabase>>['db'], redisPort: number, nodeId: string) {
+async function startScoresWorker(
+  db: Awaited<ReturnType<typeof openScoresDatabase>>['db'],
+  redisPort: number,
+  options: { readonly nodeId?: string, readonly databaseInvalidation?: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>['databaseInvalidation'] } = {},
+) {
   const scores = query({
     name: 'scores.current',
     access: 'public',
@@ -82,9 +86,9 @@ async function startScoresWorker(db: Awaited<ReturnType<typeof openScoresDatabas
       default: 'shared',
       connections: { shared: { host: '127.0.0.1', port: redisPort } },
     }),
-    nodeId,
+    ...(options.nodeId === undefined ? {} : { nodeId: options.nodeId }),
     realtime: {
-      databaseInvalidation: realtimeServerInternals.createRealtimeDatabaseInvalidationBridge(),
+      databaseInvalidation: options.databaseInvalidation ?? realtimeServerInternals.createRealtimeDatabaseInvalidationBridge(),
       query: async () => await executeRealtimeQuery(scores),
       mutate: async () => { throw new Error('No mutation is registered') },
       subscribe: async (_name, _args, options) => await subscribeRealtimeQuery(scores, {}, options),
@@ -99,7 +103,7 @@ it('refreshes a live query subscription when a write commits in another process 
   const redis = await startRedisService()
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
-  const worker = await startScoresWorker(db, redisPort, 'worker-a')
+  const worker = await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
 
   const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/key`)
   onTestFinished(() => socket.terminate())
@@ -123,7 +127,7 @@ it('publishes a worker\'s own committed writes to the scaling channel for the ot
   const redis = await startRedisService()
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
-  await startScoresWorker(db, redisPort, 'worker-a')
+  await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
   const client = redis.clients[0]
   if (!client) throw new Error('No native Redis client available')
   const subscriber = client.duplicate()
@@ -139,4 +143,51 @@ it('publishes a worker\'s own committed writes to the scaling channel for the ot
     invalidation: { connectionName: 'main', dependencies: expect.arrayContaining(['db:main:scores']) },
   })
   expect(messages.join('\n')).not.toContain('contextId')
+}, 30_000)
+
+it('publishes one invalidation per mutation and does not refresh from its own write when the app sender and the worker share a process', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const config = normalizeBroadcastConfig({
+    default: 'main',
+    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    worker: { host: '127.0.0.1', port: 1, scaling: { driver: 'redis', connection: 'shared' } },
+  })
+  const redisConfig = normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: redisPort } } })
+  const sender = workerInternals.createScalingInvalidationSender({
+    config: config.worker.scaling as Exclude<typeof config.worker.scaling, false>,
+    redis: redisConfig,
+  })
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  onTestFinished(async () => {
+    unsubscribeSender()
+    await sender.close()
+  })
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  const received: unknown[] = []
+  await startScoresWorker(db, redisPort, {
+    databaseInvalidation: {
+      connect: bridge.connect,
+      receive: async invalidation => {
+        received.push(invalidation)
+        await bridge.receive(invalidation)
+      },
+    },
+  })
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const subscriber = client.duplicate()
+  onTestFinished(() => subscriber.disconnect())
+  const messages: string[] = []
+  subscriber.on('message', (_channel: string, message: string) => { messages.push(message) })
+  await subscriber.subscribe('holo:broadcast:scaling:shared:events')
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => messages.filter(message => JSON.parse(message).type === 'database-invalidation').length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(messages.filter(message => JSON.parse(message).type === 'database-invalidation')).toHaveLength(1)
+  expect(received).toEqual([])
 }, 30_000)

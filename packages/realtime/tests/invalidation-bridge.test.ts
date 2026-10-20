@@ -10,17 +10,18 @@ it('rejects a remote invalidation whose metadata is malformed instead of droppin
     .rejects.toThrow('Remote database invalidation payload is malformed.')
 })
 
-it('keeps the publisher of a running bridge when another bridge in the same process disconnects', async () => {
+it('leaves the current publisher in place when a bridge that was replaced disconnects', async () => {
   const { db } = await openRealtimeDatabase()
-  const published: unknown[] = []
+  const published: string[] = []
   const first = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
   const second = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  const disconnectFirst = first.connect(async invalidation => { published.push(['first', invalidation]) })
+  const disconnectFirst = first.connect(async () => { published.push('first') })
   onTestFinished(() => disconnectFirst())
-  const disconnectSecond = second.connect(async invalidation => { published.push(['second', invalidation]) })
+  const disconnectSecond = second.connect(async () => { published.push('second') })
+  onTestFinished(() => disconnectSecond())
 
-  disconnectSecond()
+  disconnectFirst()
   await db.table('records').where('id', 1).update({ score: 1 })
 
-  await expect.poll(() => published.map(entry => (entry as [string])[0])).toEqual(['first'])
+  await expect.poll(() => published).toEqual(['second'])
 })
