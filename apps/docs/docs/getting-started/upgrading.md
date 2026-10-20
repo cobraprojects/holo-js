@@ -438,7 +438,7 @@ Each Redis session is stored under the store's `prefix` followed by the session 
 - **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
 - **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
 - **Set a `prefix` on a shared Redis database.** Without one, each session key is the bare session ID, so keep the session store in its own database or give it a prefix.
-- **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops between the two steps, the old ID stays valid until its expiry.
+- **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops, or the delete fails, between the two steps, the old ID stays valid until its expiry.
 
 ### Verification resend requires a signed-in user
 
