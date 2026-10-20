@@ -1,5 +1,5 @@
 import { SchemaError } from '../core/errors'
-import { compileDialectStringLiteral } from './defaultLiterals'
+import { compileMySQLStringLiteral, requiresHexStringLiteral } from '../core/mysqlStringLiteral'
 import type { AnyColumnDefinition, IdGenerationStrategy, LogicalColumnKind } from './types'
 
 export type SchemaDialectName = 'sqlite' | 'postgres' | 'mysql'
@@ -46,12 +46,20 @@ function compileIdType(dialect: SchemaDialectName, column: AnyColumnDefinition):
   return resolveDialectIdStrategyType(dialect, 'autoIncrement')
 }
 
+function compileEnumValueLiteral(value: string): string {
+  if (requiresHexStringLiteral(value)) {
+    throw new SchemaError('MySQL enum values cannot contain a backslash or a NUL character.')
+  }
+
+  return compileMySQLStringLiteral(value)
+}
+
 function compileEnumType(column: AnyColumnDefinition): string {
   if (!column.enumValues || column.enumValues.length === 0) {
     throw new SchemaError('MySQL enum columns require enum values.')
   }
 
-  return `ENUM(${column.enumValues.map((value: string) => compileDialectStringLiteral('mysql', String(value))).join(', ')})`
+  return `ENUM(${column.enumValues.map((value: string) => compileEnumValueLiteral(String(value))).join(', ')})`
 }
 
 function compileVectorType(column: AnyColumnDefinition): string {

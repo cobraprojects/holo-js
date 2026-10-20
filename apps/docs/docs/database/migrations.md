@@ -478,7 +478,7 @@ Adds a date column without a time part.
 table.date('published_on').nullable()
 ```
 
-On PostgreSQL, a `date` column reads back as a `Date` at midnight UTC on the stored day, so the day doesn't change when you save the value again.
+On PostgreSQL, a `date` column reads back as a `Date` at midnight in `app.timezone` on the stored day, so the day doesn't change when you save the value again. `timestamp` columns use `app.timezone` for their wall-clock time too.
 
 ### datetime()
 

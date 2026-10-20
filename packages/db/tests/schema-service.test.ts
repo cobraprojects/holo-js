@@ -264,6 +264,56 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         expect(String((await db.queryCompiled(state)).rows[0]!.state)).toBe(driver === 'postgres' ? 'origin' : '1')
       })
 
+      it('runs transactions started inside a scoped callback one at a time on the pinned connection', async () => {
+        const { db, schema, table } = await openDatabase(driver)
+        const state = driver === 'postgres'
+          ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
+          : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
+        const relaxed = driver === 'postgres' ? 'replica' : '0'
+        const events: string[] = []
+        const pause = () => new Promise(resolve => { setTimeout(resolve, 20) })
+
+        await schema.withoutForeignKeyConstraints(async () => {
+          await Promise.all([
+            db.transaction(async tx => {
+              events.push('a:start')
+              expect(String((await tx.queryCompiled(state)).rows[0]!.state)).toBe(relaxed)
+              await pause()
+              await tx.table(table).insert({ id: 1, name: 'first' })
+              events.push('a:end')
+            }),
+            db.transaction(async tx => {
+              events.push('b:start')
+              expect(String((await tx.queryCompiled(state)).rows[0]!.state)).toBe(relaxed)
+              await tx.table(table).insert({ id: 2, name: 'second' })
+              throw new Error('second failed')
+            }).catch(() => {}),
+          ])
+        })
+
+        expect(events).toEqual(['a:start', 'a:end', 'b:start'])
+        expect((await db.table(table).select('id').orderBy('id').get())).toEqual([{ id: 1 }])
+      })
+
+      it('rejects transactions that reach the pinned connection after its callback has returned, without writing', async () => {
+        const { db, schema, table } = await openDatabase(driver)
+        let first!: Promise<unknown>
+        let second!: Promise<unknown>
+
+        await schema.withoutForeignKeyConstraints(async () => {
+          first = db.transaction(async tx => {
+            await tx.table(table).insert({ id: 1, name: 'first' })
+          })
+          second = db.transaction(async tx => {
+            await tx.table(table).insert({ id: 2, name: 'second' })
+          })
+        })
+
+        await expect(first).rejects.toThrow('must finish before the callback returns')
+        await expect(second).rejects.toThrow('must finish before the callback returns')
+        expect((await db.table(table).select('id').orderBy('id').get())).toEqual([])
+      })
+
       it('disables foreign-key checks again for work that starts after a scoped callback has finished', async () => {
         const { db, schema } = await openDatabase(driver)
         const state = driver === 'postgres'

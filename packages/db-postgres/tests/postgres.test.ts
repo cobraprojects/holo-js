@@ -334,3 +334,50 @@ describe('@holo-js/db-postgres date values', () => {
     }
   })
 })
+
+describe('@holo-js/db-postgres full date formats', () => {
+  it('round-trips BC dates, five-digit years, and infinite dates without shifting', async () => {
+    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+    const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+    const source = `holo_full_date_${randomUUID().replaceAll('-', '')}`
+    const copy = `${source}_copy`
+    try {
+      await adapter.execute(`CREATE TABLE ${source} (id INTEGER PRIMARY KEY, day DATE NOT NULL, at TIMESTAMP NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${copy} (id INTEGER PRIMARY KEY, day DATE NOT NULL, at TIMESTAMP NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${source} VALUES
+        (1, '0044-03-15 BC', '0044-03-15 10:00:00 BC'),
+        (2, '10000-01-01', '10000-01-01 00:00:00'),
+        (3, 'infinity', 'infinity'),
+        (4, '-infinity', '-infinity')`)
+
+      const rows = (await db.queryCompiled({ sql: `SELECT id, day, at FROM ${source} ORDER BY id`, bindings: [] })).rows
+      expect(rows.map(row => row.day)).toEqual([
+        new Date('-000043-03-15T00:00:00.000Z'),
+        new Date('+010000-01-01T00:00:00.000Z'),
+        Infinity,
+        -Infinity,
+      ])
+      expect(rows.map(row => row.at)).toEqual([
+        new Date('-000043-03-15T10:00:00.000Z'),
+        new Date('+010000-01-01T00:00:00.000Z'),
+        Infinity,
+        -Infinity,
+      ])
+
+      for (const row of rows) {
+        await db.executeCompiled({ sql: `INSERT INTO ${copy} (id, day, at) VALUES ($1, $2, $3)`, bindings: [row.id, row.day, row.at] })
+      }
+      expect((await db.queryCompiled({ sql: `SELECT day::text AS day, at::text AS at FROM ${copy} ORDER BY id`, bindings: [] })).rows)
+        .toEqual([
+          { day: '0044-03-15 BC', at: '0044-03-15 10:00:00 BC' },
+          { day: '10000-01-01', at: '10000-01-01 00:00:00' },
+          { day: 'infinity', at: 'infinity' },
+          { day: '-infinity', at: '-infinity' },
+        ])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${source}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${copy}`)
+      await db.disconnect()
+    }
+  })
+})

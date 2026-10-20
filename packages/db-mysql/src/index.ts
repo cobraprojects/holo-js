@@ -15,6 +15,7 @@ class TransactionError extends Error {}
 
 export interface MySQLQueryableLike {
   query(sql: string, bindings?: readonly unknown[]): Promise<readonly [unknown, unknown]>
+  execute?(sql: string, bindings?: readonly unknown[]): Promise<readonly [unknown, unknown]>
 }
 
 export interface MySQLClientLike extends MySQLQueryableLike {
@@ -37,12 +38,14 @@ export interface MySQLAdapterOptions<TConfig extends PoolOptions = PoolOptions> 
 
 type RawMySQLClientLike = {
   query(sql: string, bindings?: unknown[]): Promise<readonly [unknown, unknown]>
+  execute(sql: string, bindings?: unknown[]): Promise<readonly [unknown, unknown]>
   release?(): void
   end?(): Promise<void>
 }
 
 type RawMySQLPoolLike = {
   query(sql: string, bindings?: unknown[]): Promise<readonly [unknown, unknown]>
+  execute(sql: string, bindings?: unknown[]): Promise<readonly [unknown, unknown]>
   getConnection(): Promise<PoolConnection | MySQLClientLike>
   end(): Promise<void>
 }
@@ -100,12 +103,31 @@ function resolveBootstrapTarget(config: PoolOptions): BootstrapTarget | undefine
   return undefined
 }
 
+async function runStatement(
+  queryable: MySQLQueryableLike,
+  sql: string,
+  bindings: readonly unknown[],
+): Promise<readonly [unknown, unknown]> {
+  if (bindings.length === 0) {
+    return queryable.query(sql)
+  }
+
+  if (!queryable.execute) {
+    throw new Error('The MySQL driver must support prepared statements (execute) to run statements with bindings.')
+  }
+
+  return queryable.execute(sql, bindings)
+}
+
 function wrapMySQLClient(client: Connection | MySQLClientLike): MySQLClientLike {
   const rawClient = client as unknown as RawMySQLClientLike
 
   return {
     async query(sql: string, bindings: readonly unknown[] = []) {
-      return rawClient.query(sql, toMutableBindings(bindings))
+      return bindings.length === 0 ? rawClient.query(sql) : rawClient.query(sql, toMutableBindings(bindings))
+    },
+    async execute(sql: string, bindings: readonly unknown[] = []) {
+      return rawClient.execute(sql, toMutableBindings(bindings))
     },
     release: rawClient.release?.bind(rawClient),
     end: rawClient.end?.bind(rawClient),
@@ -117,7 +139,10 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 
   return {
     async query(sql: string, bindings: readonly unknown[] = []) {
-      return rawPool.query(sql, toMutableBindings(bindings))
+      return bindings.length === 0 ? rawPool.query(sql) : rawPool.query(sql, toMutableBindings(bindings))
+    },
+    async execute(sql: string, bindings: readonly unknown[] = []) {
+      return rawPool.execute(sql, toMutableBindings(bindings))
     },
     async getConnection() {
       return wrapMySQLClient(await rawPool.getConnection())
@@ -227,7 +252,7 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
     bindings: readonly unknown[] = [],
   ): Promise<DriverQueryResult<TRow>> {
     const queryable = await this.getQueryable()
-    const [rows] = await queryable.query(sql, bindings)
+    const [rows] = await runStatement(queryable, sql, bindings)
     const normalized = rows as RowDataPacket[] & TRow[]
     return {
       rows: Array.isArray(normalized) ? [...normalized] : [],
@@ -247,7 +272,7 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
     bindings: readonly unknown[] = [],
   ): Promise<DriverExecutionResult> {
     const queryable = await this.getQueryable()
-    const [result] = await queryable.query(sql, bindings)
+    const [result] = await runStatement(queryable, sql, bindings)
     const execution = result as ResultSetHeader
     return {
       affectedRows: typeof execution.affectedRows === 'number' ? execution.affectedRows : 0,
@@ -316,10 +341,7 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
     const bootstrapPool = this.createPoolInstance(target.config as TConfig)
 
     try {
-      const [existing] = await bootstrapPool.query(
-        'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
-        [target.database],
-      )
+      const [existing] = await runStatement(bootstrapPool, 'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?', [target.database])
       if (Array.isArray(existing) && existing.length === 0) {
         await bootstrapPool.query(`CREATE DATABASE ${quoteDatabaseIdentifier(target.database)}`, [])
       }

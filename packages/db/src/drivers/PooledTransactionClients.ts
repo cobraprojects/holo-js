@@ -8,6 +8,8 @@ type ReleasableClient = {
 
 type ScopedClient<TClient> = {
   client: TClient
+  closed: boolean
+  leases: number
   released: boolean
 }
 
@@ -23,24 +25,30 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
 
   get current(): TClient | undefined {
     const scoped = this.scope.getStore()
-    if (scoped && !scoped.released) return scoped.client
+    if (scoped && (!scoped.closed || scoped.leases > 0)) return scoped.client
     return this.transactionClient
   }
 
   async run<T>(callback: () => Promise<T>): Promise<T> {
     const scoped = this.scope.getStore()
-    if (scoped && !scoped.released) {
-      return callback()
+    if (scoped && !scoped.closed) {
+      scoped.leases += 1
+      try {
+        return await callback()
+      } finally {
+        scoped.leases -= 1
+        this.releaseWhenIdle(scoped)
+      }
     }
 
     const client = await this.acquireClient()
-    const holder: ScopedClient<TClient> = { client, released: false }
+    const holder: ScopedClient<TClient> = { client, closed: false, leases: 0, released: false }
     return this.scope.run(holder, async () => {
       try {
         return await callback()
       } finally {
-        holder.released = true
-        this.releaseClient(client)
+        holder.closed = true
+        this.releaseWhenIdle(holder)
       }
     })
   }
@@ -66,7 +74,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
 
   release(): void {
     const scoped = this.scope.getStore()
-    if (!scoped || scoped.released) {
+    if (!scoped || scoped.closed) {
       this.disconnect()
     }
   }
@@ -76,6 +84,13 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
     this.transactionClient = undefined
     if (client) {
       this.releaseClient(client)
+    }
+  }
+
+  private releaseWhenIdle(scoped: ScopedClient<TClient>): void {
+    if (scoped.closed && scoped.leases === 0 && !scoped.released) {
+      scoped.released = true
+      this.releaseClient(scoped.client)
     }
   }
 

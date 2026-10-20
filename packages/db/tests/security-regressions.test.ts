@@ -54,7 +54,17 @@ describe('native database security boundaries', () => {
     }
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('stores enum values containing backslashes and quotes as data on %s', async driver => {
+  it('rejects MySQL enum values with a backslash before creating the table', async () => {
+    const { schema } = await openDatabase('mysql')
+    const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
+    await expect(schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.enum('state', [`b' OR 1=1 -- \\`])
+    })).rejects.toThrow(SchemaError)
+    expect(await schema.hasTable(name)).toBe(false)
+  })
+
+  it.each(['sqlite', 'postgres'] as const)('stores enum values containing backslashes and quotes as data on %s', async driver => {
     const { db, schema } = await openDatabase(driver)
     const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
     const values = ['a\\', `b' OR 1=1 -- \\`]

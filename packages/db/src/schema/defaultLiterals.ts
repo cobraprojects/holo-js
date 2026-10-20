@@ -1,8 +1,13 @@
+import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
+
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
 
-export function compileDialectStringLiteral(dialect: SchemaDefaultDialectName, value: string): string {
-  const backslashesEscaped = dialect === 'mysql' ? value.replaceAll('\\', '\\\\') : value
-  return `'${backslashesEscaped.replaceAll('\'', '\'\'')}'`
+function compileDialectStringLiteral(dialect: SchemaDefaultDialectName, value: string): string {
+  if (dialect === 'mysql') {
+    return compileMySQLStringLiteral(value)
+  }
+
+  return `'${value.replaceAll('\'', '\'\'')}'`
 }
 
 function compileBooleanLiteral(dialect: SchemaDefaultDialectName, value: boolean): string {

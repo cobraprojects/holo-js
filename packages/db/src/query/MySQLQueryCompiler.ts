@@ -1,7 +1,24 @@
+import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
+  protected override createSqlStringLiteral(value: string): string {
+    return compileMySQLStringLiteral(value)
+  }
+
+  protected override createJsonPathLiteral(path: readonly string[]): string {
+    const serializedPath = path.reduce((current, segment) => {
+      if (/^[A-Z_]\w*$/i.test(segment)) {
+        return `${current}.${segment}`
+      }
+
+      return `${current}."${segment.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+    }, '$')
+
+    return this.createSqlStringLiteral(serializedPath)
+  }
+
   protected override compileLateralJoinSource(subquery: string, alias: string): string {
     return `LATERAL ${subquery} ${this.quoteIdentifier(alias)}`
   }
