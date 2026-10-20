@@ -8,6 +8,7 @@ export type WindowsFsState = {
   readonly ioErrorOpenPrefixes: Set<string>
   readonly ioErrorUnlinkPrefixes: Set<string>
   readonly renameAttempts: Map<string, number>
+  readonly pausedRenameSources?: Map<string, Promise<void>>
 }
 
 function permissionDenied(operation: string): NodeJS.ErrnoException {
@@ -42,6 +43,7 @@ export function windowsFsOverrides(actual: typeof FsPromises, state: WindowsFsSt
     },
     rename: async (source, target) => {
       const sourcePath = String(source)
+      await state.pausedRenameSources?.get(sourcePath)
       state.renameAttempts.set(sourcePath, (state.renameAttempts.get(sourcePath) ?? 0) + 1)
       if (state.blockedRenameSources.has(sourcePath)) throw permissionDenied('rename')
       return await model.rename(source, target)
