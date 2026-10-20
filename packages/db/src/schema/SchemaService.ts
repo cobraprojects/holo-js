@@ -1,4 +1,5 @@
 import { currentPinnedConnection, runPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
@@ -199,8 +200,9 @@ export class SchemaService {
   private async restoreForeignKeyConstraints(): Promise<void> {
     try {
       await this.enableForeignKeyConstraints()
-    } catch {
+    } catch (error) {
       await this.connection.getAdapter().execute(this.createForeignKeyConstraintStatement(true).sql)
+      reportError(error, { capability: 'db', operation: 'schema.restoreForeignKeys' })
     }
   }
 

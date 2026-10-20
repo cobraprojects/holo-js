@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, column, createSchemaService, SchemaError } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
@@ -262,11 +263,15 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         expect(sources).toContain('schema:enableForeignKeys')
       })
 
-      it('restores foreign-key checks when a logger fails before the restore statement starts', async () => {
+      it('restores foreign-key checks when a logger fails before the restore statement starts, and reports the logger error', async () => {
+        const reports: Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> = []
+        errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+        onTestFinished(() => { errorReportingInternals.configure(undefined) })
+        const loggerError = new Error('logger failed')
         const { db, schema } = await openDatabase(driver, {
           logger: {
             onQueryStart: entry => {
-              if (entry.source === 'schema:enableForeignKeys') throw new Error('logger failed')
+              if (entry.source === 'schema:enableForeignKeys') throw loggerError
             },
           },
         })
@@ -274,8 +279,9 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
           ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
           : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
 
-        await schema.withoutForeignKeyConstraints(async () => {})
+        await expect(schema.withoutForeignKeyConstraints(async () => {})).resolves.toBeUndefined()
         expect(String((await db.queryCompiled(state)).rows[0]!.state)).toBe(driver === 'postgres' ? 'origin' : '1')
+        expect(reports).toEqual([{ error: loggerError, context: { capability: 'db', operation: 'schema.restoreForeignKeys' } }])
       })
 
       it('runs transactions started inside a scoped callback one at a time on the pinned connection', async () => {
