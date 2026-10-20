@@ -75,7 +75,7 @@ Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Impl
 
 | # | Candidate | Disposition | Evidence and notes |
 | --- | --- | --- | --- |
-| 28 | Next dev conflict exits zero; dead branch | reproduced | `packages/cli/src/project/scaffold/framework-renderers.ts:1276,1285-1289` gates the stop-and-restart branch behind `force` (default false, no caller passes it), and `:1402-1404` exits 0. Probe: the runner exits 0 and leaves an owned stale `next dev` running (deleted). Commit `35ae82e5` added the gate without a recorded reason. **Decision (2026-10-20):** `holo dev` exits non-zero on a port conflict with an unowned server, and the owned-stale auto-stop is re-enabled. Filed as #218. |
+| 28 | Next dev conflict exits zero; dead branch | reproduced | `packages/cli/src/project/scaffold/framework-renderers.ts:1276,1285-1289` gates the stop-and-restart branch behind `force` (default false, no caller passes it), and `:1402-1404` exits 0. Probe: the runner exits 0 and leaves an owned stale `next dev` running (deleted). Commit `35ae82e5` added the gate without a recorded reason. **Decision (2026-10-20, revised):** `holo dev` never stops another process automatically. Every port conflict exits non-zero and names the port. When the holder is this project's own `next dev`, the message says another `holo dev` is running and gives its PID. The dead `force` stop-and-restart branch is deleted. Ownership matching cannot tell a stale server from a healthy one, so it is not used to stop anything. Filed as #218. |
 | 29 | Worker processes launch via bare node | insufficient-information | `packages/cli/src/runtime.ts:389,397,408` spawns `node`; other launches use `process.execPath` (`packages/cli/src/dev.ts:28,106`, `packages/cli/src/queue.ts:651`). Probe: with `node` missing from PATH, the runtime launch fails with ENOENT while `process.execPath` runs. Pinned by `packages/cli/tests/cli.test.ts:7137-7140`. **Decision (2026-10-20):** launch via `process.execPath`. Update the pinned test and confirm `--experimental-strip-types` still works. Filed as #218. |
 | 30 | Environment payload has a 128 KB limit | reproduced (Linux; low priority) | `packages/cli/src/runtime.ts:514-537` sends the whole migrate/seed payload as `HOLO_RUNTIME_PAYLOAD`. Linux `E2BIG` at 131072 bytes (checked in a `node:22-alpine` container; macOS allows far more). Reachable only with roughly 700+ bundled files. **Proposed ticket:** packages/cli — pass the payload on stdin or as a temp file path. Not app-facing. |
 | 31 | Development module-import cache can grow | reproduced (low severity) | `packages/config/src/loader.ts:81` (jiti, `moduleCache: false`) and `:84-96` (`?t=` nonce ESM import for `.js`/`.mjs`/`.cjs`; `importConfigModule` clears the require cache for `.cjs` and still imports a fresh `?t=` URL, so `.cjs` grows too). Each `.mjs` load retains about 4.6 KB for the life of the process (1000 loads ≈ 4.6 MB); `.ts` via jiti retains about 430 B. Scaffolded configs are `.ts`, so only `.js`/`.mjs`/`.cjs` apps grow. **Decision (2026-10-20):** route `.js`/`.mjs`/`.cjs` configs through a non-retaining loader or bound retention, after confirming evaluation semantics are unchanged. Filed as #220. Internal. |
@@ -104,7 +104,7 @@ Filed on 2026-10-20 as the issues below, each with a failing regression test fir
 | storage-s3 | 21 | `Content-Type` on PUT and multipart create | #216 |
 | mail | 23 | href escaped once | #217 |
 | mail | 24 | one persistent SMTP transporter per mailer per process (internal Nodemailer `pool: true`); no public pool option | #225 |
-| cli | 28, 29, 30 | non-zero conflict exit; owned-stale stop; `process.execPath`; payload off the environment | #218 |
+| cli | 28, 29, 30 | non-zero exit and port name on every conflict (no automatic stop; PID named for this project's own `next dev`); dead `force` branch deleted; `process.execPath`; payload off the environment | #218 |
 | security | 11 | CSRF enabled by default (upgrade note) | #219 |
 | config | 31 | bounded dev cache for `.js`/`.mjs`/`.cjs` | #220 |
 | flux | 37 | malformed frames dropped with a dev log; auth failures via `.error()` | #221 |
@@ -135,7 +135,7 @@ Audit-time dispositions above are kept as recorded. This table lists only the it
 | 24 | insufficient-information | Implement: reuse one persistent SMTP transporter per mailer per process (internal Nodemailer `pool: true`; Laravel parity); public pooling option rejected | #225 |
 | 25 | insufficient-information | Rejected: no Origin requirement; allowed-origins stays optional (Reverb parity) | closed with decision |
 | 26 | insufficient-information | Rejected: no publish nonce cache; the 300 s Pusher window is parity | closed with decision |
-| 28 | reproduced | Implement: non-zero exit on an unowned port conflict; re-enable owned-stale auto-stop | #218 |
+| 28 | reproduced | Implement: every port conflict exits non-zero and names the port; a conflict with this project's own `next dev` names the other `holo dev` PID; no process is stopped automatically; dead `force` branch deleted | #218 |
 | 29 | insufficient-information | Implement: runtime worker via process.execPath | #218 |
 | 30 | reproduced | Implement: payload via stdin or temp file (decision-free) | #218 |
 | 31 | reproduced | Implement: bounded retention for `.js`/`.mjs`/`.cjs` config loads | #220 |
@@ -161,7 +161,7 @@ Resolved 2026-10-20 (see Resolution). The list below is the question as it was a
 5. **#15** Split bulk inserts under the bind limit, with transaction atomicity. Outcome: rejected.
 6. **#18** Stored-data change for `update()` timestamps; upgrade note. Outcome: implement across model-query `update`, `updateJson`, `increment`, `decrement` (`updated_at`) and `upsert` (`created_at`, `updated_at`) (#214).
 7. **#24** Opt-in SMTP pooling (new config key, app-facing) or accept parity. Outcome: public pooling rejected; transport reuse → #225.
-8. **#28** `holo dev` exit code on port conflict; re-enable owned-stale auto-stop. Outcome: non-zero exit and re-enabled auto-stop (#218).
+8. **#28** `holo dev` exit code on port conflict. Outcome: every port conflict exits non-zero and names the port; no process is stopped automatically; a conflict with this project's own `next dev` names the other `holo dev` PID; dead `force` branch deleted (#218).
 9. **#29** Runtime worker launches via `process.execPath`. Outcome: implement (#218).
 10. **#37** Surfacing malformed frames and auth failures to the app. Outcome: auth failures via `.error()`; malformed frames dropped with a dev log (#221).
 11. **#20** Record the remote-fetch guard in ADR-0016 if kept as hardening. Outcome: keep and record (#215; details in private advisory GHSA-h2jh-r2v8-m68q).
