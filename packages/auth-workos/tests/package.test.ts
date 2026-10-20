@@ -1,7 +1,7 @@
 import { createNativeHostedAuthPersistence } from '../../auth/tests/support/native-hosted-persistence'
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFileSessionStore } from '../../session/src'
@@ -209,6 +209,7 @@ async function configureRuntime(options: {
 
   return {
     persistence,
+    sessionPath,
     sessionStore,
     usersProvider,
     adminsProvider,
@@ -1307,20 +1308,22 @@ describe('@holo-js/auth-workos', () => {
     ['no token', {}],
   ])('fails closed when WorkOS returns %s and no session id, creating no Holo session', async (_label, tokens) => {
     const runtime = await configureRuntime()
-    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
-      ...tokens,
-      user: {
-        id: 'workos_no_session_id',
-        email: 'no-session-id@app.test',
-        emailVerified: true,
-      },
-    }), {
+    const sessionFilesBefore = (await readdir(runtime.sessionPath)).sort()
+    const respondWith = (payload: Readonly<Record<string, unknown>>) => vi.stubGlobal('fetch', async () => new Response(JSON.stringify(payload), {
       status: 200,
       headers: {
         'content-type': 'application/json',
       },
     }))
 
+    respondWith({
+      ...tokens,
+      user: {
+        id: 'workos_no_session_id',
+        email: 'no-session-id@app.test',
+        emailVerified: true,
+      },
+    })
     const callback = await completeWorkosAuth(await createWorkosCallbackRequest('code_no_session_id'))
 
     expect(callback.data).toBeNull()
@@ -1330,6 +1333,19 @@ describe('@holo-js/auth-workos', () => {
     expect(JSON.stringify(callback)).not.toContain('code_no_session_id')
     expect(await runtime.usersProvider.findByCredentials({ email: 'no-session-id@app.test' })).toBeNull()
     expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_no_session_id')).toBeNull()
+    expect((await readdir(runtime.sessionPath)).sort()).toEqual(sessionFilesBefore)
+
+    const logout = await logoutWithWorkos(new Request('https://app.test/logout'))
+    expect(logout.status).toBe(303)
+    expect(logout.headers.get('location')).toBe('https://app.test/')
+
+    respondWith({
+      access_token: createUnsignedJwt({ sid: 'session_positive_control' }),
+      user: { id: 'workos_positive_control', email: 'positive-control@app.test', emailVerified: true },
+    })
+    const positive = await completeWorkosAuth(await createWorkosCallbackRequest('code_positive_control'))
+    expect(positive.error).toBeNull()
+    expect((await readdir(runtime.sessionPath)).length).toBeGreaterThan(sessionFilesBefore.length)
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
