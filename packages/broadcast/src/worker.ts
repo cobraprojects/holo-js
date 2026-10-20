@@ -2836,13 +2836,14 @@ function createScalingInvalidationSender(input: {
   readonly queue?: NormalizedHoloQueueConfig
   readonly redis?: NormalizedHoloRedisConfig
   readonly appId: string
-}): { connect(): Promise<void>, publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
+}): { publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
   const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
+  const redisConnection = resolveRedisScalingConnection(input.queue, connectionName, input.redis)
   const eventChannel = resolveScalingEventChannel(connectionName)
   const nodeId = getProcessScalingNodeId()
   let adapter: Promise<BroadcastScalingAdapter> | undefined
   const openAdapter = (): Promise<BroadcastScalingAdapter> => {
-    adapter ??= createRedisScalingAdapter(resolveRedisScalingConnection(input.queue, connectionName, input.redis))
+    adapter ??= createRedisScalingAdapter(redisConnection)
       .catch((error: unknown) => {
         adapter = undefined
         throw error
@@ -2851,10 +2852,6 @@ function createScalingInvalidationSender(input: {
   }
 
   return {
-    async connect() {
-      const scalingAdapter = await openAdapter()
-      await scalingAdapter.exists('holo:broadcast:scaling:connection-check')
-    },
     async publish(invalidation) {
       const scalingAdapter = await openAdapter()
       await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, input.appId, invalidation))

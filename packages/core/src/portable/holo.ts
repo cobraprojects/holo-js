@@ -765,9 +765,7 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
 
 function getDatabaseInvalidationSenders(): DatabaseInvalidationSenders {
   const state = getRuntimeState()
-  state.databaseInvalidationSenders ??= createManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>({
-    connect: sender => sender.connect(),
-  })
+  state.databaseInvalidationSenders ??= createManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>()
   return state.databaseInvalidationSenders
 }
 

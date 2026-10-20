@@ -3441,7 +3441,7 @@ export default defineSessionConfig({ driver: 'primary', stores: {
 
     await expect(inFlight).resolves.toBeUndefined()
     await expect.poll(() => settled, { timeout: 5_000 }).toBe(true)
-    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline + 1)
+    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
     await resetHoloRuntime()
     await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
   }, 30_000)
@@ -3472,7 +3472,7 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await resetHoloRuntime()
   })
 
-  it('publishes a write made during an in-flight reconfiguration once and keeps the publisher registered throughout', async () => {
+  it('delivers publishes made before, during, and after a reconfiguration that replaces the sender, each exactly once', async () => {
     const { root, client } = await createScalingInvalidationProject()
     const counter = await countScalingInvalidations(client)
     onTestFinished(() => counter.close())
@@ -3482,23 +3482,32 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await writeScalingInvalidationConfig(root, 1)
 
     await client.client('PAUSE', '1500', 'ALL')
-    let reconfigured = false
-    let gapSeen = false
-    const reconfiguring = reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root)).finally(() => { reconfigured = true })
-    const sampling = (async () => {
-      while (!reconfigured) {
-        if (!queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()) gapSeen = true
-        await new Promise(resolve => setTimeout(resolve, 5))
-      }
-    })()
-    await new Promise(resolve => setTimeout(resolve, 300))
-    await publishThroughRegisteredPublisher()
-    await reconfiguring
-    await sampling
+    const beforeSwap = publishThroughRegisteredPublisher()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(true)
+    const afterSwap = publishThroughRegisteredPublisher()
+    await Promise.all([beforeSwap, afterSwap])
 
-    expect(gapSeen).toBe(false)
-    await expect.poll(counter.count, { timeout: 5_000 }).toBe(2)
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(3)
     await resetHoloRuntime()
+  }, 30_000)
+
+  it('publishes through a Redis user limited to PUBLISH on the scaling channel', async () => {
+    const { root, client, connections, baseline } = await createScalingInvalidationProject()
+    await client.acl('SETUSER', 'publish-only', 'on', '>publish-only-secret', '~*', '&holo:broadcast:scaling:*', '+publish')
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: ${scalingRedisPort}, db: 0, username: 'publish-only', password: 'publish-only-secret' } } })
+`)
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(1)
+    counter.close()
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
   }, 30_000)
 
   it('keeps the previous publisher working when a reconfiguration to an unusable scaling connection fails', async () => {
