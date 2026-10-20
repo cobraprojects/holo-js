@@ -389,6 +389,16 @@ it('reconnects for the next send after the server drops the idle connection', as
   expect(provider.stats.connections).toBe(2)
 })
 
+it('sends overlapping messages through one mailer over one SMTP connection', async () => {
+  const provider = await startSmtpProvider()
+  await Promise.all([
+    sendMail(defineMail({ to: 'ava@example.com', subject: 'Overlapping one', text: 'One' })),
+    sendMail(defineMail({ to: 'ava@example.com', subject: 'Overlapping two', text: 'Two' })),
+  ])
+  expect(provider.messages).toHaveLength(2)
+  expect(provider.stats.connections).toBe(1)
+})
+
 it('lets a one-shot script exit once its SMTP connection has been idle for the pool timeout', async () => {
   const provider = await startSmtpServer()
   await runOneShotSmtpSend(provider.port)

@@ -895,6 +895,7 @@ async function sendViaSmtp(
 
   const entry = getOrCreateSmtpTransport(context.mailer, () => nodemailer.createTransport({
     pool: true,
+    maxConnections: 1,
     idleTimeout: SMTP_POOL_IDLE_TIMEOUT_MS,
     host: mailerConfig.host,
     port: mailerConfig.port,
