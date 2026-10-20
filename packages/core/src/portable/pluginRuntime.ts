@@ -16,7 +16,6 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 type HoloPluginBootScope = {
-  readonly projectRoot: string
   active: boolean
 }
 
@@ -47,7 +46,7 @@ export async function bootConfiguredHoloPluginModule(
     : bootModule.module
   if (typeof candidate !== 'function') return
   const generation = bootGeneration
-  const scope: HoloPluginBootScope = { projectRoot: resolve(projectRoot), active: true }
+  const scope: HoloPluginBootScope = { active: true }
   const boot = (async () => {
     try {
       await holoPluginBootScopes.run(scope, () => candidate({ projectRoot, config: loadedConfig }))
@@ -64,9 +63,8 @@ export async function bootConfiguredHoloPluginModule(
   }
 }
 
-export function assertOutsidePluginBoot(projectRoot: string, action: string): void {
-  const scope = holoPluginBootScopes.getStore()
-  if (scope?.active && scope.projectRoot === resolve(projectRoot)) {
+export function assertOutsidePluginBoot(action: string): void {
+  if (holoPluginBootScopes.getStore()?.active) {
     throw new Error(`[@holo-js/core] ${action} cannot run inside a plugin boot hook. Plugin boot runs once per application lifecycle; move this call out of the hook.`)
   }
 }

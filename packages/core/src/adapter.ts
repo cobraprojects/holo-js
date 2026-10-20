@@ -189,6 +189,7 @@ export function createHoloProjectAccessors<
     return cacheProject
   }
   const resolveCachedProject = async (): Promise<HoloAdapterProject<TCustom>> => {
+    assertOutsidePluginBoot('Holo project initialization')
     if (!shouldCacheProject()) return resolveProject()
     if (projectPromise) return projectPromise
     projectPromise = resolveProject().catch((error: unknown) => {
@@ -233,7 +234,7 @@ async function initializeSingletonFrameworkProject<
   createProject: (options: ResolvedHoloFrameworkOptions) => Promise<TProject>,
 ): Promise<TProject> {
   const resolved = resolveHoloFrameworkOptions(options)
-  assertOutsidePluginBoot(resolved.projectRoot, `${displayName} Holo project initialization`)
+  assertOutsidePluginBoot(`${displayName} Holo project initialization`)
   const state = getFrameworkAdapterStateContainer<TProject>(stateKey) as MutableHoloFrameworkAdapterState<TProject>
 
   if (state.initialization) {

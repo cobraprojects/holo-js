@@ -69,7 +69,7 @@ import {
 } from '@holo-js/security'
 import { csrfProtection as svelteKitCsrfProtection } from '@holo-js/security/sveltekit/server'
 import type * as PortableHoloModule from '../src/portable/holo'
-import { createHoloAdapterProject, createHoloFrameworkAdapter, initializeHoloAdapterProject } from '../src'
+import { createHoloAdapterProject, createHoloFrameworkAdapter, createHoloProjectAccessors, initializeHoloAdapterProject } from '../src'
 import {
   configureHoloRenderingRuntime,
   createHolo,
@@ -2392,6 +2392,47 @@ export default async function boot() {
 
     await expect(settleWithin(adapter.initializeProject({ projectRoot: root }), 2000))
       .rejects.toThrow(/Boot Hook Holo project initialization cannot run inside a plugin boot hook/)
+    expect(peekHolo()).toBeUndefined()
+  })
+
+  it('rejects a plugin boot hook that reads a cached project accessor while that project is starting', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-cached-accessor-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-cached-accessor-boot', `
+export default {
+  id: 'cached-accessor-boot',
+  name: 'Cached Accessor Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  await globalThis.__holoCoreCachedAccessorDuringBoot__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoCoreCachedAccessorDuringBoot__?: () => Promise<unknown> }
+    const accessors = createHoloProjectAccessors(() => initializeHoloAdapterProject(root, { preferCache: false }), { cache: true })
+    runtimeGlobal.__holoCoreCachedAccessorDuringBoot__ = () => accessors.getProject()
+
+    await expect(settleWithin(accessors.getProject(), 2000)).rejects.toThrow(/Holo project initialization cannot run inside a plugin boot hook/)
     expect(peekHolo()).toBeUndefined()
   })
 
