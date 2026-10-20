@@ -965,13 +965,11 @@ describe('model relation slice', () => {
     expect(firstUserRoles.map(role => role.get('name'))).toEqual(['Editor', 'Admin'])
     expect(secondUserRoles.map(role => role.get('name'))).toEqual([])
     expect((firstUserRoles[0]?.getRelation('membership') as JsonRecord | undefined)).toEqual({
-      id: 1001,
       userId: 1,
       roleId: 101,
       grantedAt: '2026-02-01',
       approved: true })
     expect((firstUserRoles[1]?.getRelation('membership') as JsonRecord | undefined)).toEqual({
-      id: 1000,
       userId: 1,
       roleId: 100,
       grantedAt: '2026-01-01',
@@ -1060,6 +1058,7 @@ describe('model relation slice', () => {
     const User = defineModelFromTable(users, {
       relations: {
         roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId')
+          .withPivot('id', 'grantedAt', 'approved')
           .using(() => Membership)
           .as('membership') } })
 
@@ -3449,6 +3448,7 @@ describe('model relation slice', () => {
     User = defineModelFromTable(users, {
       relations: {
         roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId')
+          .withPivot('approved')
           .using(() => Membership)
           .as('membership') } })
 
@@ -3496,7 +3496,7 @@ describe('model relation slice', () => {
       casts: {
         published: 'boolean' },
       events: {
-        creating: [entity => calls.push(`creating:${String((entity as TestEntity).get('title'))}`)] },
+        creating: [entity => calls.push(`creating:${String(entity.get('title'))}`)] },
       relations: {
         author: belongsTo(() => User, 'userId') } })
     User = defineModelFromTable(users, {

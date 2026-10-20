@@ -82,6 +82,10 @@
 
 ### Changed
 
+- Many-to-many relations (`belongsToMany`, `morphToMany`, `morphedByMany`) load only the pivot keys and the columns declared with `withPivot()` and `withTimestamps()` into `pivot`, as Laravel does. Before, every pivot column was loaded. See [Reading pivot columns](apps/docs/docs/orm/relationships/many-to-many.md#reading-pivot-columns).
+- One-of-many relations (`latestOfMany`, `oldestOfMany`, `ofMany`, and their morph variants) choose the related row in the query, as Laravel does, instead of loading every related row into memory. A relation whose column is `NULL` for every candidate loads `null`, as in Laravel; before, it loaded the first candidate.
+- Eager loads and relation filters split their key lists into chunks of at most 256 keys, so a relation loaded for thousands of parents stays within database bind-parameter limits. Each chunk runs its own query.
+- `scopeRelation()` types its constraint callback as a query on the related model, so the columns it can name are checked. Lifecycle handlers in `events` are typed as receiving the model's entity, not `(...args: unknown[])`.
 - `auth.user()` loads the user from the provider once per request. Session records no longer store a copy of the user, and existing copies are ignored.
 - `resendEmailVerification()`, `sendEmailVerification()` and `verification.resend()` no longer accept an email address. They send only to the signed-in user and throw `email_verification_user_missing` (401) without one. See [Verification resend requires a signed-in user](apps/docs/docs/getting-started/upgrading.md#verification-resend-requires-a-signed-in-user).
 - SvelteKit apps without a `handleError` export log unexpected errors through the reporter and answer with SvelteKit's generic message, `Internal Error`, instead of the error's message. The error's message is returned only while `debug` is `true`. Application `handleError` hooks and validation responses are unchanged. See [Unexpected SvelteKit errors](apps/docs/docs/getting-started/upgrading.md#unexpected-sveltekit-errors).
@@ -124,6 +128,7 @@
 
 ### Compatibility and upgrade requirements
 
+- **Pivot columns aren't loaded unless declared.** Code that reads `pivot` for a column that isn't in `withPivot()` or `withTimestamps()` gets `undefined`. Add the column to `withPivot()`. See [Pivot columns](apps/docs/docs/getting-started/upgrading.md#pivot-columns-and-one-of-many-relations).
 - **Sessions don't cross between 0.3 and 0.4.** A session written by 0.4 isn't readable by 0.3, so a mixed-version rolling deploy or a rollback signs users out. See [Sessions don't cross between 0.3 and 0.4](apps/docs/docs/getting-started/upgrading.md#sessions-dont-cross-between-03-and-04).
 - **Add a nullable `remember_token` column to each auth provider table** and hide it on the model. New scaffolds and the example apps include it, and the scaffolded sessions table no longer has `remember_token_hash`. `issueRememberMeToken()`, `consumeRememberMeToken()`, `RememberTokenOptions` and `SessionRecord.rememberTokenHash` are removed from `@holo-js/session`. Custom auth providers need `getRememberToken(user)` and `updateRememberToken(user, token)` for remember me. See [Per-user remember-me tokens](apps/docs/docs/getting-started/upgrading.md#per-user-remember-me-tokens).
 - Broadcast clients that relied on close code `4001` after a refused subscription must handle `pusher:subscription_error`. Channel rules served by `holo broadcast:work` no longer receive a `null` user for unsigned subscriptions. See [Broadcast subscription errors](apps/docs/docs/getting-started/upgrading.md#broadcast-subscription-errors-and-channel-authorization).

@@ -462,6 +462,14 @@ Check three behaviors when you upgrade:
 - A transaction started inside `withoutForeignKeyConstraints()` runs on the same pinned connection, one at a time. A transaction that reaches that connection after the callback has returned fails with `TransactionError` and writes nothing.
 - `withoutForeignKeyConstraints()` keeps every query in its callback on one pooled connection. The standalone `disableForeignKeyConstraints()` and `enableForeignKeyConstraints()` still change only the connection they run on. On PostgreSQL or MySQL, wrap the work in `withoutForeignKeyConstraints()` instead. See [Foreign key constraints](/database/migrations#withoutforeignkeyconstraints).
 
+### Pivot columns and one-of-many relations
+
+Check three behaviors when you upgrade:
+
+- `pivot` on a many-to-many relation holds only the pivot keys and the columns declared with `withPivot()` and `withTimestamps()`. Before, it held every pivot column. Add `withPivot('column')` for each column your code reads from `pivot`. A custom pivot model from `using()` receives the same columns, so add `'id'` to `withPivot()` if you read the pivot's `id`.
+- A one-of-many relation (`latestOfMany`, `oldestOfMany`, `ofMany`, and the morph variants) whose column is `NULL` on every related row loads `null`, as in Laravel. Before, it loaded the first related row. To keep the old result, skip the `NULL` rows with a constraint: `scopeRelation(latestOfMany(() => Post, 'user_id', 'id', 'score'), query => query.whereNotNull('score'))`.
+- Eager loads run one query per 256 parent keys. A constraint callback passed to `with()` or `scopeRelation()` runs once per chunk, so it must not count or log calls.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

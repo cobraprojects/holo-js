@@ -10,6 +10,7 @@ import type {
   DefineModelOptions,
   ModelLifecycleEventHandler,
   ModelLifecycleEventName,
+  EmptyScopeMap,
   RelationMap,
 } from './types'
 
@@ -104,8 +105,8 @@ export function resolveTimestampColumn<TTable extends TableDefinition>(
   return candidate in table.columns ? candidate : undefined
 }
 
-export function normalizeEventHandlers(
-  events: DefineModelOptions['events'],
+export function normalizeEventHandlers<TTable extends TableDefinition, TRelations extends RelationMap>(
+  events: DefineModelOptions<TTable, EmptyScopeMap, TRelations>['events'],
 ): Partial<Record<ModelLifecycleEventName, readonly ModelLifecycleEventHandler[]>> {
   if (!events) return {}
 

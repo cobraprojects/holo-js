@@ -1,0 +1,201 @@
+import { onTestFinished, describe, expect, it } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import {
+  type Entity,
+  belongsToMany,
+  column,
+  configureDB,
+  createConnectionManager,
+  createDatabase,
+  createDialect as createDatabaseDialect,
+  latestOfMany,
+  morphToMany,
+  scopeRelation,
+  hasMany,
+  type TableDefinition,
+} from '../src'
+
+type QueryStartLog = { sql: string, bindings: readonly unknown[] }
+import { defineModelFromTable, defineTable } from './support/internal'
+import { createTestTable } from './support/schema'
+
+function openSQLite(logger?: { onQueryStart(entry: QueryStartLog): void }) {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  onTestFinished(() => adapter.disconnect())
+  const db = createDatabase({
+    adapter,
+    dialect: createDatabaseDialect('sqlite'),
+    logger,
+    security: { redactBindingsInLogs: false, maxLoggedBindings: 100_000 },
+  })
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+  return db
+}
+
+function collectBindingCounts(entries: readonly QueryStartLog[]): number[] {
+  return entries.map(entry => entry.bindings.length).filter(count => count > 0)
+}
+
+describe('bounded relation loading', () => {
+  it('selects only the pivot keys and declared pivot columns on belongsToMany relations', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const roles = defineTable('roles', { id: column.id(), name: column.string() })
+    const roleUser = defineTable('role_user', {
+      id: column.id(),
+      userId: column.integer(),
+      roleId: column.integer(),
+      granted: column.boolean(),
+      secret: column.string(),
+    })
+    await createTestTable(db, users)
+    await createTestTable(db, roles)
+    await createTestTable(db, roleUser)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
+    await db.table(roles).insert([{ id: 1, name: 'Admin' }])
+    await db.table(roleUser).insert([{ id: 1, userId: 1, roleId: 1, granted: true, secret: 'hidden' }])
+
+    const Role = defineModelFromTable(roles)
+    const User = defineModelFromTable(users, {
+      relations: {
+        roles: belongsToMany(() => Role, roleUser, 'userId', 'roleId').withPivot('granted'),
+      },
+    })
+
+    const [user] = await User.with('roles').get()
+    const [role] = user!.getRelation<Entity<TableDefinition>[]>('roles')!
+    const pivot = role!.getRelation<Record<string, unknown>>('pivot')!
+
+    expect(Object.keys(pivot).sort()).toEqual(['granted', 'roleId', 'userId'])
+    expect(pivot).not.toHaveProperty('secret')
+    expect(pivot).not.toHaveProperty('id')
+  })
+
+  it('selects only the morph keys and declared pivot columns on morphToMany relations', async () => {
+    const db = openSQLite()
+    const articles = defineTable('articles', { id: column.id(), title: column.string() })
+    const tags = defineTable('tags', { id: column.id(), name: column.string() })
+    const taggables = defineTable('taggables', {
+      id: column.id(),
+      tagId: column.integer(),
+      taggableId: column.integer(),
+      taggableType: column.string(),
+      note: column.string().nullable(),
+      secret: column.string().nullable(),
+    })
+    await createTestTable(db, articles)
+    await createTestTable(db, tags)
+    await createTestTable(db, taggables)
+    await db.table(articles).insert([{ id: 1, title: 'Hello' }])
+    await db.table(tags).insert([{ id: 1, name: 'news' }])
+    await db.table(taggables).insert([{ id: 1, tagId: 1, taggableId: 1, taggableType: 'articles', note: 'pinned', secret: 'hidden' }])
+
+    const Tag = defineModelFromTable(tags)
+    const Article = defineModelFromTable(articles, {
+      morphClass: 'articles',
+      relations: {
+        tags: morphToMany(() => Tag, 'taggable', taggables, 'tagId', 'id', 'id', 'taggableType', 'taggableId').withPivot('note'),
+      },
+    })
+
+    const [article] = await Article.with('tags').get()
+    const [tag] = article!.getRelation<Entity<TableDefinition>[]>('tags')!
+    const pivot = tag!.getRelation<Record<string, unknown>>('pivot')!
+
+    expect(Object.keys(pivot).sort()).toEqual(['note', 'tagId', 'taggableId', 'taggableType'])
+    expect(pivot).not.toHaveProperty('secret')
+  })
+
+  it('splits eager-load key lists into bounded chunks', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+
+    const userRows = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    const postRows = userRows.map(user => ({ id: user.id, userId: user.id, title: `post ${user.id}` }))
+    for (let index = 0; index < userRows.length; index += 200) {
+      await db.table(users).insert(userRows.slice(index, index + 200))
+      await db.table(posts).insert(postRows.slice(index, index + 200))
+    }
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        posts: hasMany(() => Post, 'userId'),
+      },
+    })
+
+    queries.length = 0
+    const loaded = await User.with('posts').orderBy('id').get()
+
+    expect(loaded).toHaveLength(1000)
+    expect(loaded.every(user => user.getRelation<Entity<TableDefinition>[]>('posts')?.length === 1)).toBe(true)
+
+    const sizes = collectBindingCounts(queries)
+    expect(sizes.length).toBeGreaterThan(0)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(256)
+    expect(new Set(sizes).size).toBeLessThanOrEqual(9)
+  })
+
+  it('resolves one-of-many relations to no related model when every candidate value is NULL', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer(),
+      title: column.string(),
+      score: column.integer().nullable(),
+    })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }, { id: 2, name: 'Amina' }])
+    await db.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A', score: null },
+      { id: 11, userId: 1, title: 'Post B', score: null },
+      { id: 12, userId: 2, title: 'Post C', score: 3 },
+    ])
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        topScoringPost: latestOfMany(() => Post, 'userId', 'id', 'score'),
+      },
+    })
+
+    const loaded = await User.with('topScoringPost').orderBy('id').get()
+    expect(loaded[0]?.getRelation('topScoringPost')).toBeNull()
+    expect(loaded[1]?.getRelation<Entity<TableDefinition>>('topScoringPost')?.get('title')).toBe('Post C')
+  })
+
+  it('applies a scopeRelation constraint inside the one-of-many lookup', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer(),
+      title: column.string(),
+      score: column.integer().nullable(),
+    })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert([{ id: 1, name: 'Mohamed' }])
+    await db.table(posts).insert([
+      { id: 10, userId: 1, title: 'Post A', score: 9 },
+      { id: 11, userId: 1, title: 'Post B', score: null },
+      { id: 12, userId: 1, title: 'Post C', score: 4 },
+    ])
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        topScoringPost: scopeRelation(latestOfMany(() => Post, 'userId', 'id', 'score'), query => query.where('title', '!=', 'Post A')),
+      },
+    })
+
+    const [user] = await User.with('topScoringPost').get()
+    expect(user!.getRelation<Entity<TableDefinition>>('topScoringPost')?.get('title')).toBe('Post C')
+  })
+})

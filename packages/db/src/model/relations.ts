@@ -19,6 +19,7 @@ import type {
   RegisteredModelName,
   RegisteredModelReference,
   RelationConstraintDefinition,
+  ScopedRelationConstraint,
   RelationDefinition,
 } from './types'
 import { getGlobalModel } from './ModelRegistry'
@@ -499,12 +500,12 @@ export function morphedByMany<
 
 export function scopeRelation<TRelation extends RelationDefinition>(
   relation: TRelation,
-  constraint: RelationConstraintDefinition,
+  constraint: ScopedRelationConstraint<TRelation>,
 ): TRelation {
   const existingConstraint = relation.constraint
   const mergedConstraint: RelationConstraintDefinition = (query) => {
     const constrained = (existingConstraint ? (existingConstraint(query) ?? query) : query) as Parameters<RelationConstraintDefinition>[0]
-    return constraint(constrained) ?? constrained
+    return (constraint as unknown as RelationConstraintDefinition)(constrained) ?? constrained
   }
 
   return Object.freeze({
