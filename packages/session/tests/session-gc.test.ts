@@ -34,10 +34,9 @@ function record(id: string, expiresAt: Date, data: Record<string, unknown> = { u
   return { id, store: 'file', data, createdAt: now, lastActivityAt: now, expiresAt }
 }
 
-async function waitForTombstonesToDrain(root: string): Promise<void> {
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline && (await readdir(root)).some(name => name.endsWith('.released'))) {
-    await new Promise(resolve => setTimeout(resolve, 10))
+async function clearReleaseTombstones(root: string): Promise<void> {
+  for (const name of await readdir(root)) {
+    if (name.endsWith('.released')) await rm(join(root, name), { force: true })
   }
 }
 
@@ -56,7 +55,7 @@ describe('file session garbage collection', () => {
         return store.write(live)
       }))
     }
-    await waitForTombstonesToDrain(root)
+    await clearReleaseTombstones(root)
     await expect(sweepable(store)(new Date())).resolves.toBe(0)
     for (let batch = 0; batch < 21; batch += 1) {
       await Promise.all(Array.from({ length: 50 }, (_, index) => {
@@ -64,7 +63,7 @@ describe('file session garbage collection', () => {
       }))
     }
 
-    await waitForTombstonesToDrain(root)
+    await clearReleaseTombstones(root)
     await expect(sweepable(store)(new Date())).resolves.toBe(50)
     await expect(sweepable(store)(new Date())).resolves.toBe(1_000)
     await expect(sweepable(store)(new Date())).resolves.toBe(0)

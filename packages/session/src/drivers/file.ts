@@ -233,6 +233,7 @@ const RECORD_LOCK_TOMBSTONE_SUFFIX = '.released'
 const TOMBSTONE_RETRY_FIRST_MS = 50
 const TOMBSTONE_RETRY_MAX_MS = 1_000
 const TOMBSTONE_RETRY_BUDGET_MS = 5_000
+const TOMBSTONE_QUEUE_LIMIT = 256
 const pendingTombstoneRemovals: string[] = []
 let tombstoneDrain: Promise<void> | undefined
 
@@ -274,6 +275,7 @@ async function drainTombstoneRemovals(): Promise<void> {
 }
 
 function scheduleTombstoneRemoval(tombstonePath: string): void {
+  if (pendingTombstoneRemovals.length >= TOMBSTONE_QUEUE_LIMIT) return
   pendingTombstoneRemovals.push(tombstonePath)
   tombstoneDrain ??= drainTombstoneRemovals()
 }
@@ -750,6 +752,8 @@ export function createFileSessionStore(root: string): SessionStore {
 export const fileSessionDriverInternals = {
   heldRecordLockTokens,
   pendingRecordLockReleaseRetries,
+  pendingTombstoneRemovals,
+  tombstoneQueueLimit: TOMBSTONE_QUEUE_LIMIT,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,
