@@ -250,6 +250,25 @@ describe('model query mutations apply updated_at like Laravel', () => {
     expect(await db.table(accounts).count()).toBe(0)
   })
 
+  it('does not fire retrieved observers while restoring', async () => {
+    const db = await openModelDatabase()
+    const posts = postsTable()
+    await seedPost(db, posts)
+    await db.table(posts).where('id', 1).update({ deleted_at: past })
+    let retrievals = 0
+    const Post = defineModelFromTable(posts, {
+      softDeletes: true,
+      fillable: ['title'],
+      events: { retrieved: [() => { retrievals += 1 }] },
+    })
+
+    const post = await Post.withTrashed().findOrFail(1)
+    expect(retrievals).toBe(1)
+    await post.restore()
+    expect(retrievals).toBe(1)
+    expect(post.get('deleted_at')).toBeNull()
+  })
+
   it('bumps updated_at with deleted_at on query delete and restore, and force delete still removes the row', async () => {
     const db = await openModelDatabase()
     const posts = postsTable()

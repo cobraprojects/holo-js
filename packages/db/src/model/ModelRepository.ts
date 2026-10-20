@@ -1867,22 +1867,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       await this.dispatchCancelableEvent('restoring', entity)
-      const unsaved = Object.fromEntries(
-        Object.entries(entity.getDirty()).filter(([key]) => key !== deletedAtColumn && key !== this.definition.updatedAtColumn),
-      )
-      const written = this.withWriteTimestamps({ [deletedAtColumn]: null }, 'update')
-      await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
-      entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
       entity.forceFill({ [deletedAtColumn]: null } as never)
-      const restored = await this.queryWithoutGlobalScopes().withTrashed().where(primaryKey as never, id).first()
-      if (!restored) {
-        throw new ModelNotFoundException(this.definition.name)
-      }
-
-      restored.forceFill(unsaved as never)
-      await this.dispatchEvent('restored', restored)
-      await this.touchOwners(restored)
-      return restored
+      entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
+      this.applyWriteMutators(entity, [...new Set([...Object.keys(entity.getDirty()), deletedAtColumn])])
+      const written = { ...entity.getDirty(), [deletedAtColumn]: entity.get(deletedAtColumn as never) }
+      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
+      await this.queryWithoutGlobalScopes().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
+      entity.recordChanges(written)
+      entity.forceFill(this.normalizeFromStorage(dirty))
+      entity.finishSave()
+      await this.dispatchEvent('restored', entity)
+      await this.touchOwners(entity)
+      return entity
     })
   }
 
