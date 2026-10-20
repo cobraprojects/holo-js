@@ -31,7 +31,8 @@ Server subscriptions now authorize and execute independently, including subscrip
 
 ### Realtime relations honor hidden attributes
 
-Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. No code changes are required. Subscriptions to those relations run the handler more often. Relations to plain related models keep incremental patching.
+Realtime patches for a relation loaded with `with(...)` now follow the related model's serialization rules. A relation whose related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended` is re-run instead of patched, so values hidden by the model no longer reach subscribers through belongs-to, has-one, has-many, or belongs-to-many relations. The same applies to a root model that sets those rules and loads a belongs-to relation: Holo re-runs the query when the foreign key changes. A handler that calls `makeHidden()`, `makeVisible()`, `setHidden()`, `setVisible()`, `append()`, `setAppends()`, or `withoutAppends()` on the records it loads gets the same re-run. No code changes are required. Subscriptions to those relations and queries run the handler more often. Relations to plain related models keep incremental patching.
+
 
 ### Model scope grouping
 

@@ -2073,7 +2073,14 @@ export class ModelQueryBuilder<
       return
     }
 
-    disableDatabaseQueryObservationPatching(rows)
+    disableDatabaseQueryObservationPatching(rows, {
+      serialized: this.rowsNeedSerialization(),
+    })
+  }
+
+  private rowsNeedSerialization(): boolean {
+    return modelNeedsSerialization(this.repository.definition)
+      || Object.keys(this.queryCasts).length > 0
   }
 
 }

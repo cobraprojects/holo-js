@@ -225,6 +225,7 @@ export interface DatabaseQueryObservation {
   readonly scalarListRows?: readonly Readonly<Record<string, unknown>>[]
   readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
   readonly selections: readonly DatabaseQuerySelectionObservation[]
+  readonly serialized?: boolean
 }
 
 export interface DatabaseQueryBelongsToHydrationObservation {
@@ -327,6 +328,7 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
+  serializationOverridden: boolean
 }
 
 const DATABASE_DEPENDENCY_PREFIX = 'db:'
@@ -420,6 +422,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
+    serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
 
@@ -469,7 +472,15 @@ export function recordDatabaseQueryObservation(observation: DatabaseQueryObserva
     return
   }
 
-  state.queries.push(observation)
+  state.queries.push(state.serializationOverridden ? serializedQueryObservation(observation) : observation)
+}
+
+function serializedQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  return Object.freeze({
+    ...observation,
+    patchable: false,
+    serialized: true,
+  })
 }
 
 export function readDatabaseQueryObservationCount(): number {
@@ -538,6 +549,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
@@ -559,6 +571,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     }))
     return
   }
@@ -606,6 +619,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
@@ -627,12 +641,16 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListColumn: undefined,
       scalarListRows: undefined,
       selections: query.selections,
+      serialized: query.serialized,
     }))
     return
   }
 }
 
-export function disableDatabaseQueryObservationPatching(source: unknown): void {
+export function disableDatabaseQueryObservationPatching(
+  source: unknown,
+  options: { readonly serialized?: boolean } = {},
+): void {
   const state = databaseDependencyCollector.getStore()
   if (!state) {
     return
@@ -664,8 +682,26 @@ export function disableDatabaseQueryObservationPatching(source: unknown): void {
       scalarListColumn: query.scalarListColumn,
       scalarListRows: query.scalarListRows,
       selections: query.selections,
+      serialized: options.serialized || query.serialized,
     })
     return
+  }
+}
+
+export function markDatabaseQueryObservationsSerialized(): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return
+  }
+
+  state.serializationOverridden = true
+  for (let index = 0; index < state.queries.length; index += 1) {
+    const query = state.queries[index]
+    if (!query || query.serialized) {
+      continue
+    }
+
+    state.queries[index] = serializedQueryObservation(query)
   }
 }
 
@@ -734,6 +770,7 @@ function rebindDatabaseQueryObservation(
       scalarListColumn,
       scalarListRows,
       selections: query.selections,
+      serialized: query.serialized,
     })
     return
   }

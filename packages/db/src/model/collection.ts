@@ -1,3 +1,4 @@
+import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
@@ -190,36 +191,42 @@ export function createModelCollection<
       for (const entity of collection) {
         entity.append(...keys)
       }
+      markDatabaseQueryObservationsSerialized()
       return collection
     },
     withoutAppends(): ModelCollection<TTable, TRelations, TItem> {
       for (const entity of collection) {
         entity.withoutAppends()
       }
+      markDatabaseQueryObservationsSerialized()
       return collection
     },
     makeVisible(...keys: readonly string[]): ModelCollection<TTable, TRelations, TItem> {
       for (const entity of collection) {
         entity.makeVisible(...keys)
       }
+      markDatabaseQueryObservationsSerialized()
       return collection
     },
     makeHidden(...keys: readonly string[]): ModelCollection<TTable, TRelations, TItem> {
       for (const entity of collection) {
         entity.makeHidden(...keys)
       }
+      markDatabaseQueryObservationsSerialized()
       return collection
     },
     setVisible(keys: readonly string[]): ModelCollection<TTable, TRelations, TItem> {
       for (const entity of collection) {
         entity.setVisible(keys)
       }
+      markDatabaseQueryObservationsSerialized()
       return collection
     },
     setHidden(keys: readonly string[]): ModelCollection<TTable, TRelations, TItem> {
       for (const entity of collection) {
         entity.setHidden(keys)
       }
+      markDatabaseQueryObservationsSerialized()
       return collection
     },
   }
