@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSessionDriverInternals } from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState & { readonly pausedRenameSources: Map<string, Promise<void>> } => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), pausedRenameSources: new Map(), renameAttempts: new Map() }))
+const windowsFs = vi.hoisted((): WindowsFsState & { readonly pausedRenameSources: Map<string, Promise<void>> } => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), pausedRenameSources: new Map(), renameAttempts: new Map() }))
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof FsPromises>()
@@ -272,10 +272,12 @@ describe('file session lock handover under a fake clock', () => {
     }
 
     await advanceTo(waiter, startedAt + 28_500)
+    windowsFs.blockedRenamePrefixes.add(join(lockPath, 'owner.'))
     windowsFs.blockedUnlinkPrefixes.add(join(lockPath, 'owner.'))
     await releaseAcquisition(holder)
 
     await advanceTo(waiter, startedAt + HARD_CAP_MS + 200)
+    windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedUnlinkPrefixes.clear()
     unblockRenames('waiter')
     await tickUntil(waiter, () => waiter.settled)

@@ -229,8 +229,49 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   }
 }
 
+function recordLockTombstonePath(lockPath: string, owner: RecordLockOwner): string {
+  return `${lockPath}.${owner.token}.released`
+}
+
+async function unlinkSettled(path: string, settleMs: number): Promise<boolean> {
+  const deadline = Date.now() + settleMs
+  for (;;) {
+    try {
+      await unlink(path)
+      return true
+    } catch (error) {
+      if (isMissingFileError(error)) return true
+      if (!isBusyFileError(error)) throw error
+      if (Date.now() >= deadline) return false
+      await sleep(5)
+    }
+  }
+}
+
+function scheduleTombstoneRemoval(tombstonePath: string): void {
+  void unlinkSettled(tombstonePath, BUSY_FILE_RETRY_MS)
+    .then(removed => {
+      if (!removed) reportError(new Error(`[@holo-js/session] Could not remove released file session lock marker "${tombstonePath}"; other processes ignore it.`), { capability: 'session', operation: 'file.releaseLock' })
+    })
+    .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
+}
+
+async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Promise<'retired' | 'absent' | 'busy'> {
+  const tombstonePath = recordLockTombstonePath(lockPath, owner)
+  try {
+    await rename(join(lockPath, recordLockOwnerFileName(owner)), tombstonePath)
+  } catch (error) {
+    if (isMissingFileError(error)) return 'absent'
+    if (isBusyFileError(error)) return 'busy'
+    throw error
+  }
+  scheduleTombstoneRemoval(tombstonePath)
+  await removeRecordLock(lockPath)
+  return 'retired'
+}
+
 async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+  if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
   if (await markRecordLockReleased(lockPath, owner)) return
   reportError(
     new Error(`[@holo-js/session] Could not release file session lock for "${recordPath}" on the scheduled retry; other processes can reclaim it only after this process reclaims it or exits.`),
@@ -250,15 +291,15 @@ function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, ow
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
   try {
-    let removalFailure: { readonly error: unknown } | undefined
+    let retirementFailure: { readonly error: unknown } | undefined
     try {
-      if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+      if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
     } catch (error) {
-      removalFailure = { error }
+      retirementFailure = { error }
     }
     const published = await markRecordLockReleased(lockPath, owner)
     if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
-    if (removalFailure) throw removalFailure.error
+    if (retirementFailure) throw retirementFailure.error
     reportError(
       new Error(published
         ? `[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`
