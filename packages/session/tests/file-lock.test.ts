@@ -140,8 +140,7 @@ describe('file session locking with real processes', () => {
       const owner = await startWorker('hold', root, record.id, lockPath)
       await stopWorker(owner)
     }
-    const workers: ChildProcess[] = []
-    for (let index = 0; index < 8; index += 1) workers.push(await startWorker('flash', root, record.id, `writer${index}`))
+    const workers = await Promise.all(Array.from({ length: 8 }, (_, index) => startWorker('flash', root, record.id, `writer${index}`)))
     const results = workers.map(child => new Promise<void>((resolve, reject) => {
       child.once('error', reject)
       child.once('exit', code => code === 0 ? resolve() : reject(new Error(`File session writer exited (${code})`)))
