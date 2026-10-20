@@ -92,6 +92,7 @@ const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
 const REMOTE_MEDIA_TIMEOUT_MS = 30_000
 const DEFAULT_MEDIA_DISK = 'public'
 const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
+const GLOBALLY_REACHABLE_BLOCKED_IPV4_ADDRESSES = createGloballyReachableBlockedIPv4Addresses()
 const IETF_PROTOCOL_ASSIGNMENTS = createIETFProtocolAssignmentsBlockList()
 const GLOBALLY_REACHABLE_IETF_PROTOCOL_ASSIGNMENTS = createGloballyReachableIETFProtocolAssignments()
 const NAT64_WELL_KNOWN_PREFIX = Buffer.concat([Buffer.from([0x00, 0x64, 0xff, 0x9b]), Buffer.alloc(8)])
@@ -642,11 +643,14 @@ function createBlockedRemoteMediaAddresses(): BlockList {
     ['172.16.0.0', 12],
     ['192.0.0.0', 24],
     ['192.0.2.0', 24],
+    ['192.88.99.2', 32],
     ['192.168.0.0', 16],
     ['198.18.0.0', 15],
     ['198.51.100.0', 24],
     ['203.0.113.0', 24],
     ['224.0.0.0', 4],
+    ['240.0.0.0', 4],
+    ['255.255.255.255', 32],
   ] as const) {
     blockList.addSubnet(network, prefix, 'ipv4')
   }
@@ -664,6 +668,17 @@ function createBlockedRemoteMediaAddresses(): BlockList {
     ['ff00::', 8],
   ] as const) {
     blockList.addSubnet(network, prefix, 'ipv6')
+  }
+  return blockList
+}
+
+function createGloballyReachableBlockedIPv4Addresses(): BlockList {
+  const blockList = new BlockList()
+  for (const [network, prefix] of [
+    ['192.0.0.9', 32],
+    ['192.0.0.10', 32],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv4')
   }
   return blockList
 }
@@ -691,13 +706,18 @@ function createGloballyReachableIETFProtocolAssignments(): BlockList {
   return blockList
 }
 
+function isBlockedRemoteMediaIPv4Address(address: string): boolean {
+  return BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address, 'ipv4')
+    && !GLOBALLY_REACHABLE_BLOCKED_IPV4_ADDRESSES.check(address, 'ipv4')
+}
+
 function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
-  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, address.family === 4 ? 'ipv4' : 'ipv6')) {
-    return true
+  if (address.family === 4) {
+    return isBlockedRemoteMediaIPv4Address(address.address)
   }
 
-  if (address.family === 4) {
-    return false
+  if (BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, 'ipv6')) {
+    return true
   }
 
   if (
@@ -712,7 +732,7 @@ function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
     return true
   }
 
-  return findEmbeddedIPv4Addresses(bytes).some(embeddedAddress => BLOCKED_REMOTE_MEDIA_ADDRESSES.check(embeddedAddress, 'ipv4'))
+  return findEmbeddedIPv4Addresses(bytes).some(isBlockedRemoteMediaIPv4Address)
 }
 
 function findEmbeddedIPv4Addresses(bytes: Buffer): string[] {
