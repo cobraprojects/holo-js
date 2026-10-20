@@ -122,6 +122,7 @@ const WORKOS_AUTHORIZE_URL = `${WORKOS_API_BASE_URL}/user_management/authorize`
 const WORKOS_AUTHENTICATE_URL = `${WORKOS_API_BASE_URL}/user_management/authenticate`
 const WORKOS_LOGOUT_URL = `${WORKOS_API_BASE_URL}/user_management/sessions/logout`
 const WORKOS_STATE_COOKIE_MAX_AGE_SECONDS = 300
+const WORKOS_SESSION_ID_PATTERN = /^session_[A-Za-z0-9_-]+$/
 const workosDefaultProviderRuntimeCache = new Map<string, WorkosProviderRuntime>()
 const workosJwksCache: Parameters<typeof authRuntimeInternals.jwt.resolveCachedJwk>[0] = new Map()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
@@ -630,7 +631,16 @@ function createWorkosSessionPayload<TUserAttributes extends WorkosUserAttributes
   })
 }
 
-function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosLogoutSession | null {
+type WorkosStoredSession = {
+  readonly provider: string
+  readonly sessionId?: string
+}
+
+function isWorkosSessionId(value: unknown): value is string {
+  return typeof value === 'string' && WORKOS_SESSION_ID_PATTERN.test(value)
+}
+
+function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosStoredSession | null {
   if (!payload || typeof payload !== 'object' || !('workos' in payload)) {
     return null
   }
@@ -642,13 +652,13 @@ function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosL
 
   const provider = (workos as { readonly provider?: unknown }).provider
   const sessionId = (workos as { readonly sessionId?: unknown }).sessionId
-  if (provider !== providerName || typeof sessionId !== 'string' || !sessionId.trim()) {
+  if (provider !== providerName) {
     return null
   }
 
   return Object.freeze({
     provider,
-    sessionId,
+    ...(isWorkosSessionId(sessionId) ? { sessionId } : {}),
   })
 }
 
@@ -1107,7 +1117,7 @@ function createWorkosHostedAuthRedirect(
   }
 }
 
-async function readCurrentWorkosLogoutSession(guard: string, providerName: string): Promise<WorkosLogoutSession | null> {
+async function readCurrentWorkosLogoutSession(guard: string, providerName: string): Promise<WorkosStoredSession | null> {
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const sessionId = bindings.context.getSessionId(guard)
   if (!sessionId) {
@@ -1143,7 +1153,9 @@ export async function logoutWithWorkos(
     const response = new Response(null, {
       status: 303,
       headers: {
-        Location: createLogoutUrl(workosSession.sessionId, request, options.returnTo),
+        Location: workosSession.sessionId
+          ? createLogoutUrl(workosSession.sessionId, request, options.returnTo)
+          : createWorkosReturnUrl(options.returnTo?.trim() || '/', request),
       },
     })
     for (const cookie of local.cookies) {

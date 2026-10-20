@@ -1348,6 +1348,67 @@ describe('@holo-js/auth-workos', () => {
     expect((await readdir(runtime.sessionPath)).length).toBeGreaterThan(sessionFilesBefore.length)
   })
 
+  it.each([
+    ['an access token', 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl'],
+    ['an opaque access token', 'opaque_access_token_secret'],
+    ['an authorization code', 'code_01_authorization_secret'],
+  ])('logs out locally and never sends %s upstream as the session id', async (_label, storedSessionId) => {
+    const runtime = await configureRuntime()
+    const now = new Date()
+    await runtime.sessionStore.write({
+      id: 'legacy-workos-session',
+      store: 'file',
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          authenticatedAt: now.toISOString(),
+          userId: 1,
+          user: { id: 1 },
+          workos: { provider: 'dashboard', sessionId: storedSessionId },
+        },
+      },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web', 'legacy-workos-session')
+
+    const response = await logoutWithWorkos(new Request('https://app.test/logout'))
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('https://app.test/')
+    expect(response.headers.get('location')).not.toContain(storedSessionId)
+    expect(response.headers.get('set-cookie')).toContain('holo_session=;')
+  })
+
+  it('sends a stored WorkOS session id upstream in the hosted logout URL', async () => {
+    const runtime = await configureRuntime()
+    const now = new Date()
+    await runtime.sessionStore.write({
+      id: 'workos-session',
+      store: 'file',
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          userId: 1,
+          authenticatedAt: now.toISOString(),
+          user: { id: 1 },
+          workos: { provider: 'dashboard', sessionId: 'session_01HZ8V3K1ARTE0A3XQ7B2Q9ZCD' },
+        },
+      },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web', 'workos-session')
+
+    const response = await logoutWithWorkos(new Request('https://app.test/logout'))
+
+    expect(new URL(response.headers.get('location') ?? '').searchParams.get('session_id')).toBe('session_01HZ8V3K1ARTE0A3XQ7B2Q9ZCD')
+  })
+
   it('returns typed callback failures without combining response behavior', async () => {
     await configureRuntime()
 

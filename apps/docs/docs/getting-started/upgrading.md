@@ -402,7 +402,7 @@ Email verification links now only verify the address they were sent to. If a use
 
 ### WorkOS sign-in requires a session ID
 
-WorkOS sign-in no longer uses the access token or the authorization code as the session ID. Before, when WorkOS's response had no session ID, sign-in succeeded and `logoutWithWorkos()` sent that token or code to WorkOS as `session_id`. Now the callback fails with `workos_auth_failed` and creates no session. WorkOS AuthKit always returns a session ID, so this only affects malformed responses. Sessions created before the upgrade keep the old value until they expire, and logging out of them sends that value to WorkOS until then.
+WorkOS sign-in no longer uses the access token or the authorization code as the session ID. Before, when WorkOS's response had no session ID, sign-in succeeded and `logoutWithWorkos()` sent that token or code to WorkOS as `session_id`. Now the callback fails with `workos_auth_failed` and creates no session. WorkOS AuthKit always returns a session ID, so this only affects malformed responses. Sessions created before the upgrade keep the old value until they expire. Logging out of them ends the local session only: logout sends a stored value to WorkOS only when it has the shape of a WorkOS session ID, and a token or code never does.
 
 The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `true`, even over HTTP, and behind a trusted proxy that terminates TLS when `X-Forwarded-Proto` is `https`.
 
