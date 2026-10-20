@@ -41,6 +41,8 @@ Then link to the routes from your login page:
 
 You don't configure a WorkOS cookie password or session cookie. Holo uses its own session cookie.
 
+The short-lived cookie that checks the sign-in callback is marked `Secure` when the request is HTTPS or when `session.cookie.secure` is `true`. Behind a proxy that terminates TLS, the request counts as HTTPS only when the proxy is listed in [`trustedProxies`](/basics/security/cors-and-proxies#trusted-proxies).
+
 ## Configuration
 
 ```ts [config/auth.ts]
@@ -172,6 +174,8 @@ export const GET = (async (event) => {
 ```ts
 return await logoutWithWorkos(request, { returnTo: '/goodbye' })
 ```
+
+Holo ends the WorkOS session with the session ID WorkOS returns at sign-in. WorkOS always returns one, in the WorkOS session ID shape. Logout sends a stored value upstream only when it has the shape of a WorkOS session ID (`session_` followed by letters, digits, `_` or `-`). Any other stored value ends the local session only. If a response has none, sign-in fails with `workos_auth_failed` and no session is created, rather than sending the access token or authorization code to WorkOS in its place.
 
 If the current session didn't come from WorkOS, it just redirects to `/`. Show the WorkOS logout button only for WorkOS users by checking `provider`:
 
