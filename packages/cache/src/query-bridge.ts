@@ -26,6 +26,8 @@ import {
   writeCacheEntry,
 } from './entries'
 
+let warnedMissingListDependencies = false
+
 type DependencyIndexState = {
   readonly keyToDependencies: Map<string, Set<CacheDependencyDescriptor>>
   readonly dependencyToKeys: Map<CacheDependencyDescriptor, Set<string>>
@@ -242,6 +244,10 @@ export function createCacheQueryBridge(
       options?: { driver?: string },
     ): Promise<void> {
       if (!dependencyIndex.listDependencies) {
+        if (!warnedMissingListDependencies) {
+          warnedMissingListDependencies = true
+          console.warn('[@holo-js/cache] The query cache dependency index has no listDependencies() method, so a write in another process cannot clear cached query results for this process by table. Those results stay until their TTL ends.')
+        }
         return
       }
 

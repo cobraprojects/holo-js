@@ -103,6 +103,8 @@ Holo only sees writes made through Holo. Changes from raw SQL clients, other app
 The list of which entries depend on which tables lives in each server process's memory. If you run several servers or workers against a shared Redis or database cache, a write on one server doesn't clear entries another server cached. Those entries stay until their TTL ends. Keep TTLs short in that setup, or clear keys yourself.
 :::
 
+With [Broadcast Redis scaling](/broadcasting/production#run-several-workers) on, a write in another process also clears this process's cached results for the tables it changed, and it refreshes Realtime queries that read those tables. A cache store that supplies its own dependency index must implement `listDependencies()` for this to work. Without it, the entries stay until their TTL ends, and the process logs one warning.
+
 ## When results are not cached
 
 - Queries with `lockForUpdate()` or `sharedLock()` always hit the database.
