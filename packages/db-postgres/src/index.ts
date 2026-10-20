@@ -21,6 +21,10 @@ function finalQueryResult(result: PostgresQueryResult | PostgresQueryResult[]): 
   return Array.isArray(result) ? result.at(-1) ?? { rows: [], rowCount: 0 } : result
 }
 
+function toDriverBinding(value: unknown): unknown {
+  return value instanceof Date ? value.toISOString() : value
+}
+
 export interface PostgresQueryableLike {
   query(sql: string, bindings?: readonly unknown[]): Promise<PostgresQueryResult | PostgresQueryResult[]>
 }
@@ -66,11 +70,19 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
 
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
+const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
 function createHoloPool(config?: PoolConfig): Pool {
   const pool = new Pool({
     ...config,
-    types: config?.types ?? {
+    types: {
       getTypeParser(oid: number, format: 'text' | 'binary' = 'text') {
+        if (oid === 1082 && format === 'text') {
+          return (value: string) => CALENDAR_DATE_PATTERN.test(value)
+            ? new Date(`${value}T00:00:00Z`)
+            : types.getTypeParser(oid, format)(value)
+        }
+        if (config?.types) return config.types.getTypeParser(oid, format)
         if (oid === 1114 && format === 'text') return (value: string) => new Date(`${value}Z`)
         return types.getTypeParser(oid, format)
       },
@@ -305,7 +317,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
 
   private async queryResult(sql: string, bindings: readonly unknown[]): Promise<PostgresQueryResult> {
     const client = await this.getQueryable()
-    const result = await client.query(sql, bindings)
+    const result = await client.query(sql, bindings.map(toDriverBinding))
     return finalQueryResult(result)
   }
 

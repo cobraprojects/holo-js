@@ -33,7 +33,7 @@ const DIRECTIONS = new Set<QueryDirection>(['asc', 'desc'])
 const DATE_PARTS = new Set<QueryDatePredicate['part']>(['date', 'month', 'day', 'year', 'time'])
 const JSON_VALUE_OPERATORS = new Set<QueryOperator>(['=', '!=', '>', '>=', '<', '<=', 'like'])
 const JSON_LENGTH_OPERATORS = new Set<QueryOperator>(['=', '!=', '>', '>=', '<', '<='])
-const JOIN_OPERATORS = new Set<QueryColumnPredicate['operator']>(['=', '!=', '>', '>=', '<', '<=', 'like'])
+const COLUMN_COMPARISON_OPERATORS = new Set<QueryColumnPredicate['operator']>(['=', '!=', '>', '>=', '<', '<=', 'like'])
 const FULLTEXT_MODES = new Set(['natural', 'boolean'])
 const HAVING_EXPRESSION_PATTERN = /^(?:[A-Z_]\w*|(?:count|sum|avg|min|max)\((?:\*|[A-Z_]\w*)\))$/i
 
@@ -226,7 +226,7 @@ function assertJoinClause(join: QueryJoinClause): void {
   assertQualifiedIdentifier(join.leftColumn, 'Join column')
   assertQualifiedIdentifier(join.rightColumn, 'Join column')
 
-  if (!JOIN_OPERATORS.has(join.operator)) {
+  if (!COLUMN_COMPARISON_OPERATORS.has(join.operator)) {
     throw new SecurityError(`Operator "${join.operator}" is not allowed in join clauses.`)
   }
 }
@@ -398,6 +398,10 @@ function assertPredicate(
 
   if (predicate.kind === 'column') {
     assertColumnReference(predicate.compareTo, tableName, allowedColumns)
+
+    if (!COLUMN_COMPARISON_OPERATORS.has(predicate.operator)) {
+      throw new SecurityError(`Operator "${predicate.operator}" is not allowed in column comparisons.`)
+    }
     return
   }
 

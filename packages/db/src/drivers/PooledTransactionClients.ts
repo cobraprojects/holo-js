@@ -6,8 +6,13 @@ type ReleasableClient = {
   release?(): void
 }
 
+type ScopedClient<TClient> = {
+  client: TClient
+  released: boolean
+}
+
 export class PooledTransactionClients<TClient extends ReleasableClient> {
-  private readonly scope = new AsyncLocalStorage<TClient>()
+  private readonly scope = new AsyncLocalStorage<ScopedClient<TClient>>()
   private transactionClient?: TClient
 
   constructor(
@@ -17,19 +22,24 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
   ) {}
 
   get current(): TClient | undefined {
-    return this.scope.getStore() ?? this.transactionClient
+    const scoped = this.scope.getStore()
+    if (scoped && !scoped.released) return scoped.client
+    return this.transactionClient
   }
 
   async run<T>(callback: () => Promise<T>): Promise<T> {
-    if (this.scope.getStore()) {
+    const scoped = this.scope.getStore()
+    if (scoped && !scoped.released) {
       return callback()
     }
 
     const client = await this.acquireClient()
-    return this.scope.run(client, async () => {
+    const holder: ScopedClient<TClient> = { client, released: false }
+    return this.scope.run(holder, async () => {
       try {
         return await callback()
       } finally {
+        holder.released = true
         this.releaseClient(client)
       }
     })
@@ -55,7 +65,8 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
   }
 
   release(): void {
-    if (!this.scope.getStore()) {
+    const scoped = this.scope.getStore()
+    if (!scoped || scoped.released) {
       this.disconnect()
     }
   }

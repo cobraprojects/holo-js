@@ -424,6 +424,15 @@ Check three behaviors when you upgrade:
 
 To retry a transaction after a deadlock or lock timeout, pass `attempts`. See [Retry deadlocks](/database/transactions#retry-deadlocks).
 
+### Query operators, date values, and foreign-key toggles
+
+Check three behaviors when you upgrade:
+
+- `whereColumn()` accepts only `=`, `!=`, `>`, `>=`, `<`, `<=`, and `like`. Laravel also accepts bitwise and regex operators here; Holo rejects them. Any other operator throws `SecurityError` when the query runs. Change a query that used another operator to one of the supported operators.
+- On PostgreSQL, a `date` column reads back as a `Date` at midnight UTC on the stored day. Before, it was midnight in the Node process's time zone, so a day could shift when you saved it again. Passing a `Date` as a top-level query value sends it to PostgreSQL in UTC. Dates inside arrays are unchanged. If your server runs outside UTC, `timestamp` values written before this upgrade were stored as local wall-clock time. Holo reads them as before and doesn't rewrite them.
+- Foreign-key `onDelete()` and `onUpdate()` values other than `cascade`, `restrict`, `set null`, and `no action` throw `SchemaError`. MySQL `enum` values and string defaults that contain a backslash are now stored as written. Before, MySQL read the backslash as an escape, so the stored value could differ. Existing columns keep their stored values; check them with `SHOW COLUMNS` if they contain backslashes.
+- `withoutForeignKeyConstraints()` keeps every query in its callback on one pooled connection. The standalone `disableForeignKeyConstraints()` and `enableForeignKeyConstraints()` still change only the connection they run on. On PostgreSQL or MySQL, wrap the work in `withoutForeignKeyConstraints()` instead. See [Foreign key constraints](/database/migrations#withoutforeignkeyconstraints).
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

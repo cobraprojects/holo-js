@@ -1,7 +1,8 @@
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
 
-function escapeString(value: string): string {
-  return value.replaceAll('\'', '\'\'')
+export function compileDialectStringLiteral(dialect: SchemaDefaultDialectName, value: string): string {
+  const backslashesEscaped = dialect === 'mysql' ? value.replaceAll('\\', '\\\\') : value
+  return `'${backslashesEscaped.replaceAll('\'', '\'\'')}'`
 }
 
 function compileBooleanLiteral(dialect: SchemaDefaultDialectName, value: boolean): string {
@@ -33,8 +34,8 @@ export function compileDialectDefaultLiteral(
   }
 
   if (typeof value === 'object') {
-    return `'${escapeString(JSON.stringify(value))}'`
+    return compileDialectStringLiteral(dialect, JSON.stringify(value))
   }
 
-  return `'${escapeString(String(value))}'`
+  return compileDialectStringLiteral(dialect, String(value))
 }

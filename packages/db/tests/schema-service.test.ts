@@ -199,6 +199,93 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(child).count()).toBe(0)
     })
 
+    if (driver !== 'sqlite') {
+      it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
+        const { db, schema } = await openDatabase(driver)
+        const state = driver === 'postgres'
+          ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
+          : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
+        const readStates = async () => (await Promise.all(Array.from({ length: 6 }, () => db.queryCompiled(state))))
+          .map(result => String(result.rows[0]!.state))
+        const relaxed = driver === 'postgres' ? 'replica' : '0'
+        const enforced = driver === 'postgres' ? 'origin' : '1'
+
+        await schema.withoutForeignKeyConstraints(async () => {
+          expect(await readStates()).toEqual(Array.from({ length: 6 }, () => relaxed))
+        })
+        expect(await readStates()).toEqual(Array.from({ length: 6 }, () => enforced))
+      })
+
+      it('keeps foreign-key checks off for the outer callback when a nested scoped call returns', async () => {
+        const { db, schema } = await openDatabase(driver)
+        const state = driver === 'postgres'
+          ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
+          : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
+        const readState = async () => String((await db.queryCompiled(state)).rows[0]!.state)
+        const relaxed = driver === 'postgres' ? 'replica' : '0'
+        const enforced = driver === 'postgres' ? 'origin' : '1'
+
+        await schema.withoutForeignKeyConstraints(async () => {
+          await schema.withoutForeignKeyConstraints(async () => {})
+          expect(await readState()).toBe(relaxed)
+        })
+        expect(await readState()).toBe(enforced)
+      })
+
+      it('restores foreign-key checks when a logger fails after the checks are turned off', async () => {
+        const { db, schema } = await openDatabase(driver, {
+          logger: {
+            onQuerySuccess: entry => {
+              if (entry.source === 'schema:disableForeignKeys') throw new Error('logger failed')
+            },
+          },
+        })
+        const state = driver === 'postgres'
+          ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
+          : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
+
+        await expect(schema.withoutForeignKeyConstraints(async () => {})).rejects.toThrow('logger failed')
+        expect(String((await db.queryCompiled(state)).rows[0]!.state)).toBe(driver === 'postgres' ? 'origin' : '1')
+      })
+
+      it('restores foreign-key checks when a logger fails before the restore statement starts', async () => {
+        const { db, schema } = await openDatabase(driver, {
+          logger: {
+            onQueryStart: entry => {
+              if (entry.source === 'schema:enableForeignKeys') throw new Error('logger failed')
+            },
+          },
+        })
+        const state = driver === 'postgres'
+          ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
+          : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
+
+        await schema.withoutForeignKeyConstraints(async () => {})
+        expect(String((await db.queryCompiled(state)).rows[0]!.state)).toBe(driver === 'postgres' ? 'origin' : '1')
+      })
+
+      it('disables foreign-key checks again for work that starts after a scoped callback has finished', async () => {
+        const { db, schema } = await openDatabase(driver)
+        const state = driver === 'postgres'
+          ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
+          : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
+        const relaxed = driver === 'postgres' ? 'replica' : '0'
+        let release!: () => void
+        const gate = new Promise<void>(resolve => { release = resolve })
+        let laterState: string | undefined
+
+        let later!: Promise<void>
+        await schema.withoutForeignKeyConstraints(async () => {
+          later = gate.then(() => schema.withoutForeignKeyConstraints(async () => {
+            laterState = String((await db.queryCompiled(state)).rows[0]!.state)
+          }))
+        })
+        release()
+        await later
+        expect(laterState).toBe(relaxed)
+      })
+    }
+
     if (driver !== 'postgres') {
       it('rejects unsupported vectors before executing a migration', async () => {
         const { schema } = await openDatabase(driver)

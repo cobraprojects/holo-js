@@ -1,4 +1,5 @@
 import { SchemaError } from '../core/errors'
+import { compileDialectStringLiteral } from './defaultLiterals'
 import type { AnyColumnDefinition, IdGenerationStrategy, LogicalColumnKind } from './types'
 
 export type SchemaDialectName = 'sqlite' | 'postgres' | 'mysql'
@@ -50,7 +51,7 @@ function compileEnumType(column: AnyColumnDefinition): string {
     throw new SchemaError('MySQL enum columns require enum values.')
   }
 
-  return `ENUM(${column.enumValues.map((value: string) => `'${String(value).replaceAll('\'', '\'\'')}'`).join(', ')})`
+  return `ENUM(${column.enumValues.map((value: string) => compileDialectStringLiteral('mysql', String(value))).join(', ')})`
 }
 
 function compileVectorType(column: AnyColumnDefinition): string {

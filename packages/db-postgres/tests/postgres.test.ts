@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { Client } from 'pg'
+import { Client, types as pgTypes } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
   column, configureDB, createConnectionManager, createDialect, defineGeneratedTable,
@@ -305,4 +305,32 @@ describe('@holo-js/db-postgres', () => {
       await admin.disconnect()
     }
   }, 30_000)
+})
+
+describe('@holo-js/db-postgres date values', () => {
+  it.each([
+    { label: 'default types', types: undefined },
+    { label: 'custom types that delegate to pg', types: pgTypes },
+  ])('reads and writes date columns by calendar day regardless of the process time zone with $label', async ({ types }) => {
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'America/New_York'
+    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2, types } })
+    const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+    const tableName = `holo_date_${randomUUID().replaceAll('-', '')}`
+    try {
+      await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, day DATE NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${tableName} (id, day) VALUES (1, '2024-03-15'), (2, '2024-12-31')`)
+      const rows = (await db.queryCompiled({ sql: `SELECT id, day FROM ${tableName} ORDER BY id`, bindings: [] })).rows
+      expect(rows.map(row => row.day)).toEqual([new Date('2024-03-15T00:00:00Z'), new Date('2024-12-31T00:00:00Z')])
+
+      await db.executeCompiled({ sql: `INSERT INTO ${tableName} (id, day) VALUES ($1, $2)`, bindings: [3, rows[0]!.day] })
+      expect((await db.queryCompiled({ sql: `SELECT day::text AS day FROM ${tableName} WHERE id = $1`, bindings: [3] })).rows)
+        .toEqual([{ day: '2024-03-15' }])
+    } finally {
+      if (previousTimeZone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimeZone
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await db.disconnect()
+    }
+  })
 })

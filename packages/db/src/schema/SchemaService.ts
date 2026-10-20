@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
@@ -12,6 +13,7 @@ import { TableMutationBuilder } from './TableMutationBuilder'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import type { DriverAdapter } from '../core/types'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
 export interface IntrospectedColumn {
@@ -122,6 +124,10 @@ type MySQLForeignKeyRow = {
   on_delete: string
 }
 
+type ForeignKeyRelaxation = { active: boolean }
+
+const foreignKeyRelaxations = new AsyncLocalStorage<ReadonlyMap<DriverAdapter, ForeignKeyRelaxation>>()
+
 export class SchemaService {
   constructor(private readonly connection: DatabaseContext) {}
 
@@ -185,11 +191,31 @@ export class SchemaService {
   async withoutForeignKeyConstraints<TResult>(
     callback: () => TResult | Promise<TResult>,
   ): Promise<TResult> {
-    await this.disableForeignKeyConstraints()
+    const adapter = this.connection.getAdapter()
+    if (foreignKeyRelaxations.getStore()?.get(adapter)?.active) {
+      return callback()
+    }
+
+    const relaxation: ForeignKeyRelaxation = { active: true }
+    const relaxations = new Map(foreignKeyRelaxations.getStore())
+    relaxations.set(adapter, relaxation)
+    const runOnOneConnection = () => this.runWithoutForeignKeyConstraints(callback)
+    return foreignKeyRelaxations.run(relaxations, () => (adapter.runWithTransactionScope
+      ? adapter.runWithTransactionScope(runOnOneConnection)
+      : runOnOneConnection()).finally(() => {
+      relaxation.active = false
+    }))
+  }
+
+  private async runWithoutForeignKeyConstraints<TResult>(
+    callback: () => TResult | Promise<TResult>,
+  ): Promise<TResult> {
     try {
+      await this.disableForeignKeyConstraints()
       return await callback()
     } finally {
-      await this.enableForeignKeyConstraints()
+      const adapter = this.connection.getAdapter()
+      await adapter.execute(this.createForeignKeyConstraintStatement(true).sql)
     }
   }
 

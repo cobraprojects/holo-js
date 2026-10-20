@@ -331,13 +331,17 @@ await schema.enableForeignKeyConstraints()
 
 Turns foreign key checks off for the connection. Call `enableForeignKeyConstraints()` afterward, or use `withoutForeignKeyConstraints()`.
 
+::: warning
+On a connection pool, PostgreSQL and MySQL run each statement on whichever pooled connection is free. These two methods change only the connection that runs them, so the other connections keep their checks. Use `withoutForeignKeyConstraints()` on a pool.
+:::
+
 ```ts
 await schema.disableForeignKeyConstraints()
 ```
 
 ### withoutForeignKeyConstraints()
 
-Runs a callback with foreign key checks turned off, then turns them back on, even when the callback throws.
+Runs a callback with foreign key checks turned off, then turns them back on, even when the callback throws. Every query in the callback runs on one connection.
 
 ```ts
 await schema.withoutForeignKeyConstraints(async () => {
@@ -473,6 +477,8 @@ Adds a date column without a time part.
 ```ts
 table.date('published_on').nullable()
 ```
+
+On PostgreSQL, a `date` column reads back as a `Date` at midnight UTC on the stored day, so the day doesn't change when you save the value again.
 
 ### datetime()
 
@@ -677,7 +683,7 @@ table.foreignId('owner_ref').constrained('accounts', 'account_number')
 
 ### onDelete()
 
-Sets the action when the referenced row is deleted. Use `'cascade'`, `'restrict'`, `'set null'`, or `'no action'`. The shortcuts below do the same thing.
+Sets the action when the referenced row is deleted. Use `'cascade'`, `'restrict'`, `'set null'`, or `'no action'`. Any other value throws a `SchemaError`. The shortcuts below do the same thing.
 
 ```ts
 table.foreignId('user_id').constrained().onDelete('cascade')
