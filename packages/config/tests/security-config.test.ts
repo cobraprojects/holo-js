@@ -121,7 +121,7 @@ describe('@holo-js/config security normalization', () => {
   it('provides defaults and rejects malformed values', () => {
     expect(normalizeSecurityConfig()).toEqual({
       csrf: {
-        enabled: false,
+        enabled: true,
         field: '_token',
         header: 'X-CSRF-TOKEN',
         cookie: 'XSRF-TOKEN',
@@ -249,7 +249,7 @@ describe('@holo-js/config security normalization', () => {
       },
     }))).toEqual({
       csrf: {
-        enabled: false,
+        enabled: true,
         field: '_token',
         header: 'X-CSRF-TOKEN',
         cookie: 'XSRF-TOKEN',

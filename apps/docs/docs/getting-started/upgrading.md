@@ -407,6 +407,22 @@ The CSRF token now lives in the visitor's [session](/basics/session), as in Lara
 - **Custom session stores need `setDataIfAbsent`.** The token is written with one atomic store call, so a rotation or logout that runs at the same moment can't bring back the old session. Built-in file, database and Redis stores support it. A custom store must add `setDataIfAbsent(sessionId, key, value)` before CSRF-protected pages load. Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, preserve an existing key or insert the value if absent, then return `{ found: true, value: storedValue }`. For the reserved `_token` key, treat a non-string or empty value as absent and replace it atomically; preserve a valid token initialized by another request. Keep the session's other data and expiry unchanged.
 - **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`, and the cookie value is no longer added as `_token`. If the configured header is `X-XSRF-TOKEN`, the fetched token goes in `csrf.field` instead; that header accepts only encrypted cookie values.
 
+### CSRF checks are on by default
+
+`csrf.enabled` now defaults to `true`, as in Laravel's `web` group. A `config/security.ts` that has no `csrf` block checks every unsafe request (`POST`, `PUT`, `PATCH`, `DELETE`). Before, the default was off. Apps created with `holo new` or `holo install security` already set `csrf.enabled: true` and don't change.
+
+- **Unsafe requests without a token get `419`.** Forms and `fetch` calls that don't send the token, such as `csrf.input()`, `useForm`, or the `X-CSRF-TOKEN` header, now fail. Routes that receive webhooks or API calls from other clients can be listed in `csrf.except`.
+- **Install `@holo-js/session`.** The token lives in the session, so a security config without a `csrf` block now also needs `@holo-js/session`.
+- **Opt out with `enabled: false`.** Set it to restore the old behavior for the whole app. This removes forgery protection, so prefer `except` for the routes that need it.
+
+```ts [config/security.ts]
+export default defineSecurityConfig({
+  csrf: {
+    enabled: false,
+  },
+})
+```
+
 ### CSRF endpoints for separate frontends
 
 For a separate frontend using `useForm({ csrf: { endpoint } })`, your token endpoint can now return `{ token, field }`. Use `const { name: field, value: token } = await csrf.field(request)`. The client sends the token in that field, so custom API CSRF names work without reading API cookies. Existing `{ token }` responses keep their current behavior.

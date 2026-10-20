@@ -420,8 +420,8 @@ export default defineSecurityConfig({
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `csrf` | disabled | `true` to enable with defaults, or an options object (below). |
-| `csrf.enabled` | `false` | Turn on [CSRF protection](/basics/security/csrf). |
+| `csrf` | enabled | `true` keeps [CSRF protection](/basics/security/csrf) on with defaults, `false` turns it off, or pass an options object (below). |
+| `csrf.enabled` | `true` | Check unsafe requests for a CSRF token. Set `false` to turn checks off. |
 | `csrf.field` | `'_token'` | Form field name. |
 | `csrf.header` | `'X-CSRF-TOKEN'` | Header name. |
 | `csrf.cookie` | `'XSRF-TOKEN'` | Cookie name. |
