@@ -1,5 +1,6 @@
 import { queryCacheInternals } from '@holo-js/db'
 import type { BroadcastDatabaseInvalidationBridge } from '@holo-js/broadcast/contracts'
+import { refreshSubscriptionsForRemoteTables } from './invalidation'
 
 type RemoteDatabaseDependencyInvalidation = Parameters<typeof queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation>[0]
 
@@ -7,44 +8,23 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string')
 }
 
-function isPredicateList(value: unknown): boolean {
-  return Array.isArray(value) && value.every(item => {
-    const predicate = item as { readonly tableKey?: unknown, readonly columnName?: unknown, readonly encodedValue?: unknown }
-    return typeof predicate === 'object'
-      && predicate !== null
-      && typeof predicate.tableKey === 'string'
-      && typeof predicate.columnName === 'string'
-      && typeof predicate.encodedValue === 'string'
-  })
-}
-
-function isRemoteMetadata(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null) {
-    return false
-  }
-
-  const metadata = value as Record<string, unknown>
-  return isStringArray(metadata.directDependencies)
-    && isStringArray(metadata.tableDependencies)
-    && typeof metadata.hasMutationDependency === 'boolean'
-    && isPredicateList(metadata.exactPredicates)
-    && isPredicateList(metadata.predicates)
-}
-
 function isRemoteDatabaseDependencyInvalidation(value: unknown): value is RemoteDatabaseDependencyInvalidation {
   if (typeof value !== 'object' || value === null) {
     return false
   }
 
-  const candidate = value as { readonly connectionName?: unknown, readonly dependencies?: unknown, readonly metadata?: unknown }
+  const candidate = value as { readonly connectionName?: unknown, readonly dependencies?: unknown }
   return typeof candidate.connectionName === 'string'
     && isStringArray(candidate.dependencies)
-    && (candidate.metadata === undefined || isRemoteMetadata(candidate.metadata))
 }
 
 export function createRealtimeDatabaseInvalidationBridge(): BroadcastDatabaseInvalidationBridge {
   return {
     connect(publish) {
+      if (queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()) {
+        return () => undefined
+      }
+
       return queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => { await publish(invalidation) })
     },
     async receive(invalidation) {
@@ -53,6 +33,7 @@ export function createRealtimeDatabaseInvalidationBridge(): BroadcastDatabaseInv
       }
 
       await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(invalidation)
+      await refreshSubscriptionsForRemoteTables(invalidation.dependencies)
     },
   }
 }

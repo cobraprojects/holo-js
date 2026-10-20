@@ -154,6 +154,7 @@ export interface CacheDriverContract {
 export interface CacheDependencyIndex {
   register(key: string, dependencies: readonly CacheDependencyDescriptor[]): Promise<void>
   listKeys(dependency: CacheDependencyDescriptor): Promise<readonly string[]>
+  listDependencies?(): Promise<readonly CacheDependencyDescriptor[]>
   listRegisteredKeys(): Promise<readonly string[]>
   removeKey(key: string): Promise<void>
   clear(): Promise<void>
@@ -183,6 +184,10 @@ export interface CacheQueryBridge {
   forget(key: CacheKeyInput<unknown>, options?: { driver?: string }): Promise<boolean>
   invalidateDependencies(
     dependencies: readonly CacheDependencyDescriptor[],
+    options?: { driver?: string },
+  ): Promise<void>
+  invalidateDependencyTables?(
+    tables: readonly string[],
     options?: { driver?: string },
   ): Promise<void>
 }

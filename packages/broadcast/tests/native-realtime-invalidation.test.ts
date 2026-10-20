@@ -94,8 +94,14 @@ async function startScoresWorker(
       subscribe: async (_name, _args, options) => await subscribeRealtimeQuery(scores, {}, options),
     },
   })
-  onTestFinished(() => worker.stop())
-  return worker
+  let stopped = false
+  const stop = async () => {
+    if (stopped) return
+    stopped = true
+    await worker.stop()
+  }
+  onTestFinished(stop)
+  return { ...worker, stop }
 }
 
 it('refreshes a live query subscription when a write commits in another process through Redis scaling', async () => {
@@ -120,6 +126,32 @@ it('refreshes a live query subscription when a write commits in another process 
   await writeFromAnotherProcess(filename, 42, redisPort)
 
   await expect.poll(() => packets.some(packet => packet.data.id === 'subscription' && packet.event === 'holo:realtime:snapshot' && packet.data.snapshot?.data.score === 42), { timeout: 10_000 }).toBe(true)
+}, 30_000)
+
+it('keeps a written column value off the scaling channel while the subscription still refreshes to it', async () => {
+  const { db, filename } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const worker = await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
+  const invalidations = await subscribeToScalingEvents(redis)
+  const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/key`)
+  onTestFinished(() => socket.terminate())
+  const packets: Packet[] = []
+  socket.on('message', data => {
+    const packet = JSON.parse(data.toString())
+    packets.push({ ...packet, data: typeof packet.data === 'string' ? JSON.parse(packet.data) : packet.data })
+  })
+  await once(socket, 'open')
+  await expect.poll(() => packets.some(packet => packet.event === 'pusher:connection_established')).toBe(true)
+  socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'subscription', action: 'subscribe', name: 'scores.current', args: {} } }))
+  await expect.poll(() => packets.find(packet => packet.data.id === 'subscription')?.data.snapshot?.data.score).toBe(10)
+
+  await writeFromAnotherProcess(filename, 4242, redisPort)
+
+  await expect.poll(() => packets.some(packet => packet.data.id === 'subscription' && packet.event === 'holo:realtime:snapshot' && packet.data.snapshot?.data.score === 4242), { timeout: 10_000 }).toBe(true)
+  await expect.poll(() => invalidations.length).toBeGreaterThan(0)
+  expect(JSON.stringify(invalidations)).not.toContain('4242')
 }, 30_000)
 
 it('publishes a worker\'s own committed writes to the scaling channel for the other worker nodes', async () => {
@@ -190,4 +222,72 @@ it('publishes one invalidation per mutation and does not refresh from its own wr
   await new Promise(resolve => setTimeout(resolve, 300))
   expect(messages.filter(message => JSON.parse(message).type === 'database-invalidation')).toHaveLength(1)
   expect(received).toEqual([])
+}, 30_000)
+
+async function subscribeToScalingEvents(redis: Awaited<ReturnType<typeof startRedisService>>) {
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const subscriber = client.duplicate()
+  onTestFinished(() => subscriber.disconnect())
+  const invalidations: unknown[] = []
+  subscriber.on('message', (_channel: string, message: string) => {
+    const parsed = JSON.parse(message) as { type: string, invalidation?: unknown }
+    if (parsed.type === 'database-invalidation') invalidations.push(parsed.invalidation)
+  })
+  await subscriber.subscribe('holo:broadcast:scaling:shared:events')
+  return invalidations
+}
+
+function createScalingSender(redisPort: number) {
+  const config = normalizeBroadcastConfig({
+    default: 'main',
+    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    worker: { host: '127.0.0.1', port: 1, scaling: { driver: 'redis', connection: 'shared' } },
+  })
+  const sender = workerInternals.createScalingInvalidationSender({
+    config: config.worker.scaling as Exclude<typeof config.worker.scaling, false>,
+    redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: redisPort } } }),
+  })
+  onTestFinished(() => sender.close())
+  return sender
+}
+
+it('keeps publishing once per mutation after the worker stops when the app sender was registered before the worker started', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const sender = createScalingSender(redisPort)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  onTestFinished(unsubscribeSender)
+  const worker = await startScoresWorker(db, redisPort)
+  const invalidations = await subscribeToScalingEvents(redis)
+
+  await worker.stop()
+  await db.table('scores').where('id', 1).update({ score: 8 })
+
+  await expect.poll(() => invalidations.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(invalidations).toHaveLength(1)
+}, 30_000)
+
+it('publishes once per mutation when the worker starts first and the app sender is registered after it, and keeps publishing after the worker stops', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const worker = await startScoresWorker(db, redisPort)
+  const invalidations = await subscribeToScalingEvents(redis)
+  const sender = createScalingSender(redisPort)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  onTestFinished(unsubscribeSender)
+
+  await db.table('scores').where('id', 1).update({ score: 8 })
+  await expect.poll(() => invalidations.length).toBe(1)
+  await worker.stop()
+  await db.table('scores').where('id', 1).update({ score: 9 })
+
+  await expect.poll(() => invalidations.length).toBe(2)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(invalidations).toHaveLength(2)
 }, 30_000)

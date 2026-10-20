@@ -1,6 +1,7 @@
 import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
   EMPTY_TABLE_DEPENDENCIES,
+  parseDatabaseDependency,
   createMutationIndex,
   createSingleEventMutationIndex,
   parseInvalidationEvent,
@@ -246,6 +247,31 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
     if (!first) return
     await refreshInvalidatedQueryEntries(first, group.slice(1), createInvalidationBackfills(events, group))
   })])
+}
+
+export async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly string[]): Promise<void> {
+  const state = getRuntimeState()
+  if (state.queryEntries.size === 0) {
+    return
+  }
+
+  const tableKeys = new Set(tableDependencies)
+  const refreshKeys = new Set<string>()
+  for (const [dependency, entryKeys] of state.dependencySubscribers) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey === undefined || !tableKeys.has(tableKey)) {
+      continue
+    }
+
+    for (const entryKey of entryKeys) {
+      const entry = state.queryEntries.get(entryKey)
+      if (entry) {
+        refreshKeys.add(entry.refreshKey)
+      }
+    }
+  }
+
+  await Promise.all([...refreshKeys].map(refreshKey => scheduleRefreshKey(refreshKey)))
 }
 
 export async function handleDatabaseInvalidation(

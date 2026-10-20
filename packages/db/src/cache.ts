@@ -51,6 +51,10 @@ export interface DatabaseQueryCacheBridge {
     dependencies: readonly string[],
     options?: { readonly driver?: string },
   ): Promise<void>
+  invalidateDependencyTables?(
+    tables: readonly string[],
+    options?: { readonly driver?: string },
+  ): Promise<void>
 }
 
 export interface DatabaseDependencyInvalidationEvent {
@@ -65,7 +69,6 @@ export type DatabaseDependencyInvalidationListener = (
 export interface RemoteDatabaseDependencyInvalidation {
   readonly connectionName: string
   readonly dependencies: readonly string[]
-  readonly metadata?: Omit<DatabaseDependencyInvalidationMetadata, 'contextId'>
 }
 
 type DatabaseDependencyInvalidationPublisher = (
@@ -822,43 +825,29 @@ function publishDatabaseDependencyInvalidation(
 function serializeDatabaseDependencyInvalidation(
   event: DatabaseDependencyInvalidationEventInternal,
 ): RemoteDatabaseDependencyInvalidation {
-  const metadata = event[DATABASE_DEPENDENCY_METADATA_KEY]
+  const tableDependencies = new Set<string>()
+  for (const dependency of event.dependencies) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey !== undefined) {
+      tableDependencies.add(tableKey)
+    }
+  }
+
   return Object.freeze({
     connectionName: event.connectionName,
-    dependencies: event.dependencies,
-    ...(metadata
-      ? {
-          metadata: Object.freeze({
-            directDependencies: metadata.directDependencies,
-            exactPredicates: metadata.exactPredicates,
-            hasMutationDependency: metadata.hasMutationDependency,
-            predicates: metadata.predicates,
-            tableDependencies: metadata.tableDependencies,
-          }),
-        }
-      : {}),
+    dependencies: Object.freeze([...tableDependencies]),
   })
 }
 
 async function receiveRemoteDatabaseDependencyInvalidation(
   invalidation: RemoteDatabaseDependencyInvalidation,
 ): Promise<void> {
-  await getDatabaseQueryCacheBridge()?.invalidateDependencies(invalidation.dependencies)
-  const event: DatabaseDependencyInvalidationEventInternal = {
+  await getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies)
+  await notifyDatabaseDependencyInvalidationListeners(Object.freeze({
     connectionName: invalidation.connectionName,
     dependencies: invalidation.dependencies,
     mutations: [],
-  }
-  if (invalidation.metadata) {
-    Object.defineProperty(event, DATABASE_DEPENDENCY_METADATA_KEY, {
-      configurable: false,
-      enumerable: false,
-      value: Object.freeze({ ...invalidation.metadata }),
-      writable: false,
-    })
-  }
-
-  await notifyDatabaseDependencyInvalidationListeners(Object.freeze(event))
+  }))
 }
 
 async function notifyDatabaseDependencyInvalidationListeners(

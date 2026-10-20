@@ -269,7 +269,7 @@ describe('native database and cache integration', () => {
     })
 
     await expect.poll(() => published.length).toBe(1)
-    expect(published[0]).toMatchObject({ connectionName: 'main', dependencies: expect.arrayContaining(['db:main:users']) })
+    expect(published[0]).toEqual({ connectionName: 'main', dependencies: ['db:main:users'] })
     expect(JSON.parse(JSON.stringify(published[0]))).toEqual(published[0])
     expect(JSON.stringify(published[0])).not.toContain('contextId')
   })
@@ -294,6 +294,15 @@ describe('native database and cache integration', () => {
     await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation({ connectionName: 'main', dependencies: ['db:main:users'] })
 
     expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([99, 20])
+  })
+
+  it('drops a received table-level invalidation for cached queries that filter on a column', async () => {
+    expect(await DB.table(users).where('id', 1).cache(60).value('score')).toBe(10)
+    await adapter.execute('UPDATE users SET score = 99 WHERE id = 1')
+
+    await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation({ connectionName: 'main', dependencies: ['db:main:users'] })
+
+    expect(await DB.table(users).where('id', 1).cache(60).value('score')).toBe(99)
   })
 
   it('reports a failing publisher without failing the committed write', async () => {

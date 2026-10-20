@@ -60,6 +60,9 @@ function createMemoryDependencyIndex(
     async listKeys(dependency: CacheDependencyDescriptor): Promise<readonly string[]> {
       return Object.freeze([...(state.dependencyToKeys.get(dependency) ?? new Set<string>())])
     },
+    async listDependencies(): Promise<readonly CacheDependencyDescriptor[]> {
+      return Object.freeze([...state.dependencyToKeys.keys()])
+    },
     async listRegisteredKeys(): Promise<readonly string[]> {
       return Object.freeze([...state.keyToDependencies.keys()])
     },
@@ -232,28 +235,49 @@ export function createCacheQueryBridge(
       dependencies: readonly CacheDependencyDescriptor[],
       options?: { driver?: string },
     ): Promise<void> {
-      const invalidatedKeys = new Set<string>()
-      const driverName = options?.driver?.trim()
-
-      for (const dependency of dependencies) {
-        const indexedKeys = await dependencyIndex.listKeys(dependency)
-        for (const indexedKey of indexedKeys) {
-          /* v8 ignore next 3 -- repeated dependency listings collapse after the first removeKey() call in the shared index. */
-          if (invalidatedKeys.has(indexedKey)) {
-            continue
-          }
-
-          invalidatedKeys.add(indexedKey)
-          const parsed = parseIndexedKey(indexedKey)
-          if (driverName && parsed.driverName !== driverName) {
-            continue
-          }
-
-          await forgetNormalizedCacheEntry(resolveDriverContext(parsed.driverName), parsed.normalizedKey, dependencyIndex)
-        }
+      await invalidateIndexedDependencies(dependencies, options)
+    },
+    async invalidateDependencyTables(
+      tables: readonly string[],
+      options?: { driver?: string },
+    ): Promise<void> {
+      if (!dependencyIndex.listDependencies) {
+        return
       }
+
+      const dependencies = await dependencyIndex.listDependencies()
+      await invalidateIndexedDependencies(
+        dependencies.filter(dependency => tables.some(table => dependency === table || dependency.startsWith(`${table}:`))),
+        options,
+      )
     },
   })
+
+  async function invalidateIndexedDependencies(
+    dependencies: readonly CacheDependencyDescriptor[],
+    options?: { driver?: string },
+  ): Promise<void> {
+    const invalidatedKeys = new Set<string>()
+    const driverName = options?.driver?.trim()
+
+    for (const dependency of dependencies) {
+      const indexedKeys = await dependencyIndex.listKeys(dependency)
+      for (const indexedKey of indexedKeys) {
+        /* v8 ignore next 3 -- repeated dependency listings collapse after the first removeKey() call in the shared index. */
+        if (invalidatedKeys.has(indexedKey)) {
+          continue
+        }
+
+        invalidatedKeys.add(indexedKey)
+        const parsed = parseIndexedKey(indexedKey)
+        if (driverName && parsed.driverName !== driverName) {
+          continue
+        }
+
+        await forgetNormalizedCacheEntry(resolveDriverContext(parsed.driverName), parsed.normalizedKey, dependencyIndex)
+      }
+    }
+  }
 }
 
 export const cacheQueryBridgeInternals = {
