@@ -1,6 +1,5 @@
 import { queryCacheInternals } from '@holo-js/db'
 import type { BroadcastDatabaseInvalidationBridge } from '@holo-js/broadcast/contracts'
-import { refreshSubscriptionsForRemoteTables } from './invalidation'
 
 type RemoteDatabaseDependencyInvalidation = Parameters<typeof queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation>[0]
 
@@ -33,7 +32,6 @@ export function createRealtimeDatabaseInvalidationBridge(): BroadcastDatabaseInv
       }
 
       await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(invalidation)
-      await refreshSubscriptionsForRemoteTables(invalidation.dependencies)
     },
   }
 }

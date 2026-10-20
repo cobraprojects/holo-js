@@ -2,6 +2,7 @@ import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/d
 import {
   EMPTY_TABLE_DEPENDENCIES,
   parseDatabaseDependency,
+  readDatabaseDependencyInvalidationMetadata,
   createMutationIndex,
   createSingleEventMutationIndex,
   parseInvalidationEvent,
@@ -249,7 +250,7 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
   })])
 }
 
-export async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly string[]): Promise<void> {
+async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly string[]): Promise<void> {
   const state = getRuntimeState()
   if (state.queryEntries.size === 0) {
     return
@@ -300,15 +301,22 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
   }
 
   try {
-    const event = batch.events[0]
-    if (batch.events.length === 1 && event) {
-      await handleDatabaseInvalidation(event)
-    } else {
-      await handleDatabaseInvalidation({
-        connectionName: '',
-        dependencies: EMPTY_TABLE_DEPENDENCIES,
-      }, batch.events)
-    }
+    const remoteEvents = batch.events.filter(event => readDatabaseDependencyInvalidationMetadata(event) === undefined)
+    const localEvents = batch.events.filter(event => readDatabaseDependencyInvalidationMetadata(event) !== undefined)
+    const localEvent = localEvents[0]
+    await Promise.all([
+      localEvents.length === 1 && localEvent
+        ? handleDatabaseInvalidation(localEvent)
+        : localEvents.length > 0
+          ? handleDatabaseInvalidation({
+              connectionName: '',
+              dependencies: EMPTY_TABLE_DEPENDENCIES,
+            }, localEvents)
+          : undefined,
+      remoteEvents.length > 0
+        ? refreshSubscriptionsForRemoteTables(remoteEvents.flatMap(event => event.dependencies))
+        : undefined,
+    ])
     batch.deferred.resolve(undefined)
   } catch (error) {
     batch.deferred.reject(error)

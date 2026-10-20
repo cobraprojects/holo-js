@@ -285,7 +285,7 @@ export function collectTableDependencies(dependencies: readonly string[]): reado
   return Object.freeze([firstTableDependency])
 }
 
-function readDatabaseDependencyInvalidationMetadata(
+export function readDatabaseDependencyInvalidationMetadata(
   event: DatabaseDependencyInvalidationEvent,
 ): DatabaseDependencyInvalidationMetadata | undefined {
   return (event as DatabaseDependencyInvalidationEventWithMetadata)[DATABASE_DEPENDENCY_METADATA_KEY]
