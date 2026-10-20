@@ -83,6 +83,8 @@ If a service fails to start, the ones already started are shut down again in rev
 
 Holo starts once per server process. In development, `holo dev` restarts the dev server when a change needs it (for example a new dependency or a config change).
 
+When the framework adapter asks Holo to apply its configuration again, Holo reuses a Redis connection whose settings haven't changed. If a setting changes, such as the Redis connection for rate limits or sessions, Holo opens the new connection and keeps the old one open until the server shuts down. Requests that are still using the old connection finish normally.
+
 ## The CLI runs the same code
 
 `holo migrate`, `holo queue:work`, and your [custom commands](/reference/custom-commands) start Holo the same way your app does: same config, same env files, same registries. That's why a job behaves the same in a worker as it does in a route.

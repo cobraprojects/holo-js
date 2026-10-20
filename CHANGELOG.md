@@ -13,6 +13,7 @@
 - Report notification channel failures after a transaction commits through `exceptions.report`, with capability `notifications` and operation `channel.afterCommit`. Before, these failures were not reported at all.
 - `queue:listen` forwards `SIGINT` and `SIGTERM` to its worker and exits only after the worker closes, so no worker is left running after `queue:listen` stops. A restart waits for the old worker to close. A process error while the old worker stops ends `queue:listen` with that error instead of starting a replacement. See [Develop with queue:listen](apps/docs/docs/queue/workers.md#develop-with-queue-listen).
 - Holo CLI commands that run npm, pnpm, or yarn, such as dependency installs and the framework `prepare` and `sync` steps, launch on Windows. Before, they failed with `spawn npm ENOENT` because the package manager's `.cmd` shim can't be started without a shell.
+- Reconfiguring Holo never closes a Redis connection that a request is still using. Reconfiguration reuses Redis connections whose settings haven't changed instead of reopening them, keeps a replaced connection open until the server shuts down, and runs one reconfiguration at a time, so concurrent calls can't open a connection twice and leave one behind. Before, every reconfiguration closed the previous rate-limit and session Redis connections, so requests in progress could fail with `Connection is closed`. See [How startup works](apps/docs/docs/advanced/architecture.md#what-happens-when-your-app-starts).
 
 ### Added
 

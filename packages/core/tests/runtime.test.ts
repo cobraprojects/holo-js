@@ -308,6 +308,27 @@ export default defineRedisConfig({
 `, 'utf8')
 }
 
+async function createRedisSecurityProject(): Promise<{
+  readonly root: string
+  readonly connections: () => Promise<number>
+  readonly baseline: number
+}> {
+  const service = await startRedisService()
+  const client = service.clients[0]
+  const port = service.ports[0]
+  if (!client || !port) throw new Error('The native Redis service did not start')
+  const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+  const baseline = await connections()
+  const root = await createProject()
+  await writeBaseConfig(root)
+  await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
+`)
+  await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
+  return { root, connections, baseline }
+}
+
 async function writeAuthConfig(root: string): Promise<void> {
   await writeFile(join(root, 'config/auth.ts'), `
 import { defineAuthConfig } from ${authPackageEntry}
@@ -3105,7 +3126,23 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     expect(await connections()).toBe(baseline)
   })
 
-  it.each(['redis', 'file', 'removed'] as const)('releases the previous real Redis store when security is reconfigured to %s', async driver => {
+  it('keeps a real Redis rate-limit store usable for in-flight work across an unchanged reconfiguration', async () => {
+    const { root, connections, baseline } = await createRedisSecurityProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const inFlight = getSecurityRuntimeBindings()?.rateLimitStore
+    if (!inFlight) throw new Error('The configured Redis rate limiter was not acquired')
+    await expect(inFlight.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    await expect(inFlight.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
+    await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 3 } })
+    expect(await connections()).toBe(baseline + 1)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('serializes concurrent reconfigurations so each Redis session client is acquired once', async () => {
     const service = await startRedisService()
     const client = service.clients[0]
     const port = service.ports[0]
@@ -3118,25 +3155,39 @@ export default defineSessionConfig({ driver: 'primary', stores: {
 import { defineRedisConfig } from ${kernelPackageEntry}
 export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
 `)
-    await writeSecurityConfig(root, "export default { rateLimit: { driver: 'redis', redis: { prefix: 'original:' } } }")
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: { primary: { driver: 'redis', connection: 'default' } } })
+`, 'utf8')
+    const config = await loadConfigDirectory(root)
+
+    await Promise.all([reconfigureOptionalHoloSubsystems(root, config), reconfigureOptionalHoloSubsystems(root, config)])
+
+    await expect.poll(connections).toBe(baseline + 1)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it.each(['redis', 'file', 'removed'] as const)('retains the previous real Redis store for in-flight use until the runtime resets when security is reconfigured to %s', async driver => {
+    const { root, connections, baseline } = await createRedisSecurityProject()
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
     const previous = getSecurityRuntimeBindings()?.rateLimitStore
     if (!previous) throw new Error('The configured Redis rate limiter was not acquired')
     await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
-    expect(await connections()).toBe(baseline + 1)
     if (driver === 'removed') {
       await rm(join(root, 'config/security.ts'))
     } else {
       await writeSecurityConfig(root, `export default { rateLimit: { driver: '${driver}', redis: { prefix: 'replacement:' }, file: { path: './rate-limits' } } }`)
     }
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
-    await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).rejects.toThrow(/closed/i)
+
+    await expect(previous.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
     if (driver === 'removed') {
       expect(getSecurityRuntimeBindings()).toBeUndefined()
     } else {
       await expect(getSecurityRuntimeBindings()?.rateLimitStore?.hit('account', { maxAttempts: 10, decaySeconds: 60 })).resolves.toMatchObject({ snapshot: { attempts: 1 } })
     }
-    await expect.poll(connections).toBe(baseline + (driver === 'redis' ? 1 : 0))
+    await expect.poll(connections).toBe(baseline + 1 + (driver === 'redis' ? 1 : 0))
     await resetHoloRuntime()
     await expect.poll(connections).toBe(baseline)
   })
