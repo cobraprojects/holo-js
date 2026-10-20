@@ -264,15 +264,27 @@ type BroadcastScalingPresenceMemberRemovedMessage = {
 type BroadcastScalingDatabaseInvalidationMessage = {
   readonly type: 'database-invalidation'
   readonly originNodeId: string
+  readonly appId: string
   readonly invalidation: unknown
 }
 
-function createScalingDatabaseInvalidationPayload(originNodeId: string, invalidation: unknown): string {
+function createScalingDatabaseInvalidationPayload(originNodeId: string, appId: string, invalidation: unknown): string {
   return JSON.stringify({
     type: 'database-invalidation',
     originNodeId,
+    appId,
     invalidation,
   } satisfies BroadcastScalingDatabaseInvalidationMessage)
+}
+
+function resolveBroadcastAppIds(config: NormalizedHoloBroadcastConfig): readonly string[] {
+  return Object.values(config.connections).flatMap(connection => {
+    if (connection.driver !== 'holo' || !('appId' in connection)) {
+      return []
+    }
+
+    return [connection.appId]
+  })
 }
 
 type BroadcastScalingMessage =
@@ -1177,7 +1189,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const scalingLiveness = scaling?.liveness ?? DEFAULT_SCALING_LIVENESS
   const currentTime = (): number => options.now?.() ?? performance.now()
   const startedAt = currentTime()
-  const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation
+  const servedAppIds = resolveBroadcastAppIds(options.config)
+  const databaseInvalidationAppId = servedAppIds[0]
+  const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation && databaseInvalidationAppId !== undefined
     ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation))
     : undefined
   const scalingUnsubscribe = options.scalingUnsubscribe
@@ -1780,11 +1794,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   async function publishScalingDatabaseInvalidation(invalidation: unknown): Promise<void> {
-    if (!scaling) {
+    if (!scaling || databaseInvalidationAppId === undefined) {
       return
     }
 
-    await scaling.adapter.publish(scaling.eventChannel, createScalingDatabaseInvalidationPayload(scaling.nodeId, invalidation))
+    await scaling.adapter.publish(scaling.eventChannel, createScalingDatabaseInvalidationPayload(scaling.nodeId, databaseInvalidationAppId, invalidation))
   }
 
   async function publishScalingPresenceMemberAdded(
@@ -1834,6 +1848,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     if (message.type === 'database-invalidation') {
+      if (typeof message.appId !== 'string' || !servedAppIds.includes(message.appId)) {
+        return
+      }
+
       await options.realtime?.databaseInvalidation?.receive(message.invalidation)
       return
     }
@@ -2817,7 +2835,8 @@ function createScalingInvalidationSender(input: {
   readonly config: NormalizedBroadcastWorkerScalingConfig
   readonly queue?: NormalizedHoloQueueConfig
   readonly redis?: NormalizedHoloRedisConfig
-}): { publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
+  readonly appId: string
+}): { connect(): Promise<void>, publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
   const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
   const eventChannel = resolveScalingEventChannel(connectionName)
   const nodeId = getProcessScalingNodeId()
@@ -2832,9 +2851,13 @@ function createScalingInvalidationSender(input: {
   }
 
   return {
+    async connect() {
+      const scalingAdapter = await openAdapter()
+      await scalingAdapter.exists('holo:broadcast:scaling:connection-check')
+    },
     async publish(invalidation) {
       const scalingAdapter = await openAdapter()
-      await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, invalidation))
+      await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, input.appId, invalidation))
     },
     async close() {
       const opened = adapter
@@ -2847,6 +2870,7 @@ function createScalingInvalidationSender(input: {
 export const workerInternals = {
   buildWorkerApps,
   createScalingInvalidationSender,
+  resolveBroadcastAppIds,
   createScalingNodeId,
   createRedisScalingAdapter,
   createPusherSignature,

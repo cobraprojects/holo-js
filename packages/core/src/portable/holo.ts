@@ -765,7 +765,9 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
 
 function getDatabaseInvalidationSenders(): DatabaseInvalidationSenders {
   const state = getRuntimeState()
-  state.databaseInvalidationSenders ??= createManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>()
+  state.databaseInvalidationSenders ??= createManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>({
+    connect: sender => sender.connect(),
+  })
   return state.databaseInvalidationSenders
 }
 
@@ -775,25 +777,25 @@ async function configureDatabaseInvalidationScaling(
 ): Promise<void> {
   const state = getRuntimeState()
   const senders = getDatabaseInvalidationSenders()
-  state.databaseInvalidationUnsubscribe?.()
-  state.databaseInvalidationUnsubscribe = undefined
-
   const scaling = broadcastModule ? loadedConfig.broadcast.worker.scaling : undefined
-  if (broadcastModule && scaling) {
-    try {
-      const lease = await senders.acquire(
-        { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis },
-        broadcastModule.workerInternals.createScalingInvalidationSender,
-      )
-      state.databaseInvalidationUnsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => {
-        await lease.hold(() => lease.value.publish(invalidation))
-      })
-    } catch (error) {
+  const appId = broadcastModule ? broadcastModule.workerInternals.resolveBroadcastAppIds(loadedConfig.broadcast)[0] : undefined
+  let unsubscribe: (() => void) | undefined
+  if (broadcastModule && scaling && appId !== undefined) {
+    const lease = await senders.acquire(
+      { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis, appId },
+      broadcastModule.workerInternals.createScalingInvalidationSender,
+    ).catch(async (error: unknown): Promise<never> => {
       await senders.discard()
       throw error
-    }
+    })
+    unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => {
+      await lease.hold(() => lease.value.publish(invalidation))
+    })
   }
 
+  const previous = state.databaseInvalidationUnsubscribe
+  state.databaseInvalidationUnsubscribe = unsubscribe
+  previous?.()
   await senders.commit()
 }
 

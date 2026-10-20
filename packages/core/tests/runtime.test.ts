@@ -7,7 +7,7 @@ import { once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { startRedisService } from '../../session/tests/support/redis'
 import { config, loadConfigDirectory, useConfig } from '@holo-js/config'
 import {
@@ -311,7 +311,7 @@ export default defineRedisConfig({
 `, 'utf8')
 }
 
-async function writeScalingInvalidationConfig(root: string, redisDb: number): Promise<void> {
+async function writeScalingInvalidationConfig(root: string, redisDb: number, scalingConnection = 'shared'): Promise<void> {
   await writeRedisConfig(root, `
 import { defineRedisConfig } from ${kernelPackageEntry}
 export default defineRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: ${scalingRedisPort}, db: ${redisDb} } } })
@@ -321,16 +321,19 @@ import { defineBroadcastConfig } from ${broadcastPackageEntry}
 export default defineBroadcastConfig({
   default: 'main',
   connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { host: '127.0.0.1', port: 6001, scheme: 'http', useTLS: false } } },
-  worker: { host: '127.0.0.1', port: 6001, scaling: { driver: 'redis', connection: 'shared' } },
+  worker: { host: '127.0.0.1', port: 6001, scaling: { driver: 'redis', connection: '${scalingConnection}' } },
 })
 `)
 }
+
+type ScalingRedisClient = Awaited<ReturnType<typeof startRedisService>>['clients'][number]
+
 
 let scalingRedisPort = 0
 
 async function createScalingInvalidationProject(): Promise<{
   readonly root: string
-  readonly client: { client(...args: string[]): Promise<unknown> }
+  readonly client: ScalingRedisClient
   readonly connections: () => Promise<number>
   readonly baseline: number
 }> {
@@ -345,6 +348,16 @@ async function createScalingInvalidationProject(): Promise<{
   await writeBaseConfig(root)
   await writeScalingInvalidationConfig(root, 0)
   return { root, client, connections, baseline }
+}
+
+async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ readonly count: () => number, readonly close: () => void }> {
+  const listener = client.duplicate()
+  let received = 0
+  listener.on('message', (_channel: string, message: string) => {
+    if ((JSON.parse(message) as { type?: string }).type === 'database-invalidation') received += 1
+  })
+  await listener.subscribe('holo:broadcast:scaling:shared:events')
+  return { count: () => received, close: () => { listener.disconnect() } }
 }
 
 async function publishThroughRegisteredPublisher(): Promise<void> {
@@ -3426,10 +3439,11 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await writeScalingInvalidationConfig(root, 1)
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
 
-    expect(settled).toBe(false)
     await expect(inFlight).resolves.toBeUndefined()
-    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
+    await expect.poll(() => settled, { timeout: 5_000 }).toBe(true)
+    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline + 1)
     await resetHoloRuntime()
+    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
   }, 30_000)
 
   it('disposes the database invalidation sender and unregisters its publisher on reset', async () => {
@@ -3457,6 +3471,51 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
     await resetHoloRuntime()
   })
+
+  it('publishes a write made during an in-flight reconfiguration once and keeps the publisher registered throughout', async () => {
+    const { root, client } = await createScalingInvalidationProject()
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count).toBe(1)
+    await writeScalingInvalidationConfig(root, 1)
+
+    await client.client('PAUSE', '1500', 'ALL')
+    let reconfigured = false
+    let gapSeen = false
+    const reconfiguring = reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root)).finally(() => { reconfigured = true })
+    const sampling = (async () => {
+      while (!reconfigured) {
+        if (!queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()) gapSeen = true
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+    })()
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await publishThroughRegisteredPublisher()
+    await reconfiguring
+    await sampling
+
+    expect(gapSeen).toBe(false)
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(2)
+    await resetHoloRuntime()
+  }, 30_000)
+
+  it('keeps the previous publisher working when a reconfiguration to an unusable scaling connection fails', async () => {
+    const { root, client } = await createScalingInvalidationProject()
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count).toBe(1)
+    await writeScalingInvalidationConfig(root, 0, 'missing')
+
+    await expect(reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow()
+
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(2)
+    await resetHoloRuntime()
+  }, 30_000)
 
   it('closes Redis session clients opened before a failed session acquisition and never promotes them on a later reconfiguration', async () => {
     const service = await startRedisService()
