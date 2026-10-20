@@ -200,6 +200,56 @@ describe('model query mutations apply updated_at like Laravel', () => {
     expect((await Account.withoutGlobalScopes().findOrFail(1)).get('deleted_at')).toBeNull()
   })
 
+  it('writes an instance save, soft delete, and force delete even when a global scope hides the row', async () => {
+    const db = await openModelDatabase()
+    const accounts = defineTable('accounts', {
+      id: column.id(),
+      status: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, accounts)
+    await db.table(accounts).insert({ id: 1, status: 'pending', deleted_at: null })
+    await db.table(accounts).insert({ id: 2, status: 'pending', deleted_at: null })
+    await db.table(accounts).insert({ id: 3, status: 'pending', deleted_at: past })
+    const Account = defineModelFromTable(accounts, {
+      softDeletes: true,
+      timestamps: false,
+      fillable: ['status'],
+      globalScopes: { activeOnly: query => query.where('status', 'active') },
+    })
+
+    const saved = await Account.withoutGlobalScopes().findOrFail(1)
+    saved.set('status', 'active')
+    await saved.save()
+    expect((await Account.withoutGlobalScopes().findOrFail(1)).get('status')).toBe('active')
+
+    const deleted = await Account.withoutGlobalScopes().findOrFail(2)
+    await deleted.delete()
+    expect((await Account.withoutGlobalScopes().withTrashed().findOrFail(2)).get('deleted_at')).toBeInstanceOf(Date)
+
+    const forced = await Account.withoutGlobalScopes().withTrashed().findOrFail(3)
+    await forced.forceDelete()
+    expect(await db.table(accounts).where('id', 3).count()).toBe(0)
+  })
+
+  it('hard deletes an instance on a model without soft deletes even when a global scope hides the row', async () => {
+    const db = await openModelDatabase()
+    const accounts = defineTable('accounts', {
+      id: column.id(),
+      status: column.string(),
+    })
+    await createTestTable(db, accounts)
+    await db.table(accounts).insert({ id: 1, status: 'pending' })
+    const Account = defineModelFromTable(accounts, {
+      timestamps: false,
+      fillable: ['status'],
+      globalScopes: { activeOnly: query => query.where('status', 'active') },
+    })
+
+    await (await Account.withoutGlobalScopes().findOrFail(1)).delete()
+    expect(await db.table(accounts).count()).toBe(0)
+  })
+
   it('bumps updated_at with deleted_at on query delete and restore, and force delete still removes the row', async () => {
     const db = await openModelDatabase()
     const posts = postsTable()
