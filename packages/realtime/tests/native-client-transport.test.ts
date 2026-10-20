@@ -31,7 +31,7 @@ async function startNativeQueryTransport() {
     connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { host: '127.0.0.1', port: address.port, scheme: 'http' } } },
     worker: { host: '127.0.0.1', port: address.port, statsEnabled: true },
   })
-  const worker = await startBroadcastWorker({
+  const startWorker = () => startBroadcastWorker({
     config,
     realtime: {
       query: name => executeRealtimeQuery(resolveDefinition(name)),
@@ -39,6 +39,7 @@ async function startNativeQueryTransport() {
       subscribe: (name, _args, options) => subscribeRealtimeQuery(resolveDefinition(name), {}, options),
     },
   })
+  let worker = await startWorker()
   const http = createServer((_request, response) => {
     const configResponse = renderBroadcastClientConfigResponse(config)
     response.writeHead(configResponse.status, Object.fromEntries(configResponse.headers))
@@ -54,6 +55,11 @@ async function startNativeQueryTransport() {
     stopped = true
     await worker.stop()
   }
+  const restart = async (): Promise<void> => {
+    await stop()
+    worker = await startWorker()
+    stopped = false
+  }
   onTestFinished(async () => {
     http.closeAllConnections()
     await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()))
@@ -63,6 +69,7 @@ async function startNativeQueryTransport() {
     database,
     definition,
     stop,
+    restart,
     transport: createBroadcastRealtimeTransport({ configEndpoint: `http://127.0.0.1:${httpAddress.port}/broadcasting/config` }),
     async connections(): Promise<number> {
       const response = await fetch(`http://127.0.0.1:${worker.port}/stats`)
@@ -168,22 +175,48 @@ it('reports an unavailable real worker once without fabricating a snapshot', asy
   expect(errors).toHaveLength(1)
 })
 
-it('reports a real worker shutdown to each active subscription and stops delivering updates', async () => {
+it('keeps each active subscription through a real worker shutdown without reporting an error and delivers rows changed while it was down', async () => {
   const native = await startNativeQueryTransport()
-  const first: unknown[] = []
-  const second: unknown[] = []
-  const errors: string[] = []
-  const onError = (error: unknown) => errors.push(error instanceof Error ? error.message : String(error))
-  const leaveFirst = native.transport.subscribe('records.list', {}, snapshot => first.push(snapshot), onError)
-  const leaveSecond = native.transport.subscribe('records.list', {}, snapshot => second.push(snapshot), onError)
+  const first: RealtimeSubscriptionSnapshot<readonly { id: number, score: number | null }[]>[] = []
+  const second: typeof first = []
+  const errors: unknown[] = []
+  const onError = (error: unknown) => errors.push(error)
+  const leaveFirst = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => first.push(snapshot), onError)
+  const leaveSecond = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => second.push(snapshot), onError)
   await expect.poll(() => first.length).toBe(1)
   await expect.poll(() => second.length).toBe(1)
   await native.stop()
-  await expect.poll(() => errors).toEqual(Array(2).fill('Realtime live updates are unavailable because the broadcast worker is not reachable. Start the worker with "holo broadcast:work" to enable live updates.'))
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
-  expect(first).toHaveLength(1)
-  expect(second).toHaveLength(1)
+  await native.restart()
+  await expect.poll(() => first.at(-1)?.data[0]?.score, { timeout: 10_000 }).toBe(42)
+  await expect.poll(() => second.at(-1)?.data[0]?.score, { timeout: 10_000 }).toBe(42)
+  expect(errors).toEqual([])
   leaveFirst()
   leaveSecond()
-  expect(errors).toHaveLength(2)
-})
+  await expect.poll(() => native.connections()).toBe(0)
+}, 20_000)
+
+it('recovers a live query after the worker restarts at the same address and delivers rows changed while it was down', async () => {
+  const native = await startNativeQueryTransport()
+  onTestFinished(resetRealtimeClientRuntime)
+  configureRealtimeClientTransport(native.transport)
+  const initial = await subscribeRealtimeQuery(native.definition)
+  hydrateRealtimeQuery(native.definition, {}, initial.current)
+  initial.unsubscribe()
+  const store = getRealtimeQueryStore(native.definition, {})
+  await store.load()
+  const leaveStore = store.subscribe(() => {})
+  store.connect()
+  await expect.poll(() => native.connections()).toBe(1)
+  await native.database.db.table('records').where('id', 1).update({ score: 42 })
+  await expect.poll(() => store.snapshot?.data[0]?.score).toBe(42)
+
+  await native.stop()
+  await native.database.db.table('records').where('id', 1).update({ score: 43 })
+  await native.restart()
+
+  await expect.poll(() => native.connections(), { timeout: 10_000 }).toBe(1)
+  await expect.poll(() => store.snapshot?.data[0]?.score, { timeout: 10_000 }).toBe(43)
+  leaveStore()
+  store.dispose()
+}, 20_000)

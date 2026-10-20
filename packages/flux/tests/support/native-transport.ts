@@ -11,7 +11,7 @@ export async function startNativeTransport(options: { allowedOrigins?: readonly 
   const address = reservation.address()
   if (!address || typeof address === 'string') throw new Error('No broadcast port available')
   await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
-  const worker = await startBroadcastWorker({
+  const startWorker = () => startBroadcastWorker({
     channelAuth: {
       resolveUser: ({ socketId }) => ({ id: socketId }),
       definitions: [defineChannel('App.Models.User.{userId}', {
@@ -35,6 +35,7 @@ export async function startNativeTransport(options: { allowedOrigins?: readonly 
       worker: { host: '127.0.0.1', port: address.port, statsEnabled: true, ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}) },
     }),
   })
+  let worker = await startWorker()
   const baseUrl = `http://127.0.0.1:${worker.port}`
   const clients: ReturnType<typeof createFluxClient>[] = []
   const createClient = () => {
@@ -51,6 +52,11 @@ export async function startNativeTransport(options: { allowedOrigins?: readonly 
     stopped = true
     await worker.stop()
   }
+  const restart = async (): Promise<void> => {
+    await stop()
+    worker = await startWorker()
+    stopped = false
+  }
   onTestFinished(async () => {
     resetFluxClient()
     await Promise.all(clients.map(client => client.disconnect()))
@@ -61,6 +67,7 @@ export async function startNativeTransport(options: { allowedOrigins?: readonly 
     client,
     createClient,
     stop,
+    restart,
     async subscriptions(): Promise<number> {
       const response = await fetch(`${baseUrl}/stats`)
       expect(response.status).toBe(200)

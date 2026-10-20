@@ -10,7 +10,7 @@ With the `holo` driver, broadcasting depends on a long-running WebSocket worker 
 
 Realtime and Broadcast are not production-ready. The deployment settings below do not remove these limits:
 
-- Browser reconnection and resubscription, heartbeat handling, and dead-connection cleanup still need reliability work. Do not rely on uninterrupted live updates.
+- Browsers reconnect with backoff after a socket closes or fails, and then resubscribe. A connection that stops responding without closing is not detected, so heartbeat handling and dead-connection cleanup still need reliability work. Live updates can stop silently until the page reloads.
 - Presence membership can become stale after a worker crashes.
 - Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
 

@@ -114,6 +114,20 @@ async function executeRealtimeRequest<TResult>(
   return data as TResult
 }
 
+type RealtimeTransportSocket = {
+  send(value: string): void
+}
+
+type RealtimeTransportSubscription = {
+  readonly id: string
+  readonly name: string
+  readonly args: Record<string, unknown>
+  currentSnapshot?: RealtimeSubscriptionSnapshot<unknown>
+  sentOn?: RealtimeTransportSocket
+  listener(snapshot: RealtimeSubscriptionSnapshot<unknown>): void
+  readonly onError: (error: unknown) => void
+}
+
 export function createBroadcastRealtimeTransport(options: {
   readonly configEndpoint?: string
 } = {}): RealtimeClientTransport {
@@ -121,31 +135,45 @@ export function createBroadcastRealtimeTransport(options: {
     readonly resolve: (value: RealtimeWireResult<unknown>) => void
     readonly reject: (error: unknown) => void
   }>()
-  const subscriptions = new Map<string, {
-    currentSnapshot?: RealtimeSubscriptionSnapshot<unknown>
-    listener(snapshot: RealtimeSubscriptionSnapshot<unknown>): void
-    readonly onError: (error: unknown) => void
-  }>()
+  const subscriptions = new Map<string, RealtimeTransportSubscription>()
   let connection: ReturnType<typeof broadcastBrowserInternals.createConnection> | undefined
   let nextRequestId = 0
 
   const closeSocketIfIdle = (): void => {
-    if (subscriptions.size > 0 || pendingMutations.size > 0 || !connection?.socket) {
+    if (subscriptions.size > 0 || pendingMutations.size > 0 || !connection) {
+      return
+    }
+
+    if (!connection.socket && !connection.reconnecting) {
       return
     }
 
     connection.disconnect()
   }
 
-  const rejectPending = (error: unknown): void => {
+  const rejectPendingMutations = (error: unknown): void => {
     for (const request of pendingMutations.values()) {
       request.reject(error)
     }
     pendingMutations.clear()
-    for (const subscription of subscriptions.values()) {
-      subscription.onError(error)
+  }
+
+  const sendSubscribe = (subscription: RealtimeTransportSubscription, socket: RealtimeTransportSocket): void => {
+    if (subscription.sentOn === socket) {
+      return
     }
-    subscriptions.clear()
+
+    subscription.sentOn = socket
+    subscription.currentSnapshot = undefined
+    socket.send(JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: subscription.id,
+        action: 'subscribe',
+        name: subscription.name,
+        args: subscription.args,
+      },
+    }))
   }
 
   const handleMessage = (event: { readonly data: unknown }): void => {
@@ -227,35 +255,30 @@ export function createBroadcastRealtimeTransport(options: {
           host: resolveBrowserHost(config.host, globals),
         })
       },
+      onOpen(socket) {
+        for (const subscription of subscriptions.values()) {
+          sendSubscribe(subscription, socket)
+        }
+      },
       onMessage: handleMessage,
       onDisconnect(error) {
         warnRealtimeOnce(error.message)
-        rejectPending(error)
+        rejectPendingMutations(error)
+        closeSocketIfIdle()
       },
     })
     return await connection.connect()
   }
 
-  const sendSubscription = async (
-    name: string,
-    args: Record<string, unknown>,
-    id: string,
-  ): Promise<void> => {
+  const sendSubscription = async (id: string): Promise<void> => {
     try {
       const connectedSocket = await connect()
-      if (!subscriptions.has(id)) {
+      const subscription = subscriptions.get(id)
+      if (!subscription) {
         closeSocketIfIdle()
         return
       }
-      connectedSocket.send(JSON.stringify({
-        event: 'holo:realtime',
-        data: {
-          id,
-          action: 'subscribe',
-          name,
-          args,
-        },
-      }))
+      sendSubscribe(subscription, connectedSocket)
     } catch (error) {
       warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
       throw error
@@ -326,11 +349,17 @@ export function createBroadcastRealtimeTransport(options: {
     ) {
       const id = `realtime.${++nextRequestId}`
       subscriptions.set(id, {
+        id,
+        name,
+        args,
         listener: snapshot => listener(snapshot as RealtimeSubscriptionSnapshot<TResult>),
         onError,
       })
-      void sendSubscription(name, args, id).catch((error) => {
+      void sendSubscription(id).catch((error) => {
         warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+        if (connection?.reconnecting) {
+          return
+        }
         if (subscriptions.delete(id)) {
           onError(error)
           closeSocketIfIdle()

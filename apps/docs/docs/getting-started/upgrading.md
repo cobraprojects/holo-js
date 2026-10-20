@@ -92,6 +92,12 @@ Each [Broadcast browser connection](/broadcasting/production#connection-limits) 
 
 A subscription beyond the channel or realtime limit fails with status `429`, and the socket stays open. A connection that exceeds the message rate, or that has more than 4 MB of output waiting for it, is closed with code `1008`. If a page needs more live queries than one connection allows, split them across pages.
 
+### Browser connections reconnect
+
+Realtime and Flux reconnect on their own after the WebSocket closes or fails. They wait about half a second before the first try, then wait longer after each failed try, up to 30 seconds, with some randomness so browsers don't all retry at once. Live queries and channels are sent again on the new connection, and a live query shows the current result. Flux re-authorizes private and presence channels during reconnect.
+
+Two behaviors changed for app code. A worker restart no longer calls the `onError` of every active subscription, so don't rely on that callback to detect an outage. A realtime mutation that was already sent when the socket closed rejects with a connection error and isn't sent again, because the server may already have run it. Catch that error and retry only when the mutation is safe to repeat. See [When the connection drops](/realtime/#when-the-connection-drops).
+
 ### Queue jobs interrupted by a stopped worker
 
 Queue workers now recover jobs left behind by a worker that crashed or was killed. With the `redis` driver, another worker picks the job up once at least the connection's `retryAfter` seconds have passed; before, it could stay stuck until you cleared it. A running Redis worker now renews its hold on the job, so jobs longer than `retryAfter` are no longer handed to a second worker.

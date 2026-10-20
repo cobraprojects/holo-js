@@ -271,6 +271,16 @@ export const feed = query({
 
 See [Pagination](/database/pagination) for the paginator API.
 
+## When the connection drops
+
+Live queries recover after a worker restart or a network interruption. When the WebSocket closes, the browser waits and opens it again, with a wait that starts at about half a second and grows to 30 seconds. After it reconnects, Holo sends each open live query again and delivers its current result, so the page shows rows that changed while the connection was down.
+
+- **A mutation in flight is not sent again.** If the socket closes before a mutation's result arrives, the promise rejects with a connection error. The server may already have run the mutation, so catch the error and retry only when the mutation is safe to repeat.
+- **A mutation made while disconnected goes over HTTP.** Holo doesn't queue it for the socket.
+- **Reconnecting stops when nothing is listening.** When the last live query is unsubscribed or its store is disconnected, the browser stops trying to reconnect.
+
+A connection that stops answering without closing isn't detected, so live updates can stop until the page reloads. See [production limits](/broadcasting/production#experimental-production-limits).
+
 ## Access rules
 
 Every definition sets `access`.
@@ -655,7 +665,7 @@ const posts = useRealtimeQuery(listPosts, { limit: 10 })
 
 ### useRealtimeMutation()
 
-Sends a mutation and returns a promise of its result. It uses the live WebSocket when connected and HTTP otherwise. Errors are reported through the framework's error handler and the promise still rejects, so catch them.
+Sends a mutation and returns a promise of its result. It uses the live WebSocket when connected and HTTP otherwise. Errors are reported through the framework's error handler and the promise still rejects, so catch them. If the socket closes before the result arrives, the promise rejects. See [When the connection drops](#when-the-connection-drops).
 
 ```ts
 import { useRealtimeMutation } from '@holo-js/realtime/client'

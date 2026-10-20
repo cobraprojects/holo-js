@@ -83,6 +83,17 @@ export function createRealtimeQueryStore<TResult>(
     listeners.clear()
   }
 
+  const applySnapshot = (nextSnapshot: RealtimeSubscriptionSnapshot<TResult>) => {
+    const sharedSnapshot = createSharedRealtimeSnapshot(snapshot, snapshotDataHash, nextSnapshot)
+    snapshot = sharedSnapshot.snapshot
+    snapshotDataHash = sharedSnapshot.hash
+    if (!sharedSnapshot.changed) {
+      return
+    }
+
+    notify()
+  }
+
   const setSnapshot = (nextSnapshot: RealtimeSubscriptionSnapshot<TResult>) => {
     if (disposed) {
       return
@@ -92,14 +103,7 @@ export function createRealtimeQueryStore<TResult>(
       return
     }
 
-    const sharedSnapshot = createSharedRealtimeSnapshot(snapshot, snapshotDataHash, nextSnapshot)
-    snapshot = sharedSnapshot.snapshot
-    snapshotDataHash = sharedSnapshot.hash
-    if (!sharedSnapshot.changed) {
-      return
-    }
-
-    notify()
+    applySnapshot(nextSnapshot)
   }
 
   const load = (): Promise<RealtimeSubscriptionSnapshot<TResult>> => {
@@ -147,7 +151,7 @@ export function createRealtimeQueryStore<TResult>(
           }
 
           seenLiveSnapshot = true
-          setSnapshot(nextSnapshot)
+          applySnapshot(nextSnapshot)
         }, (error) => {
           if (startupId !== currentStartupId) {
             return

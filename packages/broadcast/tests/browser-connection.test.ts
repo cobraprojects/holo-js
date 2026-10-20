@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { broadcastBrowserInternals } from '../src/client-config'
 
 type SocketEvent = 'open' | 'close' | 'error' | 'message'
@@ -53,6 +53,10 @@ function createHarness(resolveUrl: () => string | Promise<string> = () => 'ws://
 }
 
 describe('Broadcast browser connection ownership', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('deduplicates configuration discovery and connection until open', async () => {
     let discoveries = 0
     const harness = createHarness(async () => {
@@ -152,6 +156,94 @@ describe('Broadcast browser connection ownership', () => {
     await Promise.resolve()
     BrowserSocketAdapter.sockets[0]!.emit('open')
     await retry
+    harness.connection.disconnect()
+  })
+
+  it('reconnects an established connection after it drops and reports each reopening', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    BrowserSocketAdapter.sockets[0]!.emit('open')
+    await first
+    BrowserSocketAdapter.sockets[0]!.emit('close')
+    expect(harness.errors).toHaveLength(1)
+    expect(harness.connection.socket).toBeUndefined()
+    expect(harness.connection.reconnecting).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(BrowserSocketAdapter.sockets).toHaveLength(2)
+    BrowserSocketAdapter.sockets[1]!.emit('open')
+    expect(harness.opens).toBe(2)
+    expect(harness.connection.reconnecting).toBe(false)
+    expect(harness.connection.socket).toBe(BrowserSocketAdapter.sockets[1])
+    BrowserSocketAdapter.sockets[1]!.emit('message', 'resumed')
+    expect(harness.messages).toEqual(['resumed'])
+    harness.connection.disconnect()
+  })
+
+  it('keeps retrying a dropped connection with bounded backoff until it reopens', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    BrowserSocketAdapter.sockets[0]!.emit('open')
+    await first
+    BrowserSocketAdapter.sockets[0]!.emit('close')
+
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(BrowserSocketAdapter.sockets).toHaveLength(attempt + 1)
+      BrowserSocketAdapter.sockets[attempt]!.emit('error')
+    }
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    BrowserSocketAdapter.sockets.at(-1)!.emit('open')
+    expect(harness.opens).toBe(2)
+    expect(harness.connection.reconnecting).toBe(false)
+    harness.connection.disconnect()
+  })
+
+  it('stops reconnecting once the caller disconnects', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    BrowserSocketAdapter.sockets[0]!.emit('open')
+    await first
+    BrowserSocketAdapter.sockets[0]!.emit('close')
+    harness.connection.disconnect()
+    expect(harness.connection.reconnecting).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(BrowserSocketAdapter.sockets).toHaveLength(1)
+  })
+
+  it('does not reconnect a connection that never opened', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    const rejected = expect(first).rejects.toThrow('Connection unavailable')
+    BrowserSocketAdapter.sockets[0]!.emit('error')
+    await rejected
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(BrowserSocketAdapter.sockets).toHaveLength(1)
+    expect(harness.connection.reconnecting).toBe(false)
+  })
+
+  it('opens immediately when a caller connects during a backoff wait and does not open a duplicate', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness()
+    const first = harness.connection.connect()
+    BrowserSocketAdapter.sockets[0]!.emit('open')
+    await first
+    BrowserSocketAdapter.sockets[0]!.emit('close')
+
+    const manual = harness.connection.connect()
+    expect(BrowserSocketAdapter.sockets).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(BrowserSocketAdapter.sockets).toHaveLength(2)
+    BrowserSocketAdapter.sockets[1]!.emit('open')
+    await manual
+    expect(harness.connection.socket).toBe(BrowserSocketAdapter.sockets[1])
     harness.connection.disconnect()
   })
 })
