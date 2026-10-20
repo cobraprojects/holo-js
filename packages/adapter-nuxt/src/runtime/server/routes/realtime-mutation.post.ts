@@ -1,10 +1,10 @@
 import { defineEventHandler, useRuntimeConfig } from '#imports'
 import { handleRealtimeMutationRequest } from '@holo-js/realtime/server'
 import { realtimeDefinitions } from '#holo/realtime-definitions'
-import { createRealtimeRequest } from './realtime-request'
+import { createWebRequest } from '../route-request'
 
 export default defineEventHandler(async (event) => {
-  return await handleRealtimeMutationRequest(await createRealtimeRequest(event), {
+  return await handleRealtimeMutationRequest(await createWebRequest(event), {
     projectRoot: useRuntimeConfig().holo.projectRoot ?? process.cwd(),
     definitions: realtimeDefinitions,
   })

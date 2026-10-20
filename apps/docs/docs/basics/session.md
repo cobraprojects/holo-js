@@ -294,7 +294,7 @@ const setCookie = sessionCookie(rotated.id)
 
 | Option | Effect |
 |---|---|
-| `newId` | Use this ID instead of a random one |
+| `newId` | Use this ID instead of a random one. It must be unique and unused: Holo never supplies one, and rotation fails if the ID already holds a session. Concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support concurrent reuse, so don't share a `newId` between concurrent rotations on them |
 | `data` | Replace the session data |
 | `renewLifetime` | Restart the lifetime from now |
 | `store` | Move the session to another store (not allowed while it has flash data) |
@@ -408,7 +408,7 @@ Records activity and pushes the idle expiry forward, but never past the absolute
 
 `rotateSession(sessionId: string, options?: { newId?: string, data?: object, renewLifetime?: boolean, store?: string }): Promise<SessionRecord>`
 
-Gives the session a new ID and keeps its data and flash values. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, and when a store can't keep the data.
+Gives the session a new ID and keeps its data and flash values. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, when the `newId` already holds a session, and when a store can't keep the data. A `newId` must be unique and unused: concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support it.
 
 ### invalidateSession()
 
