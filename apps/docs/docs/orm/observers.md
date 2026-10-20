@@ -131,7 +131,7 @@ export default defineModel('posts', {
 Inline handlers run before observer methods for the same event.
 
 ::: info
-The argument passed to inline handlers is typed as `unknown`. When you need the model's attributes, use an observer, where you can type the argument.
+Inline handlers receive the model's entity, typed for the model they're defined on. Observers are typed by their own methods.
 :::
 
 ## Cancelling a write
