@@ -1867,12 +1867,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       await this.dispatchCancelableEvent('restoring', entity)
+      const unsaved = Object.fromEntries(
+        Object.entries(entity.getDirty()).filter(([key]) => key !== deletedAtColumn && key !== this.definition.updatedAtColumn),
+      )
       const written = this.withWriteTimestamps({ [deletedAtColumn]: null }, 'update')
       await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
       entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
       entity.forceFill({ [deletedAtColumn]: null } as never)
-      const restored = new Entity<TTable>(this, { ...entity.toAttributes(), [primaryKey]: id } as Partial<ModelRecord<TTable>>, true)
-      restored.forceFill({ [primaryKey]: entity.get(primaryKey) } as never)
+      const restored = await this.query().withTrashed().where(primaryKey as never, id).first()
+      if (!restored) {
+        throw new ModelNotFoundException(this.definition.name)
+      }
+
+      restored.forceFill(unsaved as never)
       await this.dispatchEvent('restored', restored)
       await this.touchOwners(restored)
       return restored

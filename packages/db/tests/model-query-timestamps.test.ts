@@ -161,6 +161,22 @@ describe('model query mutations apply updated_at like Laravel', () => {
     expect(restored.get('updated_at')).toEqual(fresh.get('updated_at'))
   })
 
+  it('applies deleted_at casts to a restored entity the way a fresh read does', async () => {
+    const db = await openModelDatabase()
+    const posts = postsTable()
+    await seedPost(db, posts)
+    const Post = defineModelFromTable(posts, {
+      softDeletes: true,
+      fillable: ['title'],
+      casts: { deleted_at: { get: value => (value == null ? 'active' : value), set: value => value } },
+    })
+
+    await Post.withTrashed().findOrFail(1).then(post => post.delete())
+    const restored = await Post.withTrashed().findOrFail(1).then(post => post.restore())
+    expect(restored.get('deleted_at')).toBe('active')
+    expect(restored.get('deleted_at')).toEqual((await Post.findOrFail(1)).get('deleted_at'))
+  })
+
   it('bumps updated_at with deleted_at on query delete and restore, and force delete still removes the row', async () => {
     const db = await openModelDatabase()
     const posts = postsTable()
