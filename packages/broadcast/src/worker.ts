@@ -1168,6 +1168,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     : undefined
 
   const presenceQueues = new Map<string, Promise<void>>()
+  const ownedPresenceChannels = new Map<string, { readonly app: BroadcastWorkerApp, readonly channel: string }>()
   const pendingSocketCleanups = new Set<Promise<void>>()
 
   function runPresenceExclusive<T>(key: string, task: () => T | Promise<T>): Promise<T> {
@@ -1340,15 +1341,55 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     return [...channelsByKey.values()]
   }
 
+  async function reconcileOwnPresenceEntries(app: BroadcastWorkerApp, channel: string): Promise<boolean> {
+    if (!scaling) {
+      return false
+    }
+
+    const presenceKey = resolvePresenceHashKey(scaling.connection, app.appId, channel)
+    const entries = parsePresenceHashMembers(await scaling.adapter.hashGetAll(presenceKey))
+    let remainingOwnEntries = 0
+    for (const [socketRef, member] of entries) {
+      if (resolveSocketRefNodeId(socketRef) !== scaling.nodeId) {
+        continue
+      }
+
+      const socketId = socketRef.slice(socketRef.lastIndexOf(':') + 1)
+      const socket = connectedSockets.get(socketId)
+      if (socket?.active && socket.subscribedChannels.has(channel)) {
+        remainingOwnEntries += 1
+        continue
+      }
+
+      await publishScalingPresenceMemberRemoved(app, channel, socketId, member)
+      await scaling.adapter.hashDelete(presenceKey, socketRef)
+    }
+    const hasLiveSubscriber = [...connectedSockets.values()].some(socket => {
+      return socket.active && socket.app.appId === app.appId && socket.subscribedChannels.has(channel)
+    })
+    return remainingOwnEntries > 0 || hasLiveSubscriber
+  }
+
   async function runScalingLivenessCycle(): Promise<void> {
     if (!scaling) {
       return
     }
 
+    const reportLivenessError = (error: unknown) => {
+      report(error, { capability: 'broadcast', operation: 'worker.scalingLiveness' })
+    }
     await refreshNodeLease()
+    for (const [key, { app, channel }] of [...ownedPresenceChannels]) {
+      await refreshNodeLease()
+      await runPresenceExclusive(key, async () => {
+        if (!await reconcileOwnPresenceEntries(app, channel)) {
+          ownedPresenceChannels.delete(key)
+        }
+      }).catch(reportLivenessError)
+    }
     for (const { appId, channel } of listPresenceChannelsWithLocalSubscribers()) {
       await refreshNodeLease()
-      await runPresenceExclusive(composeSubscriptionKey(appId, channel), () => reconcilePresenceEntries(appId, channel))
+      await runPresenceExclusive(composeSubscriptionKey(appId, channel), () => reconcilePresenceEntries(appId, channel)).catch(reportLivenessError)
     }
   }
 
@@ -1437,6 +1478,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     await refreshNodeLease()
+    ownedPresenceChannels.set(key, { app, channel })
     await scaling.adapter.hashSet(
       resolvePresenceHashKey(scaling.connection, app.appId, channel),
       socketRef,
@@ -2188,10 +2230,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       if (removedPresenceMember.removed && removedPresenceMember.member) {
         deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
       }
-      await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((error) => {
+      const removedFromScaling = await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).then(() => true, (error: unknown) => {
         report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
+        return false
       })
-      if (removedPresenceMember.member) {
+      if (removedFromScaling && removedPresenceMember.member) {
         await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member).catch((error) => {
           report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
         })

@@ -12,7 +12,6 @@ Realtime and Broadcast are not production-ready. The deployment settings below d
 
 - Browser reconnection and resubscription still need reliability work. Do not rely on uninterrupted live updates.
 - A worker that stops refreshing its Redis lease for 30 seconds, because it is stalled or can't reach Redis, loses its presence members from other workers' rosters. Those members stay out until their clients resubscribe. See [Run several workers](#run-several-workers).
-- If Redis rejects a worker's cleanup of a disconnected socket's presence member, the worker logs the error and does not retry. The member stays listed until that worker stops refreshing its Redis lease, which normally happens only when the worker itself crashes or stalls.
 - Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
 
 These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
@@ -213,6 +212,8 @@ Without `ioredis` installed, the worker refuses to start with scaling enabled.
 Redis shares broadcast events and presence members between workers. It doesn't share [realtime query](/realtime/) subscriptions: a realtime mutation refreshes only the subscribers connected to the worker that ran it.
 
 Each worker keeps a Redis lease that it refreshes every 10 seconds. When a worker stops refreshing for 30 seconds, because it crashed or lost Redis, the other workers remove its presence members and send `pusher_internal:member_removed` to their subscribers. A member that is also connected to a live worker stays listed. A crashed worker's members can stay listed for up to about 40 seconds.
+
+Each worker also checks its own presence entries on every lease refresh. If Redis rejects the delete for a disconnected socket's member, the worker removes it on the next refresh, within about 10 seconds, and the other workers receive one `member_removed`. A member with a live socket is never removed this way.
 
 Redis is part of the trust boundary. Workers accept presence and event messages from the scaling channel without verifying a signature, so anyone who can publish to that channel can add or remove presence members. Run Redis on a private network reachable only by your web app and workers, and require authentication with `username` and `password` in `config/redis.ts`.
 
