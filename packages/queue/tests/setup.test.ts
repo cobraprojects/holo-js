@@ -39,6 +39,7 @@ async function runPackageBuild(): Promise<{ outDir: string }> {
       await symlink(resolve(packageDir, 'node_modules/tsup'), join(nodeModulesRoot, 'tsup'))
       await symlink(resolve(packageDir, 'node_modules/typescript'), join(nodeModulesRoot, 'typescript'))
       await symlink(resolve(repoRoot, 'packages/config'), join(nodeModulesRoot, '@holo-js/config'))
+      await symlink(resolve(repoRoot, 'packages/kernel'), join(nodeModulesRoot, '@holo-js/kernel'))
       await symlink(resolve(repoRoot, 'node_modules/@types/node'), join(typesRoot, 'node'))
       await linkInstalledDependenciesForPackage({
         repoRoot,
