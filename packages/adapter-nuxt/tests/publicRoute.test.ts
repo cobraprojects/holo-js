@@ -1,12 +1,15 @@
+import { request as httpRequest } from 'node:http'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createApp, toWebHandler } from 'h3'
+import { requestUrlInternals } from '@holo-js/kernel'
 import { resetHoloRuntime } from '@holo-js/core'
 import { Storage } from '@holo-js/storage/runtime'
 import { configureHoloRuntimeConfig, holo, resetHoloRuntimeConfig } from '../src/runtime/composables'
 import storageHandler from '../src/runtime/server/routes/storage'
+import { serve } from './support/http'
 
 const roots = new Set<string>()
 
@@ -31,7 +34,31 @@ async function project() {
   configureHoloRuntimeConfig({ holo: { projectRoot: root } })
   const app = createApp()
   app.use(storageHandler)
-  return { root, request: toWebHandler(app) }
+  return { root, app, request: toWebHandler(app) }
+}
+
+function getRaw(base: string, target: string, headers: Record<string, string>): Promise<{ status: number, body: string }> {
+  const { hostname, port } = new URL(base)
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname, port, path: target, headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', chunk => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+function trustProxies(trustedProxies: readonly string[], peer: string): void {
+  requestUrlInternals.provideConnectionAddress(() => peer)
+  requestUrlInternals.configureForwardedRequestResolver((readHeader, connectionAddress) => trustedProxies.includes(connectionAddress ?? '')
+    ? { protocol: readHeader('x-forwarded-proto') }
+    : {})
+  onTestFinished(() => {
+    requestUrlInternals.configureForwardedRequestResolver(undefined)
+    requestUrlInternals.provideConnectionAddress(undefined)
+  })
 }
 
 afterEach(async () => {
@@ -91,5 +118,34 @@ describe('native Nuxt storage route', () => {
     const unsigned = new URL(url)
     unsigned.search = ''
     expect((await request(new Request(unsigned))).status).toBe(404)
+  })
+})
+
+describe('native Nuxt storage route behind a proxy', () => {
+  it('ignores X-Forwarded-Proto from a peer that is not a trusted proxy', async () => {
+    const { app } = await project()
+    await holo.getApp()
+    await Storage.disk('local').put('attachment.txt', 'Private attachment')
+    const target = new URL(Storage.disk('local').temporaryUrl('attachment.txt', { expiresIn: 60 }))
+    const path = `${target.pathname}${target.search}`
+    const base = await serve(app)
+    const forwarded = { host: 'app.test', 'x-forwarded-proto': 'https' }
+
+    trustProxies(['10.0.0.1'], '127.0.0.1')
+    expect((await getRaw(base, path, forwarded)).status).toBe(404)
+  })
+
+  it('honors X-Forwarded-Proto from a trusted proxy', async () => {
+    const { app } = await project()
+    await holo.getApp()
+    await Storage.disk('local').put('attachment.txt', 'Private attachment')
+    const target = new URL(Storage.disk('local').temporaryUrl('attachment.txt', { expiresIn: 60 }))
+    const path = `${target.pathname}${target.search}`
+    const base = await serve(app)
+
+    trustProxies(['127.0.0.1'], '127.0.0.1')
+    const served = await getRaw(base, path, { host: 'app.test', 'x-forwarded-proto': 'https' })
+    expect(served.status).toBe(200)
+    expect(served.body).toBe('Private attachment')
   })
 })

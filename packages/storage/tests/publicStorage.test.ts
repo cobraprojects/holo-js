@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { requestUrlInternals } from '@holo-js/kernel'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NormalizedHoloStorageConfig } from '../src/config'
 import { createPublicStorageResponse, normalizeModuleOptions } from '../src'
@@ -372,5 +373,27 @@ describe('public storage names on Windows', () => {
       expect(served.status).toBe(200)
       await expect(served.text()).resolves.toBe('report')
     })
+  })
+})
+
+describe('createPublicStorageResponse behind a trusted proxy', () => {
+  it('routes public files by the unprefixed path when a trusted proxy sends a forwarded prefix', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await mkdir(join(publicRoot, 'assets'), { recursive: true })
+    await writeFile(join(publicRoot, 'assets', 'item.txt'), 'Public file')
+    requestUrlInternals.provideConnectionAddress(() => '10.0.0.1')
+    requestUrlInternals.configureForwardedRequestResolver(readHeader => ({ prefix: readHeader('x-forwarded-prefix') }))
+    try {
+      const response = await createPublicStorageResponse(
+        projectRoot,
+        storageConfig(publicRoot),
+        new Request('http://app.test/storage/assets/item.txt', { headers: { 'x-forwarded-prefix': '/blog' } }),
+      )
+      expect(response.status).toBe(200)
+      await expect(response.text()).resolves.toBe('Public file')
+    } finally {
+      requestUrlInternals.configureForwardedRequestResolver(undefined)
+      requestUrlInternals.provideConnectionAddress(undefined)
+    }
   })
 })
