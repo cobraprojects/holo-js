@@ -530,6 +530,10 @@ A process runs at most four password hashes at once, so later logins queue inste
 
 No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
 
+### Dev server exits non-zero on a port conflict
+
+`holo dev` now exits with a non-zero status when another `holo dev` for the same project is already running. Before, it exited 0 and left the first server running. A port already in use by another process has always exited non-zero, and it still does, now with the port named. `holo dev` never stops a process for you. Update any CI script or wrapper that treated a second `holo dev` as success. To replace a running server, stop it first, using the PID in the message.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.

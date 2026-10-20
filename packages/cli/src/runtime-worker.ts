@@ -74,7 +74,17 @@ type FreshDropSchema = {
 }
 
 
-const payload = JSON.parse(process.env.HOLO_RUNTIME_PAYLOAD ?? '{}') as RuntimePayload
+async function readRuntimePayload(): Promise<RuntimePayload> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk))
+  }
+
+  const input = Buffer.concat(chunks).toString('utf8')
+  return JSON.parse(input.length > 0 ? input : '{}') as RuntimePayload
+}
+
+const payload = await readRuntimePayload()
 
 if (typeof payload.projectRoot === 'string') {
   process.chdir(payload.projectRoot)
