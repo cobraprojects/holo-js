@@ -164,7 +164,7 @@ export const GET = (async (event) => {
 | `workos_state_mismatch` | 422 | The callback doesn't match the login that started it |
 | `workos_code_required` | 422 | No authorization code in the callback |
 | `workos_identity_conflict` | 409 | A local user already has this email (see below) |
-| `workos_auth_failed` | 422 | Anything else, such as a rejected code, or a WorkOS response with no session ID |
+| `workos_auth_failed` | 422 | Anything else, such as a rejected code |
 | WorkOS's own `error` value | 422 | WorkOS sent the user back with an error |
 
 ## Log out

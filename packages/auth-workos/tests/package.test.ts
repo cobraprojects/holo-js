@@ -92,6 +92,8 @@ function completeWorkosSessionFixture(session: WorkosSessionFixture | null): Wor
   }
 }
 
+const SECURE_COOKIE_FLAG = /;\s*Secure\s*(;|$)/
+
 const sessionDirectories: string[] = []
 
 function createSessionStore() {
@@ -1061,7 +1063,7 @@ describe('@holo-js/auth-workos', () => {
     const login = await loginWithWorkos(new Request('http://app.test/login'))
 
     expect(login.headers.get('set-cookie')).toContain('holo_workos_dashboard_state=')
-    expect(login.headers.get('set-cookie')).toMatch(/;\s*Secure\s*(;|$)/)
+    expect(login.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
   })
 
   it('marks the WorkOS state cookie Secure on https requests with the default session cookie', async () => {
@@ -1069,7 +1071,7 @@ describe('@holo-js/auth-workos', () => {
 
     const login = await loginWithWorkos(new Request('https://app.test/login'))
 
-    expect(login.headers.get('set-cookie')).toMatch(/;\s*Secure\s*(;|$)/)
+    expect(login.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
   })
 
   it('treats X-Forwarded-Proto as https for the WorkOS state cookie only from a trusted proxy', async () => {
@@ -1079,11 +1081,11 @@ describe('@holo-js/auth-workos', () => {
 
     requestUrlInternals.provideConnectionAddress(() => '198.51.100.4')
     const trusted = await loginWithWorkos(new Request('http://app.test/login', { headers: forwardedHeaders }))
-    expect(trusted.headers.get('set-cookie')).toMatch(/;\s*Secure\s*(;|$)/)
+    expect(trusted.headers.get('set-cookie')).toMatch(SECURE_COOKIE_FLAG)
 
     requestUrlInternals.provideConnectionAddress(() => '203.0.113.66')
     const untrusted = await loginWithWorkos(new Request('http://app.test/login', { headers: forwardedHeaders }))
-    expect(untrusted.headers.get('set-cookie')).not.toMatch(/;\s*Secure\s*(;|$)/)
+    expect(untrusted.headers.get('set-cookie')).not.toMatch(SECURE_COOKIE_FLAG)
   })
 
   it('sends WorkOS the client IP resolved through trusted proxies, never a spoofed forwarded address', async () => {
@@ -1304,7 +1306,7 @@ describe('@holo-js/auth-workos', () => {
     ['an opaque access token', { access_token: 'opaque_access_token_secret' }],
     ['no token', {}],
   ])('fails closed when WorkOS returns %s and no session id, creating no Holo session', async (_label, tokens) => {
-    await configureRuntime()
+    const runtime = await configureRuntime()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
       ...tokens,
       user: {
@@ -1326,6 +1328,8 @@ describe('@holo-js/auth-workos', () => {
     expect(callback.error?.message).toContain('session id')
     expect(JSON.stringify(callback)).not.toContain('opaque_access_token_secret')
     expect(JSON.stringify(callback)).not.toContain('code_no_session_id')
+    expect(await runtime.usersProvider.findByCredentials({ email: 'no-session-id@app.test' })).toBeNull()
+    expect(await runtime.identityStore.findByProviderUserId('dashboard', 'workos_no_session_id')).toBeNull()
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
