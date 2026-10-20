@@ -15,7 +15,7 @@ Governing rules: [ADR-0016](../docs/adr/0016-laravel-behavioral-parity.md) (foll
 
 These are the four dispositions the ticket permits; "not-reproduced" is not one of them. The Resolution table gives each item's 2026-10-20 outcome and issue. Each row below records the audit reasoning and, where one was made, the same outcome.
 
-Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Implementation issues are filed as #212–#224 and linked as sub-issues of #98. Every item now has an outcome: 32 and 33 are wontfix, 1 is #224, and 22 is carried by #222.
+Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Implementation issues are filed as #212–#225 and linked as sub-issues of #98. Every item now has an outcome: 32 and 33 are wontfix, 1 is #224, and 22 is carried by #222.
 
 ## Dispositions
 
@@ -63,7 +63,7 @@ Decisions were resolved on 2026-10-20 by the orchestrator (see Resolution). Impl
 | 21 | S3 PUT omits Content-Type | reproduced | `packages/storage-s3/src/index.ts:220-292` signs no content type; `setItem`/`setItemRaw` (`:699-705`) and multipart create (`:720-745`) send none. A real local HTTP endpoint received a PUT with no content-type header (deleted probe). Flysystem's S3 adapter sets a MIME type when none is given. **Proposed ticket:** storage-s3 — set `Content-Type` from `inspectFileContent`/MIME inference before signing, on PUT and multipart create. Changes stored metadata for new objects. **Decision (2026-10-20):** store `Content-Type`, Flysystem parity. Filed as #216. |
 | 22 | Temporary URLs behind a TLS proxy | insufficient-information | The signature covers the origin from configured `appUrl` (`packages/storage/src/temporaryLocalStorage.ts:22-80`). A signed `https://` URL serves 200 when the request is https and 404 when it reaches the app as http. The probe shows only this scheme-mismatch rejection. Behind a configured trusted TLS proxy, the correct result is not reproduced: `createPublicStorageResponse` (`packages/storage/src/publicStorage.ts:203-215`) takes the scheme from the raw `request.url` and does not use the shared trusted-proxy resolver, while Laravel's TrustProxies accepts a trusted forwarded scheme. **Decision (2026-10-20):** folded into #222 as an acceptance criterion. Temporary URLs behind a trusted TLS proxy must use https, and the reproduction runs through the adapter with proxy trust configured. **Separate observation (follow-up, needs a ticket):** the Nuxt storage route (`packages/adapter-nuxt/src/runtime/server/routes/storage.ts`) builds its request URL with h3's default `toWebRequest`, which honors `X-Forwarded-Proto`. The realtime and broadcast-auth routes (`realtime-request.ts:12`, `broadcast-auth.post.ts:42`) pass `xForwardedProto: false`. The storage route therefore accepts a forwarded scheme even when `trustedProxies` is a list, which departs from ADR-0016's forwarded-header rule. No bearer escalation, because the signature covers the origin. |
 | 23 | Markdown href is double-escaped | reproduced | `packages/mail/src/markdown.ts:1-57` escapes the whole input and then escapes the href again. `[Search](https://example.test/?a=1&b=2)` renders `&amp;amp;`, which is a broken link. The label is escaped once and is correct. No test pins the double escape (`packages/mail/tests/native-delivery.test.ts:295` checks a plain href). **Proposed ticket:** mail — escape the href once from raw markdown, keep `isSafeMailHref`. Not app-facing. |
-| 24 | No SMTP connection pooling | insufficient-information | `packages/mail/src/runtime.ts:850-866` creates a transport per send with no `pool` option. Laravel's `smtp` mailer config has no pool key and reuses one mailer per process. **Decision (2026-10-20):** rejected. No SMTP pooling; per-message connections are Laravel parity. |
+| 24 | No SMTP connection pooling | insufficient-information | `packages/mail/src/runtime.ts:850-866` creates a transport per send with no `pool` option. Laravel's `smtp` mailer config has no pool key and reuses one mailer per process. **Decision (2026-10-20):** opt-in public pooling is rejected, with no app-facing pool key. Per-process transport reuse is kept for Laravel parity: Laravel's `MailManager` caches the mailer and its Symfony `SmtpTransport`, which keeps the connection open, so per-message connections are not parity. Filed as #225; it reuses the transport internally and adds no public option. |
 
 ### Realtime / Broadcast
 
@@ -103,6 +103,7 @@ Filed on 2026-10-20 as the issues below, each with a failing regression test fir
 | media | 20 | embedded-IPv4 classification; ADR-0016 hardening record | #215 |
 | storage-s3 | 21 | `Content-Type` on PUT and multipart create | #216 |
 | mail | 23 | href escaped once | #217 |
+| mail | 24 | one SMTP transport reused per mailer per process; no public pool option | #225 |
 | cli | 28, 29, 30 | non-zero conflict exit; owned-stale stop; `process.execPath`; payload off the environment | #218 |
 | security | 11 | CSRF enabled by default (upgrade note) | #219 |
 | config | 31 | bounded dev cache for `.js`/`.mjs`/`.cjs` | #220 |
@@ -110,7 +111,7 @@ Filed on 2026-10-20 as the issues below, each with a failing regression test fir
 | adapter-nuxt, storage | 22 (folded), follow-up | forwarded proto only from trusted proxies; temporary URLs behind a trusted TLS proxy use https | #222 |
 | auth | 1 | scrypt N=2^17, r=8, p=1; rehash on login; explicit `maxmem`; ADR-0016 hardening record | #224 |
 | tests | 35 (follow-up) | sleep-based waits replaced with polling | #223 |
-| rejected (no issue) | 7, 15, 24, 25, 26, 34 | closed with decision 2026-10-20 | none |
+| rejected (no issue) | 7, 15, 25, 26, 34 | closed with decision 2026-10-20 | none |
 | wontfix (no issue) | 32, 33 | maintainability only | none |
 
 ## Resolution (2026-10-20)
@@ -131,7 +132,7 @@ Audit-time dispositions above are kept as recorded. This table gives the orchest
 | 20 | reproduced | Implement: keep the media SSRF guard, record it in ADR-0016 as hardening, cover the embedded-IPv4 ranges | #215 |
 | 21 | reproduced | Implement: store Content-Type on S3 PUT (Flysystem parity) | #216 |
 | 23 | reproduced | Implement: single-escape the markdown href | #217 |
-| 24 | insufficient-information | Rejected: no SMTP connection pooling (Laravel parity) | closed with decision |
+| 24 | insufficient-information | Implement: reuse one SMTP transport per mailer per process (Laravel parity); public pooling option rejected | #225 |
 | 25 | insufficient-information | Rejected: no Origin requirement; allowed-origins stays optional (Reverb parity) | closed with decision |
 | 26 | insufficient-information | Rejected: no publish nonce cache; the 300 s Pusher window is parity | closed with decision |
 | 28 | reproduced | Implement: non-zero exit on an unowned port conflict; re-enable owned-stale auto-stop | #218 |
@@ -159,7 +160,7 @@ Resolved 2026-10-20 (see Resolution). The list below is the question as it was a
 4. **#11** CSRF enabled by default (app-facing). Outcome: enabled, with upgrade note (#219).
 5. **#15** Split bulk inserts under the bind limit, with transaction atomicity. Outcome: rejected.
 6. **#18** Stored-data change for `update()` timestamps; upgrade note. Outcome: implement (#214).
-7. **#24** Opt-in SMTP pooling (new config key, app-facing) or accept parity. Outcome: rejected.
+7. **#24** Opt-in SMTP pooling (new config key, app-facing) or accept parity. Outcome: public pooling rejected; transport reuse → #225.
 8. **#28** `holo dev` exit code on port conflict; re-enable owned-stale auto-stop. Outcome: non-zero exit and re-enabled auto-stop (#218).
 9. **#29** Runtime worker launches via `process.execPath`. Outcome: implement (#218).
 10. **#37** Surfacing malformed frames and auth failures to the app. Outcome: auth failures via `.error()`; malformed frames dropped with a dev log (#221).
