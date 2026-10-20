@@ -73,7 +73,7 @@ export default defineDatabaseConfig({
 
 ### PostgreSQL and MySQL
 
-Use either a connection URL or separate host settings. You can also set `ssl` next to a URL.
+Use either a connection URL or separate host settings. You can also set `ssl` next to a URL. It adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests.
 
 ```ts [config/database.ts]
 import { defineDatabaseConfig } from '@holo-js/db'

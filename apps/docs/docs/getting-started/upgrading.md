@@ -489,7 +489,7 @@ Check three behaviors when you upgrade:
 
 ### MySQL `ssl` with a connection URL
 
-A MySQL connection that sets `ssl` next to `url` now uses that setting. Before, it was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
+A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
 
 ## Earlier 0.3.x releases
 

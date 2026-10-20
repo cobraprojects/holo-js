@@ -43,6 +43,16 @@ describe('@holo-js/db-mysql connection options', () => {
     expect(lastPoolConfig()).toMatchObject({ uri: appUrl, ssl: { rejectUnauthorized: false } })
   })
 
+  it('keeps the ssl parameter from a URL when ssl is false', async () => {
+    const url = 'mysql://root@127.0.0.1:3306/app?ssl=Amazon%20RDS'
+    const adapter = mysqlDatabaseDriverFactory.create({ url, ssl: false })
+    onTestFinished(() => adapter.disconnect())
+
+    await adapter.initialize()
+
+    expect(lastPoolConfig()).toMatchObject({ uri: url, ssl: 'Amazon RDS' })
+  })
+
   it('leaves ssl unset for a URL without ssl configured', async () => {
     const adapter = mysqlDatabaseDriverFactory.create({ url: appUrl })
     onTestFinished(() => adapter.disconnect())
