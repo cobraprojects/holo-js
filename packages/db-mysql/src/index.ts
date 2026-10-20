@@ -376,7 +376,8 @@ export const mysqlDatabaseDriverFactory: DatabaseDriverFactory = Object.freeze({
   supportsConcurrentTransactionScopes: true,
   create(connection) {
     const ssl = connection.ssl === true ? {} : connection.ssl || undefined
-    const sslOptions = ssl ? { ssl } : {}
+    const urlSetsSsl = connection.url ? new URL(connection.url).searchParams.has('ssl') : false
+    const sslOptions = ssl && !urlSetsSsl ? { ssl } : {}
 
     return connection.url
       ? createMySQLAdapter({ config: { uri: connection.url, ...sslOptions } })

@@ -53,6 +53,16 @@ describe('@holo-js/db-mysql connection options', () => {
     expect(lastPoolConfig()).toMatchObject({ uri: url, ssl: 'Amazon RDS' })
   })
 
+  it('lets the ssl parameter from a URL win over a configured ssl object', async () => {
+    const url = 'mysql://root@127.0.0.1:3306/app?ssl=Amazon%20RDS'
+    const adapter = mysqlDatabaseDriverFactory.create({ url, ssl: { rejectUnauthorized: false } })
+    onTestFinished(() => adapter.disconnect())
+
+    await adapter.initialize()
+
+    expect(lastPoolConfig()).toMatchObject({ uri: url, ssl: 'Amazon RDS' })
+  })
+
   it('uses the ssl parameter from a URL when no ssl is configured', async () => {
     const url = 'mysql://root@127.0.0.1:3306/app?ssl=Amazon%20RDS'
     const adapter = mysqlDatabaseDriverFactory.create({ url })
@@ -77,6 +87,15 @@ describe('@holo-js/db-mysql connection options', () => {
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql connection options against a live server', () => {
   it('negotiates TLS when a URL and ssl are configured', async () => {
     const adapter = mysqlDatabaseDriverFactory.create({ url: liveMySQLUrl, ssl: { rejectUnauthorized: false } })
+    onTestFinished(() => adapter.disconnect())
+
+    const result = await adapter.query<{ Value: string }>('SHOW STATUS LIKE \'Ssl_cipher\'')
+
+    expect(result.rows[0]?.Value).not.toBe('')
+  }, 30_000)
+
+  it('lets the URL ssl parameter win over a stricter configured ssl object', async () => {
+    const adapter = mysqlDatabaseDriverFactory.create({ url: `${liveMySQLUrl}?ssl=${encodeURIComponent('{"rejectUnauthorized":false}')}`, ssl: { rejectUnauthorized: true } })
     onTestFinished(() => adapter.disconnect())
 
     const result = await adapter.query<{ Value: string }>('SHOW STATUS LIKE \'Ssl_cipher\'')
