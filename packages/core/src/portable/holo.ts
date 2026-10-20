@@ -2009,7 +2009,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   }
 
   let subsystemOptions: HoloRuntimeReconfigureOptions = options
-  let initializing = false
+  let servicesBooting = false
 
   const configureRuntimeSubsystems = async (): Promise<OptionalSubsystemsResult> => {
     const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
@@ -2027,6 +2027,15 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
 
   const initializeRuntimeServices = async (): Promise<void> => {
     if (!shouldBootRuntimeServices(options.processEnv)) return
+    servicesBooting = true
+    try {
+      await bootRuntimeServices()
+    } finally {
+      servicesBooting = false
+    }
+  }
+
+  const bootRuntimeServices = async (): Promise<void> => {
     await runOptionalSubsystemsSerially(configureRuntimeSubsystems)
     await bootHoloPluginModules(projectRoot, loadedConfig)
     const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
@@ -2150,7 +2159,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     async [reconfigureRuntime](nextOptions) {
       subsystemOptions = nextOptions
       const configured = await runOptionalSubsystemsSerially(async () => {
-        if (!runtime.initialized && !initializing) return false
+        if (!runtime.initialized && !servicesBooting) return false
         await configureRuntimeSubsystems()
         return true
       })
@@ -2162,14 +2171,9 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       if (state.current) throw new Error('A Holo runtime is already initialized for this process.')
       if (state.transition) throw new Error(runtimeTransitionConflicts[state.transition.phase])
       await runWithinRuntimeTransition(runtime, 'initializing', async () => {
-        initializing = true
-        try {
-          await runtimeLifecycle.initialize({ projectRoot })
-          runtime.initialized = true
-          state.current = runtime
-        } finally {
-          initializing = false
-        }
+        await runtimeLifecycle.initialize({ projectRoot })
+        runtime.initialized = true
+        state.current = runtime
       })
     },
     async shutdown() {
