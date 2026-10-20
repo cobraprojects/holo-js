@@ -490,6 +490,58 @@ it('removes a presence member whose disconnect delete failed on the next lease r
   expect(liveSent.some(message => message.event === 'pusher_internal:subscription_succeeded')).toBe(true)
 })
 
+it('publishes an accepted whisper that is still in flight before shutdown closes the scaling adapter', async () => {
+  const events: string[] = []
+  let releaseWhisper = (): void => {}
+  const holdWhisper = new Promise<void>(resolve => { releaseWhisper = resolve })
+  let whisperStarted = (): void => {}
+  const whisperPublishing = new Promise<void>(resolve => { whisperStarted = resolve })
+  const runtime = createBroadcastWorkerRuntime({
+    config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+    channelAuth: {
+      resolveUser: ({ headers }) => ({ id: headers.get('x-test-user') ?? 'anonymous' }),
+      definitions: [defineChannel('room.1', {
+        type: 'presence',
+        authorize: user => ({ id: (user as { id: string }).id }),
+        whispers: { typing: defineSchema({ editing: field.boolean().required() }) },
+      })],
+    },
+    scaling: {
+      driver: 'redis', connection: 'shared', nodeId: 'node-a', eventChannel: 'events',
+      adapter: {
+        publish: async (_channel, payload) => {
+          if ((JSON.parse(payload) as { name?: string }).name !== 'client-typing') return
+          whisperStarted()
+          await holdWhisper
+          events.push('whisper-published')
+        },
+        subscribe: async () => () => {},
+        hashSet: async () => {},
+        hashGetAll: async () => ({}),
+        hashDelete: async () => {},
+        setWithExpiry: async () => {},
+        exists: async () => true,
+        close: async () => { events.push('adapter-closed') },
+      },
+    },
+  })
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  runtime.connectWebSocket({ socketId: '6.1', app, headers: new Headers({ 'x-test-user': 'typist' }), send: () => {}, close: () => {}, bufferedAmount: () => 0 })
+  await runtime.receiveWebSocketMessage('6.1', JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+
+  const whisper = runtime.receiveWebSocketMessage('6.1', JSON.stringify({ event: 'client-typing', channel: 'presence-room.1', data: { editing: true } }))
+  await whisperPublishing
+  let closed = false
+  const closing = runtime.close().then(() => { closed = true })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  expect(closed).toBe(false)
+
+  releaseWhisper()
+  await whisper
+  await closing
+  expect(events).toEqual(['whisper-published', 'adapter-closed'])
+})
+
 it('removes a socket whose connection_established send fails so its identifier can be reused', async () => {
   const runtime = createBroadcastWorkerRuntime({
     config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),

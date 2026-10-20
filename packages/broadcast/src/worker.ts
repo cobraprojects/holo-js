@@ -2241,7 +2241,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       }
     }))
     socket.subscribedChannels.clear()
-    const cleanup = Promise.all(scalingCleanupTasks).then(() => undefined, (error: unknown) => {
+    const cleanup = Promise.all([socket.pendingMessage, ...scalingCleanupTasks]).then(() => undefined, (error: unknown) => {
       report(error, { capability: 'broadcast', operation: 'worker.socketCleanup' })
     })
     pendingSocketCleanups.add(cleanup)
