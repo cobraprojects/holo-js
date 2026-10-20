@@ -36,16 +36,20 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
   let retained: ManagedResourceEntry<TConfig, TValue>[] = []
   let claimed: ManagedResourceEntry<TConfig, TValue>[] = []
   let opened: ManagedResourceEntry<TConfig, TValue>[] = []
+  const releasing = new Set<Promise<void>>()
 
   const findSameConfig = (entries: readonly ManagedResourceEntry<TConfig, TValue>[], config: TConfig) =>
     entries.find(entry => isDeepStrictEqual(entry.config, config))
 
   const closeWhenIdle = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
     retained = retained.filter(candidate => candidate !== entry)
-    releaseManagedResources([entry.value]).catch(error => reportError(error, {
-      capability: 'runtime',
-      operation: 'releaseReplacedResource',
-    }))
+    const release = releaseManagedResources([entry.value])
+      .catch(error => reportError(error, {
+        capability: 'runtime',
+        operation: 'releaseReplacedResource',
+      }))
+      .finally(() => releasing.delete(release))
+    releasing.add(release)
   }
 
   const finishOperation = (entry: ManagedResourceEntry<TConfig, TValue>): void => {
@@ -121,6 +125,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       retained = []
       claimed = []
       opened = []
+      await Promise.all([...releasing])
       await releaseManagedResources(values)
     },
   }

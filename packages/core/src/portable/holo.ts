@@ -2003,9 +2003,9 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     throwCapabilityFailures(failures)
   }
 
-  const applyOptionalSubsystems = (
+  const configureRuntimeSubsystems = async (
     subsystemOptions: HoloRuntimeReconfigureOptions,
-  ): Promise<OptionalSubsystemsResult> => runOptionalSubsystemsSerially(async () => {
+  ): Promise<OptionalSubsystemsResult> => {
     const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
       authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
@@ -2017,11 +2017,11 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     activeAuthRuntime = optionalSubsystems.auth
     activeAuthContext = optionalSubsystems.authContext
     return optionalSubsystems
-  })
+  }
 
   const initializeRuntimeServices = async (): Promise<void> => {
     if (!shouldBootRuntimeServices(options.processEnv)) return
-    await applyOptionalSubsystems(options)
+    await runOptionalSubsystemsSerially(() => configureRuntimeSubsystems(options))
     const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
       ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
         ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
@@ -2141,7 +2141,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       return runner ? runner(authRequest, callback) : callback()
     },
     async [reconfigureRuntime](nextOptions) {
-      await applyOptionalSubsystems(nextOptions)
+      await runOptionalSubsystemsSerially(async () => {
+        if (!runtime.initialized) return
+        await configureRuntimeSubsystems(nextOptions)
+      })
     },
     async initialize() {
       if (runtime.initialized) throw new Error('Holo runtime is already initialized.')

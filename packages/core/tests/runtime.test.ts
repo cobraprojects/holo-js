@@ -78,6 +78,7 @@ import {
   initializeHolo,
   loadGeneratedProjectRegistry,
   peekHolo,
+  reconfigureHoloRuntime,
   reconfigureOptionalHoloSubsystems,
   registryInternals,
   resetHoloRuntime,
@@ -3213,6 +3214,35 @@ export default defineSessionConfig({ driver: 'primary', stores: { primary: { dri
 
     expect(second.primary).toBe(first.primary)
     await resetHoloRuntime()
+  })
+
+  it('does not reopen Redis session clients when a reconfiguration is queued behind a shutdown', async () => {
+    const service = await startRedisService()
+    const client = service.clients[0]
+    const port = service.ports[0]
+    if (!client || !port) throw new Error('The native Redis service did not start')
+    const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+    const baseline = await connections()
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', port: ${port} } } })
+`)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionPackageEntry}
+export default defineSessionConfig({ driver: 'primary', stores: { primary: { driver: 'redis', connection: 'default' } } })
+`, 'utf8')
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    await expect.poll(connections).toBe(baseline + 1)
+
+    const stopping = runtime.shutdown()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await reconfigureHoloRuntime(runtime, {})
+    await stopping
+
+    await expect.poll(connections).toBe(baseline)
   })
 
   it('serializes concurrent reconfigurations so each Redis session client is acquired once', async () => {

@@ -102,6 +102,36 @@ describe('managed resources', () => {
     await expect.poll(() => closed).toEqual(['first'])
   })
 
+  it('waits for a replaced resource that is still closing when the runtime disposes', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, { readonly name: string, close(): Promise<void> }>()
+    let finishClose: () => void = () => undefined
+    const slowClose = new Promise<void>(resolve => { finishClose = resolve })
+    const first = await resources.acquire('first', name => ({
+      name,
+      async close() {
+        await slowClose
+        closed.push(name)
+      },
+    }))
+    await resources.commit()
+    let settle: () => void = () => undefined
+    const operation = first.hold(() => new Promise<void>(resolve => { settle = resolve }))
+    await resources.acquire('second', config => createRecordingResource(config, closed))
+    await resources.commit()
+
+    settle()
+    await operation
+    let disposed = false
+    const dispose = resources.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(disposed).toBe(false)
+
+    finishClose()
+    await dispose
+    expect(closed.sort()).toEqual(['first', 'second'])
+  })
+
   it('holds a resource for each store operation through a held store until the operation settles', async () => {
     const closed: string[] = []
     const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
