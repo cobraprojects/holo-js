@@ -55,3 +55,40 @@ it('refreshes a table-wide and a column-level subscription exactly once for one 
   expect(runs.tableWide - before.tableWide).toBe(1)
   expect(runs.columnLevel - before.columnLevel).toBe(1)
 })
+
+it('coalesces a burst of remote invalidations for one table and limits concurrent remote refreshes', async () => {
+  const { db } = await openRealtimeDatabase()
+  const runs = new Map<string, number>()
+  let active = 0
+  let maxActive = 0
+  for (let index = 0; index < 8; index += 1) {
+    const name = `records.burst.${index}`
+    const burstQuery = query({
+      name,
+      access: 'public',
+      handler: async () => {
+        runs.set(name, (runs.get(name) ?? 0) + 1)
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        try {
+          await new Promise(resolve => setTimeout(resolve, 25))
+          return { records: await db.table('records').orderBy('id').get() }
+        } finally {
+          active -= 1
+        }
+      },
+    })
+    await subscribeRealtimeQuery(burstQuery)
+  }
+  const before = new Map(runs)
+  maxActive = 0
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+
+  await Promise.all(Array.from({ length: 10 }, () => bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })))
+  await new Promise(resolve => setTimeout(resolve, 600))
+
+  for (const [name, count] of runs) {
+    expect(count - (before.get(name) ?? 0)).toBeLessThanOrEqual(2)
+  }
+  expect(maxActive).toBeLessThanOrEqual(4)
+}, 30_000)

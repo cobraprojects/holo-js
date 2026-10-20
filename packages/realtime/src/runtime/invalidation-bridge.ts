@@ -20,10 +20,6 @@ function isRemoteDatabaseDependencyInvalidation(value: unknown): value is Remote
 export function createRealtimeDatabaseInvalidationBridge(): BroadcastDatabaseInvalidationBridge {
   return {
     connect(publish) {
-      if (queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()) {
-        return () => undefined
-      }
-
       return queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => { await publish(invalidation) })
     },
     async receive(invalidation) {

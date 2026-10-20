@@ -71,6 +71,10 @@ export interface RemoteDatabaseDependencyInvalidation {
   readonly dependencies: readonly string[]
 }
 
+type DatabaseDependencyInvalidationPublisherCandidate = {
+  readonly publisher: DatabaseDependencyInvalidationPublisher
+}
+
 type DatabaseDependencyInvalidationPublisher = (
   invalidation: RemoteDatabaseDependencyInvalidation,
 ) => void | Promise<void>
@@ -357,14 +361,14 @@ type MutationPreviousRowsRequirement = (connectionName: string, tableName: strin
 function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
-  dependencyInvalidationPublisher?: DatabaseDependencyInvalidationPublisher
+  dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
   mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoDbQueryCacheBridge__?: {
       bridge?: DatabaseQueryCacheBridge
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
-      dependencyInvalidationPublisher?: DatabaseDependencyInvalidationPublisher
+      dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
       mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
     }
   }
@@ -401,12 +405,11 @@ export function onDatabaseDependencyInvalidated(
 
 function onDatabaseDependencyInvalidationPublished(publisher: DatabaseDependencyInvalidationPublisher): () => void {
   const state = getQueryCacheBridgeState()
-  state.dependencyInvalidationPublisher = publisher
+  const candidate: DatabaseDependencyInvalidationPublisherCandidate = { publisher }
+  state.dependencyInvalidationPublishers = [...(state.dependencyInvalidationPublishers ?? []), candidate]
 
   return () => {
-    if (state.dependencyInvalidationPublisher === publisher) {
-      state.dependencyInvalidationPublisher = undefined
-    }
+    state.dependencyInvalidationPublishers = state.dependencyInvalidationPublishers?.filter(entry => entry !== candidate)
   }
 }
 
@@ -808,7 +811,7 @@ export function hasDatabaseDependencyInvalidationListeners(): boolean {
 }
 
 export function hasDatabaseDependencyInvalidationPublisher(): boolean {
-  return getQueryCacheBridgeState().dependencyInvalidationPublisher !== undefined
+  return (getQueryCacheBridgeState().dependencyInvalidationPublishers?.length ?? 0) > 0
 }
 
 function publishDatabaseDependencyInvalidation(
@@ -2129,7 +2132,8 @@ export async function invalidateQueryCacheDependencies(
   const invalidate = async () => {
     const bridge = getDatabaseQueryCacheBridge()
     await bridge?.invalidateDependencies(dependencies)
-    const publisher = getQueryCacheBridgeState().dependencyInvalidationPublisher
+    const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
+    const publisher = candidates[candidates.length - 1]?.publisher
     const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
     if (!publisher && !hasLocalListeners) {
       return

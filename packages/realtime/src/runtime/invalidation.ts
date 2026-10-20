@@ -250,6 +250,47 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
   })])
 }
 
+const REMOTE_REFRESH_CONCURRENCY = 4
+let activeRemoteRefreshes = 0
+const remoteRefreshWaiters: Array<() => void> = []
+const queuedRemoteRefreshKeys = new Set<string>()
+
+function acquireRemoteRefreshSlot(): Promise<void> {
+  if (activeRemoteRefreshes < REMOTE_REFRESH_CONCURRENCY) {
+    activeRemoteRefreshes += 1
+    return Promise.resolve()
+  }
+
+  return new Promise<void>(resolve => remoteRefreshWaiters.push(resolve))
+}
+
+function releaseRemoteRefreshSlot(): void {
+  const next = remoteRefreshWaiters.shift()
+  if (next) {
+    next()
+    return
+  }
+
+  activeRemoteRefreshes -= 1
+}
+
+async function refreshRemoteEntry(refreshKey: string): Promise<void> {
+  const running = getRuntimeState().refreshes.get(refreshKey)
+  if (running?.running) {
+    running.pending = true
+    queuedRemoteRefreshKeys.delete(refreshKey)
+    return
+  }
+
+  await acquireRemoteRefreshSlot()
+  queuedRemoteRefreshKeys.delete(refreshKey)
+  try {
+    await scheduleRefreshKey(refreshKey)
+  } finally {
+    releaseRemoteRefreshSlot()
+  }
+}
+
 async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly string[]): Promise<void> {
   const state = getRuntimeState()
   if (state.queryEntries.size === 0) {
@@ -272,7 +313,17 @@ async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly s
     }
   }
 
-  await Promise.all([...refreshKeys].map(refreshKey => scheduleRefreshKey(refreshKey)))
+  const refreshes: Promise<void>[] = []
+  for (const refreshKey of refreshKeys) {
+    if (queuedRemoteRefreshKeys.has(refreshKey)) {
+      continue
+    }
+
+    queuedRemoteRefreshKeys.add(refreshKey)
+    refreshes.push(refreshRemoteEntry(refreshKey))
+  }
+
+  await Promise.all(refreshes)
 }
 
 export async function handleDatabaseInvalidation(

@@ -502,3 +502,20 @@ it('refreshes only the subscriptions of the writing app when two apps share one 
   await new Promise(resolve => setTimeout(resolve, 1_500))
   expect(subscriberB.hasScore(42)).toBe(false)
 }, 60_000)
+
+it('keeps publishing exactly once after the first of two embedded workers stops', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const first = await startScoresWorker(db, redisPort, { nodeId: 'worker-first' })
+  await startScoresWorker(db, redisPort, { nodeId: 'worker-second' })
+  const invalidations = await subscribeToScalingEvents(redis)
+
+  await first.stop()
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => invalidations.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(invalidations).toHaveLength(1)
+}, 30_000)
