@@ -30,6 +30,10 @@
 - Add explicit other-device browser logout through `auth.logoutOtherDevices()` and session-guard `logoutOtherDevices()`, backed by durable provider/user revocation state. Retain the current logical browser session and reject the selected identity on other browsers' next authenticated request, including remember-cookie restoration. Unrelated identities and personal access tokens remain valid. Applications own recent reauthentication policy; Clerk and WorkOS logout affects Holo sessions, not upstream provider sessions.
 - Add `tokens.revokeOthers({ guard })` to revoke a user's other personal access tokens while retaining the verified token used for the current request. Browser-session revocation remains separate.
 - Allow session rotation to receive a complete replacement `data` payload and `renewLifetime`. Auth transitions renew lifetime while preserving private flash state and remember policy; ordinary rotation retains its defaults.
+- Add a `LICENSE` file (MIT) at the repository root and in every published package, and list it in each package's `files`.
+- Add `SECURITY.md` with a private reporting channel and the supported-version policy.
+- Add a [versioning policy](apps/docs/docs/getting-started/versioning.md) to the documentation: what `0.MINOR.PATCH` means, what a breaking change is, and how security fixes ship.
+- Add `repository` metadata to every published package, pointing at its directory in the Holo-JS repository.
 
 ### Security
 
@@ -121,6 +125,8 @@
 - Clean saves fire `saving` and `saved` only, as in Laravel, and no longer write `updated_at` or fire `updating` and `updated`. An `updating` handler that reverts every change fires `saved` without an `UPDATE`. After a save, `wasChanged()` and `getChanges()` report the attributes the save wrote, not edits made in `saved` handlers. A save that creates a record reports no changes, and lifecycle handlers receive the model you saved. After `save()` the model is clean, even when a `saved` handler changed an attribute. A `saving` handler that dirties the model takes the normal update path. See [lifecycle, factories, and seeders](apps/docs/docs/getting-started/upgrading.md#lifecycle-factories-and-seeders).
 - Run set mutators after each lifecycle handler on the fields that handler changed, so a later handler on the same or a later event sees normalized values. Each value is still mutated once per assignment.
 - Persist attribute changes made in `creating`, `updating`, and `saving` handlers, and apply mutators once per write, including `make().save()` and factories. Models loaded with `withCount()` or `withExists()` save without writing the computed values, and in-place changes to JSON and date attributes are detected and saved. Factories and `holo seed` run seeders without mass-assignment guards, as Laravel does. See [lifecycle, factories, and seeders](apps/docs/docs/getting-started/upgrading.md#lifecycle-factories-and-seeders).
+- Publish packages from CI. The Release workflow runs on pushes to `main` and publishes every package version that npm doesn't have yet, with npm provenance. The publish job runs only for `main` and uses the `release` environment, which holds the `NPM_TOKEN` secret. Without the secret, the run logs a notice and succeeds without publishing. Only the publish step receives the token.
+- `bun run release` stops the running `changeset publish` and every process it started, then restores the package manifests it rewrites when a publish is interrupted with SIGINT, SIGTERM, or SIGHUP, not only when the publish fails. Processes that ignore SIGTERM get SIGKILL after five seconds, and manifests are restored only after they have all exited.
 - `withoutForeignKeyConstraints()` runs its callback, and the restore, on one pooled connection, so no other pooled connection is left with foreign key checks off. The standalone `disableForeignKeyConstraints()` still changes only the connection that runs it. If the restore statement goes through the query logger and the logger throws, the checks are still restored, the call resolves, and the logger error goes to `exceptions.report` as `db` / `schema.restoreForeignKeys`.
 - Work started inside a transaction or a `withoutForeignKeyConstraints()` callback that runs after that callback returns no longer reuses the pooled connection the scope released. It uses a connection from the pool instead.
 - PostgreSQL `date` and `timestamp` values use `app.timezone` (default `UTC`) instead of the Node process's time zone. A `date` reads as a `Date` at midnight in `app.timezone`, `timestamp` reads and writes its wall-clock time in `app.timezone`, and a `Date` query value is sent with its offset. Full PostgreSQL date formats are parsed, including five-digit years, `BC`, and `infinity`. Injected PostgreSQL clients, pools, and `createPool` objects read dates and timestamps in `app.timezone` too, through a per-query type config. Ambiguous fall-back times resolve to standard time, as PostgreSQL does. A `DATE` or `TIMESTAMP` that falls in a DST gap resolves forward, as PostgreSQL does, so a DATE keeps its calendar day. `timestamptz` values bind with their full historical offset, seconds included. Holo's date and timestamp parsers take precedence over a custom `types` config for those two OIDs, and the config still applies to every other OID.
@@ -174,6 +180,310 @@ In preparation, not yet released.
 
 - Holo CLI writes generated and updated project files, including `package.json`, through a temporary file and an atomic rename. Editors, watchers and package managers reading a file while `holo dev` or `holo install` updates it no longer see an empty or truncated file.
 - Next.js realtime queries call React `use()` on every render, so a query that suspends for its first result renders without React errors on Next.js 16.4.
+
+## 0.3.28
+
+### Added
+
+- `resolveRequestUrl()` and its request input types, `HoloRequestInput` and `HoloRequestHeaders`, are exported from `@holo-js/kernel`. They accept native `Request` objects and framework request-like inputs, including trusted proxy URL resolution.
+- `Storage.stat(path)` and `disk(...).stat(path)` return `{ size, mimeType }`, or `null`, for local, public, and S3 disks. Custom backends may implement the optional `getItemStat(key, { sampleBytes })`.
+
+### Security
+
+- File types are detected from file contents wherever Holo judges a file. Text formats without recognizable contents (CSV, JSON, Markdown, SVG, HTML) use the file extension, and a binary extension whose contents do not match has no type.
+- Public storage shows images, audio, video, fonts, PDFs, and plain text formats inline and sends everything else as a download, so uploads such as XML disguised as images cannot execute on the application origin.
+- `image()` validation accepts only complete JPEG, PNG, GIF, WebP, AVIF, and TIFF images identified from their bytes, and rejects SVG. Server-side validation fully decodes every frame through the optional `sharp` peer of `@holo-js/kernel`, and rejects images over 40,000,000 decoded pixels or 1,000 frames.
+- `HOLO_SECURITY_TRUST_PROXY` trusts exactly one proxy header family: `true`, `1`, `yes`, `on`, or `x-forwarded` trust `X-Forwarded-*`, and `forwarded` trusts `Forwarded`. The two families are never mixed, and rate-limit keys use the bare client address.
+- Malformed request URLs and trusted proxy headers get `400 Bad Request` from the security middleware instead of a server error.
+- Form ambient request URLs no longer come from the `Referer` header. CSRF, Auth, Forms, and Next resolve URLs through `resolveRequestUrl()`.
+
+### Changed
+
+- Media stores and checks `acceptsMimeTypes()` against the detected type.
+- `Storage.stat()` reports the same type for the same bytes on local, public, and S3 disks. S3 disks read metadata with one ranged GET and ignore stored content types.
+- `inferMimeTypeFromName()` in `@holo-js/mail` recognizes `avif`, `css`, `mp3`, `woff`, and `woff2`. Existing answers are unchanged.
+- When the broadcast worker cannot be reached, `broadcast()` throws `[@holo-js/core] Broadcast publish request could not reach the broadcast worker at <origin>.` with the network error as its cause, instead of a raw `fetch failed` error.
+
+### Fixed
+
+- Public local-file responses honor `Range` requests with `206` and `416` responses, streamed from disk.
+- Nullable array fields keep `null` during coercion.
+- Regex rules test against a fresh copy of the pattern with `lastIndex` reset, so reused schemas no longer depend on earlier matches.
+- Writes to `json` columns are JSON-encoded once, and non-SQLite reads return stored JSON without dialect normalization.
+- The Next request context carries `url`, so the public origin resolves from `Host`.
+- `queue:listen` ignores generated discovery output when watching queue sources, and waits for queued project preparation to finish before restarting a worker.
+
+### Compatibility and upgrade requirements
+
+- `mimeType` is removed from `addMedia({ contents, fileName })` and `addMedia({ url })`. The type is detected from the bytes, so remove the argument from calls.
+- `mediaRuntimeInternals.inspectImage()` is removed from `@holo-js/media`.
+- Deployments whose proxy sends only `Forwarded` must set `HOLO_SECURITY_TRUST_PROXY=forwarded`.
+- Server-side `image()` validation needs `sharp` installed. Without it, validation reports an error asking for the install.
+- Custom storage backends that implement `getItemStat` receive `(key, { sampleBytes })` and return the file size and leading bytes.
+
+## 0.3.27
+
+### Changed
+
+- `DB.connection(name)` returns the active connection only when its name matches the requested name or no name is given. Previously, a named request inside an active connection context returned that connection.
+
+### Compatibility and upgrade requirements
+
+- `@holo-js/mail` now depends on `nodemailer` `^10.1.0` instead of the catalog version. Verify SMTP delivery after upgrading.
+
+## 0.3.26
+
+No user-visible changes.
+
+## 0.3.25
+
+### Security
+
+- Built-in `logging: true` no longer prints SQL text, savepoint names, or error messages by default. SQL appears only with `security.debugSqlInLogs: true`.
+
+### Added
+
+- `belongsToMany`, `morphToMany`, and `morphedByMany` pivots gain `withTimestamps()`.
+- Connection config accepts `max`, `connectionTimeoutMillis`, `idleTimeoutMillis`, `application_name`, `concurrency`, and `logger`. The kernel exports the new database types.
+- New PostgreSQL scaffolds include pool and concurrency settings and `DB_*` environment entries. Queries beyond the queue limit fail with `QUERY_SCHEDULER_BACKPRESSURE`.
+
+### Changed
+
+- `count()`, `exists()`, and `doesntExist()` run in the database instead of loading rows.
+- Increment and decrement compile to a single `col = col + ?` UPDATE, so concurrent counter updates are preserved.
+- PostgreSQL and MySQL transactions take a query-scheduler slot, so they count against `maxConcurrentQueries`.
+- Loaded pivot attributes include every pivot column.
+- Native-form arrays of objects serialize as indexed names (`items[0].name`). Primitive arrays keep `tags[]`.
+
+### Fixed
+
+- Pool, timeout, `application_name`, `concurrency`, and `logger` settings from `config/database.ts` reach the runtime. Pool budgets apply only to PostgreSQL.
+- Increment and decrement accept numeric strings from drivers.
+- Session persistence upserts on `id`, removing the session creation race.
+- Next helpers resolve `next/headers` and `next/navigation` from the consuming project, so locally linked framework packages use the host's request scope.
+- Native-form submissions include programmatic fields that have no matching input.
+- Migration recovery works when a model or seeder table lacks primary-key metadata.
+
+### Compatibility and upgrade requirements
+
+- Apps that relied on SQL text in logs must set `security.debugSqlInLogs: true`. A non-boolean value throws.
+- Code that parses `items[]` keys for arrays of objects must read `items[0].name` instead.
+- Pivot relation return types change to `InitialPivotRelation`, and `as()` and `using()` return configured types.
+
+## 0.3.24
+
+### Added
+
+- `clearNotifications(query)` and `markAllNotificationsAsRead(query)` are exported from `@holo-js/notifications`.
+- The Flux client delivers `notifications.message` payloads to `onNotification` listeners.
+
+### Changed
+
+- CLI dev, build, and start processes receive values from `.env` files loaded by `loadEnvironment`, not only from `process.env`.
+- Raw SQL numbered placeholders bind by index and must start at 1. Quoted strings and comments are skipped when scanning placeholders.
+- Redis Cluster queues use a `{queueName}` hash-tag key prefix. The non-cluster prefix is unchanged.
+- File session locks use a new on-disk layout.
+
+### Fixed
+
+- `avg`, `min`, and `max` on an empty set return `null`.
+- SQLite `whereYear`, `whereMonth`, and `whereDay` compare as integers.
+- Broadcast worker shutdown closes sockets with code 1001 and awaits pending messages.
+
+### Compatibility and upgrade requirements
+
+- `@holo-js/config` adds a runtime dependency on `jiti`. `.ts`, `.mts`, and `.cts` config files load through jiti on all supported Node runtimes.
+- `@holo-js/adapter-nuxt` declares `vue` as a peer dependency.
+
+## 0.3.23
+
+No user-visible changes beyond 0.3.22.
+
+## 0.3.22
+
+### Added
+
+- `DatabaseContext.table()` is added, and `DB.table()` delegates to it.
+- `createMySQLAdapter({ client })` accepts an existing `mysql2/promise` connection. The adapter owns it and closes it on disconnect.
+
+### Changed
+
+- Queue CLI commands load project jobs through the project runtime, and disabled job discovery is respected.
+- Realtime live-query predicates follow SQL `NULL` rules, use exact string equality, and fetch from the database when a local comparison cannot match its collation.
+- SQLite connections open in WAL mode, and writes serialize per database file within a process, so application and worker connections can commit while readers keep their snapshots.
+
+### Fixed
+
+- PostgreSQL multi-statement results return the last statement's rows, and multi-statement migration results are handled.
+- MySQL JSON, text, and blob defaults compile wrapped in parentheses. Paginated locking reads compile `LIMIT` and `OFFSET` before the locking clause.
+- Numeric identifiers hydrate consistently, and unsafe integers throw.
+- PostgreSQL database cache entries expire correctly, and native database cache connections are released on runtime shutdown.
+- Broadcast worker shutdown also shuts down the realtime runtime.
+- Authorization policy checks reuse the validated request actor, avoiding repeated database session writes and realtime dependency self-deadlocks. Direct auth lookups and new requests still validate sessions.
+- Session timestamps serialize per dialect, so MySQL session creation, activity updates, and rotation work.
+- Next auth refreshes cancel on navigation and unmount.
+- Validation schemas may be empty for CSRF-only forms, and submitted transport fields are not treated as application data.
+- SvelteKit disposes Holo runtime resources when the native SvelteKit server shuts down.
+- SQLite table rebuilds keep `sqlite_sequence` for auto-increment columns.
+- Project job, event, and listener definitions load as one graph, so shared definitions keep their identity.
+
+### Compatibility and upgrade requirements
+
+- Generated Next and SvelteKit apps use a new `definition-importer.ts` file, and `job-importer.ts` is removed when the registry is regenerated (#97).
+
+## 0.3.21
+
+### Added
+
+- `security.allowUnsafeRawSql` can be set per native connection in `config/database.ts`. It enables `unsafeQuery()` and `unsafeExecute()`, defaults to disabled, and must be a boolean.
+
+### Changed
+
+- The `MediaEnabledModel` type no longer intersects with the base model type.
+
+### Fixed
+
+- Pooled PostgreSQL and MySQL transactions run on separate leased connections instead of deadlocking behind the shared query queue.
+- Realtime HTTP requests send the configured CSRF cookie token, so strict protection accepts browser queries and mutations.
+- `import.meta.url` in project modules bundled by the CLI resolves to the source file URL.
+
+## 0.3.20
+
+### Security
+
+- Unsafe requests no longer pass CSRF on a signed cookie plus a matching `Origin` or `Referer`. A submitted token in the configured header or form field is required.
+
+### Changed
+
+- Next, Nuxt, and SvelteKit CSRF middleware apply the configured CORS headers and answer preflight requests from allowed origins. Nuxt treats `OPTIONS` as a safe method.
+- Next.js builds wrap exported HTTP method handlers in `app/**/route.ts` so validation and rate-limit errors become JSON responses.
+
+### Fixed
+
+- Next server-action requests carrying the CSRF form field have that token mapped to the header, so login server actions keep working.
+- Rate-limit (429) errors are serialized with `Retry-After` in Next, Nuxt, and SvelteKit.
+- The `forms` client reads the `method` attribute from the live form element.
+
+### Compatibility and upgrade requirements
+
+- Clients that send unsafe requests relying on `Origin` or `Referer` matching must send the CSRF token in the configured header or form field.
+
+## 0.3.19
+
+### Added
+
+- Next.js apps get `proxy.ts` calling `csrfProtection()`, and Nuxt apps get `server/middleware/csrf.ts`, when auth or security is enabled. Existing projects with `@holo-js/security` get these files on sync if no middleware exists.
+- The SvelteKit managed `hooks.server.ts` runs `csrfProtection()` when `@holo-js/security` is a dependency.
+
+### Changed
+
+- The Nuxt runtime plugin no longer logs `Holo DB connected` at startup. Requests wait for database initialization through the Nitro request hook and receive its error.
+
+## 0.3.18
+
+No user-visible changes.
+
+## 0.3.17
+
+### Added
+
+- `auth.logoutOtherDevices()` revokes the other browser sessions of the signed-in user through a durable per-user generation in the new `auth_session_revocations` table. The current session is kept.
+- `auth.tokens.revokeOthers({ guard? })` revokes the other personal access tokens of the current token user and keeps the current token.
+- `holo media:regenerate [ModelName ...] [--ids=] [--only=] [--only-missing]` regenerates media conversions on their stored disks.
+- `temporaryUrl()` works on local and public disks, not only S3-compatible disks. Local URLs are signed with the application key, expire, and are served by the framework storage route.
+- `createSvelteKitHoloHooks` is exported from `@holo-js/adapter-sveltekit`, and generated SvelteKit hooks use it.
+- `join`, `leftJoin`, and `rightJoin` on the table query builder accept a table definition and type the joined columns. Left and right joins mark those columns nullable.
+- `config/app.ts` gains `timezone` (default `UTC`), read from `APP_TIMEZONE` in new scaffolds.
+- New scaffolds include an `s3` storage disk with `STORAGE_DISKS_*` variables, and add `@holo-js/storage-s3` when storage is enabled.
+
+### Security
+
+- Token guards reject access tokens issued for a different provider, and the guard provider is checked before token authentication.
+- Password reset redemption is single-use under concurrent requests: the token claim and the password update run in one transaction.
+- Email verification tokens are claimed atomically. On the native model path the claim and the user update share a transaction, so a failed update leaves the token usable.
+- Logging out of a token guard deletes the current personal access token.
+- A login that fails after the session is written invalidates that session and clears the guard's session state.
+
+### Changed
+
+- Model `chunk`, `chunkById`, and `chunkByIdDesc` read rows in database batches instead of loading the full result first (#82).
+- `afterRollback` callbacks run in reverse registration order. Multiple failures, and rollback compensation failures, are thrown as `AggregateError`.
+- Native MySQL pools default `timezone` to `Z` and set the session time zone to `+00:00` unless `timezone` is configured. Native Postgres reads `timestamp without time zone` values as UTC.
+- Blank storage and mail environment values are treated as unset. An empty S3 endpoint falls back to the regional AWS endpoint, and empty SMTP credentials are omitted.
+- Scalar validation fields no longer take the last element of a JSON array. Only repeated form keys collapse to their last value.
+- A failed `custom()` skips later transforms in the chain, and a parent array transform does not run when child checks fail. A `confirmed()` placed after `transform()` compares transformed values.
+- Form submission results are discarded if a field is edited or the form is reset while the submission is in flight.
+- The S3 storage backend is created on first use of its disk, not at startup.
+- Public storage responses serve only `GET` and `HEAD`. The Nuxt route moved from `storage.get.ts` to `storage.ts`, and the generated SvelteKit route passes the app key.
+- New media migrations add indexes on `path` and on `file_name, mime_type`.
+- New SvelteKit `vite.config` allows the workspace root in `server.fs.allow`.
+
+### Fixed
+
+- The model `hidden` option keeps literal attribute names in its type.
+- Media attachment, deletion, and regeneration compensate file changes in rollback order, and post-commit failures keep the committed-state error.
+- `holo dev` restarts the framework server only after pending preparation finishes, and shutdown is terminal. Process cleanup on shutdown is fixed (#68).
+- The CLI keeps media configuration when `@holo-js/media` is installed without app media config.
+
+### Compatibility and upgrade requirements
+
+- Apps that installed auth before 0.3.17 must add an `auth_session_revocations` table: `provider` and `user_id` as `VARCHAR(255) NOT NULL`, `generation` as `INTEGER NOT NULL DEFAULT 0`, `retained_session_id` as nullable `VARCHAR(255)`, with primary key (`provider`, `user_id`). Session-authenticated requests read this table. The scaffold ships the migration only for new projects.
+- Apps that relied on the host time zone must set `APP_TIMEZONE`. The config runtime now sets `process.env.TZ` from `app.timezone`, which defaults to `UTC`.
+- MySQL and Postgres apps should review date and time columns written by earlier versions, because naive values are now read and written as UTC.
+- Calling password reset or email verification redemption inside a caller's database transaction throws `TransactionError` when the user model is not a native repository. Run redemption outside the transaction.
+- Custom `AuthTokenStore` implementations must honor the new optional `exceptId` argument of `deleteByUserId`. Otherwise `tokens.revokeOthers()` also deletes the current token.
+- Nuxt server models, the generated schema, and the model import directory resolve from the project root instead of `srcDir`. Apps that set `srcDir` must move those files.
+
+## 0.3.16
+
+### Added
+
+- `useForm(...)` accepts `credentials` (`'omit' | 'same-origin' | 'include'`) and `csrf: { endpoint }` for APIs on another origin. The built-in submitter fetches the CSRF endpoint before unsafe requests and sends the returned `token` in `X-CSRF-TOKEN`.
+- `@holo-js/validation` exports the `InferValidationSchemaData` type.
+
+### Changed
+
+- Scaffolded configuration reads environment variables: `DB_CONNECTION` and `DB_DRIVER` (database), `REDIS_CONNECTION` (Redis), `QUEUE_CONNECTION` (queue), `CACHE_DRIVER` (cache), `AUTH_GUARD` and `AUTH_PASSWORD_BROKER` (auth), and `RATE_LIMIT_DRIVER` (security). Generated `.env` and `.env.example` files include these keys.
+- The scaffolded Redis queue, Redis cache, and rate-limit configs no longer set `connection: 'default'`, and the generated cache config always lists a `redis` driver.
+- `holo agents:install` installs a versioned `holo-js` skill tree with a routing skill and focused guides such as `database-orm`, `forms-validation`, and `queues-events`. It replaces the single documentation-search skill, and `@holo-js/cli` now publishes a `skills` directory.
+- `holo agents:install` refuses to overwrite a skill tree when any file differs from the packaged version or an extra file is present. `--force` replaces the whole tree.
+- SvelteKit `useForm` with `credentials` or `csrf` options uses the default fetch submitter instead of the SvelteKit action submitter.
+
+### Fixed
+
+- `holo dev` and `holo start` forward SIGINT and SIGTERM to the framework child process, and return without an error when the child stops because of the signal.
+- On Windows, `holo dev` and `holo start` stop the framework process tree with `taskkill /T /F`.
+- Seeded runs initialize the application runtime with `initializeHolo` before seeders execute, so configured application services are booted first.
+- The default forms submitter copies `retryAfterSeconds` into 429 failure results. It previously checked for `retryAfter`, which is not the contract field name.
+- `@holo-js/flux` keeps the WebSocket connection promise pending while connector options are resolved, which fixes a connection race.
+- Queue dependency scaffolding reads the queue config file only when no driver is passed.
+- The Next.js adapter adds an ignore rule for the dynamic filesystem access warning on Holo core, kernel, and media runtime chunks.
+
+### Compatibility and upgrade requirements
+
+- Schema builders moved to `@holo-js/validation`. `@holo-js/forms` no longer exports `schema`, `isFormSchema`, `defineSchema`, `field`, `parse`, `createErrorBag`, `DEFAULT_VALIDATION_BAG`, `ValidationException`, `isValidationException`, `FormSchema`, or the error and field types, and the `@holo-js/forms/schema` subpath is removed. Applications must import these from `@holo-js/validation`, use `ValidationSchema` in place of `FormSchema`, and replace `schema(...)` with `defineSchema(...)`.
+- The engines range narrows to `^22.12.0 || ^24.0.0 || ^26.0.0` for the root and all packages. Node 23, 25, and 27 or later fall outside the declared range, so run Node 22.12 or newer on the 22, 24, or 26 lines.
+
+## 0.3.15
+
+### Added
+
+- `holo dev` accepts framework arguments (`holo dev [...frameworkArgs]`) and forwards them to the framework dev command, in the same way `holo start` does.
+
+### Changed
+
+- `holo dev` and `holo start` use the `PORT` environment variable as the port when no `--port` or `-p` flag is passed. A `PORT` that is not an integer from 0 to 65535 fails with an error.
+- For `holo start` in Nuxt and SvelteKit projects, `--port` is passed as the `PORT` environment variable (and `NITRO_PORT` for Nuxt) instead of as a flag.
+
+### Compatibility and upgrade requirements
+
+- Node.js 22.12 or newer is required. The root and packages declare `>=22.12.0`, and the root previously declared `^20.19.0 || >=22.12.0`. Applications on Node 20 must upgrade Node before upgrading Holo.
+
+## 0.3.14
+
+### Changed
+
+- Compile supported static `@holo-js/validation` schemas used by browser code into individual Valibot calls through the Next, Nuxt, and SvelteKit build integrations. Dynamic schemas and server-side validation keep the runtime path.
 
 ## 0.3.13
 
