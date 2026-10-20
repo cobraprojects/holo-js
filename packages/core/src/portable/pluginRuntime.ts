@@ -21,8 +21,16 @@ type HoloPluginBootScope = {
 
 const bootedHoloPluginModules = new Set<string>()
 const pendingHoloPluginBoots = new Map<string, Promise<void>>()
-const holoPluginBootScopes = new AsyncLocalStorage<HoloPluginBootScope>()
+const HOLO_PLUGIN_BOOT_SCOPES = Symbol.for('holo.core.pluginBootScope')
 let bootGeneration = 0
+
+function holoPluginBootScopes(): AsyncLocalStorage<HoloPluginBootScope> {
+  const host = globalThis as typeof globalThis & {
+    [HOLO_PLUGIN_BOOT_SCOPES]?: AsyncLocalStorage<HoloPluginBootScope>
+  }
+  host[HOLO_PLUGIN_BOOT_SCOPES] ??= new AsyncLocalStorage<HoloPluginBootScope>()
+  return host[HOLO_PLUGIN_BOOT_SCOPES]
+}
 
 function resolveHoloPluginBootKey(projectRoot: string, bootModule: HoloPluginRuntimeModule): string {
   return [resolve(projectRoot), bootModule.plugin.packageName, bootModule.runtime].join('\0')
@@ -49,7 +57,7 @@ export async function bootConfiguredHoloPluginModule(
   const scope: HoloPluginBootScope = { active: true }
   const boot = (async () => {
     try {
-      await holoPluginBootScopes.run(scope, () => candidate({ projectRoot, config: loadedConfig }))
+      await holoPluginBootScopes().run(scope, () => candidate({ projectRoot, config: loadedConfig }))
     } finally {
       scope.active = false
     }
@@ -64,7 +72,7 @@ export async function bootConfiguredHoloPluginModule(
 }
 
 export function assertOutsidePluginBoot(action: string): void {
-  if (holoPluginBootScopes.getStore()?.active) {
+  if (holoPluginBootScopes().getStore()?.active) {
     throw new Error(`[@holo-js/core] ${action} cannot run inside a plugin boot hook. Plugin boot runs once per application lifecycle; move this call out of the hook.`)
   }
 }
