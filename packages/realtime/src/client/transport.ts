@@ -14,6 +14,7 @@ import type {
   BroadcastClientConfig,
   RealtimeClientGlobals,
   RealtimeClientTransport,
+  RealtimeSnapshotDelivery,
   RealtimeWireResult,
 } from './types'
 import {
@@ -124,7 +125,7 @@ type RealtimeTransportSubscription = {
   readonly args: Record<string, unknown>
   currentSnapshot?: RealtimeSubscriptionSnapshot<unknown>
   sentOn?: RealtimeTransportSocket
-  listener(snapshot: RealtimeSubscriptionSnapshot<unknown>): void
+  listener(snapshot: RealtimeSubscriptionSnapshot<unknown>, delivery?: RealtimeSnapshotDelivery): void
   readonly onError: (error: unknown) => void
 }
 
@@ -212,8 +213,9 @@ export function createBroadcastRealtimeTransport(options: {
         const subscription = subscriptions.get(id)
         const nextSnapshot = snapshot as RealtimeSubscriptionSnapshot<unknown>
         if (subscription && !isStaleRealtimeSnapshot(subscription.currentSnapshot, nextSnapshot)) {
+          const resync = subscription.currentSnapshot === undefined
           subscription.currentSnapshot = nextSnapshot
-          subscription.listener(nextSnapshot)
+          subscription.listener(nextSnapshot, { resync })
         }
       }
       return
@@ -354,7 +356,7 @@ export function createBroadcastRealtimeTransport(options: {
     subscribe<TResult>(
       name: string,
       args: Record<string, unknown>,
-      listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void,
+      listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>, delivery?: RealtimeSnapshotDelivery) => void,
       onError: (error: unknown) => void,
     ) {
       const id = `realtime.${++nextRequestId}`
@@ -362,7 +364,7 @@ export function createBroadcastRealtimeTransport(options: {
         id,
         name,
         args,
-        listener: snapshot => listener(snapshot as RealtimeSubscriptionSnapshot<TResult>),
+        listener: (snapshot, delivery) => listener(snapshot as RealtimeSubscriptionSnapshot<TResult>, delivery),
         onError,
       })
       void sendSubscription(id).catch((error) => {

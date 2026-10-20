@@ -13,6 +13,7 @@ import {
 import type {
   MutableRealtimeQueryStore,
   RealtimeClientTransport,
+  RealtimeSnapshotDelivery,
   SharedRealtimeSnapshot,
 } from './types'
 import {
@@ -106,6 +107,17 @@ export function createRealtimeQueryStore<TResult>(
     applySnapshot(nextSnapshot)
   }
 
+  const applyLiveSnapshot = (
+    nextSnapshot: RealtimeSubscriptionSnapshot<TResult>,
+    delivery?: RealtimeSnapshotDelivery,
+  ) => {
+    if (!delivery?.resync && isStaleRealtimeSnapshot(snapshot, nextSnapshot)) {
+      return
+    }
+
+    applySnapshot(nextSnapshot)
+  }
+
   const load = (): Promise<RealtimeSubscriptionSnapshot<TResult>> => {
     pendingLoad ??= snapshot
       ? Promise.resolve(snapshot)
@@ -145,13 +157,13 @@ export function createRealtimeQueryStore<TResult>(
       })
       try {
         connected = true
-        unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot) => {
+        unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot, delivery) => {
           if (startupId !== currentStartupId) {
             return
           }
 
           seenLiveSnapshot = true
-          applySnapshot(nextSnapshot)
+          applyLiveSnapshot(nextSnapshot, delivery)
         }, (error) => {
           if (startupId !== currentStartupId) {
             return
