@@ -108,7 +108,7 @@ main: {
 
 PostgreSQL reads and writes `date` and `timestamp` values in `app.timezone`, not in the Node process's time zone. A `timestamp` column without a time zone holds the wall-clock time in `app.timezone`, and a `Date` you save is written as that wall-clock time. A `timestamptz` column holds the exact instant. A `date` reads back as a `Date` at midnight in `app.timezone`.
 
-In the hour that repeats when clocks fall back, a `timestamp` written at the earlier instant reads back an hour later, because the wall-clock time is the same for both instants. Use `timestamptz` for values that need an exact instant through that hour.
+In the hour that repeats when clocks fall back, a `timestamp` column can't tell the two instants apart, so a value written at the earlier instant reads back an hour later. With a non-UTC `app.timezone` that observes daylight saving time, an expiry in that hour can be honored up to one hour late. Holo recommends a UTC `app.timezone` for PostgreSQL apps, which avoids this.
 
 ### MySQL dates and time zones
 
