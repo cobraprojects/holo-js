@@ -196,7 +196,7 @@ it('publishes one invalidation per mutation and does not refresh from its own wr
     redis: redisConfig,
     appId: 'app',
   })
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
   onTestFinished(async () => {
     unsubscribeSender()
     await sender.close()
@@ -244,7 +244,7 @@ it('does not refresh from its own write when the worker has an explicit node id 
     redis: redisConfig,
     appId: 'app',
   })
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
   onTestFinished(async () => {
     unsubscribeSender()
     await sender.close()
@@ -312,7 +312,7 @@ it('keeps publishing once per mutation after the worker stops when the app sende
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
   onTestFinished(unsubscribeSender)
   const worker = await startScoresWorker(db, redisPort)
   const invalidations = await subscribeToScalingEvents(redis)
@@ -333,7 +333,7 @@ it('publishes once per mutation when the worker starts first and the app sender 
   const worker = await startScoresWorker(db, redisPort)
   const invalidations = await subscribeToScalingEvents(redis)
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
   onTestFinished(unsubscribeSender)
 
   await db.table('scores').where('id', 1).update({ score: 8 })
@@ -527,7 +527,7 @@ it('gives no remote receives in either of two embedded workers that share a proc
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
   onTestFinished(unsubscribeSender)
   const receivedByA: unknown[] = []
   const receivedByB: unknown[] = []
@@ -710,4 +710,69 @@ it('keeps publishing to the other scaling connection after the worker on one con
   expect(invalidations.get('holo:broadcast:scaling:alpha:events')).toEqual([])
   expect(invalidations.get('holo:broadcast:scaling:beta:events')).toHaveLength(1)
 }, 30_000)
+
+async function startInvalidationListenerProcess(redisPort: number, appId: string): Promise<{ readonly received: unknown[] }> {
+  const port = await reservePort()
+  const child = spawn(process.execPath, [
+    '--import',
+    'tsx',
+    '--conditions=@holo-js/source',
+    fileURLToPath(new URL('./support/invalidation-listener.ts', import.meta.url)),
+    String(redisPort),
+    String(port),
+    appId,
+  ], { stdio: ['ignore', 'pipe', 'pipe'] })
+  onTestFinished(() => { child.kill('SIGKILL') })
+  let childErrors = ''
+  child.stderr.on('data', chunk => { childErrors += String(chunk) })
+  const lines = createInterface({ input: child.stdout })
+  onTestFinished(() => lines.close())
+  const received: unknown[] = []
+  await new Promise<void>((resolve, reject) => {
+    lines.on('line', line => {
+      if (line === 'ready') {
+        resolve()
+      } else if (line.startsWith('received ')) {
+        received.push(JSON.parse(line.slice('received '.length)))
+      }
+    })
+    child.once('exit', () => reject(new Error(childErrors || 'Invalidation listener exited before startup')))
+  })
+  return { received }
+}
+
+it('delivers one write once to each app\'s remote workers when embedded workers for two apps share a scaling connection', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listenerA = await startInvalidationListenerProcess(redisPort, 'app-a')
+  const listenerB = await startInvalidationListenerProcess(redisPort, 'app-b')
+  await startScoresWorker(db, redisPort, { appId: 'app-a' })
+  await startScoresWorker(db, redisPort, { appId: 'app-b' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listenerA.received.length).toBe(1)
+  await expect.poll(() => listenerB.received.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listenerA.received).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
+  expect(listenerB.received).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
+}, 60_000)
+
+it('delivers one write once to a remote worker when two embedded workers for the same app share a scaling connection', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listener = await startInvalidationListenerProcess(redisPort, 'app-a')
+  await startScoresWorker(db, redisPort, { appId: 'app-a' })
+  await startScoresWorker(db, redisPort, { appId: 'app-a' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listener.received.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listener.received).toHaveLength(1)
+}, 60_000)
 

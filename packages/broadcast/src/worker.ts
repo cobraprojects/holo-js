@@ -650,6 +650,12 @@ function resolveScalingEventChannel(connection: string): string {
   return `holo:broadcast:scaling:${connection}:events`
 }
 
+// A database invalidation is published once per app on each channel, because each app's remote workers
+// accept only their own app's messages. Registrations for the same app and channel coalesce into one.
+function resolveDatabaseInvalidationPublisherScope(eventChannel: string, appId: string): string {
+  return `${eventChannel}\u0000${appId}`
+}
+
 function resolvePresenceHashKey(connection: string, appId: string, channel: string): string {
   return `holo:broadcast:scaling:${connection}:presence:${appId}:${channel}`
 }
@@ -1234,7 +1240,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const servedAppIds = resolveBroadcastAppIds(options.config)
   const databaseInvalidationAppId = resolveDefaultBroadcastAppId(options.config)
   const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation && databaseInvalidationAppId !== undefined
-    ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation), scaling.eventChannel)
+    ? options.realtime.databaseInvalidation.connect(
+      invalidation => publishScalingDatabaseInvalidation(invalidation),
+      resolveDatabaseInvalidationPublisherScope(scaling.eventChannel, databaseInvalidationAppId),
+    )
     : undefined
   const scalingUnsubscribe = options.scalingUnsubscribe
     ? Promise.resolve(options.scalingUnsubscribe)
@@ -2884,7 +2893,7 @@ function createScalingInvalidationSender(input: {
   readonly queue?: NormalizedHoloQueueConfig
   readonly redis?: NormalizedHoloRedisConfig
   readonly appId: string
-}): { readonly eventChannel: string, publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
+}): { readonly publisherScope: string, publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
   const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
   const redisConnection = resolveRedisScalingConnection(input.queue, connectionName, input.redis)
   const eventChannel = resolveScalingEventChannel(connectionName)
@@ -2900,7 +2909,7 @@ function createScalingInvalidationSender(input: {
   }
 
   return {
-    eventChannel,
+    publisherScope: resolveDatabaseInvalidationPublisherScope(eventChannel, input.appId),
     async publish(invalidation) {
       const scalingAdapter = await openAdapter()
       await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, input.appId, invalidation))

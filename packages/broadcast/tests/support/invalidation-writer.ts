@@ -15,7 +15,7 @@ const sender = workerInternals.createScalingInvalidationSender({
   redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: Number(redisPort) } } }),
   appId,
 })
-queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
+queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
 
 const adapter = createSQLiteAdapter({ filename })
 const db = createDatabase({
