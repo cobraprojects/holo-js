@@ -1,5 +1,4 @@
-import { setTimeout } from 'node:timers/promises'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DB } from '@holo-js/db'
 import { configureQueueRuntime, queueRuntimeInternals } from '@holo-js/queue'
 import {
@@ -107,30 +106,36 @@ describe('@holo-js/queue-db database driver', () => {
     })).toBe(1)
     expect((await harness.readJobRows()).map(row => row.id)).toEqual(['job-delayed', 'job-immediate'])
 
-    await setTimeout(1_050)
-    const releasedReserved = await harness.driver.reserve({
-      queueNames: ['default'],
-      workerId: 'worker-1',
-    })
+    const releasedReserved = await vi.waitFor(async () => {
+      const reserved = await harness.driver.reserve({
+        queueNames: ['default'],
+        workerId: 'worker-1',
+      })
+      if (!reserved) throw new Error('Expected the released job to become available')
+      return reserved
+    }, { timeout: 5_000, interval: 50 })
     expect(releasedReserved).toMatchObject({
       envelope: {
         id: 'job-immediate',
         attempts: 1,
       },
     })
-    await harness.driver.acknowledge(releasedReserved!)
+    await harness.driver.acknowledge(releasedReserved)
 
-    await setTimeout(Math.max(0, delayedAvailableAt - Date.now()) + 50)
-    const delayedReserved = await harness.driver.reserve({
-      queueNames: ['default'],
-      workerId: 'worker-1',
-    })
+    const delayedReserved = await vi.waitFor(async () => {
+      const reserved = await harness.driver.reserve({
+        queueNames: ['default'],
+        workerId: 'worker-1',
+      })
+      if (!reserved) throw new Error('Expected the delayed job to become available')
+      return reserved
+    }, { timeout: Math.max(0, delayedAvailableAt - Date.now()) + 5_000, interval: 50 })
     expect(delayedReserved).toMatchObject({
       envelope: {
         id: 'job-delayed',
       },
     })
-    await harness.driver.release(delayedReserved!)
+    await harness.driver.release(delayedReserved)
     const redelivered = await harness.driver.reserve({
       queueNames: ['default'],
       workerId: 'worker-1',
@@ -177,18 +182,21 @@ describe('@holo-js/queue-db database driver', () => {
     expect(await harness.driver.clear()).toBe(1)
     expect((await harness.readJobRows()).map(row => row.id)).toEqual(['job-active'])
 
-    await setTimeout(1_100)
-    const reclaimedReservation = await harness.driver.reserve({
-      queueNames: ['default'],
-      workerId: 'worker-2',
-    })
+    const reclaimedReservation = await vi.waitFor(async () => {
+      const reserved = await harness.driver.reserve({
+        queueNames: ['default'],
+        workerId: 'worker-2',
+      })
+      if (!reserved) throw new Error('Expected the abandoned reservation to be reclaimed')
+      return reserved
+    }, { timeout: 5_000, interval: 50 })
     expect(reclaimedReservation).toMatchObject({
       envelope: {
         id: 'job-active',
         attempts: 1,
       },
     })
-    await harness.driver.acknowledge(reclaimedReservation!)
+    await harness.driver.acknowledge(reclaimedReservation)
   })
 
   it('fails clearly for invalid table names and missing DB connections', async () => {

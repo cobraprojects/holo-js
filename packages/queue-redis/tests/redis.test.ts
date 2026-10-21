@@ -1,7 +1,7 @@
 import { Queue } from 'bullmq'
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
 import { redisQueueDriverFactory, type QueueJobEnvelope } from '../src'
 
@@ -74,13 +74,18 @@ describe('@holo-js/queue-redis native Redis behavior', () => {
     const envelope = { ...job(), availableAt: Date.now() + 300 }
     await driver.dispatch(envelope)
     expect(await driver.reserve({})).toBeNull()
-    await setTimeout(350)
-    const first = await driver.reserve({})
-    if (!first) throw new Error('Expected a delayed reservation')
+    const first = await vi.waitFor(async () => {
+      const reserved = await driver.reserve({})
+      if (!reserved) throw new Error('Expected a delayed reservation')
+      return reserved
+    }, { timeout: 5_000, interval: 50 })
     await driver.release(first, { delaySeconds: 0.3 })
     expect(await driver.reserve({})).toBeNull()
-    await setTimeout(350)
-    const retry = await driver.reserve({})
+    const retry = await vi.waitFor(async () => {
+      const reserved = await driver.reserve({})
+      if (!reserved) throw new Error('Expected a retry reservation')
+      return reserved
+    }, { timeout: 5_000, interval: 50 })
     expect(retry?.envelope.id).toBe(envelope.id)
     expect(retry?.envelope.attempts).toBe(1)
     if (!retry) throw new Error('Expected a retry reservation')

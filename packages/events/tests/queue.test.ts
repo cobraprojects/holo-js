@@ -190,8 +190,9 @@ describe('@holo-js/events queue integration', () => {
       expect(await runQueueWorker({ connection: 'database', queueNames: ['emails'], once: true })).toMatchObject({ processed: 0 })
       expect(await runQueueWorker({ connection: 'database', queueNames: ['high'], once: true })).toMatchObject({ processed: 1 })
       expect(handled).toEqual(['override'])
-      await new Promise(resolve => setTimeout(resolve, 1100))
-      expect(await runQueueWorker({ connection: 'database', queueNames: ['emails'], once: true })).toMatchObject({ processed: 1 })
+      await vi.waitFor(async () => {
+        expect(await runQueueWorker({ connection: 'database', queueNames: ['emails'], once: true })).toMatchObject({ processed: 1 })
+      }, { timeout: 10_000, interval: 50 })
       expect(handled).toEqual(['override', 'default'])
     } finally {
       await database.cleanup()
@@ -236,8 +237,9 @@ describe('@holo-js/events queue integration', () => {
       expect(await runQueueWorker({ connection: 'database', once: true, onJobReleased: ({ delaySeconds }) => { released.push(delaySeconds) } }))
         .toMatchObject({ processed: 0, released: 1, failed: 0 })
       expect(released).toEqual([1])
-      await new Promise(resolve => setTimeout(resolve, 1100))
-      expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ processed: 1, failed: 0 })
+      await vi.waitFor(async () => {
+        expect(await runQueueWorker({ connection: 'database', once: true })).toMatchObject({ processed: 1, failed: 0 })
+      }, { timeout: 10_000, interval: 50 })
       expect(attempts).toEqual([1, 2])
     } finally {
       await database.cleanup()

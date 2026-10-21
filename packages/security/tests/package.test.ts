@@ -1768,13 +1768,11 @@ describe('@holo-js/security rate-limit drivers', () => {
       }
 
       async function waitUntil(predicate: () => Promise<boolean>) {
-        const deadline = Date.now() + 60_000
-        while (!(await predicate())) {
-          if (Date.now() > deadline) {
+        await vi.waitFor(async () => {
+          if (!(await predicate())) {
             throw new Error('Timed out waiting for the background sweep.')
           }
-          await new Promise(resolve => setTimeout(resolve, 10))
-        }
+        }, { timeout: 60_000, interval: 10 })
       }
 
       it('returns from hit promptly while the sweep meets a locked expired bucket', async () => {
@@ -2224,15 +2222,20 @@ describe('@holo-js/security rate-limit drivers', () => {
       const lockHeld = new Promise<void>((resolve) => {
         releaseLock = resolve
       })
+      let signalLockAcquired!: () => void
+      const lockAcquired = new Promise<void>((resolve) => {
+        signalLockAcquired = resolve
+      })
 
       const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
         retryDelayMs: 1,
         timeoutMs: 100,
       }, async () => {
+        signalLockAcquired()
         await lockHeld
       })
 
-      await fileRateLimitDriverInternals.sleep(5)
+      await lockAcquired
 
       let clearResolved = false
       const clearAll = store.clearAll().then((cleared) => {
@@ -2281,17 +2284,22 @@ describe('@holo-js/security rate-limit drivers', () => {
       const bucketDeleted = new Promise<void>((resolve) => {
         releaseLock = resolve
       })
+      let signalLockAcquired!: () => void
+      const lockAcquired = new Promise<void>((resolve) => {
+        signalLockAcquired = resolve
+      })
 
       const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
         retryDelayMs: 1,
         timeoutMs: 100,
       }, async () => {
+        signalLockAcquired()
         await deleteRequested
         await fileRateLimitDriverInternals.deleteBucket(bucketPath)
         releaseLock()
       })
 
-      await fileRateLimitDriverInternals.sleep(5)
+      await lockAcquired
       const pendingClear = callback(store, key)
       await fileRateLimitDriverInternals.sleep(5)
       requestDelete()

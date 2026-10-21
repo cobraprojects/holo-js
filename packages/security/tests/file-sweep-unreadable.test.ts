@@ -46,14 +46,11 @@ async function writeExpiredBucket(root: string, key: string) {
 }
 
 async function waitUntil(predicate: () => Promise<boolean>) {
-  const deadline = Date.now() + 60_000
-  while (!(await predicate())) {
-    if (Date.now() > deadline) {
+  await vi.waitFor(async () => {
+    if (!(await predicate())) {
       throw new Error('Timed out waiting for the background sweep.')
     }
-
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
+  }, { timeout: 60_000, interval: 10 })
 }
 
 describe('file sweep with an unreadable bucket shard', () => {

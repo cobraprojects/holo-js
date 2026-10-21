@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import cache, { CacheInvalidNumericMutationError, configureCacheRuntime, resetCacheRuntime } from '@holo-js/cache'
 import Redis from 'ioredis'
 import { startRedisService } from '../../session/tests/support/redis'
@@ -46,8 +46,9 @@ describe('Redis cache behavior', () => {
     try {
       await cache.put('value', 'first', new Date(Date.now() + 150))
       expect(await cache.get('value')).toBe('first')
-      await setTimeout(200)
-      expect(await cache.get('value')).toBeNull()
+      await vi.waitFor(async () => {
+        expect(await cache.get('value')).toBeNull()
+      }, { timeout: 5_000, interval: 10 })
       await cache.forever('value', 'persisted')
       await cache.put('value', 'expired', new Date(Date.now() - 1))
       expect(await cache.has('value')).toBe(false)

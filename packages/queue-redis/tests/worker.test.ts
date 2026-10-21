@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   configureQueueRuntime,
   listFailedQueueJobs,
@@ -52,14 +52,11 @@ async function openRedisQueue() {
 }
 
 async function reserveEventually(driver: QueueAsyncDriver): Promise<QueueReservedJob> {
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline) {
+  return vi.waitFor(async () => {
     const reserved = await driver.reserve({})
-    if (reserved) return reserved
-    await setTimeout(100)
-  }
-
-  throw new Error('Expected the abandoned reservation to be redelivered')
+    if (!reserved) throw new Error('Expected the abandoned reservation to be redelivered')
+    return reserved
+  }, { timeout: 10_000, interval: 100 })
 }
 
 async function abandon(driver: QueueAsyncDriver, reserve: (driver: QueueAsyncDriver) => Promise<QueueReservedJob | null>) {

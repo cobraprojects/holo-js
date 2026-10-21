@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runQueueWorker } from '@holo-js/queue'
 import { createSQLiteQueueHarness } from '../../queue-db/tests/support/sqlite-queue'
 import {
@@ -85,9 +85,10 @@ describe('@holo-js/mail queued delivery options', () => {
         onJobReleased: ({ delaySeconds }) => { released.push(delaySeconds) },
       })).toMatchObject({ processed: 0, released: 1, failed: 0 })
       expect(released).toEqual([1])
-      await new Promise(resolve => setTimeout(resolve, 1100))
-      expect(await runQueueWorker({ connection: 'database', queueNames: ['mail'], once: true }))
-        .toMatchObject({ processed: 1, failed: 0 })
+      await vi.waitFor(async () => {
+        expect(await runQueueWorker({ connection: 'database', queueNames: ['mail'], once: true }))
+          .toMatchObject({ processed: 1, failed: 0 })
+      }, { timeout: 10_000, interval: 50 })
       expect(attempts).toEqual(['Retried mail', 'Retried mail'])
       expect(await database.readJobRows()).toEqual([])
     } finally {

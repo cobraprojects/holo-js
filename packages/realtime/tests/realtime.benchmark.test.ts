@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   belongsTo,
   belongsToMany,
@@ -1149,15 +1149,11 @@ function createClientPatchOperations(count: number): readonly BenchmarkPatchOper
 }
 
 async function waitForBenchmarkCondition(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (condition()) {
-      return
+  await vi.waitFor(() => {
+    if (!condition()) {
+      throw new Error('Benchmark condition was not met.')
     }
-
-    await new Promise(resolve => setTimeout(resolve, 1))
-  }
-
-  throw new Error('Benchmark condition was not met.')
+  }, { timeout: 1_000, interval: 1 })
 }
 
 function cloneRows(rows: readonly BenchmarkPostRow[]): BenchmarkPostRow[] {

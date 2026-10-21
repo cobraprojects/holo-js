@@ -1,8 +1,7 @@
-import { setTimeout } from 'node:timers/promises'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { CacheConfigError, CacheInvalidNumericMutationError, deserializeCacheValue, serializeCacheValue } from '@holo-js/cache'
 import {
@@ -408,8 +407,9 @@ describe('@holo-js/cache-db', () => {
       expiresAt,
     })
 
-    await setTimeout(Math.max(0, expiresAt - Date.now()) + 20)
-    expect(await driver.get('ttl')).toEqual({ hit: false })
+    await vi.waitFor(async () => {
+      expect(await driver.get('ttl')).toEqual({ hit: false })
+    }, { timeout: 5_000, interval: 10 })
 
     expect(await driver.increment('counter', 2)).toBe(2)
     expect(await driver.decrement('counter', 1)).toBe(1)

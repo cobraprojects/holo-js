@@ -998,6 +998,8 @@ export default class Admin extends AdminEntity {
       preferCache: false,
     })
 
+    let markSecondInitialized: () => void = () => undefined
+    const secondInitialized = new Promise<void>(resolve => { markSecondInitialized = resolve })
     const [firstCookie, secondCookie] = await Promise.all([
       Promise.resolve().then(async () => {
         await initializeHolo(root, {
@@ -1010,7 +1012,7 @@ export default class Admin extends AdminEntity {
           preferCache: false,
         })
 
-        await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+        await secondInitialized
 
         return authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
       }),
@@ -1024,6 +1026,8 @@ export default class Admin extends AdminEntity {
           processEnv: process.env,
           preferCache: false,
         })
+
+        markSecondInitialized()
 
         return authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
       }),
@@ -1045,6 +1049,9 @@ export default class Admin extends AdminEntity {
     const login = await booted.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => booted.auth!.loginUsingId(1))
     await initializeHolo(root, options)
 
+    let bootedCount = 0
+    let markBothBooted: () => void = () => undefined
+    const bothBooted = new Promise<void>(resolve => { markBothBooted = resolve })
     const readAuthState = async (sessionId: string | undefined): Promise<boolean | undefined> => {
       const runtime = await initializeHolo(root, {
         ...options,
@@ -1053,12 +1060,14 @@ export default class Admin extends AdminEntity {
           getCookie: () => sessionId ? sessionCookieValue(sessionId) : undefined,
         },
       })
-      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      bootedCount += 1
+      if (bootedCount === 2) markBothBooted()
+      await bothBooted
       return runtime.auth?.check()
     }
     const [authenticated, guest] = await Promise.all([
-      Promise.resolve().then(() => readAuthState(login.sessionId)),
-      Promise.resolve().then(() => readAuthState(undefined)),
+      readAuthState(login.sessionId),
+      readAuthState(undefined),
     ])
 
     expect(authenticated).toBe(true)
@@ -1077,6 +1086,9 @@ export default class Admin extends AdminEntity {
     expect(await booted.auth?.check()).toBe(false)
     const login = await booted.runWithAuthRequestAccessors({ appendResponseCookie: () => undefined }, () => booted.auth!.loginUsingId(1))
 
+    let bootedCount = 0
+    let markBothBooted: () => void = () => undefined
+    const bothBooted = new Promise<void>(resolve => { markBothBooted = resolve })
     const readAuthState = async (sessionId: string | undefined): Promise<boolean | undefined> => {
       const runtime = await initializeHolo(root, {
         ...options,
@@ -1085,12 +1097,14 @@ export default class Admin extends AdminEntity {
           getCookie: () => sessionId ? sessionCookieValue(sessionId) : undefined,
         },
       })
-      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      bootedCount += 1
+      if (bootedCount === 2) markBothBooted()
+      await bothBooted
       return runtime.auth?.check()
     }
     const [authenticated, guest] = await Promise.all([
-      Promise.resolve().then(() => readAuthState(login.sessionId)),
-      Promise.resolve().then(() => readAuthState(undefined)),
+      readAuthState(login.sessionId),
+      readAuthState(undefined),
     ])
 
     expect(authenticated).toBe(true)
@@ -1162,24 +1176,41 @@ export default class Admin extends AdminEntity {
     })
 
     const readCookie = () => authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
-    const [firstCookie, secondCookie] = await Promise.all([
-      project.runtime.runWithAuthRequestAccessors({
-        getCookie(name) {
-          return `${name}-first`
-        },
-      }, async () => {
-        await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+    const order: string[] = []
+    let markFirstEntered: () => void = () => undefined
+    const firstEntered = new Promise<void>(resolve => { markFirstEntered = resolve })
+    let releaseFirst: () => void = () => undefined
+    const firstMayRead = new Promise<void>(resolve => { releaseFirst = resolve })
+    const firstCookie = project.runtime.runWithAuthRequestAccessors({
+      getCookie(name) {
+        return `${name}-first`
+      },
+    }, async () => {
+      order.push('first-enter')
+      markFirstEntered()
+      await firstMayRead
+      const cookie = readCookie()
+      order.push('first-exit')
+      return cookie
+    })
+    const secondCookie = project.runtime.runWithAuthRequestAccessors({
+      getCookie(name) {
+        return `${name}-second`
+      },
+    }, async () => {
+      await firstEntered
+      try {
+        order.push('second-enter')
         return readCookie()
-      }),
-      project.runtime.runWithAuthRequestAccessors({
-        getCookie(name) {
-          return `${name}-second`
-        },
-      }, readCookie),
-    ])
+      } finally {
+        order.push('second-exit')
+        releaseFirst()
+      }
+    })
 
-    expect(await firstCookie).toBe('session-first')
     expect(await secondCookie).toBe('session-second')
+    expect(await firstCookie).toBe('session-first')
+    expect(order).toEqual(['first-enter', 'second-enter', 'second-exit', 'first-exit'])
   })
 
   it('boots auth with the default file session store when session config is omitted', async () => {

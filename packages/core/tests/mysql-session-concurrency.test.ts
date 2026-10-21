@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { setTimeout } from 'node:timers/promises'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { ConnectionManager, DatabaseContext, configureDB, createDialect, createSchemaService, resetDB } from '@holo-js/db'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createDatabaseSessionStore, type SessionRecord } from '@holo-js/session'
@@ -44,16 +43,13 @@ it.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('persists concurrent new M
       await control.queryCompiled({ sql: 'SELECT GET_LOCK(?, 10)', bindings: [name], source: 'sessions' })
       const writes = Promise.allSettled(records.map(record => store.write(record)))
       try {
-        const deadline = Date.now() + 5000
-        while (true) {
+        await vi.waitFor(async () => {
           const { rows } = await control.queryCompiled<{ arrived: number }>({
             sql: 'SELECT IS_USED_LOCK(?) IS NOT NULL AND IS_USED_LOCK(?) IS NOT NULL AS arrived',
             bindings: [`${name}a`, `${name}b`], source: 'sessions',
           })
-          if (rows[0]?.arrived === 1) break
-          if (Date.now() >= deadline) throw new Error('Both native session inserts must reach the database barrier')
-          await setTimeout(10)
-        }
+          expect(rows[0]?.arrived, 'Both native session inserts must reach the database barrier').toBe(1)
+        }, { timeout: 5000, interval: 10 })
       } finally {
         await control.queryCompiled({ sql: 'SELECT RELEASE_LOCK(?)', bindings: [name], source: 'sessions' })
         await writes
