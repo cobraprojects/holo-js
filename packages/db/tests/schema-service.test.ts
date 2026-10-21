@@ -440,6 +440,39 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await second.db.table(second.table).select('id').orderBy('id').get()).toEqual([])
     }, 5_000)
 
+    it('rejects a query outside a transaction whose rollback failed, instead of joining that transaction', async () => {
+      let failNextRollback = true
+      const failFirstRollback = (adapter: DriverAdapter): DriverAdapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property === 'rollback') {
+            return async (...args: Parameters<DriverAdapter['rollback']>) => {
+              if (failNextRollback) {
+                failNextRollback = false
+                throw new Error('rollback failed')
+              }
+              return target.rollback(...args)
+            }
+          }
+          return Reflect.get(target, property, target)
+        },
+      })
+      const { db, schema, table, adapter } = await openDatabase(driver, { wrapAdapter: failFirstRollback })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        try {
+          await expect(db.transaction(async tx => {
+            await tx.table(table).insert({ id: 1, name: 'failed' })
+            throw new Error('callback failed')
+          })).rejects.toThrow()
+          await expect(db.table(table).insert({ id: 2, name: 'plain' })).rejects.toBeInstanceOf(TransactionError)
+        } finally {
+          await adapter.rollback().catch(() => undefined)
+        }
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
+    }, 5_000)
+
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
         const { db, schema } = await openDatabase(driver)

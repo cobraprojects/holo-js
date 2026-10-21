@@ -7,7 +7,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
-import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, runPinnedTransaction } from '../concurrency/pinnedConnection'
+import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
@@ -457,7 +457,7 @@ export class DatabaseContext {
           }, options)
         } catch (error) {
           if (begin.attempt) {
-            await begin.attempt.then(() => this._adapter.rollback(), () => undefined)
+            await begin.attempt.then(() => this._rollbackAdapterTransaction(), () => undefined)
           }
           throw error
         }
@@ -474,7 +474,7 @@ export class DatabaseContext {
           value = await this._runTransactionCallback(child, callback)
         } catch (error) {
           try {
-            await this._callTransactionHook('rollback', () => this._adapter.rollback())
+            await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
             rollbackSchemaMutationScope(child)
           } catch (rollbackError) {
             await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
@@ -488,7 +488,7 @@ export class DatabaseContext {
         try {
           await this._callTransactionHook('commit', () => this._adapter.commit())
         } catch (commitError) {
-          await this._adapter.rollback().catch(() => undefined)
+          await this._rollbackAdapterTransaction().catch(() => undefined)
           rollbackSchemaMutationScope(child)
           throw commitError
         }
@@ -858,6 +858,15 @@ export class DatabaseContext {
       kind === 'query' ? 'DRIVER_QUERY_ERROR' : 'DRIVER_EXECUTE_ERROR',
       error,
     )
+  }
+
+  private async _rollbackAdapterTransaction(): Promise<void> {
+    try {
+      await this._adapter.rollback()
+    } catch (error) {
+      markPinnedTransactionStuck(this._adapter)
+      throw error
+    }
   }
 
   private async _callTransactionHook(

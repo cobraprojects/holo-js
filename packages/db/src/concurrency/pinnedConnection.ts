@@ -13,6 +13,7 @@ export type PinnedConnection = {
 
 type PinnedTransactionScope = {
   readonly pinned: PinnedConnection
+  stuck: boolean
 }
 
 const pinnedConnections = new AsyncLocalStorage<ReadonlyMap<DriverAdapter, PinnedConnection>>()
@@ -56,6 +57,10 @@ function transactionAfterCallbackError(): TransactionError {
   return new TransactionError('A transaction started inside withoutForeignKeyConstraints() must finish before the callback returns.')
 }
 
+function transactionStuckError(): TransactionError {
+  return new TransactionError('A transaction on the connection held by withoutForeignKeyConstraints() could not be rolled back, so no further transactions run on that connection.')
+}
+
 async function serializeOnPinnedConnection<T>(
   pinned: PinnedConnection,
   callback: () => Promise<T>,
@@ -74,6 +79,11 @@ async function serializeOnPinnedConnection<T>(
   }
 }
 
+export function markPinnedTransactionStuck(adapter: DriverAdapter): void {
+  const scope = pinnedConnections.getStore()?.get(adapter)?.transaction
+  if (scope) scope.stuck = true
+}
+
 export function closePinnedConnection(pinned: PinnedConnection): Promise<void> {
   return serializeOnPinnedConnection(pinned, async () => {
     pinned.closed = true
@@ -84,7 +94,8 @@ export function closePinnedConnection(pinned: PinnedConnection): Promise<void> {
 export function runPinnedTransaction<T>(pinned: PinnedConnection, attempt: () => Promise<T>): Promise<T> {
   return serializeOnPinnedConnection(pinned, async () => {
     if (pinned.closed) throw transactionAfterCallbackError()
-    const scope: PinnedTransactionScope = { pinned }
+    if (pinned.transaction?.stuck) throw transactionStuckError()
+    const scope: PinnedTransactionScope = { pinned, stuck: false }
     pinned.transaction = scope
     try {
       await waitForInFlightStatements(pinned)
@@ -92,7 +103,7 @@ export function runPinnedTransaction<T>(pinned: PinnedConnection, attempt: () =>
       scopes.add(scope)
       return await pinnedTransactionScopes.run(scopes, attempt)
     } finally {
-      pinned.transaction = undefined
+      if (!scope.stuck) pinned.transaction = undefined
     }
   })
 }
