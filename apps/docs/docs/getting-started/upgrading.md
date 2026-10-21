@@ -557,6 +557,22 @@ On a model with timestamps, these query writes now set `updated_at` to the curre
 
 Check code that reads `updated_at` to find changed rows, such as a "recently updated" list, a cache key, or a sync cursor. Rows you write from now on change `updated_at`; existing rows keep their stored values. `forceDelete()` and the table builder (`DB.table()`) don't change. Use the table builder for a write that must leave `updated_at` alone. See [Query updates](/orm/writes#update-many-rows).
 
+
+### Nested relation callbacks apply to the leaf relation
+
+A callback on a nested eager load applies only to the relation it names. `with('posts.comments', query => ...)` loads `posts` unconstrained and filters `comments`, as Laravel's `with(['posts.comments' => fn])` does. Before, the callback was also applied to `posts`, so it could only use columns that every model on the path had, and a `comments` column failed at query time.
+
+If your code depended on the old behavior, give each level the constraint explicitly:
+
+```ts
+User.with({
+  posts: query => query.where('published', true),
+  'posts.comments': query => query.where('approved', true),
+})
+```
+
+Relation callbacks now also type their query builder as the related model, so a callback that uses a column of another model is a type error. `whereRelation()` and `orWhereRelation()` on a nested path check their column against the leaf model too. See [Constraining eager loads](/orm/relationships/loading#constraining-eager-loads).
+
 ### Password hashing cost
 
 New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
