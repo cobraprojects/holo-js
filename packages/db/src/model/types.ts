@@ -438,11 +438,6 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
 
-/**
- * The relation a dot-separated path ends on. Nested paths walk each related
- * model's relations; a path through a morph relation has no single related
- * model, so it resolves to `never` and callers fall back to the generic table.
- */
 type RelationOfPath<TRelations extends RelationMap, TPath extends string>
   = string extends TPath
     ? never
@@ -470,11 +465,6 @@ export type RelatedRelationsOfPath<TRelations extends RelationMap, TPath extends
       ? RelatedRelationsOfRelation<TRelation>
       : RelationMap
 
-/**
- * The query builder a relation callback receives for a dot-separated relation
- * path: the leaf related model's builder, so nested callbacks see the deepest
- * model's columns and relations.
- */
 export type RelationQueryBuilderOfPath<TRelations extends RelationMap, TPath extends string>
   = ModelQueryBuilder<RelatedTableOfPath<TRelations, TPath>, RelatedRelationsOfPath<TRelations, TPath>>
 
