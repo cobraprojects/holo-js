@@ -201,7 +201,7 @@ export default defineDatabaseConfig({
 })
 ```
 
-Available hooks: `onQueryStart`, `onQuerySuccess`, `onQueryError`, `onTransactionStart`, `onTransactionCommit`, `onTransactionRollback`, `onMigrationStart`, `onMigrationSuccess`, `onMigrationError`, `onSeederStart`, `onSeederSuccess`, and `onSeederError`. The `sql` field is redacted unless `security.debugSqlInLogs` is on.
+Available hooks: `onQueryStart`, `onQuerySuccess`, `onQueryError`, `onTransactionStart`, `onTransactionCommit`, `onTransactionRollback`, `onMigrationStart`, `onMigrationSuccess`, `onMigrationError`, `onSeederStart`, `onSeederSuccess`, and `onSeederError`. The `sql` field is redacted unless `security.debugSqlInLogs` is on. Query hooks don't hold up the connection, so a hook can run its own queries on the same connection.
 
 ## The DB facade
 

@@ -10,7 +10,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { currentPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
-import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
+import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import { isDatabaseConcurrencyError } from './driverErrors'
@@ -778,51 +778,50 @@ export class DatabaseContext {
   ): Promise<TResult> {
     this._assertValidOperationOptions(options)
     const start = Date.now()
-    const scheduled = await this._runtime.scheduler.schedule({
+    const schedulingOptions = {
       transactional: this._scope.kind !== 'root' && this._adapter.supportsConcurrentTransactionScopes !== true,
       preferWorkerThreads: this._concurrency.workerThreads,
       withinExclusive: this._scope.kind !== 'root',
-    }, async (schedulingMode) => {
-      const baseLog: QueryStartLog = {
-        kind,
-        connectionName: this._connectionName,
-        sql: redactSql(statement.sql, this._security),
-        bindings: redactBindings(statement.bindings ?? [], this._security),
-        source: statement.source,
-        scope: this._scope.kind,
-        schedulingMode,
-      }
+    }
+    const baseLog: QueryStartLog = {
+      kind,
+      connectionName: this._connectionName,
+      sql: redactSql(statement.sql, this._security),
+      bindings: redactBindings(statement.bindings ?? [], this._security),
+      source: statement.source,
+      scope: this._scope.kind,
+      schedulingMode: this._runtime.scheduler.preview(schedulingOptions),
+    }
 
-      await this._logger?.onQueryStart?.(baseLog)
+    await this._logger?.onQueryStart?.(baseLog)
 
-      try {
-        const result = await this._guardOperation(
-          runner,
-          options,
-          kind === 'query' ? 'query' : 'execute',
-        )
-        return { result, baseLog }
-      } catch (error) {
-        const wrappedError = this._wrapDriverError(kind, error)
-        const errorLog: QueryErrorLog = {
-          ...baseLog,
-          durationMs: Date.now() - start,
-          error: wrappedError,
-        }
-        await this._logger?.onQueryError?.(errorLog)
-        throw wrappedError
+    let scheduled: { result: TResult, schedulingMode: SchedulingMode }
+    try {
+      scheduled = await this._runtime.scheduler.schedule(schedulingOptions, () => this._guardOperation(
+        runner,
+        options,
+        kind === 'query' ? 'query' : 'execute',
+      ))
+    } catch (error) {
+      const wrappedError = this._wrapDriverError(kind, error)
+      const errorLog: QueryErrorLog = {
+        ...baseLog,
+        durationMs: Date.now() - start,
+        error: wrappedError,
       }
-    })
+      await this._logger?.onQueryError?.(errorLog)
+      throw wrappedError
+    }
 
     const successLog: QuerySuccessLog = {
-      ...scheduled.result.baseLog,
+      ...baseLog,
       schedulingMode: scheduled.schedulingMode,
       durationMs: Date.now() - start,
-      rowCount: 'rows' in scheduled.result.result ? scheduled.result.result.rowCount : undefined,
-      affectedRows: 'affectedRows' in scheduled.result.result ? scheduled.result.result.affectedRows : undefined,
+      rowCount: 'rows' in scheduled.result ? scheduled.result.rowCount : undefined,
+      affectedRows: 'affectedRows' in scheduled.result ? scheduled.result.affectedRows : undefined,
     }
     await this._logger?.onQuerySuccess?.(successLog)
-    return scheduled.result.result
+    return scheduled.result
   }
 
   private _wrapDriverError(kind: 'query' | 'execute', error: unknown): DatabaseError {

@@ -33,20 +33,9 @@ describe('runtime database budgets', () => {
     const db = manager.connection()
     await db.queryCompiled({ sql: 'SELECT 1', source: 'query' })
     expect(output.mock.calls).toEqual([[{ rowCount: 1 }]])
-    let notifyStarted = () => {}
-    let finishQuery = () => {}
-    const started = new Promise<void>(resolve => { notifyStarted = resolve })
-    const finish = new Promise<void>(resolve => { finishQuery = resolve })
-    const logger = db.getLogger()!
-    logger.onQueryStart = async () => { notifyStarted(); await finish }
     const pending = db.queryCompiled({ sql: 'SELECT 1', source: 'query' })
-    await started
-    try {
-      await expect(db.queryCompiled({ sql: 'SELECT 2', source: 'query' })).rejects.toThrow('queue')
-    } finally {
-      finishQuery()
-      await pending
-    }
+    await expect(db.queryCompiled({ sql: 'SELECT 2', source: 'query' })).rejects.toThrow('queue')
+    await pending
   })
 
   it.each(['url', 'structured'] as const)('preserves pool budgets and a redacted custom logger through %s configuration', async mode => {

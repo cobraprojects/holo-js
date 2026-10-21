@@ -170,6 +170,43 @@ describe('native database contexts', () => {
     expect(errors.map(entry => entry.kind)).toEqual(['query', 'execute'])
   })
 
+  it('runs a start logger hook outside the scheduler slot so it can query its own connection', async () => {
+    const observed: unknown[] = []
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryStart(entry) {
+        if (entry.source !== 'observed') return
+        observed.push((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value)
+      },
+    } })
+    await db.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'observed' })
+    expect(observed).toEqual([1])
+  })
+
+  it('runs an error logger hook outside the scheduler slot so it can query its own connection', async () => {
+    const observed: unknown[] = []
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryError() {
+        observed.push((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value)
+      },
+    } })
+    await expect(db.queryCompiled({ sql: 'SELECT * FROM missing_table', bindings: [] })).rejects.toMatchObject({ code: 'DRIVER_QUERY_ERROR' })
+    expect(observed).toEqual([1])
+  })
+
+  it('lets a pending start logger hook wait on a query issued on the same connection', async () => {
+    let releaseHook = () => {}
+    const hookReleased = new Promise<void>(resolve => { releaseHook = resolve })
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryStart(entry) {
+        if (entry.source === 'observed') await hookReleased
+      },
+    } })
+    const observed = db.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'observed' })
+    expect((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value).toBe(1)
+    releaseHook()
+    expect((await observed).rows[0]?.value).toBe(2)
+  })
+
   it('times out and aborts native PostgreSQL work without poisoning later reads', async () => {
     const starts: string[] = []
     const { db, table } = await openDatabase('postgres', { logger: { onQueryStart() { starts.push('start') } } })
