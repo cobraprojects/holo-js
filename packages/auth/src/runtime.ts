@@ -1273,6 +1273,10 @@ async function resolveUserFromGuard(
 
   const { adapter } = getProviderAdapter(payload.provider)
   const freshUser = await adapter.findById(payload.userId)
+  if (payload.impersonation && (!freshUser || !await impersonationIdentitiesExist(payload.impersonation))) {
+    return await stopImpersonatingForGuard(guardName)
+  }
+
   if (!freshUser) {
     const remainingPayloads = {
       /* v8 ignore next -- a resolved payload guarantees readSessionPayloads(record) is non-null here. */
@@ -1288,10 +1292,6 @@ async function resolveUserFromGuard(
     bindings.context.setCachedUser(guardName, null)
     await setRememberRecaller(bindings, guardName)
     return null
-  }
-
-  if (payload.impersonation && !await impersonationIdentitiesExist(payload.impersonation)) {
-    return await stopImpersonatingForGuard(guardName)
   }
 
   const serialized = serializeUser(adapter, freshUser, payload.provider)

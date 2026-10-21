@@ -507,7 +507,7 @@ const active = await impersonation()
 await stopImpersonating()
 ```
 
-`actorGuard` is the guard the admin is signed in on. It defaults to the guard you call `impersonate()` on. You can't start impersonating while already impersonating. `stopImpersonating()` restores the previous user on that guard, or signs the guard out if there was none. Impersonation never sets a remember-me cookie, so `remember: true` throws `impersonation_remember_unsupported`.
+`actorGuard` is the guard the admin is signed in on. It defaults to the guard you call `impersonate()` on. You can't start impersonating while already impersonating. `stopImpersonating()` restores the previous user on that guard, or signs the guard out if there was none. If the impersonated user is deleted, the next request ends the impersonation the same way. Impersonation never sets a remember-me cookie, so `remember: true` throws `impersonation_remember_unsupported`.
 
 ## Reference
 
