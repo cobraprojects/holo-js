@@ -937,7 +937,16 @@ export class DatabaseContext {
         }, timeoutMs)
       }
 
-      void runner()
+      let pending: Promise<TResult>
+      try {
+        pending = runner()
+      } catch (error) {
+        finalize()
+        reject(error)
+        return
+      }
+
+      void pending
         .then((result) => {
           if (settled) return
           finalize()

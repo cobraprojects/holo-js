@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { getEventListeners } from 'node:events'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, column, createSchemaService, type DriverAdapter, SchemaError, TransactionError, unsafeSql } from '../src'
@@ -510,6 +511,52 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(restored).toBe(true)
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
     }, 3_000)
+
+    it('leaves no abort listener or timer behind when queries reusing one signal are rejected at submission', async () => {
+      let pauseQueries = false
+      const delay = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
+      const guardTimers = new Set<unknown>()
+      const realSetTimeout = globalThis.setTimeout
+      const realClearTimeout = globalThis.clearTimeout
+      globalThis.setTimeout = ((handler: () => void, timeout?: number) => {
+        const handle = realSetTimeout(handler, timeout)
+        if (timeout === 60_000) guardTimers.add(handle)
+        return handle
+      }) as typeof setTimeout
+      globalThis.clearTimeout = ((handle?: Parameters<typeof clearTimeout>[0]) => {
+        guardTimers.delete(handle)
+        return realClearTimeout(handle)
+      }) as typeof clearTimeout
+      onTestFinished(() => {
+        globalThis.setTimeout = realSetTimeout
+        globalThis.clearTimeout = realClearTimeout
+        for (const handle of guardTimers) realClearTimeout(handle as ReturnType<typeof setTimeout>)
+      })
+
+      const { db, schema } = await openDatabase(driver, {
+        security: { allowUnsafeRawSql: true },
+        logger: {
+          onQueryStart: async entry => {
+            if (entry.source === 'schema:enableForeignKeys') await delay(80)
+            else if (pauseQueries && entry.kind === 'query') await delay(20)
+          },
+        },
+      })
+      const controller = new AbortController()
+      const listenersBefore = getEventListeners(controller.signal, 'abort').length
+
+      let outcomes!: Promise<unknown>[]
+      await schema.withoutForeignKeyConstraints(async () => {
+        pauseQueries = true
+        outcomes = Array.from({ length: 20 }, () => db.unsafeQuery(unsafeSql('select 1'), { signal: controller.signal, timeoutMs: 60_000 })
+          .then(() => 'ran', (error: unknown) => error))
+        pauseQueries = false
+      })
+      for (const outcome of await Promise.all(outcomes)) expect(outcome).toBeInstanceOf(TransactionError)
+
+      expect(getEventListeners(controller.signal, 'abort').length).toBe(listenersBefore)
+      expect(guardTimers.size).toBe(0)
+    }, 5_000)
 
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
