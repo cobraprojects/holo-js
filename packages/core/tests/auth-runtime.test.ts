@@ -1176,22 +1176,41 @@ export default class Admin extends AdminEntity {
     })
 
     const readCookie = () => authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
-    const secondCookie = project.runtime.runWithAuthRequestAccessors({
-      getCookie(name) {
-        return `${name}-second`
-      },
-    }, readCookie)
+    const order: string[] = []
+    let markFirstEntered: () => void = () => undefined
+    const firstEntered = new Promise<void>(resolve => { markFirstEntered = resolve })
+    let releaseFirst: () => void = () => undefined
+    const firstMayRead = new Promise<void>(resolve => { releaseFirst = resolve })
     const firstCookie = project.runtime.runWithAuthRequestAccessors({
       getCookie(name) {
         return `${name}-first`
       },
     }, async () => {
-      await secondCookie
-      return readCookie()
+      order.push('first-enter')
+      markFirstEntered()
+      await firstMayRead
+      const cookie = readCookie()
+      order.push('first-exit')
+      return cookie
+    })
+    const secondCookie = project.runtime.runWithAuthRequestAccessors({
+      getCookie(name) {
+        return `${name}-second`
+      },
+    }, async () => {
+      await firstEntered
+      try {
+        order.push('second-enter')
+        return readCookie()
+      } finally {
+        order.push('second-exit')
+        releaseFirst()
+      }
     })
 
-    expect(await firstCookie).toBe('session-first')
     expect(await secondCookie).toBe('session-second')
+    expect(await firstCookie).toBe('session-first')
+    expect(order).toEqual(['first-enter', 'second-enter', 'second-exit', 'first-exit'])
   })
 
   it('boots auth with the default file session store when session config is omitted', async () => {
