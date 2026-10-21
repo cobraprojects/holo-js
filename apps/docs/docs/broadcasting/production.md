@@ -132,7 +132,7 @@ The worker also closes a connection with code `1008` when more than 4 MB of outp
 
 ### Dead connections
 
-On Node.js, the worker sends a WebSocket ping to each connection every 30 seconds. A connection that doesn't answer a ping, and sends nothing else before the next one, is closed. Browsers answer pings automatically. A client that doesn't answer them is disconnected within 60 seconds, well inside the 120-second activity timeout the worker advertises in `pusher:connection_established`.
+On Node.js and Bun, the worker sends a WebSocket ping to each connection every 30 seconds. A connection that doesn't answer a ping, and sends nothing else before the next one, is closed. Browsers answer pings automatically. A client that doesn't answer them is disconnected within 60 seconds, well inside the 120-second activity timeout the worker advertises in `pusher:connection_established`.
 
 ### Errors
 
