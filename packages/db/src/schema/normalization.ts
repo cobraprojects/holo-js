@@ -70,8 +70,10 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
+const ISO_INSTANT_TEXT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/i
+
 function parseIsoTemporalString(value: string): Date | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+  if (!ISO_INSTANT_TEXT.test(value)) {
     return undefined
   }
 
@@ -79,8 +81,8 @@ function parseIsoTemporalString(value: string): Date | undefined {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed
 }
 
-function stringifyDateLike(dialect: SchemaDialectName, value: unknown): unknown {
-  if (dialect !== 'mysql') {
+function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+  if (dialect === 'sqlite') {
     return value instanceof Date ? value.toISOString() : value
   }
 
@@ -196,7 +198,7 @@ export function normalizeDialectWriteValue(
     case 'date':
     case 'datetime':
     case 'timestamp':
-      return stringifyDateLike(dialect, value)
+      return dateLikeWriteValue(dialect, value)
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)
