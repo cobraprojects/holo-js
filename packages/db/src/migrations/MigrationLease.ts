@@ -17,25 +17,12 @@ const migrationLocksTable = defineTable('_holo_migration_locks', {
 const migrationLockName = 'migrations'
 const migrationLockLifetimeMs = 60 * 60 * 1000
 const migrationLockAcquireAttempts = 5
-const migrationLockNameConstraint = /_holo_migration_locks[._]\w*name|key '(?:_holo_migration_locks\.)?name'/i
 
 type MigrationLockRecord = {
   id: number
   name: string
   owner: string
   expires_at: string | Date
-}
-
-function isMigrationLockNameConflict(error: unknown): boolean {
-  if (!isUniqueConstraintError(error) || !(error instanceof Error)) {
-    return false
-  }
-
-  return migrationLockNameConstraint.test(`${error.message} ${String(error.cause ?? '')}`)
-}
-
-function isUnrelatedUniqueViolation(error: unknown): boolean {
-  return isUniqueConstraintError(error) && !isMigrationLockNameConflict(error)
 }
 
 export class MigrationLease {
@@ -74,19 +61,16 @@ export class MigrationLease {
       this.owner = owner
       return true
     } catch (error) {
-      if (isUnrelatedUniqueViolation(error)) {
-        throw error
-      }
-
-      if (await this.read()) {
+      const current = await this.read()
+      if (current && current.expiresAt > Date.now()) {
         return false
       }
 
-      if (attempt < migrationLockAcquireAttempts && isMigrationLockNameConflict(error)) {
-        return this.tryAcquire(attempt + 1)
+      if (!isUniqueConstraintError(error) || attempt >= migrationLockAcquireAttempts) {
+        throw error
       }
 
-      throw error
+      return this.tryAcquire(attempt + 1)
     }
   }
 

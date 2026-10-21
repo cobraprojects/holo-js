@@ -213,14 +213,12 @@ describe('isolated migration runs', () => {
   it.each([
     'UNIQUE constraint failed: _holo_migration_locks.id',
     "Duplicate entry '7' for key 'audit.name'",
-  ])('rethrows the unrelated unique violation %s on the lock insert at once instead of retrying it away', async (violation) => {
+  ])('rethrows the unique violation %s after the bounded attempts when no lock row explains it', async (violation) => {
     const migration = tableMigration('2026_01_01_000001_first', 'first_records')
     const db = connect()
     const executeCompiled = db.executeCompiled.bind(db)
-    let clashed = false
     db.executeCompiled = async (statement, options) => {
-      if (!clashed && /^insert into "?_holo_migration_locks"?/i.test(statement.sql)) {
-        clashed = true
+      if (/^insert into "?_holo_migration_locks"?/i.test(statement.sql)) {
         throw new Error(violation)
       }
       return executeCompiled(statement, options)
@@ -229,7 +227,26 @@ describe('isolated migration runs', () => {
     await expect(createMigrationService(db, [migration]).migrateIsolated()).rejects.toThrow(violation)
   })
 
-  it('rethrows a primary-key clash on the lock insert even while another runner holds the lock', async () => {
+  it('absorbs a short primary-key desync by retrying past the clashing insert', async () => {
+    const migration = tableMigration('2026_01_01_000001_first', 'first_records')
+    const db = connect()
+    const executeCompiled = db.executeCompiled.bind(db)
+    let clashes = 1
+    db.executeCompiled = async (statement, options) => {
+      if (clashes > 0 && /^insert into "?_holo_migration_locks"?/i.test(statement.sql)) {
+        clashes -= 1
+        throw new Error('UNIQUE constraint failed: _holo_migration_locks.id')
+      }
+      return executeCompiled(statement, options)
+    }
+
+    await expect(createMigrationService(db, [migration]).migrateIsolated()).resolves.toEqual({
+      kind: 'ran',
+      executed: [expect.objectContaining({ name: migration.name })],
+    })
+  })
+
+  it('skips a run whose primary-key clash on the lock insert happens while another runner holds the lock', async () => {
     const migration = tableMigration('2026_01_01_000001_first', 'first_records')
     const db = connect()
     const executeCompiled = db.executeCompiled.bind(db)
@@ -246,8 +263,7 @@ describe('isolated migration runs', () => {
       return executeCompiled(statement, options)
     }
 
-    await expect(createMigrationService(db, [migration]).migrateIsolated())
-      .rejects.toThrow('UNIQUE constraint failed: _holo_migration_locks.id')
+    await expect(createMigrationService(db, [migration]).migrateIsolated()).resolves.toEqual({ kind: 'skipped' })
   })
 
   it('gives up after a bounded number of handoffs and rethrows the unique violation', async () => {
