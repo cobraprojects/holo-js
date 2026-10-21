@@ -902,6 +902,41 @@ describe('@holo-js/auth package runtime', () => {
     await expect(restoreFrom(rememberCookieValue(winner?.value.rememberRecaller))).resolves.toBe(true)
   })
 
+  it('keeps a credential that replaced this enrollment when the MFA refresh rolls back', async () => {
+    const runtime = await configureRuntime({ multiFactor: true })
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await loginUsing(created, { remember: true })
+    const enrollment = await auth.multiFactor.beginEnrollment()
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    const replacement = Object.freeze({
+      provider: 'users',
+      userId: created.id,
+      encryptedSecret: 'replacement-secret',
+      recoveryCodeHashes: Object.freeze([]),
+      lastUsedCounter: null,
+      enabledAt: new Date(),
+      updatedAt: new Date(),
+    })
+    let failNextWrite = true
+    Object.assign(runtime.context, {
+      appendResponseCookie: async () => {
+        if (!failNextWrite) return
+        failNextWrite = false
+        await runtime.multiFactorStore.delete('users', created.id)
+        await runtime.multiFactorStore.save(replacement)
+        throw new Error('response cookies rejected')
+      },
+    })
+
+    await expect(auth.multiFactor.confirmEnrollment({ code })).rejects.toThrow('response cookies rejected')
+    await expect(runtime.multiFactorStore.find('users', created.id)).resolves.toMatchObject({ encryptedSecret: 'replacement-secret' })
+  })
+
   it('enrolls, challenges, rejects TOTP replay, and consumes recovery codes atomically', async () => {
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
