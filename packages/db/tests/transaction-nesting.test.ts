@@ -1,6 +1,6 @@
 import { setTimeout } from 'node:timers/promises'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { ConfigurationError, createDatabase, createDialect, resetDB, type DriverAdapter } from '../src'
+import { ConfigurationError, createDatabase, createDialect, resetDB, TransactionError, type DriverAdapter } from '../src'
 import { openDatabase } from './support/database'
 
 beforeEach(() => resetDB())
@@ -365,5 +365,118 @@ describe('transaction nesting and commit integrity', () => {
     })
     expect(committed).toEqual(['late'])
     expect(await db.table(table).orderBy('id').pluck('name')).toEqual(['Inner', 'Late'])
+  }, 5_000)
+
+  it.each(drivers)('reports a failed root rollback once on %s', async driver => {
+    let failNextRollback = true
+    const rolledBack: Array<{ scope: string, depth: number, error?: unknown }> = []
+    const { db, table, adapter } = await openDatabase(driver, {
+      wrapAdapter: real => withAdapterOverrides(real, {
+        rollback: async () => {
+          if (failNextRollback) {
+            failNextRollback = false
+            throw new Error('rollback failed')
+          }
+          return real.rollback()
+        },
+      }),
+      logger: { onTransactionRollback: entry => { rolledBack.push(entry) } },
+    })
+
+    try {
+      const failure = await db.transaction(async tx => {
+        await tx.table(table).insert({ id: 1, name: 'Failed' })
+        throw new Error('callback failed')
+      }).catch((error: unknown) => error)
+
+      expect(failure).toBeInstanceOf(TransactionError)
+      expect(rolledBack).toHaveLength(1)
+      expect(rolledBack[0]).toMatchObject({ scope: 'transaction', depth: 1 })
+      expect(rolledBack[0]?.error).toBe(failure)
+    } finally {
+      await adapter.rollback().catch(() => undefined)
+    }
+  }, 5_000)
+
+  it.each(drivers)('reports a failed savepoint rollback once on %s', async driver => {
+    let failNextRollback = true
+    const rolledBack: Array<{ scope: string, depth: number, error?: unknown }> = []
+    const { db, table } = await openDatabase(driver, {
+      wrapAdapter: real => withAdapterOverrides(real, {
+        rollbackToSavepoint: async (savepointName: string) => {
+          if (failNextRollback) {
+            failNextRollback = false
+            throw new Error('savepoint rollback failed')
+          }
+          return real.rollbackToSavepoint!(savepointName)
+        },
+      }),
+      logger: { onTransactionRollback: entry => { rolledBack.push(entry) } },
+    })
+
+    const failure = await db.transaction(async tx => {
+      await tx.transaction(async nested => {
+        await nested.table(table).insert({ id: 1, name: 'Nested' })
+        throw new Error('nested callback failed')
+      })
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(TransactionError)
+    const savepointRollbacks = rolledBack.filter(entry => entry.scope === 'savepoint')
+    expect(savepointRollbacks).toHaveLength(1)
+    expect(savepointRollbacks[0]).toMatchObject({ depth: 2 })
+    expect(savepointRollbacks[0]?.error).toBe(failure)
+    expect(rolledBack.filter(entry => entry.scope === 'transaction')).toHaveLength(1)
+  }, 5_000)
+
+  it.each(drivers)('reports a root rollback once when its rollback and a rollback callback both fail on %s', async driver => {
+    let failNextRollback = true
+    const rolledBack: Array<{ scope: string, error?: unknown }> = []
+    const { db, table, adapter } = await openDatabase(driver, {
+      wrapAdapter: real => withAdapterOverrides(real, {
+        rollback: async () => {
+          if (failNextRollback) {
+            failNextRollback = false
+            throw new Error('rollback failed')
+          }
+          return real.rollback()
+        },
+      }),
+      logger: { onTransactionRollback: entry => { rolledBack.push(entry) } },
+    })
+
+    try {
+      const failure = await db.transaction(async tx => {
+        tx.afterRollback(() => { throw new Error('compensation failed') })
+        await tx.table(table).insert({ id: 1, name: 'Failed' })
+        throw new Error('callback failed')
+      }).catch((error: unknown) => error)
+
+      expect(failure).toBeInstanceOf(AggregateError)
+      expect(rolledBack).toHaveLength(1)
+      expect(rolledBack[0]).toMatchObject({ scope: 'transaction', depth: 1 })
+      expect(rolledBack[0]?.error).toBe((failure as AggregateError).errors[0])
+    } finally {
+      await adapter.rollback().catch(() => undefined)
+    }
+  }, 5_000)
+
+  it.each(drivers)('reports a root rollback once when a rollback callback fails after a successful rollback on %s', async driver => {
+    const rolledBack: Array<{ scope: string, depth: number, error?: unknown }> = []
+    const { db, table } = await openDatabase(driver, {
+      logger: { onTransactionRollback: entry => { rolledBack.push(entry) } },
+    })
+
+    const failure = await db.transaction(async tx => {
+      tx.afterRollback(() => { throw new Error('compensation failed') })
+      await tx.table(table).insert({ id: 1, name: 'Failed' })
+      throw new Error('callback failed')
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(rolledBack).toHaveLength(1)
+    expect(rolledBack[0]).toMatchObject({ scope: 'transaction', depth: 1 })
+    expect(rolledBack[0]?.error).toBe((failure as AggregateError).errors[0])
+    expect(await db.table(table).pluck('name')).toEqual([])
   }, 5_000)
 })

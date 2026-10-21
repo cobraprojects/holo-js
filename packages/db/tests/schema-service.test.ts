@@ -601,6 +601,42 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
     }, 5_000)
 
+    it('reports a failed rollback once inside withoutForeignKeyConstraints', async () => {
+      let failNextRollback = true
+      const rolledBack: Array<{ error?: unknown }> = []
+      const { db, schema, table, adapter } = await openDatabase(driver, {
+        wrapAdapter: real => new Proxy(real, {
+          get(target, property) {
+            if (property === 'rollback') {
+              return async () => {
+                if (failNextRollback) {
+                  failNextRollback = false
+                  throw new Error('rollback failed')
+                }
+                return target.rollback()
+              }
+            }
+            return Reflect.get(target, property, target)
+          },
+        }),
+        logger: { onTransactionRollback: entry => { rolledBack.push(entry) } },
+      })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        try {
+          const failure = await db.transaction(async tx => {
+            await tx.table(table).insert({ id: 1, name: 'failed' })
+            throw new Error('callback failed')
+          }).catch((error: unknown) => error)
+          expect(failure).toBeInstanceOf(TransactionError)
+          expect(rolledBack).toHaveLength(1)
+          expect(rolledBack[0]?.error).toBe(failure)
+        } finally {
+          await adapter.rollback().catch(() => undefined)
+        }
+      })
+    }, 5_000)
+
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
         const { db, schema } = await openDatabase(driver)

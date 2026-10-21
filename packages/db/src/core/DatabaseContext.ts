@@ -476,14 +476,8 @@ export class DatabaseContext {
         try {
           value = await this._runTransactionCallback(child, callback)
         } catch (error) {
-          try {
-            await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
-            rollbackSchemaMutationScope(child)
-          } catch (rollbackError) {
-            await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
-            throw rollbackError
-          }
-
+          await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
+          rollbackSchemaMutationScope(child)
           throw error
         }
 
@@ -532,8 +526,9 @@ export class DatabaseContext {
       await transaction?._runAfterRollbackCallbacks(this)
     } catch (compensationError) {
       throw new AggregateError([error, compensationError], 'Transaction failed and rollback compensation failed.')
+    } finally {
+      await this._logger?.onTransactionRollback?.({ ...entry, error })
     }
-    await this._logger?.onTransactionRollback?.({ ...entry, error })
   }
 
   private async _runNestedTransaction<T>(
