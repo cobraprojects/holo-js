@@ -165,7 +165,7 @@ describe('file session locking with real processes', () => {
     expect(await store.read(record.id)).toEqual(record)
     expect(await store.take(record.id, 'existing')).toEqual({ found: true, value: 'preserved' })
     for (let writer = 0; writer < workers.length; writer += 1) {
-      for (let index = 0; index < 2; index += 1) {
+      for (let index = 0; index < 5; index += 1) {
         const key = `writer${writer}.${index}`
         expect(await store.take(record.id, key)).toEqual({ found: true, value: { writer: `writer${writer}`, index } })
         expect(await store.take(record.id, key)).toEqual({ found: false })
