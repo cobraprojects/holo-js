@@ -1,4 +1,6 @@
 import { expect, it, onTestFinished } from 'vitest'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
+import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
 import { configureRealtimeRuntime, realtimeRuntimeInternals, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
@@ -334,4 +336,64 @@ it('refreshes a subscription whose initial query overlapped a local write to its
   await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
   await new Promise(resolve => setTimeout(resolve, 100))
   expect(held.runs()).toBe(2)
+}, 30_000)
+
+function configureFailingCacheIndex(): void {
+  const failure = async (): Promise<never> => {
+    throw new Error('dependency index unavailable')
+  }
+  const base = cacheQueryBridgeInternals.createMemoryDependencyIndex()
+  configureCacheRuntime({
+    config: { default: 'memory', drivers: { memory: { driver: 'memory' } } },
+    dependencyIndex: { ...base, listKeys: failure, listDependencies: failure },
+  })
+  onTestFinished(() => resetCacheRuntime())
+}
+
+function captureErrorReports(): Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> {
+  const reports: Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> = []
+  errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  return reports
+}
+
+it('still refreshes a live query and reports the error when a remote invalidation fails to evict cached results', async () => {
+  const { adapter, db } = await openRealtimeDatabase()
+  configureFailingCacheIndex()
+  const reports = captureErrorReports()
+  const seen: unknown[] = []
+  const scoreQuery = query({
+    name: 'records.evictionFailure',
+    access: 'public',
+    handler: async () => ({ score: await db.table('records').where('id', 1).value('score') }),
+  })
+  await subscribeRealtimeQuery(scoreQuery, {}, {
+    onData: snapshot => { seen.push((snapshot as unknown as { data: { score: unknown } }).data.score) },
+  })
+  await adapter.execute('UPDATE records SET score = 77 WHERE id = 1')
+
+  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+
+  await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
+  expect(reports.map(report => (report.error as Error).message)).toContain('dependency index unavailable')
+}, 30_000)
+
+it('still refreshes a live query and reports the error when a local write fails to evict cached results', async () => {
+  const { db } = await openRealtimeDatabase()
+  configureFailingCacheIndex()
+  const reports = captureErrorReports()
+  const seen: unknown[] = []
+  const scoreQuery = query({
+    name: 'records.localEvictionFailure',
+    access: 'public',
+    handler: async () => ({ score: await db.table('records').where('id', 1).value('score') }),
+  })
+  await subscribeRealtimeQuery(scoreQuery, {}, {
+    onData: snapshot => { seen.push((snapshot as unknown as { data: { score: unknown } }).data.score) },
+  })
+
+  await db.table('records').where('id', 1).update({ score: 77 })
+
+  await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
+  expect(reports.map(report => (report.error as Error).message)).toContain('dependency index unavailable')
 }, 30_000)

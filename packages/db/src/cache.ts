@@ -845,12 +845,45 @@ function serializeDatabaseDependencyInvalidation(
 async function receiveRemoteDatabaseDependencyInvalidation(
   invalidation: RemoteDatabaseDependencyInvalidation,
 ): Promise<void> {
-  await getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies)
-  await notifyDatabaseDependencyInvalidationListeners(Object.freeze({
-    connectionName: invalidation.connectionName,
-    dependencies: invalidation.dependencies,
-    mutations: [],
-  }))
+  await evictThenNotify(
+    () => getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies),
+    () => notifyDatabaseDependencyInvalidationListeners(Object.freeze({
+      connectionName: invalidation.connectionName,
+      dependencies: invalidation.dependencies,
+      mutations: [],
+    })),
+  )
+}
+
+type InvalidationStep = { readonly failed: false } | { readonly failed: true, readonly error: unknown }
+
+async function attemptInvalidationStep(step: () => Promise<void> | void): Promise<InvalidationStep> {
+  try {
+    await step()
+    return { failed: false }
+  } catch (error) {
+    return { failed: true, error }
+  }
+}
+
+async function evictThenNotify(
+  evict: () => Promise<void> | void,
+  notify: () => Promise<void> | void,
+): Promise<void> {
+  const eviction = await attemptInvalidationStep(evict)
+  const notification = await attemptInvalidationStep(notify)
+  if (eviction.failed && notification.failed) {
+    throw new AggregateError([eviction.error, notification.error], '[@holo-js/db] Cache eviction and realtime notification both failed.')
+  }
+
+  if (eviction.failed) {
+    reportError(eviction.error, { capability: 'db', operation: 'cache.invalidateDependencies' })
+    return
+  }
+
+  if (notification.failed) {
+    throw notification.error
+  }
 }
 
 async function notifyDatabaseDependencyInvalidationListeners(
@@ -2131,21 +2164,25 @@ export async function invalidateQueryCacheDependencies(
 
   const invalidate = async () => {
     const bridge = getDatabaseQueryCacheBridge()
-    await bridge?.invalidateDependencies(dependencies)
-    const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
-    const publisher = candidates[candidates.length - 1]?.publisher
-    const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
-    if (!publisher && !hasLocalListeners) {
-      return
-    }
+    await evictThenNotify(
+      () => bridge?.invalidateDependencies(dependencies),
+      async () => {
+        const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
+        const publisher = candidates[candidates.length - 1]?.publisher
+        const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
+        if (!publisher && !hasLocalListeners) {
+          return
+        }
 
-    const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
-    if (publisher) {
-      publishDatabaseDependencyInvalidation(publisher, event)
-    }
-    if (hasLocalListeners) {
-      await notifyDatabaseDependencyInvalidationListeners(event)
-    }
+        const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
+        if (publisher) {
+          publishDatabaseDependencyInvalidation(publisher, event)
+        }
+        if (hasLocalListeners) {
+          await notifyDatabaseDependencyInvalidationListeners(event)
+        }
+      },
+    )
   }
 
   if (connection.getScope().kind === 'root') {
