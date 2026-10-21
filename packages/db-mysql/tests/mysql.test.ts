@@ -2,14 +2,22 @@ import { randomUUID } from 'node:crypto'
 import { createConnection } from 'mysql2/promise'
 import { describe, expect, it } from 'vitest'
 import {
+  createConnectionManager,
   createDatabase,
   TableQueryBuilder,
   createDialect,
   createMigrationService,
   createSchemaService,
   column,
+  configureDB,
+  defineGeneratedTable,
   defineMigration,
+  defineModel,
+  latestOfMany,
   MySQLSchemaCompiler,
+  resetDB,
+  type Entity,
+  type TableDefinition,
 } from '@holo-js/db'
 import { createMySQLAdapter } from '../src'
 
@@ -130,6 +138,54 @@ describe('@holo-js/db-mysql', () => {
       await adapter.disconnect()
     }
   })
+
+  it('loads one-of-many relations under a constraint lock and blocks on the latest row', async () => {
+    const suffix = randomUUID().replaceAll('-', '_')
+    const usersTable = `holo_one_of_many_lock_users_${suffix}`
+    const postsTable = `holo_one_of_many_lock_posts_${suffix}`
+    const adapter = createMySQLAdapter({ config: { ...liveMySqlConfig, connectionLimit: 1 } })
+    const holder = await createConnection(liveMySqlConfig)
+    const Post = defineModel(defineGeneratedTable(postsTable, {
+      id: column.id(),
+      user_id: column.integer(),
+      score: column.integer(),
+    }), { timestamps: false })
+    const User = defineModel(defineGeneratedTable(usersTable, {
+      id: column.id(),
+      name: column.string(),
+    }), {
+      timestamps: false,
+      relations: { topScorePost: latestOfMany(() => Post, 'user_id', 'id', 'score') },
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('mysql') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${usersTable} (id INT PRIMARY KEY, name VARCHAR(255) NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${postsTable} (id INT PRIMARY KEY, user_id INT NOT NULL, score INT NOT NULL, INDEX (user_id))`)
+      await adapter.execute(`INSERT INTO ${usersTable} VALUES (1, 'Mohamed'), (2, 'Amina')`)
+      await adapter.execute(`INSERT INTO ${postsTable} VALUES (10, 1, 5), (11, 1, 9), (12, 2, 3)`)
+      await adapter.execute('SET SESSION innodb_lock_wait_timeout = 1')
+
+      const loaded = await User.with('topScorePost', query => query.lockForUpdate()).orderBy('id').get()
+      expect(loaded.map(user => user.getRelation<Entity<TableDefinition>>('topScorePost')?.get('id'))).toEqual([11, 12])
+
+      await holder.beginTransaction()
+      await holder.query(`SELECT id FROM ${postsTable} WHERE id = 11 FOR UPDATE`)
+      await expect(User.with('topScorePost', query => query.lockForUpdate()).orderBy('id').get())
+        .rejects.toThrow('Lock wait timeout exceeded')
+      await holder.rollback()
+    } finally {
+      await holder.rollback().catch(() => undefined)
+      await holder.end()
+      await adapter.execute(`DROP TABLE IF EXISTS ${usersTable}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${postsTable}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
 
   it('reports real database creation permission failures', async () => {
     const user = `holo_denied_${randomUUID().replaceAll('-', '').slice(0, 16)}`

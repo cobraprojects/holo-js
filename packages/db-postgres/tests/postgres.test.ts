@@ -4,7 +4,8 @@ import { Client, types as pgTypes } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
   column, configureDB, createConnectionManager, createDialect, defineGeneratedTable,
-  createDatabase, defineModel, resetDB,
+  createDatabase, defineModel, latestOfMany, resetDB,
+  type Entity, type TableDefinition,
 } from '@holo-js/db'
 import { createPostgresAdapter } from '../src'
 
@@ -213,6 +214,183 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
       expect(batches).toEqual([[false], [true]])
     } finally {
       await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
+
+  it.each(['lockForUpdate', 'sharedLock'] as const)('loads one-of-many relations under a %s constraint on PostgreSQL', async lockMethod => {
+    const suffix = randomUUID().replaceAll('-', '_')
+    const usersTable = `holo_one_of_many_lock_users_${suffix}`
+    const postsTable = `holo_one_of_many_lock_posts_${suffix}`
+    const adapter = createPostgresAdapter({
+      config: livePostgresConfig,
+    })
+    const Post = defineModel(defineGeneratedTable(postsTable, {
+      id: column.id(),
+      user_id: column.integer(),
+      score: column.integer(),
+    }), { timestamps: false })
+    const User = defineModel(defineGeneratedTable(usersTable, {
+      id: column.id(),
+      name: column.string(),
+    }), {
+      timestamps: false,
+      relations: { topScorePost: latestOfMany(() => Post, 'user_id', 'id', 'score') },
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${usersTable} (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${postsTable} (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, score INTEGER NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${usersTable} VALUES (1, 'Mohamed'), (2, 'Amina')`)
+      await adapter.execute(`INSERT INTO ${postsTable} VALUES (10, 1, 5), (11, 1, 9), (12, 2, 3)`)
+
+      const users = await User.with('topScorePost', query => query[lockMethod]()).orderBy('id').get()
+      expect(users.map(user => user.getRelation<Entity<TableDefinition>>('topScorePost')?.get('id'))).toEqual([11, 12])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${usersTable}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${postsTable}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
+
+  it('locks only the latest one-of-many rows under a constraint lock on PostgreSQL', async () => {
+    const suffix = randomUUID().replaceAll('-', '_')
+    const usersTable = `holo_one_of_many_scope_users_${suffix}`
+    const postsTable = `holo_one_of_many_scope_posts_${suffix}`
+    const adapter = createPostgresAdapter({
+      config: { ...livePostgresConfig, max: 1, options: '-c lock_timeout=300' },
+    })
+    const holder = new Client(livePostgresConfig)
+    const Post = defineModel(defineGeneratedTable(postsTable, {
+      id: column.id(),
+      user_id: column.integer(),
+      score: column.integer(),
+    }), { timestamps: false })
+    const User = defineModel(defineGeneratedTable(usersTable, {
+      id: column.id(),
+      name: column.string(),
+    }), {
+      timestamps: false,
+      relations: { topScorePost: latestOfMany(() => Post, 'user_id', 'id', 'score') },
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${usersTable} (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${postsTable} (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, score INTEGER NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${usersTable} VALUES (1, 'Mohamed'), (2, 'Amina')`)
+      await adapter.execute(`INSERT INTO ${postsTable} VALUES (10, 1, 5), (11, 1, 9), (12, 2, 3)`)
+      await holder.connect()
+
+      await holder.query(`BEGIN`)
+      await holder.query(`SELECT id FROM ${postsTable} WHERE id = 10 FOR UPDATE`)
+      const withSuperseded = await User.with('topScorePost', query => query.lockForUpdate()).orderBy('id').get()
+      expect(withSuperseded.map(user => user.getRelation<Entity<TableDefinition>>('topScorePost')?.get('id'))).toEqual([11, 12])
+      await holder.query(`ROLLBACK`)
+
+      await holder.query(`BEGIN`)
+      await holder.query(`SELECT id FROM ${postsTable} WHERE id = 11 FOR UPDATE`)
+      await expect(User.with('topScorePost', query => query.lockForUpdate()).orderBy('id').get())
+        .rejects.toThrow('lock timeout')
+      await holder.query(`ROLLBACK`)
+    } finally {
+      await holder.query(`ROLLBACK`).catch(() => undefined)
+      await holder.end()
+      await adapter.execute(`DROP TABLE IF EXISTS ${usersTable}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${postsTable}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
+
+  it('keeps a one-of-many constraint lock source-scoped after removing a global scope on PostgreSQL', async () => {
+    const suffix = randomUUID().replaceAll('-', '_')
+    const usersTable = `holo_one_of_many_scope_removal_users_${suffix}`
+    const postsTable = `holo_one_of_many_scope_removal_posts_${suffix}`
+    const adapter = createPostgresAdapter({
+      config: livePostgresConfig,
+    })
+    const Post = defineModel(defineGeneratedTable(postsTable, {
+      id: column.id(),
+      user_id: column.integer(),
+      score: column.integer(),
+      published: column.boolean(),
+    }), {
+      timestamps: false,
+      globalScopes: { published: query => query.where('published', true) },
+    })
+    const User = defineModel(defineGeneratedTable(usersTable, {
+      id: column.id(),
+      name: column.string(),
+    }), {
+      timestamps: false,
+      relations: { topScorePost: latestOfMany(() => Post, 'user_id', 'id', 'score') },
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${usersTable} (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${postsTable} (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, score INTEGER NOT NULL, published BOOLEAN NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${usersTable} VALUES (1, 'Mohamed'), (2, 'Amina')`)
+      await adapter.execute(`INSERT INTO ${postsTable} VALUES (10, 1, 5, true), (11, 1, 9, true), (12, 2, 3, true), (13, 1, 20, false)`)
+
+      const users = await User.with('topScorePost', query => query.withoutGlobalScope('published').lockForUpdate()).orderBy('id').get()
+      expect(users.map(user => user.getRelation<Entity<TableDefinition>>('topScorePost')?.get('id'))).toEqual([13, 12])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${usersTable}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${postsTable}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
+
+  it.each(['lockForUpdate', 'sharedLock'] as const)('loads one-of-many relations when a %s constraint returns a fresh builder on PostgreSQL', async lockMethod => {
+    const suffix = randomUUID().replaceAll('-', '_')
+    const usersTable = `holo_one_of_many_fresh_users_${suffix}`
+    const postsTable = `holo_one_of_many_fresh_posts_${suffix}`
+    const adapter = createPostgresAdapter({
+      config: livePostgresConfig,
+    })
+    const Post = defineModel(defineGeneratedTable(postsTable, {
+      id: column.id(),
+      user_id: column.integer(),
+      score: column.integer(),
+    }), { timestamps: false })
+    const User = defineModel(defineGeneratedTable(usersTable, {
+      id: column.id(),
+      name: column.string(),
+    }), {
+      timestamps: false,
+      relations: { topScorePost: latestOfMany(() => Post, 'user_id', 'id', 'score') },
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${usersTable} (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${postsTable} (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, score INTEGER NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${usersTable} VALUES (1, 'Mohamed'), (2, 'Amina')`)
+      await adapter.execute(`INSERT INTO ${postsTable} VALUES (10, 1, 5), (11, 1, 9), (12, 2, 3)`)
+
+      const users = await User.with('topScorePost', () => Post.query()[lockMethod]()).orderBy('id').get()
+      expect(users.map(user => user.getRelation<Entity<TableDefinition>>('topScorePost')?.get('id'))).toEqual([11, 12])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${usersTable}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${postsTable}`)
       await adapter.disconnect()
       resetDB()
     }

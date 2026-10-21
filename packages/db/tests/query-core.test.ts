@@ -25,7 +25,7 @@ import {
  } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
-import { createUpsertQueryPlan, type QueryJsonUpdateOperation } from '../src/query/ast'
+import { createUpsertQueryPlan, withJoin, withLockMode, withOneOfManyAggregateMarker, type QueryJsonUpdateOperation } from '../src/query/ast'
 
 function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -1723,6 +1723,56 @@ describe('query core slice', () => {
     expect(await DB.table(users).value('name')).toBe(payload)
   })
 
+
+  it('locks only the source table when a one-of-many aggregate is joined, per dialect', () => {
+    const postgres = new PostgresQueryCompiler(
+      identifier => `"${identifier}"`,
+      index => `$${index}`,
+    )
+    const mysql = new MySQLQueryCompiler(
+      identifier => `\`${identifier}\``,
+      () => '?',
+    )
+    const aggregate = withOneOfManyAggregateMarker(createSelectQueryPlan({ kind: 'table', tableName: 'posts' }))
+    const joinAggregate = (plan: ReturnType<typeof createSelectQueryPlan>) => withJoin(plan, {
+      type: 'inner',
+      subquery: aggregate,
+      alias: '__holo_latest',
+      leftColumn: 'posts.id',
+      operator: '=',
+      rightColumn: '__holo_latest.id',
+    })
+    const source = { kind: 'table' as const, tableName: 'posts' }
+
+    expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
+      .toMatch(/ FOR UPDATE OF "posts"$/)
+    expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
+      .toMatch(/ FOR SHARE OF "posts"$/)
+    expect(mysql.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
+      .toMatch(/ FOR UPDATE$/)
+    expect(mysql.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
+      .toMatch(/ LOCK IN SHARE MODE$/)
+    expect(postgres.compile(withLockMode(createSelectQueryPlan({ kind: 'table', tableName: 'analytics.posts' }), 'update')).sql)
+      .toBe('SELECT * FROM "analytics"."posts" FOR UPDATE')
+    expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan({ kind: 'table', tableName: 'analytics.posts' }), 'update'))).sql)
+      .toMatch(/ FOR UPDATE OF "posts"$/)
+  })
+
+  it('keeps the plain lock when an application subquery join reuses the one-of-many alias', () => {
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: {
+          adapter: createTestAdapter(),
+          dialect: createDatabaseDialect('postgres') } } }))
+
+    const sql = DB.table('users')
+      .joinSub(DB.table('posts').select('userId'), '__holo_latest', '__holo_latest.userId', '=', 'users.id')
+      .lockForUpdate()
+      .toSQL().sql
+
+    expect(sql.endsWith(' FOR UPDATE')).toBe(true)
+  })
 
   it('keeps dialect-specific compilers aligned on shared SQL planning rules', () => {
     const postgres = new PostgresQueryCompiler(
