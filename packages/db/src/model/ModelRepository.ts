@@ -21,12 +21,12 @@ import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQ
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
-import { collectRelationKeys, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
+import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
 import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
-import { ModelQueryBuilder } from './ModelQueryBuilder'
+import { ModelQueryBuilder, loadRelationsOn, whereIntegerKeysIn, withoutRelationLoads } from './ModelQueryBuilder'
 import { ModelEventDispatcher } from './ModelEventDispatcher'
 import { ModelValueTransformer } from './ModelValueTransformer'
 import {
@@ -269,11 +269,33 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable>> {
-    if (values.length === 0) {
+    const primaryKey = this.definition.primaryKey
+    const keys = [...new Set(values)]
+    if (keys.length === 0) {
       return this.createCollection([])
     }
 
-    return this.query().where(this.definition.primaryKey, 'in', [...values]).get()
+    const scoped = this.query()
+    if (!isKeySeparableQuery(scoped)) {
+      const integerKeys = integerKeysToInline(keys, this.definition.table.columns[primaryKey])
+      return integerKeys
+        ? scoped[whereIntegerKeysIn](integerKeys).get()
+        : scoped.where(primaryKey, 'in', singleStatementRelationKeys(keys)).get()
+    }
+
+    const storedRows = await loadRelationKeyChunks(keys, false, chunk => scoped
+      .getTableQueryBuilder()
+      .select(primaryKey as never)
+      .where(primaryKey, 'in', chunk)
+      .get<Record<string, unknown>>())
+    const storedKeys = distinctStoredKeys(storedRows.map(row => row[primaryKey]))
+    const hydration = scoped[withoutRelationLoads]()
+    const entities = await loadRelationKeyChunks(storedKeys, false, chunk => hydration
+      .where(primaryKey, 'in', chunk)
+      .get())
+    this.attachCollection(entities)
+    await scoped[loadRelationsOn](entities)
+    return this.createCollection(entities)
   }
 
   async firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): Promise<Entity<TTable> | undefined> {

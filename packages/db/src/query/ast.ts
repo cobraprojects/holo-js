@@ -170,6 +170,17 @@ export interface QueryRawPredicate {
   readonly bindings: readonly unknown[]
 }
 
+export interface QueryIntegerInPredicate {
+  readonly kind: 'integer-in'
+  readonly boolean?: 'and' | 'or'
+  readonly column: string
+  readonly values: readonly (number | bigint)[]
+}
+
+export function isInlineIntegerValue(value: unknown): value is number | bigint {
+  return typeof value === 'bigint' || (typeof value === 'number' && Number.isSafeInteger(value))
+}
+
 export type QueryPredicateNode
   = | QueryPredicate
     | QueryColumnPredicate
@@ -182,6 +193,7 @@ export type QueryPredicateNode
     | QueryExistsPredicate
     | QuerySubqueryPredicate
     | QueryRawPredicate
+    | QueryIntegerInPredicate
 
 export type QueryOrderBy
   = | {

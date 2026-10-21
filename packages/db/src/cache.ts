@@ -1278,6 +1278,7 @@ export function normalizeQueryCacheDependencies(
 function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): boolean {
   switch (predicate.kind) {
     case 'comparison':
+    case 'integer-in':
     case 'column':
     case 'null':
     case 'date':
