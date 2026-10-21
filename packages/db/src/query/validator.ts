@@ -1,5 +1,6 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
+import { isInlineIntegerValue } from './ast'
 import type { TableColumnsShape } from '../schema/types'
 import type {
   QueryAggregateSelection,
@@ -339,6 +340,16 @@ function assertPredicate(
 
     if (typeof predicate.value === 'undefined') {
       throw new SecurityError(`JSON contains predicate for column "${predicate.column}" cannot be undefined.`)
+    }
+
+    return
+  }
+
+  if (predicate.kind === 'integer-in') {
+    assertColumnReference(predicate.column, tableName, allowedColumns)
+
+    if (predicate.values.length === 0 || !predicate.values.every(isInlineIntegerValue)) {
+      throw new SecurityError(`Integer key predicate for column "${predicate.column}" requires a non-empty list of safe integers.`)
     }
 
     return

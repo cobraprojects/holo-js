@@ -200,6 +200,74 @@ describe('bounded relation loading', () => {
     expect(rows.map(user => user.get('id'))).toEqual(userRows.map(user => user.id))
   })
 
+  it('inlines a toQuery integer key list above SQLite bind limits and keeps order and limit on the builder', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 40_000 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    for (let index = 0; index < userRows.length; index += 500) {
+      await db.table(users).insert(userRows.slice(index, index + 500))
+    }
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+
+    queries.length = 0
+    const everyRow = await collection.toQuery().get()
+    expect(everyRow).toHaveLength(40_000)
+    expect(collectBindingCounts(queries)).toEqual([])
+
+    const newest = await collection.toQuery().orderBy('id', 'desc').limit(3).get()
+    expect(newest.map(user => user.get('id'))).toEqual([40_000, 39_999, 39_998])
+  })
+
+  it('binds a toQuery key list above 256 when a string key looks numeric or injects SQL', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const codes = defineTable('codes', { code: column.string().primaryKey(), label: column.string() })
+    await createTestTable(db, codes)
+
+    const codeRows = [
+      { code: '1 OR 1=1', label: 'injected' },
+      { code: '1', label: 'numeric' },
+      ...Array.from({ length: 298 }, (_, index) => ({ code: `code-${index + 1}`, label: `code ${index + 1}` })),
+    ]
+    await db.table(codes).insert(codeRows)
+
+    const Code = defineModelFromTable(codes)
+    const collection = await Code.get()
+
+    queries.length = 0
+    const rows = await collection.toQuery().get()
+
+    expect(rows).toHaveLength(300)
+    expect(queries.some(entry => entry.sql.includes('1 OR 1=1'))).toBe(false)
+    expect(queries.flatMap(entry => entry.bindings)).toEqual(expect.arrayContaining(['1 OR 1=1', '1']))
+  })
+
+  it('binds a toQuery key list above 256 when it contains an integer beyond the safe range', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.integer().primaryKey(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    await db.table(users).insert(userRows)
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+    collection.push(User.make().forceFill({ id: Number.MAX_SAFE_INTEGER + 1, name: 'unsafe' }))
+
+    queries.length = 0
+    const rows = await collection.toQuery().get()
+
+    expect(rows).toHaveLength(300)
+    expect(queries.some(entry => entry.sql.includes(String(Number.MAX_SAFE_INTEGER + 1)))).toBe(false)
+    expect(queries.flatMap(entry => entry.bindings)).toContain(Number.MAX_SAFE_INTEGER + 1)
+  })
+
   it('resolves one-of-many relations to no related model when every candidate value is NULL', async () => {
     const db = openSQLite()
     const users = defineTable('users', { id: column.id(), name: column.string() })

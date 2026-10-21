@@ -137,3 +137,36 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('bounded relation
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('bounded relation loading on mysql', () => {
   defineBoundedRelationLoadingScenario('mysql')
 })
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('to-query integer keys on postgres', () => {
+  defineToQueryIntegerKeysScenario('postgres')
+})
+
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('to-query integer keys on mysql', () => {
+  defineToQueryIntegerKeysScenario('mysql')
+})
+
+function defineToQueryIntegerKeysScenario(driver: 'postgres' | 'mysql') {
+  it('loads a toQuery integer key list above 256 keys as inline literals on the real database', async () => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_to_query_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const qualified = driver === 'postgres' ? name : `${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`
+    await schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.string('name')
+    })
+
+    try {
+      const users = defineTable(qualified, { id: column.integer().primaryKey(), name: column.string() })
+      await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+      const User = defineModelFromTable(users)
+      const collection = await User.get()
+
+      expect(await collection.toQuery().get()).toHaveLength(300)
+      expect((await collection.toQuery().orderBy('id', 'desc').limit(2).get()).map(user => user.get('id'))).toEqual([300, 299])
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+}

@@ -110,6 +110,8 @@ type RelationConstraintMap<TRelations extends RelationMap> = Readonly<
 type TableQueryPredicates<TTable extends TableDefinition> =
   ReturnType<TableQueryBuilder<TTable, Record<string, unknown>>['getPlan']>['predicates']
 
+export const whereIntegerKeysIn = Symbol('whereIntegerKeysIn')
+
 export class ModelQueryBuilder<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
@@ -482,6 +484,13 @@ export class ModelQueryBuilder<
 
   whereIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.clone(this.tableQuery.whereIn(column as never, values))
+  }
+
+  [whereIntegerKeysIn](values: readonly (number | bigint)[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    return this.clone(this.tableQuery.withPredicates([
+      ...this.tableQuery.getPlan().predicates,
+      { kind: 'integer-in', boolean: 'and', column: this.repository.definition.primaryKey, values },
+    ]))
   }
 
   whereNotIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {

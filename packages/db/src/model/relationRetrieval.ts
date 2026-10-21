@@ -1,4 +1,5 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
+import { isInlineIntegerValue } from '../query/ast'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { TableDefinition } from '../schema/types'
 import type { SelectQueryPlan } from '../query/ast'
@@ -25,6 +26,11 @@ function padRelationKeys(keys: readonly unknown[]): unknown[] {
 export function singleStatementRelationKeys(values: readonly unknown[]): unknown[] {
   const keys = [...new Set(values)]
   return keys.length <= RELATION_KEY_CHUNK_SIZE ? padRelationKeys(keys) : keys
+}
+
+export function integerKeysToInline(values: readonly unknown[]): readonly (number | bigint)[] | undefined {
+  const keys = [...new Set(values)]
+  return keys.length > RELATION_KEY_CHUNK_SIZE && keys.every(isInlineIntegerValue) ? keys : undefined
 }
 
 function chunkRelationKeys(keys: readonly unknown[], paginated: boolean): unknown[][] {

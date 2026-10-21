@@ -1803,6 +1803,7 @@ function hasObservationDependencyFallbackPredicate(predicate: QueryPredicateNode
   return predicate.kind === 'exists'
     || predicate.kind === 'subquery'
     || predicate.kind === 'raw'
+    || predicate.kind === 'integer-in'
     || predicate.kind === 'vector'
     || predicate.kind === 'fulltext'
 }
