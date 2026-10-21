@@ -79,6 +79,20 @@ describe('native database and cache integration', () => {
     expect(await query.get()).toEqual([])
   })
 
+  it('invalidates a cached toQuery integer key list above 256 keys after a write', async () => {
+    await DB.table(users).insert(Array.from({ length: 300 }, (_, index) => ({
+      name: `bulk ${index}`, status: 'active', score: index, settings: null, created_at: null,
+    })))
+    const User = defineModelFromTable(users, { timestamps: false })
+    const collection = await User.get()
+    expect(await collection.toQuery().cache(60).get()).toHaveLength(302)
+
+    await DB.table(users).where('id', 1).update({ name: 'Changed' })
+
+    const rows = await collection.toQuery().cache(60).get()
+    expect(rows.find(user => user.get('id') === 1)?.get('name')).toBe('Changed')
+  })
+
   it('caches real query results with distinct bound-value keys and explicit file keys', async () => {
     const first = await DB.table(users).where('id', 1).cache(60).first()
     await adapter.execute("UPDATE users SET name = 'Outside' WHERE id = 1")

@@ -1,6 +1,7 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError } from '../core/errors'
+import { isInlineIntegerValue } from './ast'
 import { validateQueryPlan } from './validator'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
 import type {
@@ -478,6 +479,16 @@ export class SQLQueryCompiler {
 
     if (predicate.kind === 'raw') {
       return this.compileRawSql(predicate.sql, predicate.bindings, bindings)
+    }
+
+    if (predicate.kind === 'integer-in') {
+      const literals = predicate.values.map((value) => {
+        if (!isInlineIntegerValue(value)) {
+          throw new CompilerError(`Integer key predicate for column "${predicate.column}" received a value that is not a safe integer.`)
+        }
+        return String(value)
+      })
+      return `${this.compileColumnReference(predicate.column)} IN (${literals.join(', ')})`
     }
 
     if (predicate.kind === 'exists') {

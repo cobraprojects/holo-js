@@ -147,6 +147,7 @@ type JsonColumnPath<
 
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
+export const hasQueryCache = Symbol('hasQueryCache')
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
 const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
@@ -1351,6 +1352,10 @@ export class TableQueryBuilder<
   dump(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     console.log(this.debug())
     return this
+  }
+
+  [hasQueryCache](): boolean {
+    return this.queryCacheConfig !== undefined
   }
 
   cache(

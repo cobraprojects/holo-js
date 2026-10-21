@@ -114,6 +114,10 @@ type AggregateLoad = {
 type TableQueryPredicates<TTable extends TableDefinition> =
   ReturnType<TableQueryBuilder<TTable, Record<string, unknown>>['getPlan']>['predicates']
 
+export const whereIntegerKeysIn = Symbol('whereIntegerKeysIn')
+export const withoutRelationLoads = Symbol('withoutRelationLoads')
+export const loadRelationsOn = Symbol('loadRelationsOn')
+
 export class ModelQueryBuilder<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
@@ -486,6 +490,35 @@ export class ModelQueryBuilder<
 
   whereIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.clone(this.tableQuery.whereIn(column as never, values))
+  }
+
+  [withoutRelationLoads](): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+      this.repository,
+      this.tableQuery,
+      [],
+      this.relationFilters,
+      [],
+      this.queryCasts,
+      this.scopePredicates,
+      this.softDeleteMode,
+    )
+  }
+
+  async [loadRelationsOn](entities: readonly Entity<TTable, TRelations>[]): Promise<void> {
+    await this.repository.loadRelations(entities, this.eagerLoads)
+    await this.repository.loadRelationAggregates(entities, this.aggregateLoads)
+    const collection = this.repository.createCollection(entities as Entity<TTable, TRelations>[]) as
+      ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+    this.recordCollectionRelationObservations(collection)
+    this.recordCollectionRelationAggregateObservations(collection)
+  }
+
+  [whereIntegerKeysIn](values: readonly (number | bigint)[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    return this.clone(this.tableQuery.withPredicates([
+      ...this.tableQuery.getPlan().predicates,
+      { kind: 'integer-in', boolean: 'and', column: this.repository.definition.primaryKey, values },
+    ]))
   }
 
   whereNotIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
