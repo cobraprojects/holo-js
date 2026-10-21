@@ -52,6 +52,8 @@ import type {
   RelationDefinition,
   RelationAggregateKind,
   ModelUpdatePayload,
+  EmptyScopeMap,
+  ModelScopesDefinition,
   RelationMap,
 } from './types'
 
@@ -109,10 +111,10 @@ function isEntity(value: unknown): value is Entity {
   return value instanceof Entity
 }
 
-export function getModelDefinition<TTable extends TableDefinition>(
-  reference: ModelDefinitionLike | ModelDefinition<TTable> | ModelReference<TTable>,
-): ModelDefinition<TTable> {
-  return (hasDefinition(reference) ? reference.definition : reference) as ModelDefinition<TTable>
+export function getModelDefinition<TTable extends TableDefinition, TScopes extends ModelScopesDefinition = EmptyScopeMap>(
+  reference: ModelDefinitionLike | ModelDefinition<TTable, TScopes> | ModelReference<TTable, TScopes>,
+): ModelDefinition<TTable, TScopes> {
+  return (hasDefinition(reference) ? reference.definition : reference) as ModelDefinition<TTable, TScopes>
 }
 
 function resolveModelConnection<TTable extends TableDefinition>(
@@ -139,14 +141,17 @@ function resolveActiveConnection(connection: DatabaseContext): DatabaseContext {
   return connection
 }
 
-export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
-  readonly definition: ModelDefinition<TTable>
+export class ModelRepository<
+  TTable extends TableDefinition = TableDefinition,
+  TScopes extends ModelScopesDefinition = EmptyScopeMap,
+> {
+  readonly definition: ModelDefinition<TTable, TScopes>
   private readonly eventDispatcher: ModelEventDispatcher<TTable>
   private readonly relationAggregateCalculator = new RelationAggregateCalculator()
   private readonly valueTransformer: ModelValueTransformer<TTable>
 
   constructor(
-    definition: ModelDefinition<TTable>,
+    definition: ModelDefinition<TTable, TScopes>,
     private readonly connection: DatabaseContext,
   ) {
     this.definition = definition
@@ -154,10 +159,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     this.valueTransformer = new ModelValueTransformer(definition, () => this.getConnection().getDriver() as SchemaDialectName)
   }
 
-  static from<TTable extends TableDefinition>(
-    reference: ModelDefinitionLike | ModelDefinition<TTable> | ModelReference<TTable>,
+  static from<TTable extends TableDefinition, TScopes extends ModelScopesDefinition = EmptyScopeMap>(
+    reference: ModelDefinitionLike | ModelDefinition<TTable, TScopes> | ModelReference<TTable, TScopes>,
     connection?: DatabaseContext,
-  ): ModelRepository<TTable> {
+  ): ModelRepository<TTable, TScopes> {
     const definition = getModelDefinition(reference)
     return new ModelRepository(definition, connection ?? resolveModelConnection(definition))
   }
@@ -198,27 +203,27 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       : createModelCollection(items)
   }
 
-  query(): ModelQueryBuilder<TTable> {
+  query(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     return this.createQuery(true, true, true)
   }
 
-  newQuery(): ModelQueryBuilder<TTable> {
+  newQuery(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     return this.createQuery(true, true, true)
   }
 
-  newModelQuery(): ModelQueryBuilder<TTable> {
+  newModelQuery(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     return this.createQuery(true, true, true)
   }
 
-  newQueryWithoutScopes(): ModelQueryBuilder<TTable> {
+  newQueryWithoutScopes(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     return this.createQuery(false, false, true)
   }
 
-  queryWithoutGlobalScope(name: string): ModelQueryBuilder<TTable> {
+  queryWithoutGlobalScope(name: string): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     return this.createQuery(true, true, true, new Set([name]))
   }
 
-  queryWithoutGlobalScopes(names?: readonly string[]): ModelQueryBuilder<TTable> {
+  queryWithoutGlobalScopes(names?: readonly string[]): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     if (names && names.length > 0) {
       return this.createQuery(true, true, true, new Set(names))
     }
@@ -226,7 +231,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return this.createQuery(false, false, true)
   }
 
-  newQueryWithoutRelationships(): ModelQueryBuilder<TTable> {
+  newQueryWithoutRelationships(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     return this.createQuery(true, true, false)
   }
 
@@ -1364,7 +1369,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const baseQuery = this.newQueryWithoutScopes()
-    const configuredQuery = (this.definition.prunable(baseQuery) ?? baseQuery) as ModelQueryBuilder<TTable>
+    const configuredQuery = (this.definition.prunable(baseQuery) ?? baseQuery) as ModelQueryBuilder<TTable, RelationMap, unknown, TScopes>
 
     if (this.definition.massPrunable) {
       const result = await configuredQuery.delete()
@@ -2022,7 +2027,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     applyGlobalScopes: boolean,
     applyDefaultRelations: boolean,
     excludedGlobalScopes: ReadonlySet<string> = new Set(),
-  ): ModelQueryBuilder<TTable> {
+  ): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     let query = new ModelQueryBuilder(
       this,
       new TableQueryBuilder(this.definition.table, this.getConnection()),

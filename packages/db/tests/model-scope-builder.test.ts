@@ -133,7 +133,7 @@ describe('named scopes on ModelQueryBuilder instances', () => {
   it('rejects scope names that would shadow a ModelQueryBuilder member', () => {
     const guarded = defineTable('scope_builder_guarded', { id: column.id() })
 
-    for (const name of ['where', 'count', 'repository']) {
+    for (const name of ['where', 'count', 'repository', 'then']) {
       expect(() => defineModelFromTable(guarded, {
         scopes: { [name]: (query: ModelQueryBuilder<typeof guarded>) => query },
       })).toThrow(`Model scope "${name}" conflicts with a ModelQueryBuilder member`)

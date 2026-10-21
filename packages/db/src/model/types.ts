@@ -880,8 +880,10 @@ export type ModelScopeMethods<
   TLoaded = unknown,
 > = {
   [K in keyof TScopes]:
-  TScopes[K] extends (query: never, ...args: infer TArgs) => ModelQueryBuilder<TTable>
-    ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  TScopes[K] extends (query: infer TQuery, ...args: infer TArgs) => ModelQueryBuilder<TTable>
+    ? ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> extends TQuery
+      ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+      : never
     : never
 }
 

@@ -117,7 +117,8 @@ type TableQueryPredicates<TTable extends TableDefinition> =
 
 type ModelScopeFunction = (query: object, ...args: readonly unknown[]) => unknown
 
-const MODEL_QUERY_BUILDER_INSTANCE_FIELDS: readonly string[] = [
+const MODEL_QUERY_BUILDER_RESERVED_NAMES: readonly string[] = [
+  'then',
   'repository',
   'tableQuery',
   'eagerLoads',
@@ -129,7 +130,7 @@ const MODEL_QUERY_BUILDER_INSTANCE_FIELDS: readonly string[] = [
 ]
 
 export function assertModelScopeNameAvailable(name: string): void {
-  if (name in ModelQueryBuilderBase.prototype || MODEL_QUERY_BUILDER_INSTANCE_FIELDS.includes(name)) {
+  if (name in ModelQueryBuilderBase.prototype || MODEL_QUERY_BUILDER_RESERVED_NAMES.includes(name)) {
     throw new ConfigurationError(`Model scope "${name}" conflicts with a ModelQueryBuilder member of the same name.`)
   }
 }
@@ -141,7 +142,7 @@ class ModelQueryBuilderBase<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
 > {
   constructor(
-    private readonly repository: ModelRepository<TTable>,
+    private readonly repository: ModelRepository<TTable, TScopes>,
     private readonly tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>,
     private readonly eagerLoads: readonly EagerLoad[] = [],
     private readonly relationFilters: readonly RelationFilter[] = [],
@@ -150,7 +151,7 @@ class ModelQueryBuilderBase<
     private readonly scopePredicates: TableQueryPredicates<TTable> = [],
     private readonly softDeleteMode: 'with' | 'without' | 'only' = 'with',
   ) {
-    const scopes: Readonly<Record<string, ModelScopeFunction>> = this.repository.definition.scopes
+    const scopes = this.repository.definition.scopes as Readonly<Record<string, ModelScopeFunction>>
     for (const [name, scope] of Object.entries(scopes)) {
       Object.defineProperty(this, name, {
         value: (...args: readonly unknown[]) => scope(this, ...args),
@@ -181,11 +182,11 @@ class ModelQueryBuilderBase<
     return query
   }
 
-  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const query = scope(this.asScopedBuilder())
     const predicates = query.tableQuery.getPlan().predicates
     return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
-      query.repository,
+      this.repository,
       query.tableQuery.withPredicates([]),
       query.eagerLoads,
       query.relationFilters,
@@ -2139,4 +2140,22 @@ export type ModelQueryBuilder<
 > = ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>
   & ModelScopeMethods<TTable, TScopes, TRelations, TLoaded>
 
-export const ModelQueryBuilder = ModelQueryBuilderBase
+export interface ModelQueryBuilderConstructor {
+  new <
+    TTable extends TableDefinition = TableDefinition,
+    TRelations extends RelationMap = RelationMap,
+    TLoaded = unknown,
+    TScopes extends ModelScopesDefinition = EmptyScopeMap,
+  >(
+    repository: ModelRepository<TTable, TScopes>,
+    tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>,
+    eagerLoads?: readonly EagerLoad[],
+    relationFilters?: readonly RelationFilter[],
+    aggregateLoads?: readonly AggregateLoad[],
+    queryCasts?: Readonly<Record<string, ModelCastDefinition>>,
+    scopePredicates?: TableQueryPredicates<TTable>,
+    softDeleteMode?: 'with' | 'without' | 'only',
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+}
+
+export const ModelQueryBuilder = ModelQueryBuilderBase as unknown as ModelQueryBuilderConstructor

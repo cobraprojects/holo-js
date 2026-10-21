@@ -4,7 +4,10 @@ import {
   defineGeneratedTable,
   defineModel,
   hasMany,
+  ModelQueryBuilder as QueryBuilderConstructor,
+  ModelRepository,
   scopeRelation,
+  type TableQueryBuilder,
   type ModelQueryBuilder,
 } from '../src'
 
@@ -104,5 +107,47 @@ it('types scopes on the builder passed to scopeRelation constraints', () => {
       expectTypeOf(query.titled).toEqualTypeOf<(title: string) => PostQuery>()
       return query.published()
     })
+  }
+})
+
+declare const postRepository: ModelRepository<typeof posts, typeof Post.definition.scopes>
+declare const postTableQuery: TableQueryBuilder<typeof posts, Record<string, unknown>>
+
+it('types scopes on repository builders and on the exported builder constructor', () => {
+  if (false) {
+    expectTypeOf(Post.getRepository().query().published()).toEqualTypeOf<PostQuery>()
+    expectTypeOf(ModelRepository.from(Post).query().titled('Hello')).toEqualTypeOf<PostQuery>()
+    expectTypeOf(new QueryBuilderConstructor(postRepository, postTableQuery).published()).toEqualTypeOf<PostQuery>()
+  }
+})
+
+it('types a global scope callback written against the unscoped builder', () => {
+  if (false) {
+    const onlyDrafts = (query: ModelQueryBuilder<typeof posts>) => query.where('status', 'draft')
+    expectTypeOf(Post.query().applyGlobalScope(onlyDrafts)).toEqualTypeOf<PostQuery>()
+  }
+})
+
+it('rejects scopes whose query parameter needs more than the builder provides', () => {
+  if (false) {
+    const Narrow = defineModel(posts, {
+      scopes: {
+        needsExtra: (query: ModelQueryBuilder<typeof posts> & { extra(): void }) => query,
+      },
+    })
+    // @ts-expect-error the builder has no extra() method, so the scope cannot be called with it
+    Narrow.query().needsExtra()
+  }
+})
+
+it('rejects async scopes, whose result is a promise rather than a query builder', () => {
+  if (false) {
+    const Asynchronous = defineModel(posts, {
+      scopes: {
+        published: async (query: ModelQueryBuilder<typeof posts>) => query.where('status', 'published'),
+      },
+    })
+    // @ts-expect-error an async scope returns a promise, so it cannot be chained
+    Asynchronous.query().published().where('status', 'published')
   }
 })
