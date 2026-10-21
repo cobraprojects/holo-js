@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, test } from 'node:test'
 import {
+  parseLinuxProcessStat,
+  probeProcessGroup,
   validateNpmPublishAuthentication,
   withResolvedCatalogManifests,
 } from './publish-with-resolved-catalogs.mjs'
@@ -431,5 +434,94 @@ test('catalog resolver escalates to SIGKILL for a publish tree that ignores SIGT
   assert.equal(signal, 'SIGTERM')
   assert.equal(await readFile(manifestPath, 'utf8'), originalManifest)
   const grandchildPid = Number(await readFile(`${markerPath}.pid`, 'utf8'))
-  assert.throws(() => process.kill(grandchildPid, 0), { code: 'ESRCH' })
+  assert.equal(processHasExited(grandchildPid), true)
 })
+
+test('Linux process stat parsing reads the state, group, and start time after a process name containing spaces and parentheses', () => {
+  assert.deepEqual(
+    parseLinuxProcessStat('4321 (node (publish) worker) Z 1 4000 4000 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 777 0 0'),
+    { state: 'Z', pgrp: 4000, startTime: 777 },
+  )
+})
+
+const zombie = (pgrp, startTime) => ({ pgrp, startTime, live: false })
+const unrelatedLive = (startTime) => ({ pgrp: 5000, startTime, live: true })
+
+function fakeProcessGroupReaders(passes) {
+  let index = -1
+  return {
+    listPids() {
+      index = Math.min(index + 1, passes.length - 1)
+      return Object.keys(passes[index])
+    },
+    readGroupMember(pid, pgid) {
+      const member = passes[index][pid]
+      return member && member.pgrp === pgid ? { startTime: member.startTime, live: member.live } : null
+    },
+  }
+}
+
+test('a process group whose members are all zombies is treated as gone once two passes agree', () => {
+  const pass = { 101: zombie(4000, 1), 102: zombie(4000, 2), 900: unrelatedLive(9) }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([pass, pass])), 'gone')
+})
+
+test('a process group with a live member is still running when other members are zombies', () => {
+  const pass = { 101: zombie(4000, 1), 102: { pgrp: 4000, startTime: 2, live: true } }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([pass, pass])), 'live')
+})
+
+test('a descendant created during the scan keeps the group alive once it is seen running', () => {
+  const before = { 101: zombie(4000, 1) }
+  const during = { 101: zombie(4000, 1), 102: zombie(4000, 2) }
+  const after = { 101: zombie(4000, 1), 102: { pgrp: 4000, startTime: 2, live: true } }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([before, during, after])), 'live')
+})
+
+test('a reused process id with a new start time is verified again before the group is treated as gone', () => {
+  const before = { 101: zombie(4000, 1) }
+  const reused = { 101: zombie(4000, 2) }
+  const reusedAndRunning = { 101: { pgrp: 4000, startTime: 2, live: true } }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([before, reused, reusedAndRunning])), 'live')
+})
+
+test('unrelated processes appearing during every scan do not keep a zombie-only group alive', () => {
+  const first = { 101: zombie(4000, 1), 900: unrelatedLive(9) }
+  const second = { 101: zombie(4000, 1), 901: unrelatedLive(10) }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([first, second])), 'gone')
+})
+
+test('a group member that exits during the scan does not keep the group alive', () => {
+  const first = { 101: zombie(4000, 1), 102: zombie(4000, 2) }
+  const second = { 101: zombie(4000, 1) }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([first, second, second])), 'gone')
+})
+
+test('a group whose member identities never settle is reported as unsettled instead of gone', () => {
+  const first = { 101: zombie(4000, 1) }
+  const second = { 101: zombie(4000, 2) }
+  const third = { 101: zombie(4000, 3) }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([first, second, third])), 'unsettled')
+})
+
+function processHasExited(pid) {
+  try {
+    process.kill(pid, 0)
+  } catch (error) {
+    return error.code === 'ESRCH'
+  }
+  if (process.platform !== 'linux') return false
+
+  try {
+    return parseLinuxProcessStat(readFileSync(`/proc/${pid}/stat`, 'utf8')).state === 'Z'
+  } catch {
+    return true
+  }
+}

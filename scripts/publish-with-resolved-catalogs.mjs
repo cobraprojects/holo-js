@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -164,12 +164,87 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot, op
   }
 }
 
+export function parseLinuxProcessStat(stat) {
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+
+  return { state: fields[0], pgrp: Number(fields[2]), startTime: Number(fields[19]) }
+}
+
+const processGroupProbePasses = 3
+
+export function probeProcessGroup(pgid, readers) {
+  let previous
+  for (let pass = 0; pass < processGroupProbePasses; pass++) {
+    const current = readProcessGroupPass(pgid, readers)
+    if (current.live) return 'live'
+    if (previous && sameProcessGroupMembers(previous, current)) return 'gone'
+    previous = current
+  }
+
+  return 'unsettled'
+}
+
+function readProcessGroupPass(pgid, readers) {
+  const members = new Map()
+  for (const pid of readers.listPids()) {
+    const member = readers.readGroupMember(pid, pgid)
+    if (!member) continue
+    if (member.live) return { live: true, members }
+    members.set(pid, member.startTime)
+  }
+
+  return { live: false, members }
+}
+
+function sameProcessGroupMembers(left, right) {
+  if (left.members.size !== right.members.size) return false
+
+  return [...left.members].every(([pid, startTime]) => right.members.get(pid) === startTime)
+}
+
+function readLinuxProcessStat(path) {
+  return parseLinuxProcessStat(readFileSync(path, 'utf8'))
+}
+
+const linuxProcessReaders = {
+  listPids() {
+    return readdirSync('/proc').filter(entry => /^\d+$/.test(entry))
+  },
+  readGroupMember(pid, pgid) {
+    let leader
+    let taskIds
+    try {
+      leader = readLinuxProcessStat(join('/proc', pid, 'stat'))
+      taskIds = readdirSync(join('/proc', pid, 'task'))
+    } catch {
+      return null
+    }
+    if (leader.pgrp !== pgid) return null
+
+    const live = taskIds.some((taskId) => {
+      try {
+        return readLinuxProcessStat(join('/proc', pid, 'task', taskId, 'stat')).state !== 'Z'
+      } catch {
+        return false
+      }
+    })
+    return { startTime: leader.startTime, live }
+  },
+}
+
 function processGroupAlive(pid) {
   try {
     process.kill(-pid, 0)
-    return true
   } catch (error) {
     return error.code !== 'ESRCH'
+  }
+
+  if (process.platform !== 'linux') return true
+
+  try {
+    return probeProcessGroup(pid, linuxProcessReaders) !== 'gone'
+  } catch {
+    return true
   }
 }
 
