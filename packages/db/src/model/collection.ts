@@ -13,6 +13,7 @@ type CollectionRepository<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
 > = {
   readonly definition: { readonly name: string, readonly primaryKey: string, readonly table: TableDefinition }
+  getConnection(): OwnerConnection
   query(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   loadRelations(
     items: readonly Entity<TTable, TRelations>[],
@@ -85,30 +86,39 @@ export type ModelCollection<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
 > = Array<TItem> & ModelCollectionMethods<TTable, TRelations, TItem, TScopes>
 
-const modelCollectionOwner: unique symbol = Symbol('modelCollectionOwner')
+type OwnerConnection = { getConnectionName(): string, getContextId(): number }
+
+type CollectionOwner = {
+  readonly definition: { readonly name: string }
+  getConnection(): OwnerConnection
+}
+
+const modelCollectionOwners = new WeakMap<object, object>()
 
 export function setModelCollectionOwner<TCollection extends object>(collection: TCollection, owner: object): TCollection {
-  Object.defineProperty(collection, modelCollectionOwner, {
-    value: owner,
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  })
+  modelCollectionOwners.set(collection, owner)
   return collection
 }
 
 function getModelCollectionOwner(collection: object): object | undefined {
-  return (collection as { [modelCollectionOwner]?: object })[modelCollectionOwner]
+  return modelCollectionOwners.get(collection)
+}
+
+function isSameConnection(left: OwnerConnection, right: OwnerConnection): boolean {
+  return left.getConnectionName() === right.getConnectionName() && left.getContextId() === right.getContextId()
 }
 
 export function assertEntitiesBelongTo<TTable extends TableDefinition, TRelations extends RelationMap>(
   entities: readonly Entity<TTable, TRelations>[],
-  owner: { readonly definition: { readonly name: string } },
+  owner: CollectionOwner,
 ): void {
   for (const entity of entities) {
     const entityRepository = entity.getRepository()
     if (entityRepository.definition !== owner.definition) {
       throw new HydrationError(`Cannot create a ${owner.definition.name} collection from a ${entityRepository.definition.name} entity.`)
+    }
+    if (!isSameConnection(entityRepository.getConnection(), owner.getConnection())) {
+      throw new HydrationError(`Cannot create a ${owner.definition.name} collection from an entity on connection "${entityRepository.getConnection().getConnectionName()}".`)
     }
   }
 }

@@ -6,11 +6,15 @@ import {
   createConnectionManager,
   createDatabase,
   createDialect,
+  createModelCollection,
   createSchemaService,
   defineGeneratedTable,
   defineModel,
   HydrationError,
   ModelRepository,
+  type Entity,
+  type ModelCollection,
+  type RelationMap,
 } from '../src'
 
 const members = defineGeneratedTable('collection_owner_members', { id: column.id(), name: column.string() })
@@ -125,4 +129,50 @@ it('keeps the owner out of array keys and serialization', () => {
 
   expect(Object.keys(collection)).toEqual(['0'])
   expect(JSON.stringify(collection)).toBe(JSON.stringify([...collection]))
+})
+
+async function openTenantDatabase(connectionName: string) {
+  const db = createDatabase({ connectionName, adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
+  onTestFinished(() => db.disconnect())
+  await createSchemaService(db).createTable('collection_owner_members', (table) => {
+    table.integer('id').primaryKey()
+    table.string('name')
+  })
+  return db
+}
+
+it('rejects a tenant-B entity in tenant-A createCollection, saveMany and toQuery, and writes nothing', async () => {
+  const tenantA = await openTenantDatabase('tenant-a')
+  const tenantB = await openTenantDatabase('tenant-b')
+  configureDB(createConnectionManager({ defaultConnection: 'tenant-a', connections: { 'tenant-a': tenantA, 'tenant-b': tenantB } }))
+  const Member = defineModel(members, { name: 'Member', fillable: ['name'] })
+  const tenantARepository = ModelRepository.from(Member, tenantA)
+  const tenantBRepository = ModelRepository.from(Member, tenantB)
+  const foreign = tenantBRepository.hydrate({ id: 1, name: 'Ada' })
+
+  expect(() => tenantARepository.createCollection([foreign])).toThrow(HydrationError)
+
+  const collection = tenantARepository.createCollection([tenantARepository.hydrate({ id: 2, name: 'Bea' })])
+  collection[0] = foreign
+  expect(() => collection.toQuery()).toThrow(HydrationError)
+
+  await expect(tenantARepository.saveMany([tenantARepository.make({ name: 'Cy' }), foreign])).rejects.toThrow(HydrationError)
+  expect(await tenantA.table('collection_owner_members').count()).toBe(0)
+  expect(await tenantB.table('collection_owner_members').count()).toBe(0)
+})
+
+it('keeps a frozen custom collection working for get() and toQuery()', async () => {
+  const db = await setupMembersTable()
+  await db.table('collection_owner_members').insert([{ id: 1, name: 'Ada' }])
+  const Frozen = defineModel(members, {
+    name: 'Frozen',
+    collection<TItem extends Entity<typeof members>>(items: readonly TItem[]) {
+      return Object.freeze(createModelCollection<typeof members, RelationMap, TItem>(items)) as ModelCollection<typeof members, RelationMap, TItem>
+    },
+  })
+
+  const rows = await ModelRepository.from(Frozen).query().get()
+
+  expect(Object.isFrozen(rows)).toBe(true)
+  expect(await rows.toQuery().get()).toHaveLength(1)
 })
