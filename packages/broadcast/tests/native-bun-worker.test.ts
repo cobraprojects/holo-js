@@ -89,8 +89,11 @@ it('pings Bun sockets and terminates the ones that stop answering, while sockets
   const answering = new WebSocket(`ws://127.0.0.1:${port}/app/main-key`)
   onTestFinished(() => answering.terminate())
   await Promise.all([once(silent, 'open'), once(answering, 'open')])
+  const silentPinged = once(silent, 'ping')
   const silentClosed = once(silent, 'close')
 
+  await silentPinged
+  expect(silent.readyState).toBe(WebSocket.OPEN)
   expect((await silentClosed)[0]).toBe(1006)
   await expect.poll(() => connectionCount(baseUrl)).toBe(1)
   await new Promise(resolve => setTimeout(resolve, heartbeatIntervalMs * 5))
