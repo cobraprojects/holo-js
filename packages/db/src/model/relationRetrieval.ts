@@ -2,6 +2,7 @@ import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount
 import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
 import { canonicalStoredKey } from './entityRuntime'
+import { StoredKeyMap } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
@@ -12,7 +13,7 @@ const RELATION_KEY_CHUNK_SIZE = 256
 const INTEGER_KEY_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['id', 'integer', 'bigInteger'])
 
 export function collectRelationKeys<TTable extends TableDefinition>(entities: readonly Entity<TTable>[], column: string): unknown[] {
-  return [...new Set(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))]
+  return distinctStoredKeys(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))
 }
 
 export function isKeySeparableQuery<TTable extends TableDefinition>(query: ModelQueryBuilder<TTable>): boolean {
@@ -133,12 +134,12 @@ export async function retrieveRelation(
   return { entities, plan }
 }
 
-export function indexRelation(entities: readonly Entity[], column: string): Map<unknown, Entity> {
-  return new Map(entities.map(entity => [entity.get(column as never), entity]))
+export function indexRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity> {
+  return new StoredKeyMap(entities.map(entity => [entity.get(column as never), entity]))
 }
 
-export function groupRelation(entities: readonly Entity[], column: string): Map<unknown, Entity[]> {
-  const grouped = new Map<unknown, Entity[]>()
+export function groupRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity[]> {
+  const grouped = new StoredKeyMap<Entity[]>()
   for (const entity of entities) {
     const key = entity.get(column as never)
     const bucket = grouped.get(key)
@@ -156,13 +157,13 @@ export async function retrievePivotRelation(
   createRelatedQuery: () => ModelQueryBuilder,
   relatedKey: string,
   pivotSelection: readonly string[],
-): Promise<{ rows: Record<string, unknown>[], related: Map<unknown, Entity> }> {
-  if (parentKeys.length === 0) return { rows: [], related: new Map() }
+): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
+  if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
   const rows = await loadRelationKeyChunks(parentKeys, false, chunk => createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)
     .get<Record<string, unknown>>())
-  const keys = [...new Set(rows.map(row => row[relatedColumn]).filter(value => value != null))]
+  const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
   const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey)
   return { rows, related: indexRelation(entities, relatedKey) }
 }
