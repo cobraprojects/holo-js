@@ -1,6 +1,5 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Pool, types, type PoolClient, type PoolConfig } from 'pg'
-import { formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -10,6 +9,8 @@ import type {
 } from '@holo-js/db'
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
+
+const { formatWithOffset, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
 
 class TransactionError extends Error {}
 
@@ -48,7 +49,7 @@ function applicationTypes(base: TypeParserSource, timeZone: string): TypeParserS
         return (value: string) => parseCalendarDate(value, timeZone) ?? base.getTypeParser(oid, format)(value)
       }
       if (format === 'text' && oid === 1114) {
-        return (value: string) => parseWallClockTimestamp(value, timeZone) ?? base.getTypeParser(oid, format)(value)
+        return (value: string) => parseWallClockTimestamp(value, timeZone, 'later') ?? base.getTypeParser(oid, format)(value)
       }
       return base.getTypeParser(oid, format)
     },

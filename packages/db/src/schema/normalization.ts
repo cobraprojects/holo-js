@@ -70,29 +70,6 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
-function padDatePart(value: number, length = 2): string {
-  return String(value).padStart(length, '0')
-}
-
-function formatUtcDate(value: Date): string {
-  return [
-    value.getUTCFullYear(),
-    padDatePart(value.getUTCMonth() + 1),
-    padDatePart(value.getUTCDate()),
-  ].join('-')
-}
-
-function formatUtcDateTime(value: Date): string {
-  return [
-    formatUtcDate(value),
-    [
-      padDatePart(value.getUTCHours()),
-      padDatePart(value.getUTCMinutes()),
-      padDatePart(value.getUTCSeconds()),
-    ].join(':'),
-  ].join(' ')
-}
-
 function parseIsoTemporalString(value: string): Date | undefined {
   if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) {
     return undefined
@@ -102,22 +79,16 @@ function parseIsoTemporalString(value: string): Date | undefined {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed
 }
 
-function stringifyDateLike(dialect: SchemaDialectName, column: AnyColumnDefinition, value: unknown): unknown {
+function stringifyDateLike(dialect: SchemaDialectName, value: unknown): unknown {
   if (dialect !== 'mysql') {
     return value instanceof Date ? value.toISOString() : value
   }
 
-  const date = value instanceof Date
-    ? value
-    : typeof value === 'string'
-      ? parseIsoTemporalString(value)
-      : undefined
-
-  if (!date) {
+  if (value instanceof Date) {
     return value
   }
 
-  return column.kind === 'date' ? formatUtcDate(date) : formatUtcDateTime(date)
+  return typeof value === 'string' ? parseIsoTemporalString(value) ?? value : value
 }
 
 function parseVectorString(value: string): number[] {
@@ -225,7 +196,7 @@ export function normalizeDialectWriteValue(
     case 'date':
     case 'datetime':
     case 'timestamp':
-      return stringifyDateLike(dialect, column, value)
+      return stringifyDateLike(dialect, value)
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)
