@@ -197,10 +197,10 @@ export class ModelRepository<
     return relation
   }
 
-  createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem> {
+  createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem, TScopes> {
     return this.definition.collection
-      ? this.definition.collection(items)
-      : createModelCollection(items)
+      ? this.definition.collection(items) as ModelCollection<TTable, RelationMap, TItem, TScopes>
+      : createModelCollection<TTable, RelationMap, TItem, TScopes>(items)
   }
 
   query(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
@@ -261,7 +261,7 @@ export class ModelRepository<
     return model
   }
 
-  async get(): Promise<ModelCollection<TTable>> {
+  async get(): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     return this.query().get()
   }
 
@@ -269,11 +269,11 @@ export class ModelRepository<
     return this.query().sole()
   }
 
-  async all(): Promise<ModelCollection<TTable>> {
+  async all(): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     return this.get()
   }
 
-  async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable>> {
+  async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     const primaryKey = this.definition.primaryKey
     const keys = [...new Set(values)]
     if (keys.length === 0) {
@@ -1329,7 +1329,7 @@ export class ModelRepository<
 
   async createMany(
     values: readonly Partial<ModelRecord<TTable>>[],
-  ): Promise<ModelCollection<TTable>> {
+  ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     const created: Entity<TTable>[] = []
     for (const value of values) {
       created.push(await this.create(value))
@@ -1339,13 +1339,13 @@ export class ModelRepository<
 
   async createManyQuietly(
     values: readonly Partial<ModelRecord<TTable>>[],
-  ): Promise<ModelCollection<TTable>> {
+  ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     return withoutModelEvents(() => this.createMany(values))
   }
 
   async saveMany(
     entities: readonly Entity<TTable>[],
-  ): Promise<ModelCollection<TTable>> {
+  ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     const saved: Entity<TTable>[] = []
     for (const entity of entities) {
       saved.push(await entity.save())
@@ -1355,7 +1355,7 @@ export class ModelRepository<
 
   async saveManyQuietly(
     entities: readonly Entity<TTable>[],
-  ): Promise<ModelCollection<TTable>> {
+  ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     return withoutModelEvents(() => this.saveMany(entities))
   }
 

@@ -166,7 +166,7 @@ export type StaticModelApi<
   withoutEvents<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
   unguarded<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
   find(value: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations> | undefined>
-  findMany(values: readonly ModelPrimaryKeyValue<TTable>[]): Promise<ModelCollection<TTable, TRelations>>
+  findMany(values: readonly ModelPrimaryKeyValue<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   findOrFail(value: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations>>
   findOrFailJson(value: ModelPrimaryKeyValue<TTable>): Promise<SerializedEntityWithLoaded<TTable, unknown>>
   first(): Promise<Entity<TTable, TRelations> | undefined>
@@ -175,14 +175,14 @@ export type StaticModelApi<
   sole(): Promise<Entity<TTable, TRelations>>
   soleJson(): Promise<SerializedEntityWithLoaded<TTable, unknown>>
   firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): Promise<Entity<TTable, TRelations> | undefined>
-  get(): Promise<ModelCollection<TTable, TRelations>>
+  get(): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   getJson(): Promise<SerializedEntityWithLoaded<TTable, unknown>[]>
-  all(): Promise<ModelCollection<TTable, TRelations>>
-  paginate(perPage?: number, page?: number, options?: PaginationOptions): Promise<PaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations> }>
+  all(): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
+  paginate(perPage?: number, page?: number, options?: PaginationOptions): Promise<PaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes> }>
   paginateJson(perPage?: number, page?: number, options?: PaginationOptions): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, unknown>[], meta: PaginationMeta }>
-  simplePaginate(perPage?: number, page?: number, options?: PaginationOptions): Promise<SimplePaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations> }>
+  simplePaginate(perPage?: number, page?: number, options?: PaginationOptions): Promise<SimplePaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes> }>
   simplePaginateJson(perPage?: number, page?: number, options?: PaginationOptions): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, unknown>[], meta: SimplePaginationMeta }>
-  cursorPaginate(perPage?: number, cursor?: string | null, options?: CursorPaginationOptions): Promise<CursorPaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations> }>
+  cursorPaginate(perPage?: number, cursor?: string | null, options?: CursorPaginationOptions): Promise<CursorPaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes> }>
   cursorPaginateJson(perPage?: number, cursor?: string | null, options?: CursorPaginationOptions): Promise<{
     data: readonly SerializedEntityWithLoaded<TTable, unknown>[]
     perPage: number
@@ -208,12 +208,12 @@ export type StaticModelApi<
   max(column: ModelColumnName<TTable>): Promise<number | null>
   create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   create(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
-  createMany(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations>>
-  createMany(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations>>
+  createMany(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
+  createMany(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   createQuietly(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   createQuietly(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
-  createManyQuietly(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations>>
-  createManyQuietly(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations>>
+  createManyQuietly(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
+  createManyQuietly(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   update(id: ModelPrimaryKeyValue<TTable>, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
   prune(): Promise<number>
   increment(column: ModelColumnName<TTable>, amount?: number, extraValues?: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult>
@@ -228,7 +228,7 @@ export type StaticModelApi<
   upsert(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrNew(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
-  saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations>>
+  saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations, THidden>
   make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>
   getRepository(): ModelRepository<TTable, TScopes>

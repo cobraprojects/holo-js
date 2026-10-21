@@ -174,9 +174,9 @@ type MediaEnabledResult<
     ? AsyncGenerator<MediaEnabledResult<TYield, TCollectionName, TConversionName>, TReturn, TNext>
     : TValue extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
       ? MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
-      : TValue extends ModelCollection<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TItem>
+      : TValue extends ModelCollection<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TItem, infer TScopes extends Readonly<Record<string, unknown>>>
         ? TItem extends Entity<TTable, TRelations>
-          ? ModelCollection<TTable, TRelations, MediaEnabledEntityResult<TItem, TCollectionName, TConversionName>>
+          ? ModelCollection<TTable, TRelations, MediaEnabledEntityResult<TItem, TCollectionName, TConversionName>, TScopes>
           : TValue
         : TValue extends PaginatedResult<infer TItem>
           ? MediaEnabledPaginatedResult<
