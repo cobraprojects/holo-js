@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { getRootDatabaseContext, registerDatabaseContext } from './contextOwnership'
 import { beginSchemaMutationScope, commitSchemaMutationScope, rollbackSchemaMutationScope } from '../schema/mutationState'
 import { createFactoryService, type FactoryService } from '../factories/FactoryService'
@@ -110,6 +111,8 @@ function runSerialized<T>(queue: SerialQueue, callback: () => Promise<T>): Promi
 }
 
 let nextDatabaseContextId = 0
+
+const queryLoggerScope = new AsyncLocalStorage<true>()
 
 export class DatabaseContext {
   private readonly _contextId: number
@@ -793,7 +796,7 @@ export class DatabaseContext {
       schedulingMode: this._runtime.scheduler.preview(schedulingOptions),
     }
 
-    await this._logger?.onQueryStart?.(baseLog)
+    await this._emitQueryLog(() => this._logger?.onQueryStart?.(baseLog))
 
     let scheduled: { result: TResult, schedulingMode: SchedulingMode }
     try {
@@ -809,7 +812,7 @@ export class DatabaseContext {
         durationMs: Date.now() - start,
         error: wrappedError,
       }
-      await this._logger?.onQueryError?.(errorLog)
+      await this._emitQueryLog(() => this._logger?.onQueryError?.(errorLog))
       throw wrappedError
     }
 
@@ -820,8 +823,13 @@ export class DatabaseContext {
       rowCount: 'rows' in scheduled.result ? scheduled.result.rowCount : undefined,
       affectedRows: 'affectedRows' in scheduled.result ? scheduled.result.affectedRows : undefined,
     }
-    await this._logger?.onQuerySuccess?.(successLog)
+    await this._emitQueryLog(() => this._logger?.onQuerySuccess?.(successLog))
     return scheduled.result
+  }
+
+  private async _emitQueryLog(emit: () => void | Promise<void>): Promise<void> {
+    if (queryLoggerScope.getStore()) return
+    await queryLoggerScope.run(true, emit)
   }
 
   private _wrapDriverError(kind: 'query' | 'execute', error: unknown): DatabaseError {
