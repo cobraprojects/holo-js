@@ -6,6 +6,10 @@ import {
   defineModel,
   hasMany,
   type ModelQueryBuilder,
+  type ModelRelationName,
+  type RelatedColumnNameForRelationPath,
+  type RelationMap,
+  type TableDefinition,
 } from '@holo-js/db'
 import { defineMediaModel } from '../src'
 
@@ -28,6 +32,12 @@ const Author = defineMediaModel(defineModel(users), {})
 const Article = defineMediaModel(defineModel(posts, {
   relations: {
     author: belongsTo(() => Author, 'user_id'),
+  },
+}), {})
+const Activity = defineMediaModel(defineModel(users, {
+  relations: {
+    posts: hasMany(() => Post, 'user_id'),
+    comments: hasMany(() => Comment, 'post_id'),
   },
 }), {})
 
@@ -218,5 +228,180 @@ it('keeps media-enabled callbacks after whereRelation', () => {
       .with('posts', (query) => {
         expectTypeOf(query).toEqualTypeOf<PostQuery>()
       })
+  }
+})
+
+it('types object-form aggregate callbacks per relation key against the related media model', () => {
+  if (false) {
+    User.withSum({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+        query.where('title', '=', 'Hello')
+        // @ts-expect-error body is a comments column, not a posts column
+        query.where('body', '=', 'Hello')
+      },
+    }, 'title')
+    User.query().withAvg({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    }, 'user_id')
+    User.withMin({ posts: () => {} }, 'id')
+    User.query().withMax({ posts: () => {} }, 'title')
+    // @ts-expect-error body is a comments column, not a posts column
+    User.withSum({ posts: () => {} }, 'body')
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ missing: () => {} }, 'title')
+    // @ts-expect-error invalid nested key is rejected in object form
+    User.withSum({ 'posts.comments': () => {} }, 'body')
+    // @ts-expect-error missing is not a column of posts
+    User.query().withAvg({ posts: () => {} }, 'missing')
+  }
+})
+
+it('checks object-form media aggregate columns against every relation key', () => {
+  if (false) {
+    Activity.withSum({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+      comments: (query) => {
+        expectTypeOf(query).toEqualTypeOf<CommentQuery>()
+        query.where('body', '=', 'Hello')
+      },
+    }, 'id')
+    // @ts-expect-error title is a posts column that comments does not have
+    Activity.withSum({ posts: () => {}, comments: () => {} }, 'title')
+    // @ts-expect-error body is a comments column that posts does not have
+    Activity.query().withMax({ posts: () => {}, comments: () => {} }, 'body')
+    Activity.withMin({ posts: () => {}, comments: () => {} }, 'id')
+    Activity.withSum('posts', 'title')
+    Activity.withSum('comments', 'body')
+    Activity.withSum({ posts: () => {} }, 'title')
+    Activity.withMax({ comments: () => {} }, 'body')
+    // @ts-expect-error body is a comments column, not a posts column
+    Activity.withSum({ posts: () => {} }, 'body')
+  }
+})
+
+it('types object-form media aggregate callbacks keyed with an alias against the related model', () => {
+  if (false) {
+    User.withSum({
+      'posts as total': (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+        query.where('title', '=', 'Hello')
+      },
+    }, 'id')
+    User.query().withMax({ 'posts as latest_title': () => {} }, 'title')
+    // @ts-expect-error body is a comments column, not a posts column
+    User.withSum({ 'posts as total': () => {} }, 'body')
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ 'missing as total': () => {} }, 'title')
+    Activity.withSum({
+      'posts as post_total': () => {},
+      'comments as comment_total': () => {},
+    }, 'id')
+    // @ts-expect-error title is a posts column that comments does not have
+    Activity.withSum({ 'posts as post_total': () => {}, 'comments as comment_total': () => {} }, 'title')
+  }
+})
+
+it('accepts the alias keyword in any case and with any whitespace, and rejects invalid alias relations', () => {
+  if (false) {
+    User.withSum({
+      'posts AS total': (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    }, 'user_id')
+    User.withSum({ '  posts\tAs\ntotal  ': () => {} }, 'user_id')
+    User.withMax({ 'posts   as   total': () => {} }, 'id')
+    // @ts-expect-error body is not a posts column, under any spelling of the alias
+    User.withSum({ 'posts AS total': () => {} }, 'body')
+    // @ts-expect-error missing is not a relation of users, under any spelling of the alias
+    User.withSum({ 'missing As total': () => {} }, 'title')
+    // @ts-expect-error missing is not a relation of users, under any spelling of the alias
+    User.withMin({ 'missing   as   total': () => {} }, 'title')
+  }
+})
+
+it('rejects an object type argument on object-form media aggregate calls, as core models do', () => {
+  if (false) {
+    const loads = { posts: () => {}, comments: () => {} }
+    // @ts-expect-error an object type argument is not accepted by the object form
+    Activity.withSum<{ posts: () => void }>(loads, 'title')
+    // @ts-expect-error an object type argument is not accepted by the object form
+    User.withSum<{ posts: () => void }>({ posts: () => {} }, 'title')
+    const aliased = { 'posts as total': () => {}, 'comments as c': () => {} }
+    // @ts-expect-error an object type argument is not accepted by the object form
+    Activity.withSum<{ 'posts as total': () => void }>(aliased, 'title')
+  }
+})
+
+it('keeps explicit key type arguments on object-form media aggregate calls compiling, as core models do', () => {
+  if (false) {
+    User.withSum<'posts'>({ posts: () => {} }, 'title')
+    User.query().withAvg<'posts'>({ posts: () => {} }, 'user_id')
+    Activity.withSum<'posts AS total'>({ 'posts AS total': () => {}, posts: () => {} }, 'user_id')
+    // @ts-expect-error body is not a posts column, under an explicit key argument
+    User.withSum<'posts'>({ posts: () => {} }, 'body')
+    // @ts-expect-error a fresh literal with an extra key is rejected under an explicit key argument
+    User.withSum<'posts'>({ posts: () => {}, missing: () => {} }, 'title')
+  }
+})
+
+it('checks every key of an object held in a variable, including unions, numeric keys and invalid keys', () => {
+  if (false) {
+    const loads = { posts: () => {}, comments: () => {} }
+    // @ts-expect-error title is a posts column that comments does not have
+    Activity.withSum(loads, 'title')
+    const narrow = { posts: () => {} }
+    const wide = { posts: () => {}, comments: () => {} }
+    const union: typeof narrow | typeof wide = wide
+    // @ts-expect-error title is not a comments column, so the union member for comments rejects it
+    Activity.withSum(union, 'title')
+    const invalid = { posts: () => {}, missing: () => {} }
+    // @ts-expect-error missing is not a relation of users
+    User.withSum(invalid, 'title')
+    const invalidUnion = { posts: () => {}, missing: () => {} } as { posts: () => void } | { posts: () => void, missing: () => void }
+    // @ts-expect-error missing is not a relation of users, inside a union member
+    User.withSum(invalidUnion, 'title')
+    // @ts-expect-error missing is not a relation of users, through a spread
+    User.withSum({ ...narrow, missing: () => {} }, 'title')
+    // @ts-expect-error 123 is not a relation of users, even though runtime reads it as a key
+    User.withSum({ posts: () => {}, 123: () => {} }, 'title')
+    const broad: Record<string, () => void> = {}
+    // @ts-expect-error a broad string index cannot prove every key is a relation
+    User.withSum(broad, 'title')
+    User.withSum({}, 'title')
+  }
+})
+
+it('types object-form media aggregate columns across mixed alias and plain keys', () => {
+  if (false) {
+    Activity.withSum({
+      'posts as total': () => {},
+      comments: () => {},
+    }, 'id')
+    Activity.withSum({
+      'posts as total': () => {},
+      posts: () => {},
+    }, 'id')
+    // @ts-expect-error title is not a comments column, under a mixed alias and plain key object
+    Activity.withSum({ 'posts as total': () => {}, comments: () => {} }, 'title')
+  }
+})
+
+it('forwards generic relation maps into object-form media aggregate helpers', () => {
+  if (false) {
+    function forwardAggregates<TRelations extends RelationMap>(
+      relations: TRelations,
+      loads: Readonly<Partial<Record<ModelRelationName<TRelations>, () => void>>>,
+      column: RelatedColumnNameForRelationPath<TRelations, ModelRelationName<TRelations>>,
+    ) {
+      const Model = defineMediaModel(defineModel(users, { relations }), {})
+      Model.query().withSum(loads, column)
+      Model.query().withMax(loads, column)
+    }
+    void forwardAggregates
   }
 })

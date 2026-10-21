@@ -12,6 +12,8 @@ import { installEntityMediaMethods } from './model/entity'
 import { observeMediaModelDeletion } from './model/observer'
 import { registerMediaDefinition } from './registry'
 import type {
+  AggregateRelatedColumnNameOfKeys,
+  AggregateRelationConstraintMap,
   CursorPaginatedResult,
   DynamicRelationResolver,
   Entity,
@@ -264,6 +266,16 @@ type MediaEnabledRelationAggregate<
     }
   : never
 
+type DistributiveKeysOfObject<TConstraints>
+  = TConstraints extends unknown
+    ? keyof TConstraints
+    : never
+
+type AggregateKeysOfObject<TConstraints>
+  = TConstraints extends unknown
+    ? `${Extract<keyof TConstraints, string | number>}`
+    : never
+
 type MediaEnabledRelationColumnAggregate<
   TBuilder,
   TCollectionName extends string,
@@ -275,7 +287,17 @@ type MediaEnabledRelationColumnAggregate<
         column: RelatedColumnNameForRelationPath<TRelations, TRelationName>,
         ...rest: readonly ModelRelationName<TRelations>[]
       ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
-      <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(
+      <TConstraints extends AggregateRelationConstraintMap<TRelations, Extract<keyof TConstraints, string>>, _TNoExplicitArgument extends never>(
+        first: TConstraints,
+        column: AggregateRelatedColumnNameOfKeys<TRelations, AggregateKeysOfObject<TConstraints>>,
+        ...rest: readonly ModelRelationName<TRelations>[]
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
+      <TKey extends string>(
+        first: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>,
+        column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>,
+        ...rest: readonly ModelRelationName<TRelations>[]
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
+      <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints> & ([DistributiveKeysOfObject<TConstraints>] extends [ModelRelationName<TRelations>] ? unknown : never), _TNoExplicitArgument extends never>(
         first: TConstraints,
         column: RelatedColumnNameForRelationPath<TRelations, ModelRelationName<TRelations>>,
         ...rest: readonly ModelRelationName<TRelations>[]

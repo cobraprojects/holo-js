@@ -439,7 +439,9 @@ type AggregateKeyParts<TKey extends string>
     : never
 
 export type AggregateRelationName<TKey extends string>
-  = AggregateKeyParts<TKey> extends { readonly relation: infer TRelation extends string } ? TRelation : never
+  = TKey extends string
+    ? AggregateKeyParts<TKey> extends { readonly relation: infer TRelation extends string } ? TRelation : never
+    : never
 
 export type AggregateRelationConstraintMap<TRelations extends RelationMap, TKey extends string> = {
   readonly [K in TKey | AggregateRelationName<TKey> | `${AggregateRelationName<TKey>} as ${string}`]?: RelationConstraintFor<TRelations, AggregateRelationName<K>>
