@@ -72,7 +72,32 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
-const ISO_INSTANT_TEXT = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.(\d+))?)?)(Z|[+-]\d{2}:?\d{2})$/i
+const ISO_INSTANT_TEXT = /^((\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)(Z|[+-](\d{2}):?(\d{2}))$/i
+
+function daysInMonth(year: number, month: number): number {
+  const last = new Date(0)
+  last.setUTCFullYear(year, month, 0)
+  return last.getUTCDate()
+}
+
+function isEndOfDay(match: RegExpExecArray): boolean {
+  return Number(match[5]) === 24 && Number(match[6]) === 0 && Number(match[7] ?? 0) === 0 && /^0*$/.test(match[8] ?? '')
+}
+
+function hasCalendarFields(match: RegExpExecArray): boolean {
+  const year = Number(match[2])
+  const month = Number(match[3])
+  const day = Number(match[4])
+  const minute = Number(match[6])
+  const second = Number(match[7] ?? 0)
+  const zoneHour = Number(match[10] ?? 0)
+  const zoneMinute = Number(match[11] ?? 0)
+  const clockOk = Number(match[5]) <= 23 || isEndOfDay(match)
+  return month >= 1 && month <= 12
+    && day >= 1 && day <= daysInMonth(year, month)
+    && clockOk && minute <= 59 && second <= 59
+    && zoneHour <= 23 && zoneMinute <= 59
+}
 
 function parseIsoInstantText(value: string): { instant: Date, fraction: string | undefined } | undefined {
   const match = ISO_INSTANT_TEXT.exec(value)
@@ -80,10 +105,18 @@ function parseIsoInstantText(value: string): { instant: Date, fraction: string |
     return undefined
   }
 
-  const zone = match[3]!.toUpperCase()
+  if (Number(match[7] ?? 0) === 60) {
+    throw new HydrationError(`Leap second in "${value}" cannot be written as a timestamp.`)
+  }
+
+  if (!hasCalendarFields(match)) {
+    return undefined
+  }
+
+  const zone = match[9]!.toUpperCase()
   const canonicalZone = zone.length === 5 ? `${zone.slice(0, 3)}:${zone.slice(3)}` : zone
   const instant = new Date(`${match[1]}${canonicalZone}`)
-  return Number.isNaN(instant.getTime()) ? undefined : { instant, fraction: match[2] }
+  return Number.isNaN(instant.getTime()) ? undefined : { instant, fraction: match[8] }
 }
 
 function postgresZonedText(parsed: { instant: Date, fraction: string | undefined }): string {

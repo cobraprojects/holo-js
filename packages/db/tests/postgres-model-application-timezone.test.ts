@@ -68,6 +68,53 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     })
   })
 
+  it.each([
+    '2025-02-30T03:04:05Z',
+    '2025-04-31T00:00:00+02:00',
+  ])('rejects zoned text with an impossible calendar value (%s) instead of writing a different instant', async (value) => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const table = `holo_pg_invalid_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('postgres') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.timestamp() })
+        const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'at'] })
+
+        await expect(Model.create({ id: 1, at: value } as never)).rejects.toThrow()
+        expect((await adapter.query<{ count: string }>(`SELECT COUNT(*) AS count FROM ${table}`)).rows).toEqual([{ count: '0' }])
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
+  it('writes an end-of-day zoned value as the instant it names, and rejects a leap second', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const table = `holo_pg_eod_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('postgres') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.timestamp() })
+        const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'at'] })
+
+        await Model.create({ id: 1, at: '2025-01-02T24:00:00Z' } as never)
+        expect((await adapter.query<{ at: string }>(`SELECT to_char(at, 'YYYY-MM-DD HH24:MI:SS') AS at FROM ${table} WHERE id = 1`)).rows)
+          .toEqual([{ at: '2025-01-02 19:00:00' }])
+
+        await expect(Model.create({ id: 2, at: '2025-01-02T03:04:60Z' } as never)).rejects.toThrow('Leap second')
+        expect((await adapter.query<{ count: string }>(`SELECT COUNT(*) AS count FROM ${table}`)).rows).toEqual([{ count: '1' }])
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
   it('keeps microseconds from explicitly zoned text written through a typed model', async () => {
     await withAppTimezone('America/New_York', async () => {
       const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
