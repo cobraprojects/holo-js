@@ -63,6 +63,10 @@ type TransactionFrame = {
   open: boolean
 }
 
+type RootAttemptState = {
+  rollbackFailed: boolean
+}
+
 type CommittedRootTransaction<T> = {
   value: T
   transaction: DatabaseContext
@@ -72,7 +76,7 @@ type CommittedRootTransaction<T> = {
 type SavepointOutcome<T> =
   | { kind: 'committed', value: T, entry: TransactionLog }
   | { kind: 'rolled-back', error: unknown, transaction: DatabaseContext, entry: TransactionLog }
-  | { kind: 'rollback-failed', rethrow: unknown, rollbackError: unknown, entry: TransactionLog }
+  | { kind: 'rollback-failed', rollbackError: unknown, entry: TransactionLog }
 
 type ContextInternals = {
   rootContext: DatabaseContext
@@ -420,10 +424,11 @@ export class DatabaseContext {
 
     for (let attempt = 1; ; attempt += 1) {
       let committed: CommittedRootTransaction<T>
+      const state: RootAttemptState = { rollbackFailed: false }
       try {
-        committed = await this._attemptRootTransaction(callback, options)
+        committed = await this._attemptRootTransaction(callback, options, state)
       } catch (error) {
-        if (attempt >= maxAttempts || !isDatabaseConcurrencyError(error)) {
+        if (attempt >= maxAttempts || state.rollbackFailed || !isDatabaseConcurrencyError(error)) {
           throw error
         }
         continue
@@ -437,7 +442,8 @@ export class DatabaseContext {
 
   private async _attemptRootTransaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
-    options?: DatabaseTransactionOptions,
+    options: DatabaseTransactionOptions | undefined,
+    state: RootAttemptState,
   ): Promise<CommittedRootTransaction<T>> {
     const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
       ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
@@ -450,6 +456,15 @@ export class DatabaseContext {
     let transaction: DatabaseContext | undefined
     let commitStarted = false
 
+    const rollbackAdapter = async (): Promise<void> => {
+      try {
+        await this._rollbackAdapterTransaction()
+      } catch (rollbackError) {
+        state.rollbackFailed = true
+        throw rollbackError
+      }
+    }
+
     const runTransaction = async (): Promise<CommittedRootTransaction<T>> => {
       return runWithinScope(async () => {
         const begin: { attempt?: Promise<void> } = {}
@@ -460,7 +475,7 @@ export class DatabaseContext {
           }, options)
         } catch (error) {
           if (begin.attempt) {
-            await begin.attempt.then(() => this._rollbackAdapterTransaction(), () => undefined)
+            await begin.attempt.then(rollbackAdapter, () => undefined)
           }
           throw error
         }
@@ -476,7 +491,7 @@ export class DatabaseContext {
         try {
           value = await this._runTransactionCallback(child, callback)
         } catch (error) {
-          await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
+          await this._callTransactionHook('rollback', rollbackAdapter)
           rollbackSchemaMutationScope(child)
           throw error
         }
@@ -508,7 +523,7 @@ export class DatabaseContext {
     } catch (error) {
       frame.open = false
       if (!commitStarted) {
-        await this._settleRolledBackTransaction(transaction, entry, error)
+        await this._settleRolledBackTransaction(state.rollbackFailed ? undefined : transaction, entry, error)
       }
       throw error
     }
@@ -579,7 +594,7 @@ export class DatabaseContext {
         throw outcome.error
       case 'rollback-failed':
         await this._logger?.onTransactionRollback?.({ ...outcome.entry, error: outcome.rollbackError })
-        throw outcome.rethrow
+        throw outcome.rollbackError
     }
   }
 
@@ -631,9 +646,8 @@ export class DatabaseContext {
       } catch (rollbackError) {
         if (isDatabaseConcurrencyError(error)) {
           rollbackSchemaMutationScope(tx)
-          return { kind: 'rollback-failed', rethrow: error, rollbackError, entry }
         }
-        return { kind: 'rollback-failed', rethrow: rollbackError, rollbackError, entry }
+        return { kind: 'rollback-failed', rollbackError, entry }
       }
       rollbackSchemaMutationScope(tx)
       return { kind: 'rolled-back', error, transaction: tx, entry }
