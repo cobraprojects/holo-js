@@ -8,7 +8,7 @@ import type { ModelQueryBuilder } from './ModelQueryBuilder'
 import type { ModelAggregateLoad, ModelMorphLoadMap, ModelRelationName, ModelRelationPath, ModelRecord, RelatedColumnNameOfRelation, RelationMap, ResolveEagerLoads, SerializeLoaded } from './types'
 
 type CollectionRepository<TTable extends TableDefinition, TRelations extends RelationMap> = {
-  readonly definition: { readonly primaryKey: string }
+  readonly definition: { readonly primaryKey: string, readonly table: TableDefinition }
   query(): ModelQueryBuilder<TTable, TRelations>
   loadRelations(
     items: readonly Entity<TTable, TRelations>[],
@@ -116,7 +116,7 @@ export function createModelCollection<
 
       const repo = getRepository(first)
       const keys = this.modelKeys()
-      const integerKeys = integerKeysToInline(keys)
+      const integerKeys = integerKeysToInline(keys, repo.definition.table.columns[repo.definition.primaryKey])
       if (integerKeys) {
         return repo.query()[whereIntegerKeysIn](integerKeys) as ModelQueryBuilder<TTable, TRelations>
       }

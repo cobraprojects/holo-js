@@ -223,6 +223,26 @@ describe('bounded relation loading', () => {
     expect(newest.map(user => user.get('id'))).toEqual([40_000, 39_999, 39_998])
   })
 
+  it('binds a toQuery key list above 256 when the primary key is a string column holding number values', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const codes = defineTable('codes', { code: column.string().primaryKey(), label: column.string() })
+    await createTestTable(db, codes)
+    await db.table(codes).insert(Array.from({ length: 300 }, (_, index) => ({ code: `${index + 1}`, label: `code ${index + 1}` })))
+
+    const Code = defineModelFromTable(codes)
+    const collection = await Code.get()
+    for (const code of collection) {
+      code.forceFill({ code: Number(code.get('code')) as never })
+    }
+
+    queries.length = 0
+    await collection.toQuery().get()
+
+    expect(queries.some(entry => entry.sql.includes('IN (1, 2, '))).toBe(false)
+    expect(queries.flatMap(entry => entry.bindings)).toContain(1)
+  })
+
   it('binds a toQuery key list above 256 when a string key looks numeric or injects SQL', async () => {
     const queries: QueryStartLog[] = []
     const db = openSQLite({ onQueryStart: entry => queries.push(entry) })

@@ -170,3 +170,29 @@ function defineToQueryIntegerKeysScenario(driver: 'postgres' | 'mysql') {
     }
   })
 }
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('to-query string keys with number values on postgres', () => {
+  it('binds number-valued keys for a string primary key above 256 rows', async () => {
+    const { db, schema } = await openDatabase('postgres')
+    const name = `holo_to_query_codes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.string('code').primaryKey()
+      table.string('label')
+    })
+
+    try {
+      const codes = defineTable(name, { code: column.string().primaryKey(), label: column.string() })
+      await db.table(codes).insert(Array.from({ length: 300 }, (_, index) => ({ code: `${index + 1}`, label: `code ${index + 1}` })))
+
+      const Code = defineModelFromTable(codes)
+      const collection = await Code.get()
+      for (const code of collection) {
+        code.forceFill({ code: Number(code.get('code')) as never })
+      }
+
+      expect(await collection.toQuery().get()).toHaveLength(300)
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+})

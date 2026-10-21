@@ -1,12 +1,13 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
-import type { TableDefinition } from '../schema/types'
+import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 
 const RELATION_KEY_CHUNK_SIZE = 256
+const INTEGER_KEY_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['id', 'integer', 'bigInteger'])
 
 export function collectRelationKeys<TTable extends TableDefinition>(entities: readonly Entity<TTable>[], column: string): unknown[] {
   return [...new Set(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))]
@@ -28,7 +29,11 @@ export function singleStatementRelationKeys(values: readonly unknown[]): unknown
   return keys.length <= RELATION_KEY_CHUNK_SIZE ? padRelationKeys(keys) : keys
 }
 
-export function integerKeysToInline(values: readonly unknown[]): readonly (number | bigint)[] | undefined {
+export function integerKeysToInline(
+  values: readonly unknown[],
+  primaryKey: Pick<ColumnDefinition, 'kind'> | undefined,
+): readonly (number | bigint)[] | undefined {
+  if (!primaryKey || !INTEGER_KEY_KINDS.has(primaryKey.kind)) return undefined
   const keys = [...new Set(values)]
   return keys.length > RELATION_KEY_CHUNK_SIZE && keys.every(isInlineIntegerValue) ? keys : undefined
 }

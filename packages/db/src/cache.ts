@@ -1266,6 +1266,7 @@ export function normalizeQueryCacheDependencies(
 function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): boolean {
   switch (predicate.kind) {
     case 'comparison':
+    case 'integer-in':
     case 'column':
     case 'null':
     case 'date':
@@ -1803,7 +1804,6 @@ function hasObservationDependencyFallbackPredicate(predicate: QueryPredicateNode
   return predicate.kind === 'exists'
     || predicate.kind === 'subquery'
     || predicate.kind === 'raw'
-    || predicate.kind === 'integer-in'
     || predicate.kind === 'vector'
     || predicate.kind === 'fulltext'
 }
