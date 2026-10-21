@@ -8,7 +8,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
-import { currentPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, isPinnedRestoreStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
@@ -452,7 +452,18 @@ export class DatabaseContext {
 
     const runTransaction = async (): Promise<CommittedRootTransaction<T>> => {
       return runWithinScope(async () => {
-        await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
+        const begin: { attempt?: Promise<void> } = {}
+        try {
+          await this._callTransactionHook('begin', () => {
+            begin.attempt = this._adapter.beginTransaction(options)
+            return begin.attempt
+          }, options)
+        } catch (error) {
+          if (begin.attempt) {
+            await begin.attempt.then(() => this._rollbackAdapterTransaction(), () => undefined)
+          }
+          throw error
+        }
         const child = this._createChildContext(
           { kind: 'transaction', depth: 1 },
           this._createTransactionCallbackState(),
@@ -466,7 +477,7 @@ export class DatabaseContext {
           value = await this._runTransactionCallback(child, callback)
         } catch (error) {
           try {
-            await this._callTransactionHook('rollback', () => this._adapter.rollback())
+            await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
             rollbackSchemaMutationScope(child)
           } catch (rollbackError) {
             await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
@@ -480,7 +491,7 @@ export class DatabaseContext {
         try {
           await this._callTransactionHook('commit', () => this._adapter.commit())
         } catch (commitError) {
-          await this._adapter.rollback().catch(() => undefined)
+          await this._rollbackAdapterTransaction().catch(() => undefined)
           rollbackSchemaMutationScope(child)
           throw commitError
         }
@@ -499,7 +510,7 @@ export class DatabaseContext {
           ? this._runtime.scheduler.exclusive(runTransaction)
           : runSerialized(this._runtime.rootTransactionQueue, () => this._runtime.scheduler.exclusive(runTransaction))
       const pinned = currentPinnedConnection(this._adapter)
-      committed = await (pinned ? serializeOnPinnedConnection(pinned, attempt) : attempt())
+      committed = await (pinned ? runPinnedTransaction(pinned, attempt) : attempt())
     } catch (error) {
       frame.open = false
       if (!commitStarted) {
@@ -781,6 +792,21 @@ export class DatabaseContext {
   ): Promise<TResult> {
     this._assertValidOperationOptions(options)
     const start = Date.now()
+    const pinned = currentPinnedConnection(this._adapter)
+    const restore = isPinnedRestoreStatement(options)
+    if (pinned) assertPinnedStatementAllowed(pinned, restore)
+    const submit = (): Promise<TResult> => {
+      const leave = pinned ? enterPinnedStatement(pinned, restore) : undefined
+      let pending: Promise<TResult>
+      try {
+        pending = runner()
+      } catch (error) {
+        leave?.()
+        throw error
+      }
+      return leave ? pending.finally(leave) : pending
+    }
+    const execute = () => this._guardOperation(submit, options, kind === 'query' ? 'query' : 'execute')
     const schedulingOptions = {
       transactional: this._scope.kind !== 'root' && this._adapter.supportsConcurrentTransactionScopes !== true,
       preferWorkerThreads: this._concurrency.workerThreads,
@@ -800,11 +826,7 @@ export class DatabaseContext {
 
     let scheduled: { result: TResult, schedulingMode: SchedulingMode }
     try {
-      scheduled = await this._runtime.scheduler.schedule(schedulingOptions, () => this._guardOperation(
-        runner,
-        options,
-        kind === 'query' ? 'query' : 'execute',
-      ))
+      scheduled = await this._runtime.scheduler.schedule(schedulingOptions, () => execute())
     } catch (error) {
       const wrappedError = this._wrapDriverError(kind, error)
       const errorLog: QueryErrorLog = {
@@ -844,6 +866,15 @@ export class DatabaseContext {
       kind === 'query' ? 'DRIVER_QUERY_ERROR' : 'DRIVER_EXECUTE_ERROR',
       error,
     )
+  }
+
+  private async _rollbackAdapterTransaction(): Promise<void> {
+    try {
+      await this._adapter.rollback()
+    } catch (error) {
+      markPinnedTransactionStuck(this._adapter)
+      throw error
+    }
   }
 
   private async _callTransactionHook(
@@ -913,7 +944,16 @@ export class DatabaseContext {
         }, timeoutMs)
       }
 
-      void runner()
+      let pending: Promise<TResult>
+      try {
+        pending = runner()
+      } catch (error) {
+        finalize()
+        reject(error)
+        return
+      }
+
+      void pending
         .then((result) => {
           if (settled) return
           finalize()
