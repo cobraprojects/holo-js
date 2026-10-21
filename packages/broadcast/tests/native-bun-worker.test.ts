@@ -86,11 +86,11 @@ it('pings Bun sockets and terminates the ones that stop answering, while sockets
   const baseUrl = `http://127.0.0.1:${port}`
   const silent = new WebSocket(`ws://127.0.0.1:${port}/app/main-key`, { autoPong: false })
   onTestFinished(() => silent.terminate())
+  const silentPinged = once(silent, 'ping')
+  const silentClosed = once(silent, 'close')
   const answering = new WebSocket(`ws://127.0.0.1:${port}/app/main-key`)
   onTestFinished(() => answering.terminate())
   await Promise.all([once(silent, 'open'), once(answering, 'open')])
-  const silentPinged = once(silent, 'ping')
-  const silentClosed = once(silent, 'close')
 
   await silentPinged
   expect(silent.readyState).toBe(WebSocket.OPEN)
