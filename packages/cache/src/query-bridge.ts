@@ -162,6 +162,15 @@ export function setGlobalDatabaseQueryCacheBridge(bridge?: CacheQueryBridge): vo
   runtime.__holoDbQueryCacheBridge__.bridge = bridge
 }
 
+type PendingDependencyTable = {
+  readonly table: string
+  readonly driverName: string | undefined
+}
+
+function pendingDependencyTableKey(table: string, driverName: string | undefined): string {
+  return `${driverName ?? ''}\u0000${table}`
+}
+
 export function createCacheQueryBridge(
   dependencyIndex: CacheDependencyIndex = getOrCreateDependencyIndex(),
 ): CacheQueryBridge {
@@ -176,6 +185,9 @@ export function createCacheQueryBridge(
 
     await dependencyIndex.removeKey(indexedKey)
   }
+
+  const pendingDependencyTables = new Map<string, PendingDependencyTable>()
+  let dependencyTableDrain: Promise<void> | undefined
 
   return Object.freeze({
     async get<TValue>(key: CacheKeyInput<TValue>, options?: { driver?: string }): Promise<TValue | null> {
@@ -251,11 +263,11 @@ export function createCacheQueryBridge(
         return
       }
 
-      const dependencies = await dependencyIndex.listDependencies()
-      await invalidateIndexedDependencies(
-        dependencies.filter(dependency => tables.some(table => dependency === table || dependency.startsWith(`${table}:`))),
-        options,
-      )
+      const driverName = options?.driver?.trim() || undefined
+      for (const table of tables) {
+        pendingDependencyTables.set(pendingDependencyTableKey(table, driverName), { table, driverName })
+      }
+      await drainPendingDependencyTables()
     },
   })
 
@@ -282,6 +294,41 @@ export function createCacheQueryBridge(
 
         await forgetNormalizedCacheEntry(resolveDriverContext(parsed.driverName), parsed.normalizedKey, dependencyIndex)
       }
+    }
+  }
+
+  function drainPendingDependencyTables(): Promise<void> {
+    dependencyTableDrain ??= runPendingDependencyTableDrain()
+    return dependencyTableDrain
+  }
+
+  async function runPendingDependencyTableDrain(): Promise<void> {
+    try {
+      while (pendingDependencyTables.size > 0) {
+        const batch = [...pendingDependencyTables.values()]
+        pendingDependencyTables.clear()
+        try {
+          await evictPendingDependencyTables(batch)
+        } catch (error) {
+          for (const entry of batch) {
+            pendingDependencyTables.set(pendingDependencyTableKey(entry.table, entry.driverName), entry)
+          }
+          throw error
+        }
+      }
+    } finally {
+      dependencyTableDrain = undefined
+    }
+  }
+
+  async function evictPendingDependencyTables(batch: readonly PendingDependencyTable[]): Promise<void> {
+    const dependencies = (await dependencyIndex.listDependencies?.()) ?? []
+    for (const driverName of new Set(batch.map(entry => entry.driverName))) {
+      const tables = batch.filter(entry => entry.driverName === driverName).map(entry => entry.table)
+      await invalidateIndexedDependencies(
+        dependencies.filter(dependency => tables.some(table => dependency === table || dependency.startsWith(`${table}:`))),
+        driverName === undefined ? undefined : { driver: driverName },
+      )
     }
   }
 }

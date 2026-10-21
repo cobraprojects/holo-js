@@ -259,6 +259,30 @@ const remoteRefreshWaiters: Array<(acquired: boolean) => void> = []
 const queuedRemoteRefreshKeys = new Set<string>()
 const remoteRefreshLastRunAt = new Map<string, number>()
 const remoteRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const tableInvalidationGenerations = new Map<string, number>()
+const initialRefreshRequests = new Set<string>()
+
+export function snapshotTableInvalidationGenerations(): ReadonlyMap<string, number> {
+  return new Map(tableInvalidationGenerations)
+}
+
+export function hasTableInvalidationSince(
+  snapshot: ReadonlyMap<string, number>,
+  dependencies: readonly string[],
+): boolean {
+  return dependencies.some(dependency => {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    return tableKey !== undefined && (tableInvalidationGenerations.get(tableKey) ?? 0) !== (snapshot.get(tableKey) ?? 0)
+  })
+}
+
+export function requestInitialRefresh(refreshKey: string): void {
+  initialRefreshRequests.add(refreshKey)
+}
+
+export function takeInitialRefreshRequest(refreshKey: string): boolean {
+  return initialRefreshRequests.delete(refreshKey)
+}
 
 export function forgetRemoteRefreshSchedule(refreshKey: string): void {
   const timer = remoteRefreshTimers.get(refreshKey)
@@ -277,6 +301,8 @@ export function hasRemoteRefreshSchedule(refreshKey: string): boolean {
 }
 
 export function resetRemoteRefreshSchedule(): void {
+  tableInvalidationGenerations.clear()
+  initialRefreshRequests.clear()
   remoteRefreshGeneration += 1
   activeRemoteRefreshes = 0
   for (const waiter of remoteRefreshWaiters.splice(0)) {
@@ -454,6 +480,12 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
 export async function handleBatchedDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
 ): Promise<void> {
+  for (const dependency of event.dependencies) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey !== undefined) {
+      tableInvalidationGenerations.set(tableKey, (tableInvalidationGenerations.get(tableKey) ?? 0) + 1)
+    }
+  }
   const state = getRuntimeState()
   if (state.queryEntries.size === 0) {
     return

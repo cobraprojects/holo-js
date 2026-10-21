@@ -276,3 +276,62 @@ it('forgets a subscription\'s remote refresh schedule and cancels its deferred r
   await new Promise(resolve => setTimeout(resolve, 250))
   expect(runs).toBe(afterUnsubscribe)
 }, 30_000)
+
+function createHeldScoreQuery(db: Awaited<ReturnType<typeof openRealtimeDatabase>>['db']) {
+  let holdFirst = true
+  let release: () => void = () => undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let markRead: () => void = () => undefined
+  const read = new Promise<void>(resolve => { markRead = resolve })
+  let runs = 0
+  const scoreQuery = query({
+    name: 'records.heldScore',
+    access: 'public',
+    handler: async () => {
+      runs += 1
+      const score = await db.table('records').where('id', 1).value('score')
+      if (holdFirst) {
+        holdFirst = false
+        markRead()
+        await gate
+      }
+      return { score }
+    },
+  })
+  return { scoreQuery, read, release, runs: () => runs }
+}
+
+it('refreshes a subscription whose initial query overlapped a remote invalidation for its table', async () => {
+  const { adapter, db } = await openRealtimeDatabase()
+  const held = createHeldScoreQuery(db)
+  const seen: unknown[] = []
+  const subscribing = subscribeRealtimeQuery(held.scoreQuery, {}, {
+    onData: snapshot => { seen.push((snapshot as unknown as { data: { score: unknown } }).data.score) },
+  })
+  await held.read
+  await adapter.execute('UPDATE records SET score = 77 WHERE id = 1')
+  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  held.release()
+  await subscribing
+
+  await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  expect(held.runs()).toBe(2)
+}, 30_000)
+
+it('refreshes a subscription whose initial query overlapped a local write to its table', async () => {
+  const { db } = await openRealtimeDatabase()
+  const held = createHeldScoreQuery(db)
+  const seen: unknown[] = []
+  const subscribing = subscribeRealtimeQuery(held.scoreQuery, {}, {
+    onData: snapshot => { seen.push((snapshot as unknown as { data: { score: unknown } }).data.score) },
+  })
+  await held.read
+  await db.table('records').where('id', 1).update({ score: 77 })
+  held.release()
+  await subscribing
+
+  await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  expect(held.runs()).toBe(2)
+}, 30_000)
