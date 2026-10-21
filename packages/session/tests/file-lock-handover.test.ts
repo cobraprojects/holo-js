@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSessionDriverInternals } from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState & { readonly pausedRenameSources: Map<string, Promise<void>> } => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), pausedRenameSources: new Map(), renameAttempts: new Map() }))
+const windowsFs = vi.hoisted((): WindowsFsState & { readonly pausedRenameSources: Map<string, Promise<void>> } => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), pausedRenameSources: new Map(), renameAttempts: new Map() }))
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof FsPromises>()
@@ -231,7 +231,7 @@ describe('file session lock handover under a fake clock', () => {
     await releaseAcquisition(waiter)
   })
 
-  it('gives up at the hard cap while the lock keeps changing hands', async () => {
+  async function giveUpAtHardCap(): Promise<void> {
     let holder = startAcquisition('holder-0')
     await settleHolderOperation(holder.ready)
     const asleep = nextSleep()
@@ -253,6 +253,17 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
     expect(waiter.settledAt! - startedAt).toBeLessThan(HARD_CAP_MS + 2 * COARSE_STEP_MS)
+  }
+
+  it('gives up at the hard cap while the lock keeps changing hands', giveUpAtHardCap)
+
+  it('gives up at the hard cap while tombstone removals wait on busy unlinks', async () => {
+    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    try {
+      await giveUpAtHardCap()
+    } finally {
+      windowsFs.blockedUnlinkPrefixes.clear()
+    }
   })
 
   it('times out instead of acquiring when a reclaim finishes past the hard cap', async () => {
@@ -273,10 +284,12 @@ describe('file session lock handover under a fake clock', () => {
     }
 
     await advanceTo(waiter, startedAt + 28_500, COARSE_STEP_MS)
+    windowsFs.blockedRenamePrefixes.add(join(lockPath, 'owner.'))
     windowsFs.blockedUnlinkPrefixes.add(join(lockPath, 'owner.'))
     await releaseAcquisition(holder)
 
     await advanceTo(waiter, startedAt + HARD_CAP_MS + 200, COARSE_STEP_MS)
+    windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedUnlinkPrefixes.clear()
     unblockRenames('waiter')
     await tickUntil(waiter, () => waiter.settled)
