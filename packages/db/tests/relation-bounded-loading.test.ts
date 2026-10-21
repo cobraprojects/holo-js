@@ -321,6 +321,8 @@ describe('bounded relation loading', () => {
     expect(canonicalStoredKey('binary:6162')).not.toBe(canonicalStoredKey(Buffer.from('ab')))
     expect(canonicalStoredKey({ a: [1, 2] })).toBe(canonicalStoredKey({ a: [1, 2] }))
     expect(canonicalStoredKey({ a: [1, 2] })).not.toBe(canonicalStoredKey({ a: [2, 1] }))
+    expect(canonicalStoredKey(new Map([[1, 'a']]))).not.toBe(canonicalStoredKey(new Set([2])))
+    expect(canonicalStoredKey(new Map())).not.toBe(canonicalStoredKey(new Map()))
     const circular: Record<string, unknown> = {}
     circular.self = circular
     expect(canonicalStoredKey(circular)).toBe(circular)
