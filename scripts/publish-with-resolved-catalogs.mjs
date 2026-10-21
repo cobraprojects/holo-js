@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -164,12 +164,106 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot, op
   }
 }
 
+export function parseLinuxProcessStat(stat) {
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+
+  return { state: fields[0], pgrp: Number(fields[2]), startTime: Number(fields[19]) }
+}
+
+const processGroupProbePasses = 3
+
+export function probeProcessGroup(pgid, readers) {
+  let previous
+  for (let pass = 0; pass < processGroupProbePasses; pass++) {
+    const current = readProcessGroupPass(pgid, readers)
+    if (current.live) return 'live'
+    if (previous?.complete && current.complete && sameProcessGroupMembers(previous, current)) return 'gone'
+    previous = current
+  }
+
+  return 'unsettled'
+}
+
+function readProcessGroupPass(pgid, readers) {
+  const members = new Map()
+  try {
+    for (const pid of readers.listPids()) {
+      const member = readers.readGroupMember(pid, pgid)
+      if (!member) continue
+      if (member.live) return { live: true, complete: true, members }
+      members.set(pid, member.startTime)
+    }
+  } catch {
+    return { live: false, complete: false, members }
+  }
+
+  return { live: false, complete: true, members }
+}
+
+function sameProcessGroupMembers(left, right) {
+  if (left.members.size !== right.members.size) return false
+
+  return [...left.members].every(([pid, startTime]) => right.members.get(pid) === startTime)
+}
+
+function isProcVanished(error) {
+  return error.code === 'ENOENT' || error.code === 'ESRCH'
+}
+
+function readOptionalProcFile(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch (error) {
+    if (isProcVanished(error)) return null
+    throw error
+  }
+}
+
+function readOptionalProcDirectory(path) {
+  try {
+    return readdirSync(path)
+  } catch (error) {
+    if (isProcVanished(error)) return null
+    throw error
+  }
+}
+
+const linuxProcessReaders = {
+  listPids() {
+    return readdirSync('/proc').filter(entry => /^\d+$/.test(entry))
+  },
+  readGroupMember(pid, pgid) {
+    const stat = readOptionalProcFile(join('/proc', pid, 'stat'))
+    if (stat === null) return null
+
+    const leader = parseLinuxProcessStat(stat)
+    if (leader.pgrp !== pgid) return null
+
+    const taskIds = readOptionalProcDirectory(join('/proc', pid, 'task'))
+    if (taskIds === null) return null
+
+    let live = false
+    for (const taskId of taskIds) {
+      const taskStat = readOptionalProcFile(join('/proc', pid, 'task', taskId, 'stat'))
+      if (taskStat !== null && parseLinuxProcessStat(taskStat).state !== 'Z') live = true
+    }
+    return { startTime: leader.startTime, live }
+  },
+}
+
 function processGroupAlive(pid) {
   try {
     process.kill(-pid, 0)
-    return true
   } catch (error) {
     return error.code !== 'ESRCH'
+  }
+
+  if (process.platform !== 'linux') return true
+
+  try {
+    return probeProcessGroup(pid, linuxProcessReaders) !== 'gone'
+  } catch {
+    return true
   }
 }
 
