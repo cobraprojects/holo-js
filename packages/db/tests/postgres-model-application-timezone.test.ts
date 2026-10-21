@@ -68,6 +68,28 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     })
   })
 
+  it('keeps microseconds from explicitly zoned text written through a typed model', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const table = `holo_pg_micro_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL, instant TIMESTAMPTZ NOT NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('postgres') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.timestamp(), instant: column.timestamp() })
+        const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'at', 'instant'] })
+        await Model.create({ id: 1, at: '2026-11-15T03:30:00.123456Z', instant: '2026-11-15T03:30:00.123456Z' } as never)
+
+        expect((await adapter.query<{ at: string, instant: string }>(
+          `SELECT to_char(at, 'YYYY-MM-DD HH24:MI:SS.US') AS at, to_char(instant AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') AS instant FROM ${table} WHERE id = 1`,
+        )).rows).toEqual([{ at: '2026-11-14 22:30:00.123456', instant: '2026-11-15 03:30:00.123456' }])
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
   it('matches and stores Date query values as app.timezone wall-clock time through the query builder', async () => {
     await withAppTimezone('America/New_York', async () => {
       const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })

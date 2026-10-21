@@ -1,4 +1,6 @@
 import { CapabilityError, HydrationError } from '../core/errors'
+import { formatWithOffset } from '../applicationTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type { AnyColumnDefinition } from './types'
 import type { SchemaDialectName } from './typeMapping'
 
@@ -70,15 +72,27 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
-const ISO_INSTANT_TEXT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/i
+const ISO_INSTANT_TEXT = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.(\d+))?)?)(Z|[+-]\d{2}:?\d{2})$/i
 
-function parseIsoTemporalString(value: string): Date | undefined {
-  if (!ISO_INSTANT_TEXT.test(value)) {
+function parseIsoInstantText(value: string): { instant: Date, fraction: string | undefined } | undefined {
+  const match = ISO_INSTANT_TEXT.exec(value)
+  if (!match) {
     return undefined
   }
 
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed
+  const zone = match[3]!.toUpperCase()
+  const canonicalZone = zone.length === 5 ? `${zone.slice(0, 3)}:${zone.slice(3)}` : zone
+  const instant = new Date(`${match[1]}${canonicalZone}`)
+  return Number.isNaN(instant.getTime()) ? undefined : { instant, fraction: match[2] }
+}
+
+function postgresZonedText(parsed: { instant: Date, fraction: string | undefined }): string {
+  const formatted = formatWithOffset(parsed.instant, getApplicationTimezone())
+  if (parsed.fraction === undefined) {
+    return formatted
+  }
+
+  return formatted.replace(/\.\d{3}(?=[+-])/, `.${parsed.fraction.padEnd(6, '0').slice(0, 6)}`)
 }
 
 function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
@@ -90,7 +104,16 @@ function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown
     return value
   }
 
-  return typeof value === 'string' ? parseIsoTemporalString(value) ?? value : value
+  if (typeof value !== 'string') {
+    return value
+  }
+
+  const parsed = parseIsoInstantText(value)
+  if (!parsed) {
+    return value
+  }
+
+  return dialect === 'postgres' ? postgresZonedText(parsed) : parsed.instant
 }
 
 function parseVectorString(value: string): number[] {
