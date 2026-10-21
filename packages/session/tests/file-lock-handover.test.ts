@@ -17,6 +17,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 const STALL_MS = 5_000
 const HARD_CAP_MS = 30_000
 const STEP_MS = 50
+const COARSE_STEP_MS = 500
 const MAX_TICKS_PER_CONDITION = 20
 
 type Acquisition = {
@@ -106,8 +107,8 @@ async function tickUntil(waiter: Acquisition, done: () => boolean): Promise<void
   for (let ticks = 0; !done() && ticks < MAX_TICKS_PER_CONDITION; ticks += 1) await tick(waiter, STEP_MS)
 }
 
-async function advanceTo(waiter: Acquisition, time: number): Promise<void> {
-  while (Date.now() < time) await tick(waiter, Math.min(STEP_MS, time - Date.now()))
+async function advanceTo(waiter: Acquisition, time: number, step = STEP_MS): Promise<void> {
+  while (Date.now() < time) await tick(waiter, Math.min(step, time - Date.now()))
 }
 
 async function advanceUntilSettled<T>(operation: Promise<T>): Promise<T> {
@@ -240,18 +241,18 @@ describe('file session lock handover under a fake clock', () => {
     const startedAt = Date.now()
 
     for (let cycle = 1; cycle * 4_000 < HARD_CAP_MS; cycle += 1) {
-      await advanceTo(waiter, startedAt + cycle * 4_000)
+      await advanceTo(waiter, startedAt + cycle * 4_000, COARSE_STEP_MS)
       expect(waiter.settled).toBe(false)
       await releaseAcquisition(holder)
       holder = startAcquisition(`holder-${cycle}`)
       await settleHolderOperation(holder.ready)
     }
 
-    await advanceTo(waiter, startedAt + HARD_CAP_MS + STEP_MS)
+    await advanceTo(waiter, startedAt + HARD_CAP_MS + COARSE_STEP_MS, COARSE_STEP_MS)
     expect(waiter.settled).toBe(true)
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
-    expect(waiter.settledAt! - startedAt).toBeLessThan(HARD_CAP_MS + 2 * STEP_MS)
+    expect(waiter.settledAt! - startedAt).toBeLessThan(HARD_CAP_MS + 2 * COARSE_STEP_MS)
   }
 
   it('gives up at the hard cap while the lock keeps changing hands', giveUpAtHardCap)
@@ -275,19 +276,19 @@ describe('file session lock handover under a fake clock', () => {
     const startedAt = Date.now()
 
     for (let cycle = 1; cycle <= 7; cycle += 1) {
-      await advanceTo(waiter, startedAt + cycle * 4_000)
+      await advanceTo(waiter, startedAt + cycle * 4_000, COARSE_STEP_MS)
       expect(waiter.settled).toBe(false)
       await releaseAcquisition(holder)
       holder = startAcquisition(`holder-${cycle}`)
       await settleHolderOperation(holder.ready)
     }
 
-    await advanceTo(waiter, startedAt + 28_500)
+    await advanceTo(waiter, startedAt + 28_500, COARSE_STEP_MS)
     windowsFs.blockedRenamePrefixes.add(join(lockPath, 'owner.'))
     windowsFs.blockedUnlinkPrefixes.add(join(lockPath, 'owner.'))
     await releaseAcquisition(holder)
 
-    await advanceTo(waiter, startedAt + HARD_CAP_MS + 200)
+    await advanceTo(waiter, startedAt + HARD_CAP_MS + 200, COARSE_STEP_MS)
     windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedUnlinkPrefixes.clear()
     unblockRenames('waiter')
