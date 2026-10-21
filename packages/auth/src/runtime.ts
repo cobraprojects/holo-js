@@ -2012,21 +2012,32 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
       const store = ensureMultiFactorStore()
       const reissue = !state.payload.impersonation && Boolean(await getRememberRecaller(getRuntimeBindings(), guardName))
       if (reissue) await assertResponseCookiesWritable(getRuntimeBindings())
-      const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
-      if (!state.payload.impersonation) await reissueRememberRecaller(getRuntimeBindings(), guardName, recaller)
+      const credential = Object.freeze({
+        provider: state.payload.provider,
+        userId: state.payload.userId,
+        encryptedSecret: encryptMultiFactorValue(pending.secret, multiFactorEncryptionKey()),
+        recoveryCodeHashes: Object.freeze(recoveryCodes.map(hashMultiFactorRecoveryCode)),
+        lastUsedCounter: counter,
+        enabledAt: now,
+        updatedAt: now,
+      })
       try {
-        await store.save(Object.freeze({
-          provider: state.payload.provider,
-          userId: state.payload.userId,
-          encryptedSecret: encryptMultiFactorValue(pending.secret, multiFactorEncryptionKey()),
-          recoveryCodeHashes: Object.freeze(recoveryCodes.map(hashMultiFactorRecoveryCode)),
-          lastUsedCounter: counter,
-          enabledAt: now,
-          updatedAt: now,
-        }))
+        await store.save(credential)
       } catch (error) {
         if (await store.find(state.payload.provider, state.payload.userId)) {
           throwAuthError('multi_factor_already_enabled', 'Multi-factor authentication is already enabled.', { cause: error })
+        }
+        throw error
+      }
+      try {
+        const recaller = await cycleRememberToken(state.payload.provider, state.payload.userId)
+        if (!state.payload.impersonation) await reissueRememberRecaller(getRuntimeBindings(), guardName, recaller)
+      } catch (error) {
+        try {
+          const saved = await store.find(state.payload.provider, state.payload.userId)
+          if (saved?.encryptedSecret === credential.encryptedSecret) await store.delete(state.payload.provider, state.payload.userId)
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], 'Failed to roll back a multi-factor enrollment after the remember token refresh failed.')
         }
         throw error
       }
