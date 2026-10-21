@@ -52,9 +52,11 @@ async function openRedisQueue() {
 }
 
 async function reserveEventually(driver: QueueAsyncDriver): Promise<QueueReservedJob> {
-  return vi.waitUntil(() => driver.reserve({}), { timeout: 10_000, interval: 100 }).catch(error => {
-    throw new Error('Expected the abandoned reservation to be redelivered', { cause: error })
-  })
+  return vi.waitFor(async () => {
+    const reserved = await driver.reserve({})
+    if (!reserved) throw new Error('Expected the abandoned reservation to be redelivered')
+    return reserved
+  }, { timeout: 10_000, interval: 100 })
 }
 
 async function abandon(driver: QueueAsyncDriver, reserve: (driver: QueueAsyncDriver) => Promise<QueueReservedJob | null>) {

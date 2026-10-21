@@ -46,7 +46,9 @@ describe('Redis cache behavior', () => {
     try {
       await cache.put('value', 'first', new Date(Date.now() + 150))
       expect(await cache.get('value')).toBe('first')
-      await vi.waitUntil(async () => (await cache.get('value')) === null, { timeout: 5_000, interval: 10 })
+      await vi.waitFor(async () => {
+        expect(await cache.get('value')).toBeNull()
+      }, { timeout: 5_000, interval: 10 })
       await cache.forever('value', 'persisted')
       await cache.put('value', 'expired', new Date(Date.now() - 1))
       expect(await cache.has('value')).toBe(false)

@@ -151,7 +151,7 @@ async function insertFillerLocks(connection: DatabaseContext, lockTable: string)
 }
 
 async function waitForBlockedPrune(control: DatabaseContext, driver: ServerDriver, lockTable: string): Promise<void> {
-  await vi.waitUntil(async () => {
+  await vi.waitFor(async () => {
     const result = driver === 'mysql'
       ? await control.queryCompiled({
           sql: 'SELECT COUNT(*) AS waiting FROM information_schema.processlist WHERE COMMAND = ? AND INFO LIKE ?',
@@ -163,10 +163,10 @@ async function waitForBlockedPrune(control: DatabaseContext, driver: ServerDrive
           bindings: [`DELETE%${lockTable}%`],
           source: 'test:cache-db:deadlock',
         })
-    return Number(result.rows[0]?.waiting) > 0
-  }, { timeout: 15_000, interval: 5 }).catch(error => {
-    throw new Error(`No ${driver} session blocked on the expired-lock prune of ${lockTable}.`, { cause: error })
-  })
+    if (!(Number(result.rows[0]?.waiting) > 0)) {
+      throw new Error(`No ${driver} session blocked on the expired-lock prune of ${lockTable}.`)
+    }
+  }, { timeout: 15_000, interval: 5 })
 }
 
 function deferred(): { readonly promise: Promise<void>, readonly resolve: () => void } {
