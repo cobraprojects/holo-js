@@ -25,7 +25,7 @@ import {
  } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
-import { createUpsertQueryPlan, ONE_OF_MANY_AGGREGATE_ALIAS, withJoin, withLockMode, type QueryJsonUpdateOperation } from '../src/query/ast'
+import { createUpsertQueryPlan, withJoin, withLockMode, withOneOfManyAggregateMarker, type QueryJsonUpdateOperation } from '../src/query/ast'
 
 function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -1733,14 +1733,14 @@ describe('query core slice', () => {
       identifier => `\`${identifier}\``,
       () => '?',
     )
-    const aggregate = createSelectQueryPlan({ kind: 'table', tableName: 'posts' })
+    const aggregate = withOneOfManyAggregateMarker(createSelectQueryPlan({ kind: 'table', tableName: 'posts' }))
     const joinAggregate = (plan: ReturnType<typeof createSelectQueryPlan>) => withJoin(plan, {
       type: 'inner',
       subquery: aggregate,
-      alias: ONE_OF_MANY_AGGREGATE_ALIAS,
+      alias: '__holo_latest',
       leftColumn: 'posts.id',
       operator: '=',
-      rightColumn: `${ONE_OF_MANY_AGGREGATE_ALIAS}.id`,
+      rightColumn: '__holo_latest.id',
     })
     const source = { kind: 'table' as const, tableName: 'posts' }
 
@@ -1756,6 +1756,22 @@ describe('query core slice', () => {
       .toBe('SELECT * FROM "analytics"."posts" FOR UPDATE')
     expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan({ kind: 'table', tableName: 'analytics.posts' }), 'update'))).sql)
       .toMatch(/ FOR UPDATE OF "posts"$/)
+  })
+
+  it('keeps the plain lock when an application subquery join reuses the one-of-many alias', () => {
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: {
+          adapter: createTestAdapter(),
+          dialect: createDatabaseDialect('postgres') } } }))
+
+    const sql = DB.table('users')
+      .joinSub(DB.table('posts').select('userId'), '__holo_latest', '__holo_latest.userId', '=', 'users.id')
+      .lockForUpdate()
+      .toSQL().sql
+
+    expect(sql.endsWith(' FOR UPDATE')).toBe(true)
   })
 
   it('keeps dialect-specific compilers aligned on shared SQL planning rules', () => {

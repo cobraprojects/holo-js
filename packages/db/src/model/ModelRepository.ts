@@ -17,7 +17,7 @@ import {
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
-import { ONE_OF_MANY_AGGREGATE_ALIAS, withLockMode, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
@@ -3138,7 +3138,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     constraint?: RelationConstraint,
   ): ModelQueryBuilder {
     const relatedTable = related.definition.table.tableName
-    const latestAlias = ONE_OF_MANY_AGGREGATE_ALIAS
+    const latestAlias = '__holo_latest'
     const latestKey = '__holo_latest_key'
     const latestValue = '__holo_latest_value'
     const constrainedSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().reorder().limit().offset()
@@ -3149,9 +3149,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const latestGroups = scopedSource
       .where(parentColumn, 'in', parentKeys)
       .select(`${parentColumn} as ${latestKey}`)
-    const latestQuery = relation.aggregate === 'max'
+    const latestAggregate = relation.aggregate === 'max'
       ? latestGroups.addSelectMax(latestValue, relation.aggregateColumn)
       : latestGroups.addSelectMin(latestValue, relation.aggregateColumn)
+    const latestQuery = new TableQueryBuilder(relatedTable, latestAggregate.getConnection(), withOneOfManyAggregateMarker(latestAggregate.getPlan()))
     const outer = this.applyRelationConstraint(relation, related, constraint)
     const projected = outer.getTableQueryBuilder().getPlan().selections.length > 0
     const scopedOuter = relation.kind === 'morphOneOfMany'

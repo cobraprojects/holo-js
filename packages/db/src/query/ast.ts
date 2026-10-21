@@ -15,7 +15,6 @@ export type QueryOperator
 
 export type QueryDirection = 'asc' | 'desc'
 export type QueryLockMode = 'update' | 'share'
-export const ONE_OF_MANY_AGGREGATE_ALIAS = '__holo_latest'
 export type QueryJoinType = 'inner' | 'left' | 'right' | 'cross'
 
 export interface QuerySource {
@@ -500,6 +499,19 @@ export function withGroupBy(
     ...plan,
     groupBy: Object.freeze([...plan.groupBy, ...columns]),
   })
+}
+
+const oneOfManyAggregateMarker = Symbol('holo.oneOfManyAggregate')
+
+export function withOneOfManyAggregateMarker(plan: SelectQueryPlan): SelectQueryPlan {
+  return Object.freeze({
+    ...plan,
+    [oneOfManyAggregateMarker]: true,
+  })
+}
+
+export function isOneOfManyAggregatePlan(plan: SelectQueryPlan): boolean {
+  return (plan as SelectQueryPlan & Record<typeof oneOfManyAggregateMarker, unknown>)[oneOfManyAggregateMarker] === true
 }
 
 export function withLockMode(
