@@ -23,7 +23,7 @@ import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
-import { createModelCollection, type ModelCollection } from './collection'
+import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
 import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
@@ -200,18 +200,14 @@ export class ModelRepository<
 
   createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem, TScopes> {
     this.assertOwnedEntities(items)
-    return this.definition.collection
+    const collection = this.definition.collection
       ? this.definition.collection(items) as ModelCollection<TTable, RelationMap, TItem, TScopes>
       : createModelCollection<TTable, RelationMap, TItem, TScopes>(items)
+    return setModelCollectionOwner(collection, this)
   }
 
   private assertOwnedEntities(entities: readonly Entity<TTable>[]): void {
-    for (const entity of entities) {
-      const owner = entity.getRepository().definition
-      if (owner !== this.definition) {
-        throw new HydrationError(`Cannot create a ${this.definition.name} collection from a ${owner.name} entity.`)
-      }
-    }
+    assertEntitiesBelongTo(entities, this)
   }
 
   query(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {

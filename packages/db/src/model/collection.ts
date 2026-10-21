@@ -12,7 +12,7 @@ type CollectionRepository<
   TRelations extends RelationMap,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
 > = {
-  readonly definition: { readonly primaryKey: string, readonly table: TableDefinition }
+  readonly definition: { readonly name: string, readonly primaryKey: string, readonly table: TableDefinition }
   query(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   loadRelations(
     items: readonly Entity<TTable, TRelations>[],
@@ -85,6 +85,34 @@ export type ModelCollection<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
 > = Array<TItem> & ModelCollectionMethods<TTable, TRelations, TItem, TScopes>
 
+const modelCollectionOwner: unique symbol = Symbol('modelCollectionOwner')
+
+export function setModelCollectionOwner<TCollection extends object>(collection: TCollection, owner: object): TCollection {
+  Object.defineProperty(collection, modelCollectionOwner, {
+    value: owner,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  return collection
+}
+
+function getModelCollectionOwner(collection: object): object | undefined {
+  return (collection as { [modelCollectionOwner]?: object })[modelCollectionOwner]
+}
+
+export function assertEntitiesBelongTo<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entities: readonly Entity<TTable, TRelations>[],
+  owner: { readonly definition: { readonly name: string } },
+): void {
+  for (const entity of entities) {
+    const entityRepository = entity.getRepository()
+    if (entityRepository.definition !== owner.definition) {
+      throw new HydrationError(`Cannot create a ${owner.definition.name} collection from a ${entityRepository.definition.name} entity.`)
+    }
+  }
+}
+
 export function createModelCollection<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
@@ -116,13 +144,22 @@ export function createModelCollection<
       })
     },
     toQuery(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes> {
-      const first = collection[0]
-      if (!first) {
-        throw new HydrationError('Cannot create a query from an empty model collection.')
+      const owner = getModelCollectionOwner(collection) as CollectionRepository<TTable, TRelations, TScopes> | undefined
+      let repo: CollectionRepository<TTable, TRelations, TScopes>
+      if (owner) {
+        assertEntitiesBelongTo(collection, owner)
+        repo = owner
+      } else {
+        const first = collection[0]
+        if (!first) {
+          throw new HydrationError('Cannot create a query from an empty model collection.')
+        }
+        repo = getRepository(first)
       }
-
-      const repo = getRepository(first)
       const keys = this.modelKeys()
+      if (keys.length === 0) {
+        return repo.query().whereNull(repo.definition.primaryKey as never).whereNotNull(repo.definition.primaryKey as never) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
+      }
       const integerKeys = integerKeysToInline(keys, repo.definition.table.columns[repo.definition.primaryKey])
       if (integerKeys) {
         return repo.query()[whereIntegerKeysIn](integerKeys) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
@@ -192,13 +229,10 @@ export function createModelCollection<
         collection.map(entity => entity.fresh()),
       )
       const items = refreshed.filter((entity): entity is Entity<TTable, TRelations> => entity !== undefined)
+      const owner = getModelCollectionOwner(collection) as CollectionRepository<TTable, TRelations, TScopes> | undefined
       const first = items[0]
-      if (!first) {
-        return createModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>(items)
-      }
-
-      const repo = getRepository(first)
-      return typeof repo.createCollection === 'function'
+      const repo = owner ?? (first ? getRepository(first) : undefined)
+      return repo && typeof repo.createCollection === 'function'
         ? repo.createCollection(items)
         : createModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>(items)
     },

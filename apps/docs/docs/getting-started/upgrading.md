@@ -580,6 +580,22 @@ Model scopes are now also methods on every query builder for the model, so a sco
 
 Rename the scope. A name such as `whereActive` or `activeOnly` keeps the meaning clear and does not collide with a builder method. See [Local scopes](/orm/scopes#local-scopes).
 
+### toQuery() on an empty result builds a query
+
+`toQuery()` on a collection returned by a query no longer throws when the collection is empty. The query keeps the model's scopes and matches no rows, so `toQuery().update(...)` and `toQuery().delete()` change nothing. Before, the call threw `Cannot create a query from an empty model collection.`
+
+Code that caught that error to detect an empty result should check `length` instead:
+
+```ts
+const drafts = await Post.where('status', 'draft').get()
+
+if (drafts.length > 0) {
+  await drafts.toQuery().update({ status: 'archived' })
+}
+```
+
+A collection built from plain items with `createModelCollection()` still throws when it is empty, because it has no model to query.
+
 ### Password hashing cost
 
 New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
