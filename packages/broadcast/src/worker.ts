@@ -168,6 +168,8 @@ export interface StartedBroadcastWorker {
 type BunWebSocketLike = {
   data: WorkerConnectionInfo
   send(value: string): void
+  ping(): void
+  terminate(): void
   close(code?: number, reason?: string): void
   getBufferedAmount(): number
 }
@@ -181,6 +183,7 @@ type BroadcastWorkerBunGlobal = {
       open: (socket: BunWebSocketLike) => void
       message: (socket: BunWebSocketLike, message: string | Uint8Array) => void
       close: (socket: BunWebSocketLike) => void
+      pong: (socket: BunWebSocketLike) => void
     }
   }): BunServerLike
 }
@@ -627,13 +630,18 @@ function resolveSocketRefNodeId(socketRef: string): string {
   return separator < 0 ? socketRef : socketRef.slice(0, separator)
 }
 
-function startNodeSocketHeartbeat(wsServer: NodeWebSocketServerLike): {
-  readonly recordActivity: (socket: NodeWebSocketLike) => void
+type HeartbeatSocket = {
+  ping(): void
+  terminate(): void
+}
+
+function startSocketHeartbeat<TSocket extends HeartbeatSocket>(clients: ReadonlySet<TSocket>, intervalMs: number): {
+  readonly recordActivity: (socket: TSocket) => void
   readonly stop: () => void
 } {
-  const awaitingPong = new WeakSet<NodeWebSocketLike>()
+  const awaitingPong = new WeakSet<TSocket>()
   const timer = setInterval(() => {
-    for (const client of wsServer.clients) {
+    for (const client of clients) {
       if (awaitingPong.has(client)) {
         client.terminate()
         continue
@@ -642,10 +650,10 @@ function startNodeSocketHeartbeat(wsServer: NodeWebSocketServerLike): {
       awaitingPong.add(client)
       client.ping()
     }
-  }, HEARTBEAT_INTERVAL_MS)
+  }, intervalMs)
 
   return Object.freeze({
-    recordActivity(socket: NodeWebSocketLike) {
+    recordActivity(socket: TSocket) {
       awaitingPong.delete(socket)
     },
     stop() {
@@ -2372,6 +2380,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   let closing: Promise<void> | undefined
+  let isShuttingDown = false
   async function closeRuntime(): Promise<void> {
   if (livenessTimer !== undefined) {
     clearInterval(livenessTimer)
@@ -2422,6 +2431,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     connectWebSocket(connection: WorkerWebSocketConnection): void {
       if (connectedSockets.has(connection.socketId)) {
         throw new Error(`[@holo-js/broadcast] Socket id "${connection.socketId}" is already connected.`)
+      }
+
+      if (isShuttingDown) {
+        connection.close(1001, 'Worker shutdown')
+        return
       }
 
       const socket: SocketState = {
@@ -2542,6 +2556,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       })
     },
     close(): Promise<void> {
+      isShuttingDown = true
       closing ??= closeRuntime()
       return closing
     },
@@ -2572,6 +2587,7 @@ export async function startBroadcastWorker(
     readonly createScalingAdapter?: (connection: BroadcastRedisScalingConnection) => Promise<BroadcastScalingAdapter>
     readonly loadRedisModule?: () => Promise<unknown>
     readonly loadWebSocketModule?: () => Promise<unknown>
+    readonly heartbeatIntervalMs?: number
   },
 ): Promise<StartedBroadcastWorker> {
   const report = captureErrorReporter()
@@ -2626,6 +2642,7 @@ export async function startBroadcastWorker(
     const appPathRegex = new RegExp(`^${escapeRegExp(pathPrefix)}/([^/]+)$`)
     if (bun?.serve) {
       const rejectedSockets = new WeakSet<object>()
+      const bunSockets = new Set<BunWebSocketLike>()
       const server = bun.serve({
         hostname: config.worker.host,
         port: config.worker.port,
@@ -2673,6 +2690,7 @@ export async function startBroadcastWorker(
                   return socket.getBufferedAmount()
                 },
               })
+              bunSockets.add(socket)
             } catch (error) {
               rejectedSockets.add(socket)
               rejectSocketConnection(socket, error, report)
@@ -2682,6 +2700,7 @@ export async function startBroadcastWorker(
             if (rejectedSockets.has(socket)) {
               return
             }
+            heartbeat.recordActivity(socket)
             const messageBytes = typeof message === 'string'
               ? Buffer.byteLength(message)
               : message.byteLength
@@ -2699,7 +2718,11 @@ export async function startBroadcastWorker(
               socket.close(4001, 'Protocol error')
             })
           },
+          pong(socket) {
+            heartbeat.recordActivity(socket)
+          },
           close(socket) {
+            bunSockets.delete(socket)
             if (rejectedSockets.has(socket)) {
               return
             }
@@ -2708,11 +2731,13 @@ export async function startBroadcastWorker(
           },
         },
       })
+      const heartbeat = startSocketHeartbeat(bunSockets, runtimeBindings.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS)
 
       return Object.freeze({
         host: config.worker.host,
         port: config.worker.port,
         async stop() {
+          heartbeat.stop()
           server.stop(true)
           await runtime.close()
         },
@@ -2738,7 +2763,7 @@ export async function startBroadcastWorker(
 
     const requestConnectionInfo = new WeakMap<IncomingMessage, WorkerConnectionInfo>()
     const wsServer = new WebSocketServer({ noServer: true, maxPayload: config.worker.maxMessageBytes })
-    const heartbeat = startNodeSocketHeartbeat(wsServer)
+    const heartbeat = startSocketHeartbeat(wsServer.clients, runtimeBindings.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS)
     /* v8 ignore start -- Node websocket connection handler is adapter glue; exercised by real ws integration tests */
     wsServer.on('connection', (socket, request) => {
       const connectionInfo = requestConnectionInfo.get(request)!
