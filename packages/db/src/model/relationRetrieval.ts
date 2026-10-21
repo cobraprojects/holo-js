@@ -13,6 +13,17 @@ export function collectRelationKeys<TTable extends TableDefinition>(entities: re
   return [...new Set(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))]
 }
 
+export function isKeySeparableQuery<TTable extends TableDefinition>(query: ModelQueryBuilder<TTable>): boolean {
+  const plan = query.getTableQueryBuilder().getPlan()
+  return typeof plan.limit !== 'number'
+    && typeof plan.offset !== 'number'
+    && plan.orderBy.length === 0
+    && plan.groupBy.length === 0
+    && plan.having.length === 0
+    && plan.unions.length === 0
+    && !plan.distinct
+}
+
 export function isPaginatedRelationQuery(query: ModelQueryBuilder): boolean {
   const plan = query.getTableQueryBuilder().getPlan()
   return typeof plan.limit === 'number' || typeof plan.offset === 'number'

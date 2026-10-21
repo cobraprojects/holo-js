@@ -21,12 +21,12 @@ import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQ
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
-import { collectRelationKeys, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation } from './relationRetrieval'
+import { collectRelationKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
 import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
-import { ModelQueryBuilder } from './ModelQueryBuilder'
+import { ModelQueryBuilder, whereIntegerKeysIn } from './ModelQueryBuilder'
 import { ModelEventDispatcher } from './ModelEventDispatcher'
 import { ModelValueTransformer } from './ModelValueTransformer'
 import {
@@ -274,10 +274,26 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return this.createCollection([])
     }
 
+    const primaryKey = this.definition.primaryKey
+    if (!isKeySeparableQuery(this.query())) {
+      const query = this.query()
+      const integerKeys = integerKeysToInline(keys, this.definition.table.columns[primaryKey])
+      return integerKeys
+        ? query[whereIntegerKeysIn](integerKeys).get()
+        : query.where(primaryKey, 'in', singleStatementRelationKeys(keys)).get()
+    }
+
     const entities = await loadRelationKeyChunks(keys, false, chunk => this.query()
-      .where(this.definition.primaryKey, 'in', chunk)
+      .where(primaryKey, 'in', chunk)
       .get())
-    return this.createCollection(entities)
+    const byPrimaryKey = new Map<unknown, Entity<TTable>>()
+    for (const entity of entities) {
+      const key = entity.get(primaryKey as never)
+      if (!byPrimaryKey.has(key)) {
+        byPrimaryKey.set(key, entity)
+      }
+    }
+    return this.createCollection([...byPrimaryKey.values()])
   }
 
   async firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): Promise<Entity<TTable> | undefined> {

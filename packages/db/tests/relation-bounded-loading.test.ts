@@ -166,6 +166,45 @@ describe('bounded relation loading', () => {
     expect(new Set(sizes).size).toBeLessThanOrEqual(9)
   })
 
+  it('applies a global scope limit once to a findMany over more than 256 keys', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, { globalScopes: { firstOnly: query => query.limit(1) } })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(1)
+  })
+
+  it('keeps a global scope ordering across findMany key chunks', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, { globalScopes: { newestFirst: query => query.orderBy('id', 'desc') } })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found.map(user => user.get('id'))).toEqual(Array.from({ length: 300 }, (_, index) => 300 - index))
+  })
+
+  it('returns each row once when a findMany key list mixes numeric and string forms of one key', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const keys: number[] = Array.from({ length: 256 }, (_, index) => index + 1)
+    keys.push('1' as never)
+    const User = defineModelFromTable(users)
+    const found = await User.findMany(keys)
+
+    expect(found).toHaveLength(256)
+    expect(new Set(found.map(user => user.get('id'))).size).toBe(256)
+  })
+
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {
     const queries: QueryStartLog[] = []
     const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
