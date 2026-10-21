@@ -90,6 +90,7 @@ type SocketState = {
   readonly realtimeSubscriptionTokens: Map<string, object>
   readonly presenceCleanupPending: Set<string>
   readonly presenceMembers: Map<string, PresenceMember>
+  readonly presencePublicationPending: Set<string>
   messageWindowStartedAt: number
   messagesInWindow: number
   active: boolean
@@ -1426,19 +1427,23 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     for (const socket of [...connectedSockets.values()]) {
       const socketRef = createNodeSocketRef(scaling.nodeId, socket.socketId)
       const member = socket.presenceMembers.get(channel)
-      if (member === undefined || entries.has(socketRef) || !isLiveOwnPresenceSocket(socket, app.appId, channel)) {
+      if (member === undefined || !isLiveOwnPresenceSocket(socket, app.appId, channel)) {
+        continue
+      }
+      if (!socket.presencePublicationPending.has(channel) && entries.has(socketRef)) {
         continue
       }
 
-      await scaling.adapter.hashSet(presenceKey, socketRef, JSON.stringify(member))
+      socket.presencePublicationPending.add(channel)
+      if (!entries.has(socketRef)) {
+        await scaling.adapter.hashSet(presenceKey, socketRef, JSON.stringify(member))
+      }
       if (!isLiveOwnPresenceSocket(socket, app.appId, channel)) {
         continue
       }
 
-      await publishScalingPresenceMemberAdded(app, channel, socket.socketId, member).catch(async (error: unknown) => {
-        await scaling.adapter.hashDelete(presenceKey, socketRef)
-        throw error
-      })
+      await publishScalingPresenceMemberAdded(app, channel, socket.socketId, member)
+      socket.presencePublicationPending.delete(channel)
     }
     const hasLiveSubscriber = [...connectedSockets.values()].some(socket => {
       return socket.active && socket.app.appId === app.appId && socket.subscribedChannels.has(channel)
@@ -2042,6 +2047,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     socket.subscribedChannels.delete(channel)
     const joinedMember = socket.presenceMembers.get(channel)
     socket.presenceMembers.delete(channel)
+    socket.presencePublicationPending.delete(channel)
     await runPresenceExclusive(composeSubscriptionKey(socket.app.appId, channel), () => {
       const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
       if (removedPresenceMember.removed && removedPresenceMember.member) {
@@ -2150,6 +2156,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       socket.presenceCleanupPending.delete(channel)
       socket.subscribedChannels.delete(channel)
       socket.presenceMembers.delete(channel)
+      socket.presencePublicationPending.delete(channel)
       const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
       if (removedPresenceMember.removed && removedPresenceMember.member) {
         deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
@@ -2435,6 +2442,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         realtimeSubscriptionTokens: new Map(),
         presenceCleanupPending: new Set(),
         presenceMembers: new Map(),
+        presencePublicationPending: new Set(),
         messageWindowStartedAt: currentTime(),
         messagesInWindow: 0,
         active: true,

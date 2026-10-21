@@ -502,7 +502,7 @@ function createPresenceLeaseHarness() {
     },
   }
   const createNode = (nodeId: string) => {
-    const control: { leaseGate?: Promise<void>, publishGate?: Promise<void>, hashGate?: Promise<void>, failNextPublish: boolean, heldPublishes: number, heldHashWrites: number } = { failNextPublish: false, heldPublishes: 0, heldHashWrites: 0 }
+    const control: { leaseGate?: Promise<void>, publishGate?: Promise<void>, hashGate?: Promise<void>, failNextPublish: boolean, failNextHashDelete: boolean, heldPublishes: number, heldHashWrites: number } = { failNextPublish: false, failNextHashDelete: false, heldPublishes: 0, heldHashWrites: 0 }
     const runtime = createBroadcastWorkerRuntime({
       config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
       channelAuth: { resolveUser: ({ headers }) => ({ id: headers.get('x-test-user') ?? 'anonymous' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: user => ({ id: (user as { id: string }).id }) })] },
@@ -530,7 +530,13 @@ function createPresenceLeaseHarness() {
             hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]]))
           },
           hashGetAll: async key => Object.fromEntries(hashes.get(key) ?? []),
-          hashDelete: async (key, field) => { hashes.get(key)?.delete(field) },
+          hashDelete: async (key, field) => {
+            if (control.failNextHashDelete) {
+              control.failNextHashDelete = false
+              throw new Error('Redis connection lost')
+            }
+            hashes.get(key)?.delete(field)
+          },
           setWithExpiry: async (key, value) => {
             await control.leaseGate
             leases.set(key, value)
@@ -632,6 +638,31 @@ it('retries a presence re-publish that failed during lease recovery', async () =
   await expect.poll(() => harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
   await new Promise(resolve => setTimeout(resolve, 1_000))
   expect(harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+})
+
+it('announces a recovering member exactly once when its publish and the compensating hash delete both fail', async () => {
+  const harness = createPresenceLeaseHarness()
+  const node = harness.createNode('node-a')
+  const observer = harness.createNode('node-b')
+  harness.connect(node.runtime, '8.1', 'ghost-user')
+  await node.runtime.receiveWebSocketMessage('8.1', harness.subscribe)
+  harness.connect(node.runtime, '8.2', 'live-user')
+  await node.runtime.receiveWebSocketMessage('8.2', harness.subscribe)
+  const observerSent = harness.connect(observer.runtime, '9.1', 'observer')
+  await observer.runtime.receiveWebSocketMessage('9.1', harness.subscribe)
+
+  let resume = (): void => {}
+  node.control.leaseGate = new Promise<void>(resolve => { resume = resolve })
+  harness.expireLease('node-a')
+  await expect.poll(() => harness.removedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+
+  node.control.failNextPublish = true
+  node.control.failNextHashDelete = true
+  resume()
+  await expect.poll(() => harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+  await new Promise(resolve => setTimeout(resolve, 1_000))
+  expect(harness.addedIds(observerSent).filter(id => id === 'ghost-user')).toHaveLength(1)
+  expect(harness.presenceFields()).toEqual(['node-a:8.1', 'node-a:8.2', 'node-b:9.1'])
 })
 
 it('does not re-publish a member whose socket disconnects while lease recovery is publishing an earlier member', async () => {
