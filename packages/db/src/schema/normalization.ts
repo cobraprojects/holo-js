@@ -72,9 +72,9 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
-function parseCalendarDay(value: unknown): unknown {
-  if (value == null || value instanceof Date) {
-    return value
+function parseCalendarDay(dialect: SchemaDialectName, value: unknown): unknown {
+  if (value == null || value instanceof Date || dialect === 'sqlite') {
+    return parseDateLike(value)
   }
 
   return parseCalendarDate(String(value), getApplicationTimezone()) ?? parseDateLike(value)
@@ -226,7 +226,7 @@ export function normalizeDialectReadValue(
     case 'json':
       return parseJson(value)
     case 'date':
-      return parseCalendarDay(value)
+      return parseCalendarDay(dialect, value)
     case 'datetime':
     case 'timestamp':
       return parseDateLike(value)

@@ -297,6 +297,9 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
         const typed = defineGeneratedTable(table, { id: column.integer(), day: column.date() })
         const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'day'] })
 
+        expect((await adapter.query<{ day: unknown }>(`SELECT day FROM ${table} ORDER BY id`)).rows.map(row => row.day))
+          .toEqual([new Date('2011-12-29T10:00:00Z'), '2011-12-30', new Date('2011-12-30T10:00:00Z')])
+
         for (const id of [1, 2, 3]) {
           const loaded = await Model.find(id)
           await Model.create({ id: id + 10, day: loaded!.day } as never)
