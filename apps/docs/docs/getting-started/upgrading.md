@@ -125,7 +125,7 @@ Workers that use [Redis scaling](/broadcasting/production#run-several-workers) n
 
 ### Realtime queries refresh across processes
 
-With [Redis scaling](/broadcasting/production#run-several-workers) on, a query-builder or model write that commits in your web app or queue workers now publishes a message to `holo:broadcast:scaling:<connection>:events`, and every Broadcast worker refreshes the realtime queries that read the changed rows. Those processes need the Redis connection, `ioredis` installed, and permission to `PUBLISH` on `holo:broadcast:scaling:*`. Without the permission, writes still commit, but realtime queries on other workers don't update.
+With [Redis scaling](/broadcasting/production#run-several-workers) on, a query-builder or model write that commits in your web app or queue workers now publishes to `holo:broadcast:scaling:<connection>:events` once per Broadcast worker or app runtime sender in that process. Every Broadcast worker refreshes the realtime queries that read the changed rows, and each worker applies a write once, by its write ID, however many copies arrive. Those processes need the Redis connection, `ioredis` installed, and permission to `PUBLISH` on `holo:broadcast:scaling:*`. Without the permission, writes still commit, but realtime queries on other workers don't update.
 
 ### Broadcast workers upgrade together
 

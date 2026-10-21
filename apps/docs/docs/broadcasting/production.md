@@ -215,13 +215,21 @@ Without `ioredis` installed, the worker refuses to start with scaling enabled.
 
 Redis shares broadcast events, presence members, and [realtime query](/realtime/) invalidations between workers. When a write commits in any process, including your web app, a queue worker, or another worker, every worker refreshes the realtime queries that read the changed rows.
 
-Each process publishes one message to Redis per committed query-builder or model write that changes a table, whether or not a realtime query is subscribed. Raw SQL statements don't publish. The message is sent after the write commits, in the background, so a slow Redis doesn't delay the write or the refresh of queries in the process that wrote. If Redis rejects the message, the failure is reported through [exceptions.report](/basics/errors#reporting-errors). Realtime queries on other workers then keep their last result until a later write refreshes them.
+Each committed query-builder or model write that changes a table is published to Redis once per registered publisher, whether or not a realtime query is subscribed. Each Broadcast worker running with Redis scaling is one publisher when realtime is installed, and so is the app runtime's sender when Redis scaling is configured. A process that runs two scaling workers therefore sends two copies of every write, even when both workers use the same Redis connection. Every copy carries the same write ID. Each receiving worker applies a write once, so it drops any copy whose write ID it has already applied. Raw SQL statements don't publish. The copies are sent after the write commits, in the background, so a slow Redis doesn't delay the write or the refresh of queries in the process that wrote. If Redis rejects a copy, the failure is reported through [exceptions.report](/basics/errors#reporting-errors). Realtime queries on other workers then keep their last result until a later write refreshes them.
 
 Each worker keeps a Redis lease that it refreshes every 10 seconds. When a worker stops refreshing for 30 seconds, because it crashed or lost Redis, the other workers remove its presence members and send `pusher_internal:member_removed` to their subscribers. A member that is also connected to a live worker stays listed. A crashed worker's members can stay listed for up to about 40 seconds.
 
 Each worker also checks its own presence entries on every lease refresh. If Redis rejects the delete for a disconnected socket's member, the worker removes it on the next refresh, within about 10 seconds, and the other workers receive one `member_removed`. A member with a live socket is never removed this way.
 
 Redis is part of the trust boundary. Workers accept presence, event, and invalidation messages from the scaling channel without verifying a signature, so anyone who can publish to that channel can add or remove presence members or trigger realtime refreshes. Run Redis on a private network reachable only by your web app and workers, and require authentication with `username` and `password` in `config/redis.ts`.
+
+### Invalidation traffic
+
+Each write that changes a table adds one small message per registered publisher. A message names the connection and the tables that changed, not the rows, and carries the write ID. Size Redis and the network between your processes with these rules in mind:
+
+- The message count per write equals the number of publishers in the sending process. Two scaling workers in one process, or a worker plus the app runtime's sender, double the traffic for every write. Run one scaling worker per process where you can.
+- Every receiving worker applies each write once, but it still receives every copy. Each extra publisher adds inbound messages on every worker that subscribes to the channel.
+- Each process remembers up to 10,000 write IDs for 60 seconds. If more than 10,000 writes commit within 60 seconds, the oldest IDs are forgotten early. A copy that arrives after its ID is forgotten is applied again. That costs one extra refresh of the affected queries and never leaves a write unapplied.
 
 ## Next steps
 
