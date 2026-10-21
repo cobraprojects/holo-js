@@ -301,6 +301,7 @@ export async function syncManagedDriverDependencies(
   projectRoot: string,
   registry?: GeneratedProjectRegistry,
 ): Promise<boolean> {
+  await import('@holo-js/security/config')
   const loaded = await loadConfigDirectory(projectRoot, {
     preferCache: false,
     processEnv: process.env,
