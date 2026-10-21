@@ -205,6 +205,32 @@ describe('bounded relation loading', () => {
     expect(new Set(found.map(user => user.get('id'))).size).toBe(256)
   })
 
+  it('returns every row of a findMany over more than 256 keys when a global scope projection omits the primary key', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, { globalScopes: { namesOnly: query => query.select('name') } })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(300)
+    expect(new Set(found.map(user => user.get('name'))).size).toBe(300)
+  })
+
+  it('keeps distinct stored string keys that hydrate to the same cast value when findMany is chunked', async () => {
+    const db = openSQLite()
+    const codes = defineTable('codes', { code: column.string().primaryKey(), label: column.string() })
+    await createTestTable(db, codes)
+    await db.table(codes).insert([{ code: '01', label: 'zero-one' }, { code: '1', label: 'one' }])
+
+    const Code = defineModelFromTable(codes, { casts: { code: 'number' } })
+    const keys = ['01', '1', ...Array.from({ length: 256 }, (_, index) => `missing-${index}`)]
+    const found = await Code.findMany(keys)
+
+    expect(found.map(code => code.get('label')).sort()).toEqual(['one', 'zero-one'])
+  })
+
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {
     const queries: QueryStartLog[] = []
     const db = openSQLite({ onQueryStart: entry => queries.push(entry) })

@@ -196,3 +196,27 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('to-query string 
     }
   })
 })
+
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('findMany string keys on mysql', () => {
+  it('returns a stored key once when case variants of it fall into different findMany chunks', async () => {
+    const { db, schema } = await openDatabase('mysql')
+    const name = `holo_find_many_codes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.string('code').primaryKey()
+      table.string('label')
+    })
+
+    try {
+      const codes = defineTable(`${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`, { code: column.string().primaryKey(), label: column.string() })
+      await db.table(codes).insert([{ code: 'Abc', label: 'stored' }])
+
+      const Code = defineModelFromTable(codes)
+      const keys = ['Abc', ...Array.from({ length: 255 }, (_, index) => `missing-${index}`), 'abc']
+
+      expect(await Code.findMany(keys)).toHaveLength(1)
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+})
+

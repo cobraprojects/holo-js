@@ -269,12 +269,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable>> {
+    const primaryKey = this.definition.primaryKey
     const keys = [...new Set(values)]
     if (keys.length === 0) {
       return this.createCollection([])
     }
 
-    const primaryKey = this.definition.primaryKey
     if (!isKeySeparableQuery(this.query())) {
       const query = this.query()
       const integerKeys = integerKeysToInline(keys, this.definition.table.columns[primaryKey])
@@ -283,17 +283,16 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         : query.where(primaryKey, 'in', singleStatementRelationKeys(keys)).get()
     }
 
-    const entities = await loadRelationKeyChunks(keys, false, chunk => this.query()
+    const storedRows = await loadRelationKeyChunks(keys, false, chunk => this.query()
+      .getTableQueryBuilder()
+      .select(primaryKey as never)
+      .where(primaryKey, 'in', chunk)
+      .get<Record<string, unknown>>())
+    const storedKeys = [...new Set(storedRows.map(row => row[primaryKey]))]
+    const entities = await loadRelationKeyChunks(storedKeys, false, chunk => this.query()
       .where(primaryKey, 'in', chunk)
       .get())
-    const byPrimaryKey = new Map<unknown, Entity<TTable>>()
-    for (const entity of entities) {
-      const key = entity.get(primaryKey as never)
-      if (!byPrimaryKey.has(key)) {
-        byPrimaryKey.set(key, entity)
-      }
-    }
-    return this.createCollection([...byPrimaryKey.values()])
+    return this.createCollection(entities)
   }
 
   async firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): Promise<Entity<TTable> | undefined> {
