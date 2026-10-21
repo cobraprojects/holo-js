@@ -39,6 +39,11 @@ function openSQLite() {
 const keyA = Buffer.from('owner-a')
 const keyB = Buffer.from('owner-b')
 
+function loaded<TRelation>(entity: { getRelation<T>(name: string): T | undefined } | undefined, name: string): TRelation | undefined {
+  if (!entity) throw new Error(`expected a loaded parent before reading ${name}`)
+  return entity.getRelation<TRelation>(name)
+}
+
 function idsOf(entities: readonly Entity<TableDefinition>[] | Entity<TableDefinition> | null | undefined): unknown[] {
   if (!entities) return []
   const list = Array.isArray(entities) ? entities : [entities]
@@ -62,8 +67,8 @@ describe('relation loading over binary keys', () => {
     const Owner = defineModelFromTable(owners, { relations: { items: hasMany(() => Item, 'ownerKey', 'key') } })
     const [a, b] = await Owner.with('items').orderBy('name').get()
 
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>[]>('items'))).toEqual([1, 2])
-    expect(idsOf(b!.getRelation<Entity<TableDefinition>[]>('items'))).toEqual([])
+    expect(idsOf(loaded<Entity<TableDefinition>[]>(a, 'items'))).toEqual([1, 2])
+    expect(idsOf(loaded<Entity<TableDefinition>[]>(b, 'items'))).toEqual([])
   })
 
   it('attaches hasOne rows across blob keys', async () => {
@@ -79,8 +84,8 @@ describe('relation loading over binary keys', () => {
     const Owner = defineModelFromTable(owners, { relations: { item: hasOne(() => Item, 'ownerKey', 'key') } })
     const [a, b] = await Owner.with('item').orderBy('name').get()
 
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>>('item'))).toEqual([])
-    expect(idsOf(b!.getRelation<Entity<TableDefinition>>('item'))).toEqual([7])
+    expect(idsOf(loaded<Entity<TableDefinition>>(a, 'item'))).toEqual([])
+    expect(idsOf(loaded<Entity<TableDefinition>>(b, 'item'))).toEqual([7])
   })
 
   it('attaches belongsTo owners across blob keys', async () => {
@@ -96,7 +101,7 @@ describe('relation loading over binary keys', () => {
     const Item = defineModelFromTable(items, { relations: { owner: belongsTo(() => Owner, 'ownerKey', 'key') } })
     const [item] = await Item.with('owner').get()
 
-    expect(item!.getRelation<Entity<TableDefinition>>('owner')!.get('name')).toBe('B')
+    expect(loaded<Entity<TableDefinition>>(item, 'owner')?.get('name')).toBe('B')
   })
 
   it('attaches the latest hasOneOfMany row across blob keys', async () => {
@@ -115,8 +120,8 @@ describe('relation loading over binary keys', () => {
     const Owner = defineModelFromTable(owners, { relations: { latestItem: latestOfMany(() => Item, 'ownerKey', 'key') } })
     const [a, b] = await Owner.with('latestItem').orderBy('name').get()
 
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>>('latestItem'))).toEqual([2])
-    expect(idsOf(b!.getRelation<Entity<TableDefinition>>('latestItem'))).toEqual([])
+    expect(idsOf(loaded<Entity<TableDefinition>>(a, 'latestItem'))).toEqual([2])
+    expect(idsOf(loaded<Entity<TableDefinition>>(b, 'latestItem'))).toEqual([])
   })
 
   it('attaches morphOne and morphMany rows across blob morph ids', async () => {
@@ -147,9 +152,9 @@ describe('relation loading over binary keys', () => {
 
     const [a, b] = await Owner.with('comments', 'latestComment').orderBy('name').get()
 
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>[]>('comments'))).toEqual([1, 2])
-    expect(idsOf(b!.getRelation<Entity<TableDefinition>[]>('comments'))).toEqual([])
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>>('latestComment'))).toEqual([1])
+    expect(idsOf(loaded<Entity<TableDefinition>[]>(a, 'comments'))).toEqual([1, 2])
+    expect(idsOf(loaded<Entity<TableDefinition>[]>(b, 'comments'))).toEqual([])
+    expect(idsOf(loaded<Entity<TableDefinition>>(a, 'latestComment'))).toEqual([1])
   })
 
   it('resolves morphTo parents across blob keys', async () => {
@@ -171,7 +176,7 @@ describe('relation loading over binary keys', () => {
 
     const [comment] = await Comment.with('commentable').get()
 
-    expect(comment!.getRelation<Entity<TableDefinition>>('commentable')!.get('name')).toBe('B')
+    expect(loaded<Entity<TableDefinition>>(comment, 'commentable')?.get('name')).toBe('B')
   })
 
   it('attaches hasManyThrough and hasOneThrough rows across blob keys', async () => {
@@ -200,9 +205,9 @@ describe('relation loading over binary keys', () => {
     })
     const [a, b] = await Owner.with('members', 'member').orderBy('name').get()
 
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>[]>('members'))).toEqual([10, 11])
-    expect(idsOf(b!.getRelation<Entity<TableDefinition>[]>('members'))).toEqual([12])
-    expect(idsOf(a!.getRelation<Entity<TableDefinition>>('member'))).toEqual([10])
+    expect(idsOf(loaded<Entity<TableDefinition>[]>(a, 'members'))).toEqual([10, 11])
+    expect(idsOf(loaded<Entity<TableDefinition>[]>(b, 'members'))).toEqual([12])
+    expect(idsOf(loaded<Entity<TableDefinition>>(a, 'member'))).toEqual([10])
   })
 
   it('attaches belongsToMany rows across blob keys on both sides of the pivot', async () => {
@@ -226,8 +231,8 @@ describe('relation loading over binary keys', () => {
     })
     const [a, b] = await Owner.with('roles').orderBy('name').get()
 
-    expect((a!.getRelation<Entity<TableDefinition>[]>('roles') ?? []).map(role => role.get('name'))).toEqual(['Admin', 'Editor'])
-    expect(b!.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
+    expect((loaded<Entity<TableDefinition>[]>(a, 'roles') ?? []).map(role => role.get('name'))).toEqual(['Admin', 'Editor'])
+    expect(loaded<Entity<TableDefinition>[]>(b, 'roles')).toEqual([])
   })
 
   it('attaches morphToMany and morphedByMany rows across blob keys', async () => {
@@ -260,9 +265,9 @@ describe('relation loading over binary keys', () => {
     const [postA, postB] = await Post.with('tags').orderBy('title').get()
     const [tag] = await TagWithPosts.with('posts').get()
 
-    expect((postA!.getRelation<Entity<TableDefinition>[]>('tags') ?? []).map(entity => entity.get('name'))).toEqual(['tag-1'])
-    expect(postB!.getRelation<Entity<TableDefinition>[]>('tags')).toEqual([])
-    expect((tag!.getRelation<Entity<TableDefinition>[]>('posts') ?? []).map(entity => entity.get('title'))).toEqual(['post-a'])
+    expect((loaded<Entity<TableDefinition>[]>(postA, 'tags') ?? []).map(entity => entity.get('name'))).toEqual(['tag-1'])
+    expect(loaded<Entity<TableDefinition>[]>(postB, 'tags')).toEqual([])
+    expect((loaded<Entity<TableDefinition>[]>(tag, 'posts') ?? []).map(entity => entity.get('title'))).toEqual(['post-a'])
   })
 
   it('counts and filters hasMany rows across blob keys', async () => {
