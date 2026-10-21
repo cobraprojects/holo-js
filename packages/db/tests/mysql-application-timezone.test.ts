@@ -117,10 +117,58 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
     }
   })
 
-  it('refuses dateStrings, which would bypass app.timezone date handling', async () => {
-    const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, dateStrings: true } })
+  it.each([
+    {
+      label: 'dateStrings: true',
+      config: { ...liveMySQLConfig, connectionLimit: 1, dateStrings: true },
+      stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
+    },
+    {
+      label: 'dateStrings in the connection URL',
+      config: { uri: `mysql://${liveMySQLConfig.user}@${liveMySQLConfig.host}:${liveMySQLConfig.port}/${liveMySQLConfig.database}?dateStrings=true`, connectionLimit: 1 },
+      stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
+    },
+    {
+      label: 'typeCast: false',
+      config: { ...liveMySQLConfig, connectionLimit: 1, typeCast: false },
+      stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
+    },
+    {
+      label: 'dateStrings for DATETIME only',
+      config: { ...liveMySQLConfig, connectionLimit: 1, dateStrings: ['DATETIME' as const] },
+      stored: { day: new Date('2024-03-14T15:00:00Z'), at: '2024-03-15 10:00:00', instant: new Date('2024-03-15T01:00:00Z') },
+    },
+  ])('returns app.timezone wall-clock values and round-trips them with $label', async ({ config, stored: expected }) => {
+    await withAppTimezone('Asia/Tokyo', async () => {
+      const adapter = createMySQLAdapter({ config })
+      const db = createDatabase({ adapter, dialect: createDialect('mysql') })
+      const table = `holo_opt_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, day DATE NOT NULL, at DATETIME NOT NULL, instant TIMESTAMP NOT NULL)`)
+        await adapter.execute(`INSERT INTO ${table} VALUES (1, '2024-03-15', '2024-03-15 10:00:00', '2024-03-15 10:00:00')`)
+        const [stored] = (await adapter.query(`SELECT day, at, instant FROM ${table} WHERE id = ?`, [1])).rows
+        expect(stored).toEqual(expected)
+
+        const instant = new Date('2024-03-15T01:00:00Z')
+        await db.executeCompiled({ sql: `INSERT INTO ${table} (id, day, at, instant) VALUES (?, ?, ?, ?)`, bindings: [2, instant, instant, instant] })
+        const [bound] = (await adapter.query(`SELECT day, at, instant FROM ${table} WHERE id = ?`, [2])).rows
+        expect(bound).toEqual(expected)
+
+        await db.executeCompiled({ sql: `INSERT INTO ${table} (id, day, at, instant) VALUES (?, ?, ?, ?)`, bindings: [3, stored!.day, stored!.at, stored!.instant] })
+        const [roundTrip] = (await adapter.query(`SELECT day, at, instant FROM ${table} WHERE id = ?`, [3])).rows
+        expect(roundTrip).toEqual(expected)
+      } finally {
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await db.disconnect()
+      }
+    })
+  })
+
+  it('leaves other columns as the driver returns them when typeCast is false', async () => {
+    const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1, typeCast: false } })
     try {
-      await expect(adapter.query('SELECT 1')).rejects.toThrow(/dateStrings/)
+      expect((await adapter.query<{ n: unknown, one: unknown }>('SELECT NULL AS n, CAST(1 AS SIGNED) AS one')).rows)
+        .toEqual([{ n: null, one: Buffer.from('1') }])
     } finally {
       await adapter.disconnect()
     }

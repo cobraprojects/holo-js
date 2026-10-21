@@ -71,26 +71,32 @@ function toDriverBindings(bindings: readonly unknown[]): unknown[] {
   return bindings.map(value => toDriverBinding(value, timeZone))
 }
 
-function applicationTypeCast(configured: PoolOptions['typeCast']): MySQLTypeCast {
-  const fallback = typeof configured === 'function' ? configured : undefined
+const DATE_TYPE_NAMES = ['date', 'datetime', 'timestamp']
+
+const rawTypeCast: MySQLTypeCast = (field) => field.buffer()
+
+function dateStringTypes(config: PoolOptions): ReadonlySet<string> {
+  const uriOption = typeof config.uri === 'string' ? new URL(config.uri).searchParams.get('dateStrings') : null
+  const option: unknown = config.dateStrings ?? (uriOption === 'true' ? true : uriOption === 'false' || uriOption === null ? undefined : uriOption)
+  if (option === true || config.typeCast === false) return new Set(DATE_TYPE_NAMES)
+  if (typeof option === 'string') return new Set([option.toLowerCase()])
+  if (Array.isArray(option)) return new Set(option.map(type => String(type).toLowerCase()))
+  return new Set()
+}
+
+function applicationTypeCast(config: PoolOptions): MySQLTypeCast {
+  const fallback = typeof config.typeCast === 'function' ? config.typeCast : config.typeCast === false ? rawTypeCast : undefined
+  const stringTypes = dateStringTypes(config)
   return (field, next) => {
     if (field.type !== 'DATE' && field.type !== 'DATETIME' && field.type !== 'TIMESTAMP') {
       return fallback ? fallback(field, next) : next()
     }
     const value = field.string()
     if (value === null) return null
-    if (ZERO_DATE_PART.test(value)) return value
+    if (stringTypes.has(field.type.toLowerCase()) || ZERO_DATE_PART.test(value)) return value
     const timeZone = holoRuntimeInternals.getApplicationTimezone()
     if (field.type === 'DATE') return parseCalendarDate(value, timeZone) ?? value
     return parseWallClockTimestamp(value, timeZone) ?? value
-  }
-}
-
-function assertApplicationDateHandling(config: PoolOptions): void {
-  const dateStrings = config.dateStrings !== undefined && config.dateStrings !== false
-    || (typeof config.uri === 'string' && new URL(config.uri).searchParams.has('dateStrings'))
-  if (dateStrings || config.typeCast === false) {
-    throw new Error('The MySQL adapter reads DATE, DATETIME, and TIMESTAMP values in app.timezone, so the dateStrings option and typeCast: false are not supported. Remove them from the connection options.')
   }
 }
 
@@ -193,12 +199,11 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 const DEFAULT_MAX_PREPARED_STATEMENTS = 256
 
 function createNativeMySQLPool(config: PoolOptions): MySQLPoolLike {
-  assertApplicationDateHandling(config)
   const pool = mysql.createPool({
     maxPreparedStatements: DEFAULT_MAX_PREPARED_STATEMENTS,
     ...config,
     timezone: config.timezone ?? 'Z',
-    typeCast: applicationTypeCast(config.typeCast),
+    typeCast: applicationTypeCast(config),
   })
   pool.pool.on('connection', (connection) => {
     connection.query('SET time_zone = ?', [sessionTimeZone(holoRuntimeInternals.getApplicationTimezone())], (error) => {
