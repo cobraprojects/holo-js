@@ -122,6 +122,8 @@ Calling `DB.afterCommit()` or `DB.afterRollback()` outside a transaction throws 
 If an `afterCommit` callback throws, the data stays committed, `DB.transaction()` rejects with that same error, and the remaining `afterCommit` callbacks are skipped. Handle errors inside the callback if the caller shouldn't see them.
 
 A failed commit is different. If the database rejects the commit, the callbacks registered with `afterRollback()` don't run, because the outcome is unknown and the data may already be saved.
+
+The same applies when the rollback itself fails. The `afterRollback()` callbacks don't run, and `DB.transaction()` rejects with the rollback error.
 :::
 
 ## Write transactions on SQLite
