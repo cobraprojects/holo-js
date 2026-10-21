@@ -476,14 +476,8 @@ export class DatabaseContext {
         try {
           value = await this._runTransactionCallback(child, callback)
         } catch (error) {
-          try {
-            await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
-            rollbackSchemaMutationScope(child)
-          } catch (rollbackError) {
-            await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
-            throw rollbackError
-          }
-
+          await this._callTransactionHook('rollback', () => this._rollbackAdapterTransaction())
+          rollbackSchemaMutationScope(child)
           throw error
         }
 
@@ -528,12 +522,22 @@ export class DatabaseContext {
     entry: TransactionLog,
     error: unknown,
   ): Promise<void> {
+    let compensationFailure: { error: unknown } | undefined
     try {
       await transaction?._runAfterRollbackCallbacks(this)
     } catch (compensationError) {
-      throw new AggregateError([error, compensationError], 'Transaction failed and rollback compensation failed.')
+      compensationFailure = { error: compensationError }
     }
-    await this._logger?.onTransactionRollback?.({ ...entry, error })
+
+    try {
+      await this._logger?.onTransactionRollback?.({ ...entry, error })
+    } catch (logError) {
+      if (!compensationFailure) throw logError
+    }
+
+    if (compensationFailure) {
+      throw new AggregateError([error, compensationFailure.error], 'Transaction failed and rollback compensation failed.')
+    }
   }
 
   private async _runNestedTransaction<T>(
