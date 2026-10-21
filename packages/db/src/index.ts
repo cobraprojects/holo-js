@@ -1,6 +1,7 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { PooledTransactionClients } from './drivers/PooledTransactionClients'
 import { getApplicationTimezone } from './applicationTimezone'
+import { formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
 export {
@@ -393,4 +394,12 @@ export type {
   UpdateQueryPlan,
 } from './query'
 
-export const holoRuntimeInternals = Object.freeze({ PooledTransactionClients, reportError, getApplicationTimezone })
+export const holoRuntimeInternals = Object.freeze({
+  PooledTransactionClients,
+  reportError,
+  getApplicationTimezone,
+  formatWallClock,
+  formatWithOffset,
+  parseCalendarDate,
+  parseWallClockTimestamp,
+})

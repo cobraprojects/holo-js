@@ -114,6 +114,11 @@ export function parseWallClockTimestamp(value: string, timeZone: string): Date |
   }, timeZone)
 }
 
+export function formatWallClock(instant: Date, timeZone: string): string {
+  const wall = wallClockAt(instant, timeZone)
+  return `${pad(wall.year, 4)}-${pad(wall.month, 2)}-${pad(wall.day, 2)} ${pad(wall.hour, 2)}:${pad(wall.minute, 2)}:${pad(wall.second, 2)}.${pad(wall.millisecond, 3)}`
+}
+
 export function formatWithOffset(instant: Date, timeZone: string): string {
   const wall = wallClockAt(instant, timeZone)
   const offsetSeconds = Math.round(offsetMillisAt(instant, timeZone) / 1000)

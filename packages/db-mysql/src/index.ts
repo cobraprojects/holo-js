@@ -11,6 +11,8 @@ import type { DatabaseDriverFactory, DriverAdapter, DriverExecutionResult, Drive
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
+const { formatWallClock, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
+
 class TransactionError extends Error {}
 
 export interface MySQLQueryableLike {
@@ -55,8 +57,45 @@ type BootstrapTarget = {
   config: PoolOptions
 }
 
-function toMutableBindings(bindings: readonly unknown[] = []): unknown[] {
-  return [...bindings]
+type MySQLTypeCast = Exclude<NonNullable<PoolOptions['typeCast']>, boolean>
+
+const ZERO_DATE_PART = /-00(?:-|\s|$)/
+
+function toDriverBinding(value: unknown, timeZone: string): unknown {
+  if (!(value instanceof Date)) return value
+  return Number.isNaN(value.getTime()) ? null : formatWallClock(value, timeZone)
+}
+
+function toDriverBindings(bindings: readonly unknown[]): unknown[] {
+  const timeZone = holoRuntimeInternals.getApplicationTimezone()
+  return bindings.map(value => toDriverBinding(value, timeZone))
+}
+
+function applicationTypeCast(configured: PoolOptions['typeCast']): MySQLTypeCast {
+  const fallback = typeof configured === 'function' ? configured : undefined
+  return (field, next) => {
+    if (field.type !== 'DATE' && field.type !== 'DATETIME' && field.type !== 'TIMESTAMP') {
+      return fallback ? fallback(field, next) : next()
+    }
+    const value = field.string()
+    if (value === null) return null
+    if (ZERO_DATE_PART.test(value)) return value
+    const timeZone = holoRuntimeInternals.getApplicationTimezone()
+    if (field.type === 'DATE') return parseCalendarDate(value, timeZone) ?? value
+    return parseWallClockTimestamp(value, timeZone) ?? value
+  }
+}
+
+function assertApplicationDateHandling(config: PoolOptions): void {
+  const dateStrings = config.dateStrings !== undefined && config.dateStrings !== false
+    || (typeof config.uri === 'string' && new URL(config.uri).searchParams.has('dateStrings'))
+  if (dateStrings || config.typeCast === false) {
+    throw new Error('The MySQL adapter reads DATE, DATETIME, and TIMESTAMP values in app.timezone, so the dateStrings option and typeCast: false are not supported. Remove them from the connection options.')
+  }
+}
+
+function sessionTimeZone(timeZone: string): string {
+  return timeZone === 'UTC' ? '+00:00' : timeZone
 }
 
 function quoteDatabaseIdentifier(database: string): string {
@@ -124,10 +163,10 @@ function wrapMySQLClient(client: Connection | MySQLClientLike): MySQLClientLike 
 
   return {
     async query(sql: string, bindings: readonly unknown[] = []) {
-      return bindings.length === 0 ? rawClient.query(sql) : rawClient.query(sql, toMutableBindings(bindings))
+      return bindings.length === 0 ? rawClient.query(sql) : rawClient.query(sql, toDriverBindings(bindings))
     },
     async execute(sql: string, bindings: readonly unknown[] = []) {
-      return rawClient.execute(sql, toMutableBindings(bindings))
+      return rawClient.execute(sql, toDriverBindings(bindings))
     },
     release: rawClient.release?.bind(rawClient),
     end: rawClient.end?.bind(rawClient),
@@ -139,10 +178,10 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 
   return {
     async query(sql: string, bindings: readonly unknown[] = []) {
-      return bindings.length === 0 ? rawPool.query(sql) : rawPool.query(sql, toMutableBindings(bindings))
+      return bindings.length === 0 ? rawPool.query(sql) : rawPool.query(sql, toDriverBindings(bindings))
     },
     async execute(sql: string, bindings: readonly unknown[] = []) {
-      return rawPool.execute(sql, toMutableBindings(bindings))
+      return rawPool.execute(sql, toDriverBindings(bindings))
     },
     async getConnection() {
       return wrapMySQLClient(await rawPool.getConnection())
@@ -154,12 +193,20 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 const DEFAULT_MAX_PREPARED_STATEMENTS = 256
 
 function createNativeMySQLPool(config: PoolOptions): MySQLPoolLike {
-  const pool = mysql.createPool({ maxPreparedStatements: DEFAULT_MAX_PREPARED_STATEMENTS, ...config, timezone: config.timezone ?? 'Z' })
-  if (!config.timezone || config.timezone === 'Z') {
-    pool.pool.on('connection', (connection) => {
-      connection.query("SET time_zone = '+00:00'")
+  assertApplicationDateHandling(config)
+  const pool = mysql.createPool({
+    maxPreparedStatements: DEFAULT_MAX_PREPARED_STATEMENTS,
+    ...config,
+    timezone: config.timezone ?? 'Z',
+    typeCast: applicationTypeCast(config.typeCast),
+  })
+  pool.pool.on('connection', (connection) => {
+    connection.query('SET time_zone = ?', [sessionTimeZone(holoRuntimeInternals.getApplicationTimezone())], (error) => {
+      if (!error) return
+      holoRuntimeInternals.reportError(error, { capability: 'db', operation: 'mysql.sessionTimeZone' })
+      connection.destroy()
     })
-  }
+  })
   return wrapMySQLPool(pool)
 }
 
@@ -183,7 +230,7 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
 
   constructor(options: MySQLAdapterOptions<TConfig> = {}) {
     this.supportsConcurrentTransactionScopes = !options.client
-    this.directClient = options.client ? wrapMySQLClient(options.client) : undefined
+    this.directClient = options.client as MySQLClientLike | undefined
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined

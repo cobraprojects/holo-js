@@ -1,6 +1,5 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Pool, types, type PoolClient, type PoolConfig } from 'pg'
-import { formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -10,6 +9,8 @@ import type {
 } from '@holo-js/db'
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
+
+const { formatWithOffset, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
 
 class TransactionError extends Error {}
 
