@@ -20,6 +20,10 @@ export interface FluxHookOptions<TManifest extends GeneratedBroadcastManifest = 
   readonly onUnmount?: (cleanup: () => void) => void
 }
 
+export interface FluxChannelHookOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxHookOptions<TManifest> {
+  readonly onError?: (error: Error) => void
+}
+
 export interface FluxConnectionStatusHookOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxHookOptions<TManifest> {
   readonly onChange?: (status: FluxConnectionStatus) => void
 }
@@ -137,11 +141,12 @@ export function useFlux<
   channel: TChannel & ManifestHookChannel<NoInfer<TManifest>>,
   events: ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent> | readonly ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions<TManifest> = {},
+  options: FluxChannelHookOptions<TManifest> = {},
 ): FluxListenerControls {
   const client = resolveClient(options)
+  const onErrorRef = useLatestRef(options.onError)
   return useEventSubscription(
-    () => client.private(channel),
+    () => client.private(channel).error(error => onErrorRef.current?.(error)),
     events,
     callback,
     options.onUnmount,
@@ -157,11 +162,12 @@ export function useFluxPublic<
   channel: TChannel & ManifestHookChannel<NoInfer<TManifest>>,
   events: ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent> | readonly ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions<TManifest> = {},
+  options: FluxChannelHookOptions<TManifest> = {},
 ): FluxListenerControls {
   const client = resolveClient(options)
+  const onErrorRef = useLatestRef(options.onError)
   return useEventSubscription(
-    () => client.channel(channel),
+    () => client.channel(channel).error(error => onErrorRef.current?.(error)),
     events,
     callback,
     options.onUnmount,
@@ -177,7 +183,7 @@ export function useFluxPrivate<
   channel: TChannel & ManifestHookChannel<NoInfer<TManifest>>,
   events: ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent> | readonly ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions<TManifest> = {},
+  options: FluxChannelHookOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFlux(channel, events, callback, options)
 }
@@ -189,7 +195,7 @@ export function useFluxPresence<
 >(
   channel: TChannel & ManifestHookChannel<NoInfer<TManifest>>,
   callbacks: FluxPresenceHookCallbacks<ManifestHookPresenceMember<TMember, TManifest, TChannel>> = {},
-  options: FluxHookOptions<TManifest> = {},
+  options: FluxChannelHookOptions<TManifest> = {},
 ): FluxPresenceHookState<ManifestHookPresenceMember<TMember, TManifest, TChannel>> {
   const client = resolveClient(options)
   type TResolvedMember = ManifestHookPresenceMember<TMember, TManifest, TChannel>
@@ -198,9 +204,11 @@ export function useFluxPresence<
   const controlsRef = useRef<FluxListenerControls>(createNoopControls())
   const callbacksRef = useLatestRef(callbacks)
   const onUnmountRef = useLatestRef(options.onUnmount)
+  const onErrorRef = useLatestRef(options.onError)
 
   useEffect(() => {
     const subscription = client.presence(channel)
+    subscription.error(error => onErrorRef.current?.(error))
     let active = true
     const updateMembers = (members: readonly TResolvedMember[]) => {
       membersRef.current = members
@@ -248,7 +256,7 @@ export function useFluxPresence<
     }).listen()
     onUnmountRef.current?.(cleanup)
     return cleanup
-  }, [channel, client, callbacksRef, onUnmountRef])
+  }, [channel, client, callbacksRef, onUnmountRef, onErrorRef])
 
   const controls = useMemo(() => Object.freeze({
     leave: () => {
@@ -279,12 +287,13 @@ export function useFluxNotification<
 >(
   channel: TChannel & ManifestHookChannel<NoInfer<TManifest>>,
   callback: (payload: unknown) => void,
-  options: FluxHookOptions<TManifest> = {},
+  options: FluxChannelHookOptions<TManifest> = {},
 ): FluxListenerControls {
   const client = resolveClient(options)
   const callbackRef = useLatestRef(callback)
+  const onErrorRef = useLatestRef(options.onError)
   return useControls(() => {
-    return client.private(channel).notification(
+    return client.private(channel).error(error => onErrorRef.current?.(error)).notification(
       callbackRef.current as (payload: { readonly [key: string]: unknown }) => void,
     ) as AnyFluxSubscription
   }, options.onUnmount, [client, channel])
@@ -298,7 +307,7 @@ export function useFluxModel<
   channel: TChannel & ManifestHookChannel<NoInfer<TManifest>>,
   events: ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent> | readonly ManifestHookEvent<NoInfer<TManifest>, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions<TManifest> = {},
+  options: FluxChannelHookOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFluxPrivate(channel, events, callback, options)
 }

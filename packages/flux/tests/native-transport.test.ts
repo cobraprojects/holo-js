@@ -178,3 +178,18 @@ it('resubscribes channels after the worker restarts at the same address and deli
   await expect.poll(() => delivered, { timeout: 10_000 }).toEqual(['After restart'])
   expect(transport.client.getStatus()).toBe('connected')
 }, 20_000)
+
+it('calls the error callback of a private subscription the real worker refuses', async () => {
+  const transport = await startNativeTransport({ authorizeOrders: () => false })
+  const errors: string[] = []
+  const delivered: string[] = []
+  transport.client.private('orders.1')
+    .listen('order.shipped', payload => delivered.push(String(payload.title)))
+    .error(error => errors.push(error.message))
+  await transport.client.connect()
+  await expect.poll(() => errors).toEqual([
+    '[@holo-js/flux] Subscription to orders.1 was refused: Unable to authorize the channel subscription.',
+  ])
+  expect(transport.client.getStatus()).toBe('connected')
+  expect(delivered).toEqual([])
+})

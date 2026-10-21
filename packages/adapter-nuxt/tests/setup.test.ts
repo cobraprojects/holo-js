@@ -464,12 +464,12 @@ describe('@holo-js/adapter-nuxt module setup', () => {
 
   it.each([
     { packages: [], expected: [] },
-    { packages: ['validation'], expected: ['@holo-js/validation > valibot', '@holo-js/validation > file-type'] },
+    { packages: ['validation'], expected: ['@holo-js/validation > valibot', '@holo-js/validation > @holo-js/kernel > file-type'] },
     { packages: ['forms', 'validation'], expected: [
       '@holo-js/forms > @holo-js/validation > valibot',
-      '@holo-js/forms > @holo-js/validation > file-type',
+      '@holo-js/forms > @holo-js/validation > @holo-js/kernel > file-type',
       '@holo-js/validation > valibot',
-      '@holo-js/validation > file-type',
+      '@holo-js/validation > @holo-js/kernel > file-type',
     ] },
   ])('configures native Vite dependencies for installed packages $packages', async ({ packages, expected }) => {
     const root = await createProject()
@@ -507,8 +507,8 @@ describe('@holo-js/adapter-nuxt module setup', () => {
       'vue',
       '@holo-js/validation > valibot',
       '@holo-js/forms > @holo-js/validation > valibot',
-      '@holo-js/forms > @holo-js/validation > file-type',
-      '@holo-js/validation > file-type',
+      '@holo-js/forms > @holo-js/validation > @holo-js/kernel > file-type',
+      '@holo-js/validation > @holo-js/kernel > file-type',
     ])
     expect(nuxt.options.vite.optimizeDeps?.exclude).toEqual(['vue-demi'])
   }, 30000)

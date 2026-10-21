@@ -2,7 +2,7 @@ import { effectScope, nextTick } from 'vue'
 import { expect, it } from 'vitest'
 import { configureFluxClient } from '@holo-js/flux'
 import { startNativeTransport } from '../../flux/tests/support/native-transport'
-import { useFluxConnectionStatus, useFluxNotification, useFluxPresence, useFluxPublic } from '../src'
+import { useFlux, useFluxConnectionStatus, useFluxNotification, useFluxPresence, useFluxPublic } from '../src'
 
 it('receives native broadcasts and notifications through the default client until scope disposal', async () => {
   const transport = await startNativeTransport()
@@ -83,4 +83,16 @@ it('uses explicit cleanup outside a Vue scope to stop native delivery', async ()
   await expect.poll(() => transport.subscriptions()).toBe(0)
   await transport.publish('After cleanup')
   expect(delivered).toEqual(['Before cleanup'])
+})
+
+it('calls onError when the real worker refuses a private channel the composable subscribes to', async () => {
+  const transport = await startNativeTransport({ authorizeOrders: () => false })
+  const errors: string[] = []
+  const scope = effectScope()
+  scope.run(() => useFlux('orders.1', 'order.shipped', () => {}, { client: transport.client, onError: error => errors.push(error.message) }))
+  await transport.client.connect()
+  await expect.poll(() => errors).toEqual([
+    '[@holo-js/flux] Subscription to orders.1 was refused: Unable to authorize the channel subscription.',
+  ])
+  scope.stop()
 })

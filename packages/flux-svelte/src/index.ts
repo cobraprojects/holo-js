@@ -27,6 +27,10 @@ export interface FluxHelperOptions<TManifest extends GeneratedBroadcastManifest 
   readonly onUnmount?: (cleanup: () => void) => void
 }
 
+export interface FluxChannelHelperOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxHelperOptions<TManifest> {
+  readonly onError?: (error: Error) => void
+}
+
 export interface FluxConnectionStatusHelperOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxHelperOptions<TManifest> {
   readonly onChange?: (status: FluxConnectionStatus) => void
 }
@@ -112,10 +116,10 @@ export function useFlux<
   channel: TChannel,
   events: ManifestHelperEvent<TManifest, TChannel, TEvent> | readonly ManifestHelperEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions<TManifest> = {},
+  options: FluxChannelHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = subscribeWithEvents(
-    resolveClient(options).private(channel),
+    resolveClient(options).private(channel).error(error => options.onError?.(error)),
     events,
     callback,
   )
@@ -133,10 +137,10 @@ export function useFluxPublic<
   channel: TChannel,
   events: ManifestHelperEvent<TManifest, TChannel, TEvent> | readonly ManifestHelperEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions<TManifest> = {},
+  options: FluxChannelHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = subscribeWithEvents(
-    resolveClient(options).channel(channel),
+    resolveClient(options).channel(channel).error(error => options.onError?.(error)),
     events,
     callback,
   )
@@ -154,7 +158,7 @@ export function useFluxPrivate<
   channel: TChannel,
   events: ManifestHelperEvent<TManifest, TChannel, TEvent> | readonly ManifestHelperEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions<TManifest> = {},
+  options: FluxChannelHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFlux(channel, events, callback, options)
 }
@@ -166,10 +170,11 @@ export function useFluxPresence<
 >(
   channel: TChannel,
   callbacks: FluxPresenceHelperCallbacks<ManifestHelperPresenceMember<TMember, TManifest, TChannel>> = {},
-  options: FluxHelperOptions<TManifest> = {},
+  options: FluxChannelHelperOptions<TManifest> = {},
 ): FluxPresenceHelperState<ManifestHelperPresenceMember<TMember, TManifest, TChannel>> {
   type TResolvedMember = ManifestHelperPresenceMember<TMember, TManifest, TChannel>
   const subscription = resolveClient(options).presence(channel) as unknown as FluxPresenceSubscriptionWithChange<TManifest, TResolvedMember>
+  subscription.error(error => options.onError?.(error))
   const members = writable<readonly TResolvedMember[]>(subscription.members)
   let active = true
   const updateMembers = (nextMembers: readonly TResolvedMember[]) => {
@@ -244,9 +249,9 @@ export function useFluxNotification<
 >(
   channel: TChannel,
   callback: (payload: BroadcastJsonObject) => void,
-  options: FluxHelperOptions<TManifest> = {},
+  options: FluxChannelHelperOptions<TManifest> = {},
 ): FluxListenerControls {
-  const subscription = resolveClient(options).private(channel).notification(callback) as AnyFluxSubscription
+  const subscription = resolveClient(options).private(channel).error(error => options.onError?.(error)).notification(callback) as AnyFluxSubscription
   registerCleanup(options, () => {
     subscription.leaveChannel()
   })
@@ -261,7 +266,7 @@ export function useFluxModel<
   channel: TChannel,
   events: ManifestHelperEvent<TManifest, TChannel, TEvent> | readonly ManifestHelperEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions<TManifest> = {},
+  options: FluxChannelHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFluxPrivate(channel, events, callback, options)
 }

@@ -386,7 +386,7 @@ function resolveCompiledRuntimeWorkerPath(workerPath: string): string {
 export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath()): { command: string, args: string[] } {
   if (workerPath.endsWith('.ts')) {
     return {
-      command: 'node',
+      command: process.execPath,
       args: supportsNodeTypeStripping()
         ? ['--experimental-strip-types', workerPath]
         : [resolveCompiledRuntimeWorkerPath(workerPath)],
@@ -394,7 +394,7 @@ export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath())
   }
 
   return {
-    command: 'node',
+    command: process.execPath,
     args: [workerPath],
   }
 }
@@ -402,18 +402,20 @@ export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath())
 export function runRuntimeInvocation(
   command: string,
   args: string[],
-  options: { cwd: string, env: NodeJS.ProcessEnv },
+  options: { cwd: string, env: NodeJS.ProcessEnv, input?: string },
 ): Promise<RuntimeSpawnResult> {
   return new Promise(resolveInvocation => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
     let stderr = ''
     let error: Error | null = null
 
+    child.stdin.on('error', () => undefined)
+    child.stdin.end(options.input)
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       stdout += chunk
@@ -532,10 +534,8 @@ export async function withRuntimeEnvironment<T>(
     const runtime = createRuntimeInvocation()
     const result = await runRuntimeInvocation(runtime.command, runtime.args, {
       cwd: runtimeRoot,
-      env: {
-        ...process.env,
-        HOLO_RUNTIME_PAYLOAD: runtimePayload,
-      },
+      env: process.env,
+      input: runtimePayload,
     })
 
     if (result.status !== 0) {
