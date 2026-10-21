@@ -20,6 +20,7 @@ import { normalizeDialectReadValue } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
+import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
@@ -270,7 +271,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable>> {
     const primaryKey = this.definition.primaryKey
-    const keys = [...new Set(values)]
+    const keys = distinctStoredKeys(values)
     if (keys.length === 0) {
       return this.createCollection([])
     }
@@ -483,7 +484,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       })
 
       if (filter.boolean === 'or' && hasAppliedFilter) {
-        const merged = new Map<unknown, Entity<TTable>>()
+        const merged = new StoredKeyMap<Entity<TTable>>()
         for (const entity of current) {
           merged.set(entity.get(this.definition.primaryKey), entity)
         }
@@ -2355,7 +2356,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: RelationDefinition,
     constraint?: RelationConstraint,
     morphTypes?: readonly string[],
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     switch (relation.kind) {
       case 'belongsTo':
         return this.getMatchingBelongsToParentKeys(entities, relation, constraint)
@@ -2385,7 +2386,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: RelationDefinition,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
+  ): Promise<StoredKeyMap<number>> {
     switch (relation.kind) {
       case 'belongsTo':
         return this.getBelongsToMatchCounts(entities, relation, constraint)
@@ -2665,7 +2666,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: RelationDefinition,
     aggregate: AggregateLoad,
-  ): Promise<Map<unknown, RelationAggregateComputation>> {
+  ): Promise<StoredKeyMap<RelationAggregateComputation>> {
     if (aggregate.kind === 'count' || aggregate.kind === 'exists') {
       throw new SecurityError(`Relation aggregate "${aggregate.kind}" does not require a value pipeline.`)
     }
@@ -2685,7 +2686,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const grouped = await this.getRelatedEntitiesByParentKey(entities, relation, aggregate.constraint)
-    const values = new Map<unknown, RelationAggregateComputation>()
+    const values = new StoredKeyMap<RelationAggregateComputation>()
 
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
@@ -2700,7 +2701,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Exclude<RelationDefinition, { kind: 'morphTo' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     switch (relation.kind) {
       case 'belongsTo':
         return this.getBelongsToEntitiesByParentKey(entities, relation, constraint)
@@ -2778,11 +2779,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
-      return new Set()
+      return new StoredKeySet()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
@@ -2792,18 +2793,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       relation.ownerKey,
     )
 
-    return new Set(relatedEntities.map(entity => entity.get(relation.ownerKey as never)))
+    return new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)))
   }
 
   private async getBelongsToMatchCounts(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
+  ): Promise<StoredKeyMap<number>> {
     const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
@@ -2812,8 +2813,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
     )
-    const matching = new Set(relatedEntities.map(entity => entity.get(relation.ownerKey as never)))
-    const counts = new Map<unknown, number>()
+    const matching = new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)))
+    const counts = new StoredKeyMap<number>()
 
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
@@ -2829,11 +2830,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const foreignKeys = collectRelationKeys(entities, relation.foreignKey)
 
     if (foreignKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
@@ -2843,7 +2844,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       relation.ownerKey,
     )
     const relatedMap = indexRelation(relatedEntities, relation.ownerKey)
-    const grouped = new Map<unknown, Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>()
 
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
@@ -2858,26 +2859,26 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' | 'hasOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const grouped = await this.getHasManyEntitiesByParentKey(entities, relation, constraint)
-    return new Set([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
+    return new StoredKeySet([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
   }
 
   private async getMatchingMorphManyParentKeys(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphOne' | 'morphMany' | 'morphOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const grouped = await this.getMorphManyEntitiesByParentKey(entities, relation, constraint)
-    return new Set([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
+    return new StoredKeySet([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
   }
 
   private async getHasManyMatchCounts(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' | 'hasOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
-    const counts = new Map<unknown, number>()
+  ): Promise<StoredKeyMap<number>> {
+    const counts = new StoredKeyMap<number>()
     const grouped = await this.getHasManyEntitiesByParentKey(entities, relation, constraint)
 
     for (const [key, related] of grouped.entries()) {
@@ -2891,8 +2892,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphOne' | 'morphMany' | 'morphOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
-    const counts = new Map<unknown, number>()
+  ): Promise<StoredKeyMap<number>> {
+    const counts = new StoredKeyMap<number>()
     const grouped = await this.getMorphManyEntitiesByParentKey(entities, relation, constraint)
 
     for (const [key, related] of grouped.entries()) {
@@ -2907,17 +2908,17 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'morphTo' }>,
     constraint?: RelationConstraint,
     morphTypes?: readonly string[],
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const grouped = await this.getMorphToEntitiesByParentKey(entities, relation, constraint, morphTypes)
-    return new Set([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
+    return new StoredKeySet([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
   }
 
   private async getMorphToMatchCounts(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphTo' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
-    const counts = new Map<unknown, number>()
+  ): Promise<StoredKeyMap<number>> {
+    const counts = new StoredKeyMap<number>()
     const grouped = await this.getMorphToEntitiesByParentKey(entities, relation, constraint)
 
     for (const [key, related] of grouped.entries()) {
@@ -2931,9 +2932,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const grouped = await this.getThroughEntitiesByParentKey(entities, relation, constraint)
-    const matching = new Set<unknown>()
+    const matching = new StoredKeySet()
 
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
@@ -2949,9 +2950,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
+  ): Promise<StoredKeyMap<number>> {
     const grouped = await this.getThroughEntitiesByParentKey(entities, relation, constraint)
-    const counts = new Map<unknown, number>()
+    const counts = new StoredKeyMap<number>()
 
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
@@ -2965,7 +2966,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' | 'hasOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     if (relation.kind === 'hasOneOfMany') {
       return this.getOneOfManyEntitiesByParentKey(entities, relation, constraint)
     }
@@ -2973,7 +2974,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const localKeys = collectRelationKeys(entities, relation.localKey)
 
     if (localKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
@@ -2989,11 +2990,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphOne' | 'morphMany' | 'morphOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const localKeys = collectRelationKeys(entities, relation.localKey)
 
     if (localKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     if (relation.kind === 'morphOneOfMany') {
@@ -3014,7 +3015,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: Extract<RelationDefinition, { kind: 'morphTo' }>,
     constraint?: RelationConstraint,
     morphTypes?: readonly string[],
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const groups = new Map<string, { repository: ModelRepository, ids: unknown[], parents: Entity<TTable>[] }>()
 
     for (const entity of entities) {
@@ -3035,14 +3036,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       groups.set(key, group)
     }
 
-    const grouped = new Map<unknown, Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>()
 
     for (const group of groups.values()) {
       const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, group.repository, constraint))
-      const relatedEntities = await loadRelationKeyChunks([...new Set(group.ids)], paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
+      const relatedEntities = await loadRelationKeyChunks(distinctStoredKeys(group.ids), paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
         .where(group.repository.definition.primaryKey, 'in', chunk)
         .get())
-      const relatedMap = new Map(
+      const relatedMap = new StoredKeyMap(
         relatedEntities.map(entity => [entity.get(group.repository.definition.primaryKey as never), entity]),
       )
 
@@ -3132,18 +3133,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const parentKeys = collectRelationKeys(entities, relation.localKey)
 
     if (parentKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
     const latestEntities = await loadRelationKeyChunks(parentKeys, paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
-    const grouped = new Map<unknown, Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>()
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn).entries()) {
       grouped.set(key, [bucket[0]!])
@@ -3193,11 +3194,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const parentKeys = collectRelationKeys(entities, relation.localKey)
 
     if (parentKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const through = this.resolveThroughRepository(relation.through)
@@ -3206,18 +3207,18 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       .get())
 
     if (throughEntities.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
-    const throughByParent = new Map<unknown, Entity[]>()
-    const secondLocalValues = [...new Set(
+    const throughByParent = new StoredKeyMap<Entity[]>()
+    const secondLocalValues = distinctStoredKeys(
       throughEntities
         .map(entity => entity.get(relation.secondLocalKey as never))
         .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    )
 
     if (secondLocalValues.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     for (const throughEntity of throughEntities) {
@@ -3233,7 +3234,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.secondKey,
     )
-    const relatedBySecondKey = new Map<unknown, Entity[]>()
+    const relatedBySecondKey = new StoredKeyMap<Entity[]>()
 
     for (const relatedEntity of relatedEntities) {
       const secondKey = relatedEntity.get(relation.secondKey as never)
@@ -3242,7 +3243,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       relatedBySecondKey.set(secondKey, bucket)
     }
 
-    const grouped = new Map<unknown, Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>()
 
     for (const [parentKey, links] of throughByParent.entries()) {
       const matches: Entity[] = []
@@ -3260,9 +3261,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
-    const matchingParents = new Set<unknown>()
+    const matchingParents = new StoredKeySet()
 
     for (const row of pivotRows) {
       if (relatedMap.has(row[relation.relatedPivotKey])) {
@@ -3277,27 +3278,27 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const grouped = await this.getMorphToManyEntitiesByParentKey(entities, relation, constraint)
-    return new Set([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
+    return new StoredKeySet([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
   }
 
   private async getMatchingMorphedByManyParentKeys(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphedByMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Set<unknown>> {
+  ): Promise<StoredKeySet> {
     const grouped = await this.getMorphedByManyEntitiesByParentKey(entities, relation, constraint)
-    return new Set([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
+    return new StoredKeySet([...grouped.entries()].filter(([, related]) => related.length > 0).map(([key]) => key))
   }
 
   private async getBelongsToManyMatchCounts(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
+  ): Promise<StoredKeyMap<number>> {
     const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
-    const counts = new Map<unknown, number>()
+    const counts = new StoredKeyMap<number>()
 
     for (const row of pivotRows) {
       if (!relatedMap.has(row[relation.relatedPivotKey])) {
@@ -3315,8 +3316,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
-    const counts = new Map<unknown, number>()
+  ): Promise<StoredKeyMap<number>> {
+    const counts = new StoredKeyMap<number>()
     const grouped = await this.getMorphToManyEntitiesByParentKey(entities, relation, constraint)
 
     for (const [key, related] of grouped.entries()) {
@@ -3330,8 +3331,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphedByMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, number>> {
-    const counts = new Map<unknown, number>()
+  ): Promise<StoredKeyMap<number>> {
+    const counts = new StoredKeyMap<number>()
     const grouped = await this.getMorphedByManyEntitiesByParentKey(entities, relation, constraint)
 
     for (const [key, related] of grouped.entries()) {
@@ -3345,7 +3346,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
     return this.groupPivotRows(pivotRows, relatedMap, relation)
   }
@@ -3354,7 +3355,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<{ rows: Record<string, unknown>[], related: Map<unknown, Entity> }> {
+  ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
     return retrievePivotRelation(
       collectRelationKeys(entities, relation.parentKey),
       () => this.createBelongsToManyPivotQuery(relation, this.getConnection()),
@@ -3368,10 +3369,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   private groupPivotRows(
     rows: readonly Record<string, unknown>[],
-    related: ReadonlyMap<unknown, Entity>,
+    related: StoredKeyMap<Entity>,
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
-  ): Map<unknown, Entity[]> {
-    const grouped = new Map<unknown, Entity[]>()
+  ): StoredKeyMap<Entity[]> {
+    const grouped = new StoredKeyMap<Entity[]>()
     for (const row of rows) {
       const entity = related.get(row[relation.relatedPivotKey])
       if (!entity) continue
@@ -3387,11 +3388,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphToMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const parentKeys = collectRelationKeys(entities, relation.parentKey)
 
     if (parentKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const pivotSelection = this.getPivotSelection(relation, [relation.foreignPivotKey, relation.morphIdColumn, relation.morphTypeColumn])
@@ -3401,14 +3402,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       .where(relation.morphIdColumn, 'in', chunk)
       .get<Record<string, unknown>>())
 
-    const relatedIds = [...new Set(
+    const relatedIds = distinctStoredKeys(
       pivotRows
         .map(row => row[relation.foreignPivotKey])
         .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    )
 
     if (relatedIds.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
@@ -3418,7 +3419,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       relation.relatedKey,
     )
     const relatedMap = indexRelation(relatedEntities, relation.relatedKey)
-    const grouped = new Map<unknown, Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>()
 
     for (const row of pivotRows) {
       const parentKey = row[relation.morphIdColumn]
@@ -3440,11 +3441,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'morphedByMany' }>,
     constraint?: RelationConstraint,
-  ): Promise<Map<unknown, Entity[]>> {
+  ): Promise<StoredKeyMap<Entity[]>> {
     const parentKeys = collectRelationKeys(entities, relation.parentKey)
 
     if (parentKeys.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const related = this.resolveRelatedRepository(relation.related)
@@ -3454,14 +3455,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       .where(relation.foreignPivotKey, 'in', chunk)
       .get<Record<string, unknown>>())
 
-    const relatedIds = [...new Set(
+    const relatedIds = distinctStoredKeys(
       pivotRows
         .map(row => row[relation.morphIdColumn])
         .filter(value => value !== null && typeof value !== 'undefined'),
-    )]
+    )
 
     if (relatedIds.length === 0) {
-      return new Map()
+      return new StoredKeyMap()
     }
 
     const { entities: relatedEntities } = await retrieveRelation(
@@ -3470,7 +3471,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       relation.relatedKey,
     )
     const relatedMap = indexRelation(relatedEntities, relation.relatedKey)
-    const grouped = new Map<unknown, Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>()
 
     for (const row of pivotRows) {
       const parentKey = row[relation.foreignPivotKey]
