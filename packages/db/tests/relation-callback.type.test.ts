@@ -1,4 +1,5 @@
 import { expectTypeOf, it } from 'vitest'
+import type { RelatedColumnNameOfRelation } from '../src/model/types'
 import {
   belongsTo,
   column,
@@ -6,6 +7,7 @@ import {
   defineModel,
   hasMany,
   type ModelQueryBuilder,
+  type ModelRelationName,
   type ModelRelationPath,
   type RelationMap,
   type TableDefinition,
@@ -30,6 +32,13 @@ const Author = defineModel(users)
 const Article = defineModel(posts, {
   relations: {
     author: belongsTo(() => Author, 'user_id'),
+  },
+})
+
+const Activity = defineModel(users, {
+  relations: {
+    posts: hasMany(() => Post, 'user_id'),
+    comments: hasMany(() => Comment, 'post_id'),
   },
 })
 
@@ -194,5 +203,120 @@ it('restricts aggregate helpers to top-level relation names', () => {
         expectTypeOf(query).toEqualTypeOf<PostQuery>()
       },
     })
+  }
+})
+
+it('types object-form aggregate callbacks per relation key against the related model', () => {
+  if (false) {
+    User.withSum({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+        query.where('title', '=', 'Hello')
+        // @ts-expect-error body is a comments column, not a posts column
+        query.where('body', '=', 'Hello')
+      },
+    }, 'title')
+    User.query().withAvg({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    }, 'user_id')
+    User.withMin({ posts: () => {} }, 'id')
+    User.query().withMax({ posts: () => {} }, 'title')
+    // @ts-expect-error body is a comments column, not a posts column
+    User.withSum({ posts: () => {} }, 'body')
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ missing: () => {} }, 'title')
+    // @ts-expect-error invalid nested key is rejected in object form
+    User.withSum({ 'posts.comments': () => {} }, 'body')
+    // @ts-expect-error missing is not a column of posts
+    User.query().withAvg({ posts: () => {} }, 'missing')
+  }
+})
+
+it('checks object-form aggregate columns against every relation key', () => {
+  if (false) {
+    Activity.withSum({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+      comments: (query) => {
+        expectTypeOf(query).toEqualTypeOf<CommentQuery>()
+        query.where('body', '=', 'Hello')
+      },
+    }, 'id')
+    // @ts-expect-error title is a posts column that comments does not have
+    Activity.withSum({ posts: () => {}, comments: () => {} }, 'title')
+    // @ts-expect-error body is a comments column that posts does not have
+    Activity.query().withMax({ posts: () => {}, comments: () => {} }, 'body')
+    Activity.withMin({ posts: () => {}, comments: () => {} }, 'id')
+    Activity.withSum('posts', 'title')
+    Activity.withSum('comments', 'body')
+  }
+})
+
+it('types object-form aggregate callbacks keyed with an alias against the related model', () => {
+  if (false) {
+    User.withSum({
+      'posts as total': (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+        query.where('title', '=', 'Hello')
+      },
+    }, 'id')
+    User.query().withMax({ 'posts as latest_title': () => {} }, 'title')
+    // @ts-expect-error body is a comments column, not a posts column
+    User.withSum({ 'posts as total': () => {} }, 'body')
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ 'missing as total': () => {} }, 'title')
+    Activity.withSum({
+      'posts as post_total': () => {},
+      'comments as comment_total': () => {},
+    }, 'id')
+    // @ts-expect-error title is a posts column that comments does not have
+    Activity.withSum({ 'posts as post_total': () => {}, 'comments as comment_total': () => {} }, 'title')
+  }
+})
+
+it('checks object-form aggregate columns against every member of an object union', () => {
+  if (false) {
+    const narrow = { posts: () => {} }
+    const wide = { posts: () => {}, comments: () => {} }
+    const loads: typeof narrow | typeof wide = wide
+    Activity.withSum(loads, 'id')
+    // @ts-expect-error title is not a comments column, so the union member for comments rejects it
+    Activity.withSum(loads, 'title')
+    User.withSum({}, 'title')
+  }
+})
+
+it('keeps object-form aggregate call shapes that compiled before', () => {
+  if (false) {
+    User.withSum<'posts'>({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    }, 'title')
+    function takesLoads(loads: 'posts' | { posts: () => void }) {
+      User.withSum(loads, 'title')
+    }
+    void takesLoads
+    User.withSum({}, 'title')
+    const opaque: object = { posts: () => {} }
+    // @ts-expect-error body is not a posts column, and an opaque object does not widen the check
+    User.withSum(opaque, 'body')
+  }
+})
+
+it('keeps generic relation maps forwarded into object-form aggregate helpers', () => {
+  if (false) {
+    function forwardAggregates<TRelations extends RelationMap>(
+      query: ModelQueryBuilder<TableDefinition, TRelations>,
+      loads: Readonly<Partial<Record<ModelRelationName<TRelations>, () => void>>>,
+      column: RelatedColumnNameOfRelation<TRelations[ModelRelationName<TRelations>]>,
+    ) {
+      query.withSum(loads, column)
+      query.withMax(loads, column)
+    }
+    void forwardAggregates
   }
 })

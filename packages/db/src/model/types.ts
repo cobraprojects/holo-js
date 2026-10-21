@@ -405,6 +405,21 @@ export type RelatedTableOfRelation<TRelation extends RelationDefinition>
 export type RelatedColumnNameOfRelation<TRelation extends RelationDefinition>
   = ModelAttributeKey<RelatedTableOfRelation<TRelation>>
 
+export type AggregateRelationName<TKey extends string>
+  = TKey extends `${infer TName} as ${string}` ? TName : TKey
+
+export type AggregateRelationKey<TRelations extends RelationMap>
+  = ModelRelationName<TRelations> | `${ModelRelationName<TRelations>} as ${string}`
+
+export type AggregateRelationConstraintMap<TRelations extends RelationMap, TKey extends string> = {
+  readonly [K in TKey]?: RelationConstraintFor<TRelations, AggregateRelationName<K>>
+}
+
+export type AggregateRelatedColumnNameOfKeys<TRelations extends RelationMap, TKey extends string>
+  = [TKey] extends [never]
+    ? Extract<RelatedColumnNameOfRelation<TRelations[ModelRelationName<TRelations>]>, string>
+    : Extract<RelatedColumnNameOfRelation<TRelations[Extract<AggregateRelationName<TKey>, ModelRelationName<TRelations>>]>, string>
+
 export type RelatedColumnNameForRelationPath<
   TRelations extends RelationMap,
   TRelationPath extends ModelRelationPath<TRelations>,
