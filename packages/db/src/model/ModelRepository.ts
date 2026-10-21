@@ -412,7 +412,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
       const nested = rest.join('.')
       const node = relationTree.get(root) ?? { children: [] as EagerLoad[], constraint: undefined }
-      if (typeof entry.constraint !== 'undefined') {
+      if (typeof entry.constraint !== 'undefined' && nested.length === 0) {
         node.constraint = entry.constraint
       }
       if (nested.length > 0 && !node.children.some(child => child.relation === nested)) {

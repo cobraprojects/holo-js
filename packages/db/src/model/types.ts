@@ -395,17 +395,6 @@ type NestedRelationPath<TRelations extends RelationMap, TDepth extends number>
                 : never
         }[ModelRelationName<TRelations>]
 
-type RelationRootName<
-  TRelations extends RelationMap,
-  TRelationPath extends ModelRelationPath<TRelations>,
-> = TRelationPath extends `${infer TRoot}.${string}`
-  ? TRoot extends ModelRelationName<TRelations>
-    ? TRoot
-    : never
-  : TRelationPath extends ModelRelationName<TRelations>
-    ? TRelationPath
-    : never
-
 export type RelatedTableOfRelation<TRelation extends RelationDefinition>
   = TRelation extends { readonly related: () => infer TReference extends ModelDefinitionLike }
     ? ModelDefinitionTable<TReference>
@@ -417,11 +406,40 @@ export type RelatedColumnNameOfRelation<TRelation extends RelationDefinition>
 export type RelatedColumnNameForRelationPath<
   TRelations extends RelationMap,
   TRelationPath extends ModelRelationPath<TRelations>,
-> = RelatedColumnNameOfRelation<TRelations[RelationRootName<TRelations, TRelationPath>]>
+> = ModelAttributeKey<RelatedTableOfPath<TRelations, TRelationPath>>
 
 // ---------------------------------------------------------------------------
 // Eager-load type resolution
 // ---------------------------------------------------------------------------
+
+export type RelationConstraintFor<TRelations extends RelationMap, TPath extends string>
+  = (query: RelationQueryBuilderOfPath<TRelations, TPath>) => void
+
+export type RelationConstraintRecord<TRelations extends RelationMap> = Readonly<
+  Partial<Record<ModelRelationPath<TRelations>, RelationConstraintDefinition>>
+>
+
+export type RelationConstraintMap<TRelations extends RelationMap> = {
+  readonly [TPath in ModelRelationPath<TRelations>]?: RelationConstraintFor<TRelations, TPath>
+}
+
+export type RelationNameConstraintMap<TRelations extends RelationMap> = {
+  readonly [TName in ModelRelationName<TRelations>]?: RelationConstraintFor<TRelations, TName>
+}
+
+export type RelationNameConstraintRecord<TRelations extends RelationMap> = Readonly<
+  Partial<Record<ModelRelationName<TRelations>, RelationConstraintDefinition>>
+>
+
+export type RelationNameConstraintMapGuarded<
+  TRelations extends RelationMap,
+  TConstraints,
+> = RelationNameConstraintMap<TRelations> & (keyof TConstraints extends ModelRelationName<TRelations> ? RelationNameConstraintMap<TRelations> : never)
+
+export type RelationConstraintMapGuarded<
+  TRelations extends RelationMap,
+  TConstraints,
+> = RelationConstraintMap<TRelations> & (keyof TConstraints extends ModelRelationPath<TRelations> ? RelationConstraintMap<TRelations> : never)
 
 /**
  * Extracts the RelationMap from a related model definition referenced by a
@@ -437,6 +455,36 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
   = TRelation extends { readonly related: () => infer TRef }
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
+
+type RelationOfPath<TRelations extends RelationMap, TPath extends string>
+  = string extends TPath
+    ? never
+    : TPath extends `${infer TRoot}.${infer TRest}`
+      ? TRoot extends keyof TRelations & string
+        ? TRelations[TRoot] extends { readonly kind: 'morphTo' }
+          ? never
+          : RelationOfPath<RelatedRelationsOfRelation<TRelations[TRoot]>, TRest>
+        : never
+      : TPath extends keyof TRelations & string
+        ? TRelations[TPath]
+        : never
+
+export type RelatedTableOfPath<TRelations extends RelationMap, TPath extends string>
+  = [RelationOfPath<TRelations, TPath>] extends [never]
+    ? TableDefinition
+    : RelationOfPath<TRelations, TPath> extends infer TRelation extends RelationDefinition
+      ? RelatedTableOfRelation<TRelation>
+      : TableDefinition
+
+export type RelatedRelationsOfPath<TRelations extends RelationMap, TPath extends string>
+  = [RelationOfPath<TRelations, TPath>] extends [never]
+    ? RelationMap
+    : RelationOfPath<TRelations, TPath> extends infer TRelation extends RelationDefinition
+      ? RelatedRelationsOfRelation<TRelation>
+      : RelationMap
+
+export type RelationQueryBuilderOfPath<TRelations extends RelationMap, TPath extends string>
+  = ModelQueryBuilder<RelatedTableOfPath<TRelations, TPath>, RelatedRelationsOfPath<TRelations, TPath>>
 
 /** True for relation kinds that resolve to an array of entities. */
 type IsToManyRelation<TRelation extends RelationDefinition>
