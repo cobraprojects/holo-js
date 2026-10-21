@@ -17,6 +17,9 @@ import {
 
 type QueryStartLog = { sql: string, bindings: readonly unknown[] }
 import { defineModelFromTable, defineTable } from './support/internal'
+import { canonicalStoredKey } from '../src/model/entityRuntime'
+import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
+import { queryCacheInternals } from '../src'
 import { createTestTable } from './support/schema'
 
 function openSQLite(logger?: { onQueryStart(entry: QueryStartLog): void }) {
@@ -26,7 +29,7 @@ function openSQLite(logger?: { onQueryStart(entry: QueryStartLog): void }) {
     adapter,
     dialect: createDatabaseDialect('sqlite'),
     logger,
-    security: { redactBindingsInLogs: false, maxLoggedBindings: 100_000 },
+    security: { redactBindingsInLogs: false, maxLoggedBindings: 100_000, allowUnsafeRawSql: true, debugSqlInLogs: true },
   })
   configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
   return db
@@ -138,6 +141,450 @@ describe('bounded relation loading', () => {
     expect(sizes.length).toBeGreaterThan(0)
     expect(Math.max(...sizes)).toBeLessThanOrEqual(256)
     expect(new Set(sizes).size).toBeLessThanOrEqual(9)
+  })
+
+  it('splits findMany key lists into bounded chunks and returns each row once', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    for (let index = 0; index < userRows.length; index += 200) {
+      await db.table(users).insert(userRows.slice(index, index + 200))
+    }
+
+    const User = defineModelFromTable(users)
+    const keys = [...userRows.map(user => user.id), 1, 2, 3]
+
+    queries.length = 0
+    const found = await User.findMany(keys)
+
+    expect(found).toHaveLength(1000)
+    expect(new Set(found.map(user => user.get('id'))).size).toBe(1000)
+
+    const sizes = collectBindingCounts(queries)
+    expect(sizes.length).toBeGreaterThan(0)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(256)
+    expect(new Set(sizes).size).toBeLessThanOrEqual(9)
+  })
+
+  it('applies a global scope limit once to a findMany over more than 256 keys', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, { globalScopes: { firstOnly: query => query.limit(1) } })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(1)
+  })
+
+  it('keeps a global scope ordering across findMany key chunks', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, { globalScopes: { newestFirst: query => query.orderBy('id', 'desc') } })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found.map(user => user.get('id'))).toEqual(Array.from({ length: 300 }, (_, index) => 300 - index))
+  })
+
+  it('returns each row once when a findMany key list mixes numeric and string forms of one key', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const keys: number[] = Array.from({ length: 256 }, (_, index) => index + 1)
+    keys.push('1' as never)
+    const User = defineModelFromTable(users)
+    const found = await User.findMany(keys)
+
+    expect(found).toHaveLength(256)
+    expect(new Set(found.map(user => user.get('id'))).size).toBe(256)
+  })
+
+  it('returns every row of a findMany over more than 256 keys when a global scope projection omits the primary key', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, { globalScopes: { namesOnly: query => query.select('name') } })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(300)
+    expect(new Set(found.map(user => user.get('name'))).size).toBe(300)
+  })
+
+  it('keeps distinct stored string keys that hydrate to the same cast value when findMany is chunked', async () => {
+    const db = openSQLite()
+    const codes = defineTable('codes', { code: column.string().primaryKey(), label: column.string() })
+    await createTestTable(db, codes)
+    await db.table(codes).insert([{ code: '01', label: 'zero-one' }, { code: '1', label: 'one' }])
+
+    const Code = defineModelFromTable(codes, { casts: { code: 'number' } })
+    const keys = ['01', '1', ...Array.from({ length: 256 }, (_, index) => `missing-${index}`)]
+    const found = await Code.findMany(keys)
+
+    expect(found.map(code => code.get('label')).sort()).toEqual(['one', 'zero-one'])
+  })
+
+  it('binds every findMany entity to the full result so automatic eager loading covers all of them', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+    await db.table(posts).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, userId: index + 1, title: `post ${index + 1}` })))
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      name: 'AutomaticUser',
+      automaticEagerLoading: true,
+      relations: { posts: hasMany(() => Post, 'userId') },
+    })
+    User.preventLazyLoading(false)
+    User.automaticallyEagerLoadRelationships(true)
+
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+    await (found[0] as unknown as Record<string, Promise<unknown>>).posts
+
+    expect(found.every(user => user.hasRelation('posts'))).toBe(true)
+  })
+
+  it('returns one row per stored binary primary key when case-equal buffers fall into different findMany chunks', async () => {
+    const db = openSQLite()
+    const blobs = defineTable('blobs', { key: column.blob().primaryKey(), label: column.string() })
+    await createTestTable(db, blobs)
+    await db.table(blobs).insert([
+      { key: Buffer.from('abc'), label: 'stored' },
+      ...Array.from({ length: 255 }, (_, index) => ({ key: Buffer.from(`row-${index}`), label: `row ${index}` })),
+    ])
+
+    const Blob = defineModelFromTable(blobs)
+    const keys = [Buffer.from('abc'), ...Array.from({ length: 255 }, (_, index) => Buffer.from(`row-${index}`)), Buffer.from('abc')]
+    const found = await Blob.findMany(keys)
+
+    expect(found).toHaveLength(256)
+    expect(found.filter(entity => Buffer.from(entity.get('key') as Uint8Array).equals(Buffer.from('abc')))).toHaveLength(1)
+  })
+
+  it('applies a global scope eager-load limit once across findMany key chunks', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+    await db.table(posts).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, userId: index + 1, title: `post ${index + 1}` })))
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: { posts: hasMany(() => Post, 'userId') },
+      globalScopes: { firstFivePosts: query => query.with('posts', relation => relation.orderBy('id').limit(5)) },
+    })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(postIdsAcross(found)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('loads default with relations on every row of a findMany over more than 256 keys', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+    await db.table(posts).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, userId: index + 1, title: `post ${index + 1}` })))
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      with: ['posts'],
+      relations: { posts: hasMany(() => Post, 'userId') },
+    })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found.every(user => user.hasRelation('posts'))).toBe(true)
+    expect(postIdsAcross(found)).toHaveLength(300)
+  })
+
+  it('treats equal stored binary values as one key and keeps numbers and strings distinct', () => {
+    expect(canonicalStoredKey(Buffer.from('ab'))).toBe(canonicalStoredKey(Uint8Array.from([97, 98])))
+    expect(canonicalStoredKey(Buffer.from('ab'))).not.toBe(canonicalStoredKey(Buffer.from('ac')))
+    expect(canonicalStoredKey(1)).not.toBe(canonicalStoredKey('1'))
+    expect(canonicalStoredKey('binary:6162')).not.toBe(canonicalStoredKey(Buffer.from('ab')))
+    expect(canonicalStoredKey({ a: [1, 2] })).toBe(canonicalStoredKey({ a: [1, 2] }))
+    expect(canonicalStoredKey({ a: [1, 2] })).not.toBe(canonicalStoredKey({ a: [2, 1] }))
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    expect(canonicalStoredKey(circular)).toBe(circular)
+  })
+
+  it('returns one row per stored JSON primary key on SQLite when equal object keys fall into different findMany chunks', async () => {
+    const db = openSQLite()
+    const docs = defineTable('docs', { key: column.json<number[]>().primaryKey(), label: column.string() })
+    await createTestTable(db, docs)
+    await db.table(docs).insert([
+      { key: [1, 2], label: 'stored' },
+      ...Array.from({ length: 255 }, (_, index) => ({ key: [1000 + index], label: `row ${index}` })),
+    ])
+
+    const Doc = defineModelFromTable(docs)
+    const keys: number[][] = [[1, 2], ...Array.from({ length: 255 }, (_, index) => [1000 + index]), [1, 2]]
+    const found = await Doc.findMany(keys)
+
+    expect(found).toHaveLength(256)
+  })
+
+  it('runs a global scope once for a chunked findMany regardless of chunk count', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    let invocations = 0
+    const User = defineModelFromTable(users, {
+      globalScopes: { counted: query => {
+        invocations += 1
+        return query
+      } },
+    })
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(invocations).toBe(1)
+  })
+
+  it('runs a global scope once for a single-statement findMany', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 10 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    let invocations = 0
+    const User = defineModelFromTable(users, {
+      globalScopes: { counted: query => {
+        invocations += 1
+        return query.limit(5)
+      } },
+    })
+    expect(await User.findMany(Array.from({ length: 10 }, (_, index) => index + 1))).toHaveLength(5)
+
+    expect(invocations).toBe(1)
+  })
+
+  it('uses a global scope cache key for one statement instead of sharing it across findMany chunks', async () => {
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, {
+      globalScopes: { shared: query => query.cache({ key: 'users.findMany.shared', ttl: 60 }) },
+    })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(300)
+  })
+
+  it('excludes soft-deleted rows from a chunked findMany', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string(), deleted_at: column.string().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}`, deleted_at: index === 0 ? '2026-01-01' : null })))
+
+    const User = defineModelFromTable(users, { softDeletes: true })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(299)
+    expect(found.some(user => user.get('id') === 1)).toBe(false)
+  })
+
+  it('fires the retrieved observer once per returned row of a chunked findMany', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    let retrieved = 0
+    const User = defineModelFromTable(users, { observers: [{ retrieved() { retrieved += 1 } }] })
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(retrieved).toBe(300)
+  })
+
+  it('records the chunked findMany result in an active database dependency collector', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users)
+    const collected = await queryCacheInternals.collectDatabaseQueryDependencies(() => User.findMany(Array.from({ length: 300 }, (_, index) => index + 1)))
+
+    expect(collected.value).toHaveLength(300)
+    expect(collected.dependencies.length).toBeGreaterThan(0)
+  })
+
+  it('evaluates a volatile scope predicate in one statement for a findMany over more than 256 keys', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, {
+      globalScopes: { volatile: query => query.unsafeWhere('random() % 2 = 0', []) },
+    })
+    queries.length = 0
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(queries.filter(entry => entry.sql.includes('random()'))).toHaveLength(1)
+  })
+
+  it('still splits a structured scope predicate over more than 256 keys into chunk passes', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, {
+      globalScopes: { positive: query => query.where('id', '>', 0) },
+    })
+    queries.length = 0
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(queries.filter(entry => entry.sql.includes('"id" IN ('))).toHaveLength(4)
+  })
+
+  it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    await db.table(users).insert(userRows)
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+
+    queries.length = 0
+    const rows = await collection.toQuery().orderBy('id').get()
+
+    expect(rows.map(user => user.get('id'))).toEqual(userRows.map(user => user.id))
+    expect(collectBindingCounts(queries)).toEqual([256])
+  })
+
+  it('returns every row for a ModelCollection.toQuery key list longer than 256', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    await db.table(users).insert(userRows)
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+    const rows = await collection.toQuery().orderBy('id').get()
+
+    expect(rows.map(user => user.get('id'))).toEqual(userRows.map(user => user.id))
+  })
+
+  it('inlines a toQuery integer key list above SQLite bind limits and keeps order and limit on the builder', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 40_000 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    for (let index = 0; index < userRows.length; index += 500) {
+      await db.table(users).insert(userRows.slice(index, index + 500))
+    }
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+
+    queries.length = 0
+    const everyRow = await collection.toQuery().get()
+    expect(everyRow).toHaveLength(40_000)
+    expect(collectBindingCounts(queries)).toEqual([])
+
+    const newest = await collection.toQuery().orderBy('id', 'desc').limit(3).get()
+    expect(newest.map(user => user.get('id'))).toEqual([40_000, 39_999, 39_998])
+  })
+
+  it('binds a toQuery key list above 256 when the primary key is a string column holding number values', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const codes = defineTable('codes', { code: column.string().primaryKey(), label: column.string() })
+    await createTestTable(db, codes)
+    await db.table(codes).insert(Array.from({ length: 300 }, (_, index) => ({ code: `${index + 1}`, label: `code ${index + 1}` })))
+
+    const Code = defineModelFromTable(codes)
+    const collection = await Code.get()
+    for (const code of collection) {
+      code.forceFill({ code: Number(code.get('code')) as never })
+    }
+
+    queries.length = 0
+    await collection.toQuery().get()
+
+    expect(queries.some(entry => entry.sql.includes('IN (1, 2, '))).toBe(false)
+    expect(queries.flatMap(entry => entry.bindings)).toContain(1)
+  })
+
+  it('binds a toQuery key list above 256 when a string key looks numeric or injects SQL', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const codes = defineTable('codes', { code: column.string().primaryKey(), label: column.string() })
+    await createTestTable(db, codes)
+
+    const codeRows = [
+      { code: '1 OR 1=1', label: 'injected' },
+      { code: '1', label: 'numeric' },
+      ...Array.from({ length: 298 }, (_, index) => ({ code: `code-${index + 1}`, label: `code ${index + 1}` })),
+    ]
+    await db.table(codes).insert(codeRows)
+
+    const Code = defineModelFromTable(codes)
+    const collection = await Code.get()
+
+    queries.length = 0
+    const rows = await collection.toQuery().get()
+
+    expect(rows).toHaveLength(300)
+    expect(queries.some(entry => entry.sql.includes('1 OR 1=1'))).toBe(false)
+    expect(queries.flatMap(entry => entry.bindings)).toEqual(expect.arrayContaining(['1 OR 1=1', '1']))
+  })
+
+  it('binds a toQuery key list above 256 when it contains an integer beyond the safe range', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.integer().primaryKey(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    await db.table(users).insert(userRows)
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+    collection.push(User.make().forceFill({ id: Number.MAX_SAFE_INTEGER + 1, name: 'unsafe' }))
+
+    queries.length = 0
+    const rows = await collection.toQuery().get()
+
+    expect(rows).toHaveLength(300)
+    expect(queries.some(entry => entry.sql.includes(String(Number.MAX_SAFE_INTEGER + 1)))).toBe(false)
+    expect(queries.flatMap(entry => entry.bindings)).toContain(Number.MAX_SAFE_INTEGER + 1)
   })
 
   it('resolves one-of-many relations to no related model when every candidate value is NULL', async () => {

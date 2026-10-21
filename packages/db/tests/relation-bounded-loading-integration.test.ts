@@ -137,3 +137,112 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('bounded relation
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('bounded relation loading on mysql', () => {
   defineBoundedRelationLoadingScenario('mysql')
 })
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('to-query integer keys on postgres', () => {
+  defineToQueryIntegerKeysScenario('postgres')
+})
+
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('to-query integer keys on mysql', () => {
+  defineToQueryIntegerKeysScenario('mysql')
+})
+
+function defineToQueryIntegerKeysScenario(driver: 'postgres' | 'mysql') {
+  it('loads a toQuery integer key list above 256 keys as inline literals on the real database', async () => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_to_query_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const qualified = driver === 'postgres' ? name : `${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`
+    await schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.string('name')
+    })
+
+    try {
+      const users = defineTable(qualified, { id: column.integer().primaryKey(), name: column.string() })
+      await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+      const User = defineModelFromTable(users)
+      const collection = await User.get()
+
+      expect(await collection.toQuery().get()).toHaveLength(300)
+      expect((await collection.toQuery().orderBy('id', 'desc').limit(2).get()).map(user => user.get('id'))).toEqual([300, 299])
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+}
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('to-query string keys with number values on postgres', () => {
+  it('binds number-valued keys for a string primary key above 256 rows', async () => {
+    const { db, schema } = await openDatabase('postgres')
+    const name = `holo_to_query_codes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.string('code').primaryKey()
+      table.string('label')
+    })
+
+    try {
+      const codes = defineTable(name, { code: column.string().primaryKey(), label: column.string() })
+      await db.table(codes).insert(Array.from({ length: 300 }, (_, index) => ({ code: `${index + 1}`, label: `code ${index + 1}` })))
+
+      const Code = defineModelFromTable(codes)
+      const collection = await Code.get()
+      for (const code of collection) {
+        code.forceFill({ code: Number(code.get('code')) as never })
+      }
+
+      expect(await collection.toQuery().get()).toHaveLength(300)
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+})
+
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('findMany string keys on mysql', () => {
+  it('returns a stored key once when case variants of it fall into different findMany chunks', async () => {
+    const { db, schema } = await openDatabase('mysql')
+    const name = `holo_find_many_codes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.string('code').primaryKey()
+      table.string('label')
+    })
+
+    try {
+      const codes = defineTable(`${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`, { code: column.string().primaryKey(), label: column.string() })
+      await db.table(codes).insert([{ code: 'Abc', label: 'stored' }])
+
+      const Code = defineModelFromTable(codes)
+      const keys = ['Abc', ...Array.from({ length: 255 }, (_, index) => `missing-${index}`), 'abc']
+
+      expect(await Code.findMany(keys)).toHaveLength(1)
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+})
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('findMany JSON keys on postgres', () => {
+  it('returns one row per stored JSON key when equal object keys fall into different findMany chunks', async () => {
+    const { db, schema } = await openDatabase('postgres')
+    const name = `holo_find_many_docs_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.json('key').primaryKey()
+      table.string('label')
+    })
+
+    try {
+      const docs = defineTable(name, { key: column.json<Record<string, number>>().primaryKey(), label: column.string() })
+      await db.table(docs).insert([
+        { key: { a: 1 }, label: 'stored' },
+        ...Array.from({ length: 255 }, (_, index) => ({ key: { b: index }, label: `row ${index}` })),
+      ])
+
+      const Doc = defineModelFromTable(docs)
+      const keys = [{ a: 1 }, ...Array.from({ length: 255 }, (_, index) => ({ b: index })), { a: 1 }]
+
+      expect(await Doc.findMany(keys as never)).toHaveLength(256)
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+})
+

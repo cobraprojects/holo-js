@@ -72,6 +72,43 @@ export function valuesAreEqual(left: unknown, right: unknown): boolean {
   return false
 }
 
+export function canonicalStoredKey(value: unknown): unknown {
+  if (isComparableBinaryView(value)) {
+    return `binary:${Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('hex')}`
+  }
+
+  if (value instanceof Date) {
+    return `date:${value.getTime()}`
+  }
+
+  switch (typeof value) {
+    case 'string':
+      return `string:${value}`
+    case 'number':
+      return `number:${value}`
+    case 'bigint':
+      return `bigint:${value}`
+    case 'boolean':
+      return `boolean:${value}`
+    case 'object':
+      return canonicalObjectKey(value)
+    default:
+      return value
+  }
+}
+
+function canonicalObjectKey(value: object | null): unknown {
+  if (value === null) {
+    return value
+  }
+
+  try {
+    return `json:${JSON.stringify(value)}`
+  } catch {
+    return value
+  }
+}
+
 export function snapshotAttributes<TAttributes extends object>(attributes: TAttributes): TAttributes {
   return Object.fromEntries(Object.entries(attributes).map(([key, value]) => [key, snapshotAttributeValue(value)])) as TAttributes
 }

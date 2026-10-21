@@ -1,14 +1,56 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
+import { isInlineIntegerValue } from '../query/ast'
+import { hasQueryCache } from '../query/TableQueryBuilder'
+import { canonicalStoredKey } from './entityRuntime'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
-import type { TableDefinition } from '../schema/types'
-import type { SelectQueryPlan } from '../query/ast'
+import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
+import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 
 const RELATION_KEY_CHUNK_SIZE = 256
+const INTEGER_KEY_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['id', 'integer', 'bigInteger'])
 
 export function collectRelationKeys<TTable extends TableDefinition>(entities: readonly Entity<TTable>[], column: string): unknown[] {
   return [...new Set(entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null))]
+}
+
+export function isKeySeparableQuery<TTable extends TableDefinition>(query: ModelQueryBuilder<TTable>): boolean {
+  const tableQuery = query.getTableQueryBuilder()
+  const plan = tableQuery.getPlan()
+  return !tableQuery[hasQueryCache]()
+    && !planHasRawSql(plan)
+    && typeof plan.limit !== 'number'
+    && typeof plan.offset !== 'number'
+    && plan.orderBy.length === 0
+    && plan.groupBy.length === 0
+    && plan.having.length === 0
+    && plan.unions.length === 0
+    && !plan.distinct
+}
+
+function planHasRawSql(plan: SelectQueryPlan): boolean {
+  return plan.selections.some(selection => selection.kind === 'raw' || (selection.kind === 'subquery' && planHasRawSql(selection.query)))
+    || plan.joins.some(join => join.subquery !== undefined && planHasRawSql(join.subquery))
+    || plan.unions.some(union => planHasRawSql(union.query))
+    || plan.predicates.some(predicate => predicateHasRawSql(predicate))
+    || plan.orderBy.some(orderBy => orderBy.kind === 'raw')
+}
+
+function predicateHasRawSql(predicate: QueryPredicateNode): boolean {
+  if (predicate.kind === 'raw') {
+    return true
+  }
+
+  if (predicate.kind === 'group') {
+    return predicate.predicates.some(nested => predicateHasRawSql(nested))
+  }
+
+  if (predicate.kind === 'exists' || predicate.kind === 'subquery') {
+    return planHasRawSql(predicate.subquery)
+  }
+
+  return false
 }
 
 export function isPaginatedRelationQuery(query: ModelQueryBuilder): boolean {
@@ -16,14 +58,44 @@ export function isPaginatedRelationQuery(query: ModelQueryBuilder): boolean {
   return typeof plan.limit === 'number' || typeof plan.offset === 'number'
 }
 
+function padRelationKeys(keys: readonly unknown[]): unknown[] {
+  const width = 2 ** Math.ceil(Math.log2(keys.length))
+  const padding = Array.from({ length: width - keys.length }, () => keys[keys.length - 1])
+  return [...keys, ...padding]
+}
+
+export function singleStatementRelationKeys(values: readonly unknown[]): unknown[] {
+  const keys = [...new Set(values)]
+  return keys.length <= RELATION_KEY_CHUNK_SIZE ? padRelationKeys(keys) : keys
+}
+
+export function distinctStoredKeys(values: readonly unknown[]): unknown[] {
+  const seen = new Set<unknown>()
+  const distinct: unknown[] = []
+  for (const value of values) {
+    const identity = canonicalStoredKey(value)
+    if (!seen.has(identity)) {
+      seen.add(identity)
+      distinct.push(value)
+    }
+  }
+  return distinct
+}
+
+export function integerKeysToInline(
+  values: readonly unknown[],
+  primaryKey: Pick<ColumnDefinition, 'kind'> | undefined,
+): readonly (number | bigint)[] | undefined {
+  if (!primaryKey || !INTEGER_KEY_KINDS.has(primaryKey.kind)) return undefined
+  const keys = [...new Set(values)]
+  return keys.length > RELATION_KEY_CHUNK_SIZE && keys.every(isInlineIntegerValue) ? keys : undefined
+}
+
 function chunkRelationKeys(keys: readonly unknown[], paginated: boolean): unknown[][] {
   if (paginated) return keys.length === 0 ? [] : [[...keys]]
   const chunks: unknown[][] = []
   for (let offset = 0; offset < keys.length; offset += RELATION_KEY_CHUNK_SIZE) {
-    const chunk = keys.slice(offset, offset + RELATION_KEY_CHUNK_SIZE)
-    const width = 2 ** Math.ceil(Math.log2(chunk.length))
-    const padding = Array.from({ length: width - chunk.length }, () => chunk[chunk.length - 1])
-    chunks.push([...chunk, ...padding])
+    chunks.push(padRelationKeys(keys.slice(offset, offset + RELATION_KEY_CHUNK_SIZE)))
   }
   return chunks
 }
