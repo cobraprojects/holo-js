@@ -7,7 +7,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
-import { currentPinnedConnection, isInPinnedConnectionSlot, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
@@ -496,7 +496,7 @@ export class DatabaseContext {
           ? this._runtime.scheduler.exclusive(runTransaction)
           : runSerialized(this._runtime.rootTransactionQueue, () => this._runtime.scheduler.exclusive(runTransaction))
       const pinned = currentPinnedConnection(this._adapter)
-      committed = await (pinned ? serializeOnPinnedConnection(pinned, attempt) : attempt())
+      committed = await (pinned ? runPinnedTransaction(pinned, attempt) : attempt())
     } catch (error) {
       frame.open = false
       if (!commitStarted) {
@@ -776,13 +776,18 @@ export class DatabaseContext {
     runner: () => Promise<TResult>,
     options?: DatabaseOperationOptions,
   ): Promise<TResult> {
-    const pinned = currentPinnedConnection(this._adapter)
-    if (pinned && !isInPinnedConnectionSlot(pinned)) {
-      return serializeOnPinnedConnection(pinned, () => this._runLogged(kind, statement, runner, options))
-    }
-
     this._assertValidOperationOptions(options)
     const start = Date.now()
+    const pinned = currentPinnedConnection(this._adapter)
+    if (pinned) assertPinnedStatementAllowed(pinned)
+    const execute = async () => {
+      const leave = pinned ? enterPinnedStatement(pinned) : undefined
+      try {
+        return await this._guardOperation(runner, options, kind === 'query' ? 'query' : 'execute')
+      } finally {
+        leave?.()
+      }
+    }
     const scheduled = await this._runtime.scheduler.schedule({
       transactional: this._scope.kind !== 'root' && this._adapter.supportsConcurrentTransactionScopes !== true,
       preferWorkerThreads: this._concurrency.workerThreads,
@@ -801,11 +806,7 @@ export class DatabaseContext {
       await this._logger?.onQueryStart?.(baseLog)
 
       try {
-        const result = await this._guardOperation(
-          runner,
-          options,
-          kind === 'query' ? 'query' : 'execute',
-        )
+        const result = await execute()
         return { result, baseLog }
       } catch (error) {
         const wrappedError = this._wrapDriverError(kind, error)

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { CapabilityError, column, createSchemaService, SchemaError } from '../src'
+import { CapabilityError, column, createSchemaService, SchemaError, TransactionError } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -200,7 +200,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(child).count()).toBe(0)
     })
 
-    it('keeps a plain write issued while a pinned-connection transaction is open out of that transaction', async () => {
+    it('rejects a plain write issued while a pinned-connection transaction is open, and keeps it out of that transaction', async () => {
       const { db, schema, table } = await openDatabase(driver)
       let transactionStarted!: () => void
       const started = new Promise<void>(resolve => { transactionStarted = resolve })
@@ -213,15 +213,32 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
           throw new Error('transaction failed')
         })
         await started
-        const plain = db.table(table).insert({ id: 2, name: 'plain' })
+        await expect(db.table(table).insert({ id: 2, name: 'plain' })).rejects.toBeInstanceOf(TransactionError)
         await expect(failing).rejects.toThrow('transaction failed')
-        await plain
+        await db.table(table).insert({ id: 3, name: 'after' })
       })
 
-      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 2 }])
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 3 }])
     })
 
-    it('keeps a write scheduled from a finished transaction out of a later transaction on the pinned connection', async () => {
+    it('rejects a transaction that awaits a query started outside it instead of hanging', async () => {
+      const { db, schema, table } = await openDatabase(driver)
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        let outsideWrite!: Promise<unknown>
+        const transaction = db.transaction(async tx => {
+          await tx.table(table).insert({ id: 1, name: 'inside' })
+          await outsideWrite
+        })
+        outsideWrite = new Promise(resolve => { setTimeout(resolve, 30) })
+          .then(() => db.table(table).insert({ id: 2, name: 'outside' }))
+        await expect(transaction).rejects.toBeInstanceOf(TransactionError)
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
+    }, 2_000)
+
+    it('rejects a write scheduled from a finished transaction that runs while a later transaction is open', async () => {
       const { db, schema, table } = await openDatabase(driver)
       let releaseStray!: () => void
       const strayReleased = new Promise<void>(resolve => { releaseStray = resolve })
@@ -238,7 +255,58 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
           await new Promise(resolve => { setTimeout(resolve, 20) })
           throw new Error('second failed')
         })).rejects.toThrow('second failed')
-        await stray
+        await expect(stray).rejects.toBeInstanceOf(TransactionError)
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }])
+    })
+
+    it('rejects a write still running its query logger when a later transaction opens before it reaches the connection', async () => {
+      let pauseNextQuery = false
+      const { db, schema, table } = await openDatabase(driver, {
+        logger: {
+          onQueryStart: async () => {
+            if (!pauseNextQuery) return
+            pauseNextQuery = false
+            await new Promise(resolve => { setTimeout(resolve, 20) })
+          },
+        },
+      })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        let stray!: Promise<unknown>
+        await db.transaction(async tx => {
+          await tx.table(table).insert({ id: 1, name: 'first' })
+          pauseNextQuery = true
+          stray = db.table(table).insert({ id: 2, name: 'stray' })
+        })
+        await expect(db.transaction(async tx => {
+          await tx.table(table).insert({ id: 3, name: 'second' })
+          await new Promise(resolve => { setTimeout(resolve, 60) })
+          throw new Error('second failed')
+        })).rejects.toThrow('second failed')
+        await expect(stray).rejects.toBeInstanceOf(TransactionError)
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }])
+    })
+
+    it('lets a query logger start a transaction on the pinned connection after a plain write succeeds', async () => {
+      let loggedWrite = false
+      const { db, schema, table } = await openDatabase(driver, {
+        logger: {
+          onQuerySuccess: async entry => {
+            if (loggedWrite || !entry.source?.startsWith('query:insert')) return
+            loggedWrite = true
+            await db.transaction(async tx => {
+              await tx.table(table).insert({ id: 2, name: 'from logger' })
+            })
+          },
+        },
+      })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        await db.table(table).insert({ id: 1, name: 'plain' })
       })
 
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }, { id: 2 }])

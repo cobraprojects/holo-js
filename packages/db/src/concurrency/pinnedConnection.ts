@@ -5,35 +5,50 @@ import type { DriverAdapter } from '../core/types'
 export type PinnedConnection = {
   active: boolean
   tail: Promise<void>
+  inFlight: number
+  transaction?: PinnedTransactionScope
+  drained?: () => void
 }
 
-type PinnedConnectionSlot = {
+type PinnedTransactionScope = {
   readonly pinned: PinnedConnection
-  open: boolean
 }
 
 const pinnedConnections = new AsyncLocalStorage<ReadonlyMap<DriverAdapter, PinnedConnection>>()
-const pinnedConnectionSlots = new AsyncLocalStorage<ReadonlySet<PinnedConnectionSlot>>()
+const pinnedTransactionScopes = new AsyncLocalStorage<ReadonlySet<PinnedTransactionScope>>()
 
 export function currentPinnedConnection(adapter: DriverAdapter): PinnedConnection | undefined {
   const pinned = pinnedConnections.getStore()?.get(adapter)
   return pinned?.active ? pinned : undefined
 }
 
-export function isInPinnedConnectionSlot(pinned: PinnedConnection): boolean {
-  for (const slot of pinnedConnectionSlots.getStore() ?? []) {
-    if (slot.open && slot.pinned === pinned) return true
-  }
-  return false
-}
-
 export function runPinnedConnection<T>(adapter: DriverAdapter, callback: () => Promise<T>): Promise<T> {
-  const pinned: PinnedConnection = { active: true, tail: Promise.resolve() }
+  const pinned: PinnedConnection = { active: true, tail: Promise.resolve(), inFlight: 0 }
   const pinnedMap = new Map(pinnedConnections.getStore())
   pinnedMap.set(adapter, pinned)
   return pinnedConnections.run(pinnedMap, () => callback().finally(() => {
     pinned.active = false
   }))
+}
+
+export function assertPinnedStatementAllowed(pinned: PinnedConnection): void {
+  if (pinned.transaction && !pinnedTransactionScopes.getStore()?.has(pinned.transaction)) {
+    throw new TransactionError(
+      'A query on the connection held by withoutForeignKeyConstraints() ran while a transaction on that connection was still open, so it would have joined that transaction. Await the transaction before running other queries, or run the query inside the transaction.',
+    )
+  }
+}
+
+export function enterPinnedStatement(pinned: PinnedConnection): () => void {
+  assertPinnedStatementAllowed(pinned)
+  pinned.inFlight += 1
+  return () => {
+    pinned.inFlight -= 1
+    if (pinned.inFlight > 0) return
+    const drained = pinned.drained
+    pinned.drained = undefined
+    drained?.()
+  }
 }
 
 export async function serializeOnPinnedConnection<T>(
@@ -48,15 +63,28 @@ export async function serializeOnPinnedConnection<T>(
     if (!pinned.active) {
       throw new TransactionError('A transaction started inside withoutForeignKeyConstraints() must finish before the callback returns.')
     }
-    const slot: PinnedConnectionSlot = { pinned, open: true }
-    const slots = new Set<PinnedConnectionSlot>(pinnedConnectionSlots.getStore())
-    slots.add(slot)
-    try {
-      return await pinnedConnectionSlots.run(slots, callback)
-    } finally {
-      slot.open = false
-    }
+    return await callback()
   } finally {
     release()
   }
+}
+
+export function runPinnedTransaction<T>(pinned: PinnedConnection, attempt: () => Promise<T>): Promise<T> {
+  return serializeOnPinnedConnection(pinned, async () => {
+    const scope: PinnedTransactionScope = { pinned }
+    pinned.transaction = scope
+    try {
+      await waitForInFlightStatements(pinned)
+      const scopes = new Set<PinnedTransactionScope>(pinnedTransactionScopes.getStore())
+      scopes.add(scope)
+      return await pinnedTransactionScopes.run(scopes, attempt)
+    } finally {
+      pinned.transaction = undefined
+    }
+  })
+}
+
+function waitForInFlightStatements(pinned: PinnedConnection): Promise<void> {
+  if (pinned.inFlight === 0) return Promise.resolve()
+  return new Promise((resolve) => { pinned.drained = resolve })
 }
