@@ -46,16 +46,15 @@ import type {
   ModelUpdatePayload,
   ModelRelationPath,
   RelatedColumnNameForRelationPath,
+  RelationConstraintFor,
+  RelationConstraintMap,
+  RelationConstraintRecord,
   UniqueIdRuntimeConfig,
 } from './types'
 import type { StaticModelApi } from './staticModelApi'
 
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
-type RelationConstraintCallback = (query: ModelQueryBuilder<TableDefinition>) => unknown
-type RelationConstraintMap<TRelations extends RelationMap> = Readonly<
-  Partial<Record<ModelRelationPath<TRelations>, RelationConstraintCallback>>
->
 const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
 const HOLO_MODEL_OBSERVER_REGISTRAR = Symbol.for('holo-js.db.model-observer-registrar')
 type MorphEntityTarget = {
@@ -631,7 +630,7 @@ function createStaticModelApi<
     },
     with(
       first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations> | readonly ModelRelationPath<TRelations>[],
-      second?: ModelRelationPath<TRelations> | RelationConstraintCallback,
+      second?: ModelRelationPath<TRelations> | RelationConstraintFor<TRelations, ModelRelationPath<TRelations>>,
       ...rest: readonly ModelRelationPath<TRelations>[]
     ) {
       if (Array.isArray(first)) {
@@ -655,16 +654,16 @@ function createStaticModelApi<
         ? this.query().withExists(first, ...rest)
         : this.query().withExists(first)
     },
-    withSum<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintMap<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
+    withSum<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return this.query().withSum(first, column, ...rest)
     },
-    withAvg<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintMap<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
+    withAvg<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return this.query().withAvg(first, column, ...rest)
     },
-    withMin<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintMap<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
+    withMin<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return this.query().withMin(first, column, ...rest)
     },
-    withMax<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintMap<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
+    withMax<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return this.query().withMax(first, column, ...rest)
     },
     has(relation: ModelRelationPath<TRelations>) {
@@ -673,10 +672,10 @@ function createStaticModelApi<
     orHas(relation: ModelRelationPath<TRelations>) {
       return this.query().orHas(relation)
     },
-    whereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraintCallback) {
+    whereHas<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
       return this.query().whereHas(relation, constraint)
     },
-    orWhereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraintCallback) {
+    orWhereHas<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
       return this.query().orWhereHas(relation, constraint)
     },
     doesntHave(relation: ModelRelationPath<TRelations>) {
@@ -685,10 +684,10 @@ function createStaticModelApi<
     orDoesntHave(relation: ModelRelationPath<TRelations>) {
       return this.query().orDoesntHave(relation)
     },
-    whereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraintCallback) {
+    whereDoesntHave<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
       return this.query().whereDoesntHave(relation, constraint)
     },
-    orWhereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraintCallback) {
+    orWhereDoesntHave<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
       return this.query().orWhereDoesntHave(relation, constraint)
     },
     whereRelation<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, operator: unknown, value?: unknown) {
@@ -715,7 +714,7 @@ function createStaticModelApi<
     orWhereNotMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector) {
       return this.query().orWhereNotMorphedTo(relation, target)
     },
-    withWhereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraintCallback) {
+    withWhereHas<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
       return this.query().withWhereHas(relation, constraint)
     },
     find(value: unknown) {

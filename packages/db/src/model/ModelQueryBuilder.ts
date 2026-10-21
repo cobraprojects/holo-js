@@ -54,6 +54,9 @@ import type {
   ModelRelationPath,
   ModelSelectableColumn,
   RelatedColumnNameForRelationPath,
+  RelationConstraintFor,
+  RelationConstraintMap,
+  RelationConstraintRecord,
   RelationDefinition,
   RelationMap,
   ResolveEagerLoads,
@@ -104,9 +107,6 @@ type AggregateLoad = {
   column?: string
   alias?: string
 }
-type RelationConstraintMap<TRelations extends RelationMap> = Readonly<
-  Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>
->
 type TableQueryPredicates<TTable extends TableDefinition> =
   ReturnType<TableQueryBuilder<TTable, Record<string, unknown>>['getPlan']>['predicates']
 
@@ -715,11 +715,11 @@ export class ModelQueryBuilder<
   }
 
   with<TPaths extends readonly ModelRelationPath<TRelations>[]>(...relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
-  with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
-  with(relations: Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraintFor<TRelations, TPath>): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
+  with<TConstraints extends RelationConstraintMap<TRelations>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   with<TPaths extends readonly ModelRelationPath<TRelations>[]>(relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
   with(
-    first: ModelRelationPath<TRelations> | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>> | readonly ModelRelationPath<TRelations>[],
+    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations> | readonly ModelRelationPath<TRelations>[],
     second?: ModelRelationPath<TRelations> | RelationConstraint,
     ...rest: readonly ModelRelationPath<TRelations>[]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- return type varies per overload
@@ -745,17 +745,19 @@ export class ModelQueryBuilder<
     return this.withRelationFilter({ relation, negate: false, boolean: 'or' })
   }
 
-  whereHas(
-    relation: ModelRelationPath<TRelations>,
-    constraint?: RelationConstraint,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereHas<TPath extends ModelRelationPath<TRelations>>(
+    relation: TPath,
+    constraint?: RelationConstraintFor<TRelations, TPath>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  whereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withRelationFilter({ relation, negate: false, constraint, boolean: 'and' })
   }
 
-  orWhereHas(
-    relation: ModelRelationPath<TRelations>,
-    constraint?: RelationConstraint,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereHas<TPath extends ModelRelationPath<TRelations>>(
+    relation: TPath,
+    constraint?: RelationConstraintFor<TRelations, TPath>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  orWhereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withRelationFilter({ relation, negate: false, constraint, boolean: 'or' })
   }
 
@@ -767,17 +769,19 @@ export class ModelQueryBuilder<
     return this.withRelationFilter({ relation, negate: true, boolean: 'or' })
   }
 
-  whereDoesntHave(
-    relation: ModelRelationPath<TRelations>,
-    constraint?: RelationConstraint,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereDoesntHave<TPath extends ModelRelationPath<TRelations>>(
+    relation: TPath,
+    constraint?: RelationConstraintFor<TRelations, TPath>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  whereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withRelationFilter({ relation, negate: true, constraint, boolean: 'and' })
   }
 
-  orWhereDoesntHave(
-    relation: ModelRelationPath<TRelations>,
-    constraint?: RelationConstraint,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereDoesntHave<TPath extends ModelRelationPath<TRelations>>(
+    relation: TPath,
+    constraint?: RelationConstraintFor<TRelations, TPath>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  orWhereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withRelationFilter({ relation, negate: true, constraint, boolean: 'or' })
   }
 
@@ -863,7 +867,7 @@ export class ModelQueryBuilder<
 
   withWhereHas<TPath extends ModelRelationPath<TRelations>>(
     relation: TPath,
-    constraint?: RelationConstraint,
+    constraint?: RelationConstraintFor<TRelations, TPath>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>> {
     return (constraint
       ? this.whereHas(relation, constraint).with(relation, constraint)
@@ -871,36 +875,36 @@ export class ModelQueryBuilder<
   }
 
   withCount(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withCount(relations: Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withCount<TConstraints extends RelationConstraintMap<TRelations>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   withCount(
-    first: ModelRelationPath<TRelations> | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>,
+    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
     ...rest: readonly ModelRelationPath<TRelations>[]
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('count', first, rest))
   }
 
   withExists(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withExists(relations: Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withExists<TConstraints extends RelationConstraintMap<TRelations>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   withExists(
-    first: ModelRelationPath<TRelations> | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>,
+    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
     ...rest: readonly ModelRelationPath<TRelations>[]
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('exists', first, rest))
   }
 
-  withSum<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withSum<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('sum', first, column, rest))
   }
 
-  withAvg<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withAvg<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('avg', first, column, rest))
   }
 
-  withMin<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withMin<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('min', first, column, rest))
   }
 
-  withMax<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withMax<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('max', first, column, rest))
   }
 
@@ -1523,7 +1527,7 @@ export class ModelQueryBuilder<
   }
 
   private normalizeEagerLoads(
-    first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations> | readonly ModelRelationPath<TRelations>[],
+    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations> | readonly ModelRelationPath<TRelations>[],
     second?: ModelRelationPath<TRelations> | RelationConstraint,
     rest: readonly ModelRelationPath<TRelations>[] = [],
   ): readonly EagerLoad[] {
@@ -1558,7 +1562,7 @@ export class ModelQueryBuilder<
 
   private normalizeAggregateLoads(
     kind: AggregateLoad['kind'],
-    first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations>,
+    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
     rest: readonly ModelRelationPath<TRelations>[] = [],
   ): readonly AggregateLoad[] {
     if (typeof first === 'string') {
@@ -1731,7 +1735,7 @@ export class ModelQueryBuilder<
 
   private normalizeColumnAggregateLoads(
     kind: Extract<AggregateLoad['kind'], 'sum' | 'avg' | 'min' | 'max'>,
-    first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations>,
+    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
     column: string,
     rest: readonly ModelRelationPath<TRelations>[] = [],
   ): readonly AggregateLoad[] {
@@ -1787,8 +1791,8 @@ export class ModelQueryBuilder<
     }
 
     return boolean === 'and'
-      ? this.whereHas(resolvedRelationName, query => query.where(relation.ownerKey, ownerValue))
-      : this.orWhereHas(resolvedRelationName, query => query.where(relation.ownerKey, ownerValue))
+      ? this.withRelationFilter({ relation: resolvedRelationName, negate: false, constraint: query => query.where(relation.ownerKey, ownerValue), boolean: 'and' })
+      : this.withRelationFilter({ relation: resolvedRelationName, negate: false, constraint: query => query.where(relation.ownerKey, ownerValue), boolean: 'or' })
   }
 
   private resolveBelongsToRelationName<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
