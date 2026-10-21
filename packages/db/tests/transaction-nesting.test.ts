@@ -502,6 +502,74 @@ describe('transaction nesting and commit integrity', () => {
     }
   }, 5_000)
 
+  it.each(drivers)('keeps the root rollback failure when the logger also fails on %s', async driver => {
+    let failNextRollback = true
+    const rollbackFailure = new Error('rollback failed')
+    const loggerCalls: Array<{ scope: string }> = []
+    const { db, table, adapter } = await openDatabase(driver, {
+      wrapAdapter: real => withAdapterOverrides(real, {
+        rollback: async () => {
+          if (failNextRollback) {
+            failNextRollback = false
+            throw rollbackFailure
+          }
+          return real.rollback()
+        },
+      }),
+      logger: { onTransactionRollback: entry => {
+        loggerCalls.push(entry)
+        throw new Error('logger failed')
+      } },
+    })
+
+    try {
+      const failure = await db.transaction(async tx => {
+        await tx.table(table).insert({ id: 1, name: 'Failed' })
+        throw new Error('callback failed')
+      }).catch((error: unknown) => error)
+
+      expect(failure).toBeInstanceOf(TransactionError)
+      expect((failure as TransactionError).cause).toBe(rollbackFailure)
+      expect(loggerCalls).toHaveLength(1)
+      expect(loggerCalls[0]).toMatchObject({ scope: 'transaction', depth: 1 })
+    } finally {
+      await adapter.rollback().catch(() => undefined)
+    }
+  }, 5_000)
+
+  it.each(drivers)('keeps the savepoint rollback failure when the logger also fails on %s', async driver => {
+    let failNextRollback = true
+    const rollbackFailure = new Error('savepoint rollback failed')
+    const loggerCalls: Array<{ scope: string, depth: number }> = []
+    const { db, table } = await openDatabase(driver, {
+      wrapAdapter: real => withAdapterOverrides(real, {
+        rollbackToSavepoint: async (savepointName: string) => {
+          if (failNextRollback) {
+            failNextRollback = false
+            throw rollbackFailure
+          }
+          return real.rollbackToSavepoint!(savepointName)
+        },
+      }),
+      logger: { onTransactionRollback: entry => {
+        loggerCalls.push(entry)
+        throw new Error('logger failed')
+      } },
+    })
+
+    const failure = await db.transaction(async tx => {
+      await tx.transaction(async nested => {
+        await nested.table(table).insert({ id: 1, name: 'Nested' })
+        throw new Error('nested callback failed')
+      })
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(TransactionError)
+    expect((failure as TransactionError).cause).toBe(rollbackFailure)
+    expect(loggerCalls.filter(entry => entry.scope === 'savepoint')).toHaveLength(1)
+    expect(await db.table(table).pluck('name')).toEqual([])
+  }, 5_000)
+
   it.each(drivers)('does not retry a transaction whose rollback failed with a concurrency error on %s', async driver => {
     let attempts = 0
     let failNextRollback = true

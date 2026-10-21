@@ -67,6 +67,18 @@ type RootAttemptState = {
   rollbackFailed: boolean
 }
 
+const failedRollbackErrors = new WeakSet<object>()
+
+function markFailedRollback(error: unknown): void {
+  if (typeof error === 'object' && error !== null) {
+    failedRollbackErrors.add(error)
+  }
+}
+
+function isFailedRollback(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && failedRollbackErrors.has(error)
+}
+
 type CommittedRootTransaction<T> = {
   value: T
   transaction: DatabaseContext
@@ -523,6 +535,9 @@ export class DatabaseContext {
     } catch (error) {
       frame.open = false
       if (!commitStarted) {
+        if (state.rollbackFailed) {
+          markFailedRollback(error)
+        }
         await this._settleRolledBackTransaction(state.rollbackFailed ? undefined : transaction, entry, error)
       }
       throw error
@@ -547,7 +562,7 @@ export class DatabaseContext {
     try {
       await this._logger?.onTransactionRollback?.({ ...entry, error })
     } catch (logError) {
-      if (!compensationFailure) throw logError
+      if (!compensationFailure && !isFailedRollback(error)) throw logError
     }
 
     if (compensationFailure) {
@@ -593,7 +608,7 @@ export class DatabaseContext {
         await this._settleRolledBackTransaction(outcome.transaction, outcome.entry, outcome.error)
         throw outcome.error
       case 'rollback-failed':
-        await this._logger?.onTransactionRollback?.({ ...outcome.entry, error: outcome.rollbackError })
+        await this._settleRolledBackTransaction(undefined, outcome.entry, outcome.rollbackError)
         throw outcome.rollbackError
     }
   }
@@ -647,6 +662,7 @@ export class DatabaseContext {
         if (isDatabaseConcurrencyError(error)) {
           rollbackSchemaMutationScope(tx)
         }
+        markFailedRollback(rollbackError)
         return { kind: 'rollback-failed', rollbackError, entry }
       }
       rollbackSchemaMutationScope(tx)
