@@ -221,10 +221,9 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'json':
           return typeof value === 'string' ? JSON.parse(value) : value
         case 'date':
-          return value == null || value instanceof Date ? value : parseCalendarDay(this.getSchemaDialectName(), value)
         case 'datetime':
         case 'timestamp':
-          return value == null || value instanceof Date ? value : new Date(String(value))
+          return value == null || value instanceof Date ? value : parseCalendarDay(this.getSchemaDialectName(), value)
         case 'vector':
           return this.parseVectorValue(value, builtInCast.parameter)
       }

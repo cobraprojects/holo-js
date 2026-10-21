@@ -185,19 +185,21 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
           { id: 13, day: '2011-12-31' },
         ])
 
-        const Casted = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'day'], casts: { day: 'date' } })
-        for (const id of [1, 2, 3]) {
-          const loaded = await Casted.find(id)
-          await Casted.create({ id: id + 20, day: loaded!.day } as never)
-        }
+        for (const [cast, base] of [['date', 20], ['timestamp', 30]] as const) {
+          const Casted = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'day'], casts: { day: cast } })
+          for (const id of [1, 2, 3]) {
+            const loaded = await Casted.find(id)
+            await Casted.create({ id: id + base, day: loaded!.day } as never)
+          }
 
-        expect((await adapter.query<{ id: number, day: string }>(
-          `SELECT id, to_char(day, 'YYYY-MM-DD') AS day FROM ${table} WHERE id > 20 ORDER BY id`,
-        )).rows).toEqual([
-          { id: 21, day: '2011-12-29' },
-          { id: 22, day: '2011-12-30' },
-          { id: 23, day: '2011-12-31' },
-        ])
+          expect((await adapter.query<{ id: number, day: string }>(
+            `SELECT id, to_char(day, 'YYYY-MM-DD') AS day FROM ${table} WHERE id > ${base} AND id <= ${base + 3} ORDER BY id`,
+          )).rows).toEqual([
+            { id: base + 1, day: '2011-12-29' },
+            { id: base + 2, day: '2011-12-30' },
+            { id: base + 3, day: '2011-12-31' },
+          ])
+        }
       } finally {
         resetDB()
         await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
