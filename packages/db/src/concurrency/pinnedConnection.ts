@@ -4,6 +4,7 @@ import type { DriverAdapter } from '../core/types'
 
 export type PinnedConnection = {
   active: boolean
+  closed: boolean
   tail: Promise<void>
   inFlight: number
   transaction?: PinnedTransactionScope
@@ -23,7 +24,7 @@ export function currentPinnedConnection(adapter: DriverAdapter): PinnedConnectio
 }
 
 export function runPinnedConnection<T>(adapter: DriverAdapter, callback: () => Promise<T>): Promise<T> {
-  const pinned: PinnedConnection = { active: true, tail: Promise.resolve(), inFlight: 0 }
+  const pinned: PinnedConnection = { active: true, closed: false, tail: Promise.resolve(), inFlight: 0 }
   const pinnedMap = new Map(pinnedConnections.getStore())
   pinnedMap.set(adapter, pinned)
   return pinnedConnections.run(pinnedMap, () => callback().finally(() => {
@@ -51,6 +52,10 @@ export function enterPinnedStatement(pinned: PinnedConnection): () => void {
   }
 }
 
+function transactionAfterCallbackError(): TransactionError {
+  return new TransactionError('A transaction started inside withoutForeignKeyConstraints() must finish before the callback returns.')
+}
+
 async function serializeOnPinnedConnection<T>(
   pinned: PinnedConnection,
   callback: () => Promise<T>,
@@ -61,7 +66,7 @@ async function serializeOnPinnedConnection<T>(
   await previous
   try {
     if (!pinned.active) {
-      throw new TransactionError('A transaction started inside withoutForeignKeyConstraints() must finish before the callback returns.')
+      throw transactionAfterCallbackError()
     }
     return await callback()
   } finally {
@@ -71,13 +76,14 @@ async function serializeOnPinnedConnection<T>(
 
 export function closePinnedConnection(pinned: PinnedConnection): Promise<void> {
   return serializeOnPinnedConnection(pinned, async () => {
-    pinned.active = false
+    pinned.closed = true
     await waitForInFlightStatements(pinned)
   })
 }
 
 export function runPinnedTransaction<T>(pinned: PinnedConnection, attempt: () => Promise<T>): Promise<T> {
   return serializeOnPinnedConnection(pinned, async () => {
+    if (pinned.closed) throw transactionAfterCallbackError()
     const scope: PinnedTransactionScope = { pinned }
     pinned.transaction = scope
     try {

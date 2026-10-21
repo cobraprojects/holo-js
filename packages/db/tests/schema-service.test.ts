@@ -363,6 +363,58 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await expect(schema.withoutForeignKeyConstraints(async () => undefined)).resolves.toBeUndefined()
     }, 2_000)
 
+    it('does not let a transaction started from the restore query logger take a write the callback left running', async () => {
+      let restoreLogged = false
+      let sibling!: Promise<unknown>
+      const { db, schema, table } = await openDatabase(driver, {
+        logger: {
+          onQuerySuccess: async entry => {
+            if (restoreLogged || entry.source !== 'schema:enableForeignKeys') return
+            restoreLogged = true
+            await db.transaction(async tx => {
+              await tx.table(table).insert({ id: 3, name: 'restore' })
+              await sibling
+            })
+          },
+        },
+      })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        sibling = new Promise(resolve => { setTimeout(resolve, 20) })
+          .then(() => db.table(table).insert({ id: 2, name: 'sibling' }))
+      })
+      await sibling
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 2 }])
+    }, 2_000)
+
+    it('keeps a write out of a transaction whose timed-out BEGIN has not settled yet', async () => {
+      const delayBegin = (adapter: DriverAdapter): DriverAdapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property === 'beginTransaction') {
+            return async (...args: Parameters<DriverAdapter['beginTransaction']>) => {
+              await new Promise(resolve => { setTimeout(resolve, 30) })
+              return target.beginTransaction(...args)
+            }
+          }
+          return Reflect.get(target, property, target)
+        },
+      })
+      const { db, schema, table } = await openDatabase(driver, { wrapAdapter: delayBegin })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        const started = db.transaction(async tx => {
+          await tx.table(table).insert({ id: 1, name: 'transaction' })
+        }, { timeoutMs: 5 }).then(() => undefined, (error: unknown) => error)
+        await new Promise(resolve => { setTimeout(resolve, 15) })
+        await expect(db.table(table).insert({ id: 2, name: 'during begin' })).rejects.toBeInstanceOf(TransactionError)
+        expect(await started).toBeInstanceOf(Error)
+        await db.table(table).insert({ id: 3, name: 'after begin' })
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 3 }])
+    }, 5_000)
+
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
         const { db, schema } = await openDatabase(driver)

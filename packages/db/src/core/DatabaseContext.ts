@@ -449,7 +449,18 @@ export class DatabaseContext {
 
     const runTransaction = async (): Promise<CommittedRootTransaction<T>> => {
       return runWithinScope(async () => {
-        await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
+        const begin: { attempt?: Promise<void> } = {}
+        try {
+          await this._callTransactionHook('begin', () => {
+            begin.attempt = this._adapter.beginTransaction(options)
+            return begin.attempt
+          }, options)
+        } catch (error) {
+          if (begin.attempt) {
+            await begin.attempt.then(() => this._adapter.rollback(), () => undefined)
+          }
+          throw error
+        }
         const child = this._createChildContext(
           { kind: 'transaction', depth: 1 },
           this._createTransactionCallbackState(),
