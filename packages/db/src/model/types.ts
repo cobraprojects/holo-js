@@ -413,7 +413,7 @@ export type RelatedColumnNameForRelationPath<
 // ---------------------------------------------------------------------------
 
 export type RelationConstraintFor<TRelations extends RelationMap, TPath extends string>
-  = (query: RelationQueryBuilderOfPath<TRelations, TPath>) => unknown
+  = (query: RelationQueryBuilderOfPath<TRelations, TPath>) => void
 
 export type RelationConstraintRecord<TRelations extends RelationMap> = Readonly<
   Partial<Record<ModelRelationPath<TRelations>, RelationConstraintDefinition>>
@@ -422,6 +422,11 @@ export type RelationConstraintRecord<TRelations extends RelationMap> = Readonly<
 export type RelationConstraintMap<TRelations extends RelationMap> = {
   readonly [TPath in ModelRelationPath<TRelations>]?: RelationConstraintFor<TRelations, TPath>
 }
+
+export type RelationConstraintMapArgument<
+  TRelations extends RelationMap,
+  TConstraints extends RelationConstraintMap<TRelations>,
+> = TConstraints & Record<Exclude<keyof TConstraints, ModelRelationPath<TRelations>>, never>
 
 /**
  * Extracts the RelationMap from a related model definition referenced by a

@@ -105,6 +105,24 @@ it('types object-form eager and count callbacks per relation key', () => {
   }
 })
 
+it('rejects object-form callback keys that are not relations of the model', () => {
+  if (false) {
+    User.with({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    })
+    // @ts-expect-error missing is not a relation of users
+    User.with({ posts: () => {}, missing: () => {} })
+    // @ts-expect-error missing is not a relation of users
+    User.withCount({ missing: () => {} })
+    // @ts-expect-error missing is not a relation of users
+    User.query().withExists({ missing: () => {} })
+    // @ts-expect-error invalid nested key is rejected in object form
+    User.with({ 'posts.missing': () => {} })
+  }
+})
+
 it('types nested relation filter columns against the leaf related model', () => {
   if (false) {
     User.whereRelation('posts.comments', 'body', '=', 'Hello')
