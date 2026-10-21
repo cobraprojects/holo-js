@@ -269,11 +269,15 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable>> {
-    if (values.length === 0) {
+    const keys = [...new Set(values)]
+    if (keys.length === 0) {
       return this.createCollection([])
     }
 
-    return this.query().where(this.definition.primaryKey, 'in', [...values]).get()
+    const entities = await loadRelationKeyChunks(keys, false, chunk => this.query()
+      .where(this.definition.primaryKey, 'in', chunk)
+      .get())
+    return this.createCollection(entities)
   }
 
   async firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): Promise<Entity<TTable> | undefined> {

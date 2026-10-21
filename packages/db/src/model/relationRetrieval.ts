@@ -16,14 +16,22 @@ export function isPaginatedRelationQuery(query: ModelQueryBuilder): boolean {
   return typeof plan.limit === 'number' || typeof plan.offset === 'number'
 }
 
+function padRelationKeys(keys: readonly unknown[]): unknown[] {
+  const width = 2 ** Math.ceil(Math.log2(keys.length))
+  const padding = Array.from({ length: width - keys.length }, () => keys[keys.length - 1])
+  return [...keys, ...padding]
+}
+
+export function singleStatementRelationKeys(values: readonly unknown[]): unknown[] {
+  const keys = [...new Set(values)]
+  return keys.length <= RELATION_KEY_CHUNK_SIZE ? padRelationKeys(keys) : keys
+}
+
 function chunkRelationKeys(keys: readonly unknown[], paginated: boolean): unknown[][] {
   if (paginated) return keys.length === 0 ? [] : [[...keys]]
   const chunks: unknown[][] = []
   for (let offset = 0; offset < keys.length; offset += RELATION_KEY_CHUNK_SIZE) {
-    const chunk = keys.slice(offset, offset + RELATION_KEY_CHUNK_SIZE)
-    const width = 2 ** Math.ceil(Math.log2(chunk.length))
-    const padding = Array.from({ length: width - chunk.length }, () => chunk[chunk.length - 1])
-    chunks.push([...chunk, ...padding])
+    chunks.push(padRelationKeys(keys.slice(offset, offset + RELATION_KEY_CHUNK_SIZE)))
   }
   return chunks
 }

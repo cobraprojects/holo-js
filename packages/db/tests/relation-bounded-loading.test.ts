@@ -140,6 +140,66 @@ describe('bounded relation loading', () => {
     expect(new Set(sizes).size).toBeLessThanOrEqual(9)
   })
 
+  it('splits findMany key lists into bounded chunks and returns each row once', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    for (let index = 0; index < userRows.length; index += 200) {
+      await db.table(users).insert(userRows.slice(index, index + 200))
+    }
+
+    const User = defineModelFromTable(users)
+    const keys = [...userRows.map(user => user.id), 1, 2, 3]
+
+    queries.length = 0
+    const found = await User.findMany(keys)
+
+    expect(found).toHaveLength(1000)
+    expect(new Set(found.map(user => user.get('id'))).size).toBe(1000)
+
+    const sizes = collectBindingCounts(queries)
+    expect(sizes.length).toBeGreaterThan(0)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(256)
+    expect(new Set(sizes).size).toBeLessThanOrEqual(9)
+  })
+
+  it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    await db.table(users).insert(userRows)
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+
+    queries.length = 0
+    const rows = await collection.toQuery().orderBy('id').get()
+
+    expect(rows.map(user => user.get('id'))).toEqual(userRows.map(user => user.id))
+    expect(collectBindingCounts(queries)).toEqual([256])
+  })
+
+  it('returns every row for a ModelCollection.toQuery key list longer than 256', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+
+    const userRows = Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` }))
+    await db.table(users).insert(userRows)
+
+    const User = defineModelFromTable(users)
+    const collection = await User.get()
+    const rows = await collection.toQuery().orderBy('id').get()
+
+    expect(rows.map(user => user.get('id'))).toEqual(userRows.map(user => user.id))
+  })
+
   it('resolves one-of-many relations to no related model when every candidate value is NULL', async () => {
     const db = openSQLite()
     const users = defineTable('users', { id: column.id(), name: column.string() })

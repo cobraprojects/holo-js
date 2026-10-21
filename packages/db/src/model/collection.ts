@@ -1,5 +1,6 @@
 import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
+import { singleStatementRelationKeys } from './relationRetrieval'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
@@ -113,7 +114,7 @@ export function createModelCollection<
       }
 
       const repo = getRepository(first)
-      return repo.query().where(repo.definition.primaryKey as never, 'in', this.modelKeys()) as ModelQueryBuilder<TTable, TRelations>
+      return repo.query().where(repo.definition.primaryKey as never, 'in', singleStatementRelationKeys(this.modelKeys())) as ModelQueryBuilder<TTable, TRelations>
     },
     toJSON(): Array<CollectionSerializedItem<TItem, TTable>> {
       return collection.map(item => item.toJSON() as CollectionSerializedItem<TItem, TTable>)
