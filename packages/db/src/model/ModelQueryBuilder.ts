@@ -55,8 +55,7 @@ import type {
   ModelSelectableColumn,
   RelatedColumnNameForRelationPath,
   RelationConstraintFor,
-  RelationConstraintMap,
-  RelationConstraintMapArgument,
+  RelationConstraintMapGuarded,
   RelationConstraintRecord,
   RelationDefinition,
   RelationMap,
@@ -717,7 +716,7 @@ export class ModelQueryBuilder<
 
   with<TPaths extends readonly ModelRelationPath<TRelations>[]>(...relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
   with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraintFor<TRelations, TPath>): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
-  with<TConstraints extends RelationConstraintMap<TRelations>>(relations: RelationConstraintMapArgument<TRelations, TConstraints>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  with<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   with<TPaths extends readonly ModelRelationPath<TRelations>[]>(relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
   with(
     first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations> | readonly ModelRelationPath<TRelations>[],
@@ -876,7 +875,7 @@ export class ModelQueryBuilder<
   }
 
   withCount(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withCount<TConstraints extends RelationConstraintMap<TRelations>>(relations: RelationConstraintMapArgument<TRelations, TConstraints>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withCount<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   withCount(
     first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
     ...rest: readonly ModelRelationPath<TRelations>[]
@@ -885,7 +884,7 @@ export class ModelQueryBuilder<
   }
 
   withExists(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withExists<TConstraints extends RelationConstraintMap<TRelations>>(relations: RelationConstraintMapArgument<TRelations, TConstraints>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withExists<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   withExists(
     first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
     ...rest: readonly ModelRelationPath<TRelations>[]

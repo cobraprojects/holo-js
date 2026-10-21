@@ -423,10 +423,10 @@ export type RelationConstraintMap<TRelations extends RelationMap> = {
   readonly [TPath in ModelRelationPath<TRelations>]?: RelationConstraintFor<TRelations, TPath>
 }
 
-export type RelationConstraintMapArgument<
+export type RelationConstraintMapGuarded<
   TRelations extends RelationMap,
-  TConstraints extends RelationConstraintMap<TRelations>,
-> = TConstraints & Record<Exclude<keyof TConstraints, ModelRelationPath<TRelations>>, never>
+  TConstraints,
+> = RelationConstraintMap<TRelations> & (keyof TConstraints extends ModelRelationPath<TRelations> ? RelationConstraintMap<TRelations> : never)
 
 /**
  * Extracts the RelationMap from a related model definition referenced by a

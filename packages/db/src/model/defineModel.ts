@@ -48,7 +48,6 @@ import type {
   RelatedColumnNameForRelationPath,
   RelationConstraintFor,
   RelationConstraintMap,
-  RelationConstraintMapArgument,
   RelationConstraintRecord,
   UniqueIdRuntimeConfig,
 } from './types'
@@ -638,7 +637,7 @@ function createStaticModelApi<
         return this.query().with(first as readonly ModelRelationPath<TRelations>[])
       }
       if (typeof first === 'object') {
-        return this.query().with(first as RelationConstraintMapArgument<TRelations, RelationConstraintMap<TRelations>>)
+        return this.query().with(first as RelationConstraintMap<TRelations>)
       }
       if (typeof second === 'function') {
         return this.query().with(first, second)
@@ -648,12 +647,12 @@ function createStaticModelApi<
     withCount(first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return typeof first === 'string'
         ? this.query().withCount(first, ...rest)
-        : this.query().withCount(first as RelationConstraintMapArgument<TRelations, RelationConstraintMap<TRelations>>)
+        : this.query().withCount(first)
     },
     withExists(first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return typeof first === 'string'
         ? this.query().withExists(first, ...rest)
-        : this.query().withExists(first as RelationConstraintMapArgument<TRelations, RelationConstraintMap<TRelations>>)
+        : this.query().withExists(first)
     },
     withSum<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]) {
       return this.query().withSum(first, column, ...rest)

@@ -1,5 +1,15 @@
 import { expectTypeOf, it } from 'vitest'
-import { belongsTo, column, defineGeneratedTable, defineModel, hasMany, type ModelQueryBuilder } from '../src'
+import {
+  belongsTo,
+  column,
+  defineGeneratedTable,
+  defineModel,
+  hasMany,
+  type ModelQueryBuilder,
+  type ModelRelationPath,
+  type RelationMap,
+  type TableDefinition,
+} from '../src'
 
 const users = defineGeneratedTable('relation_callback_users', { id: column.id(), name: column.string() })
 const posts = defineGeneratedTable('relation_callback_posts', { id: column.id(), user_id: column.integer(), title: column.string() })
@@ -148,5 +158,19 @@ it('keeps relation callbacks on related models typed through belongsTo and wider
     })
     const userQuery: UserQuery = User.query()
     void userQuery
+  }
+})
+
+it('accepts generic relation maps forwarded into eager-load and count callbacks', () => {
+  if (false) {
+    function forwardLoads<TRelations extends RelationMap>(
+      query: ModelQueryBuilder<TableDefinition, TRelations>,
+      loads: Readonly<Partial<Record<ModelRelationPath<TRelations>, () => void>>>,
+    ) {
+      query.with(loads)
+      query.withCount(loads)
+      query.withExists(loads)
+    }
+    void forwardLoads
   }
 })
