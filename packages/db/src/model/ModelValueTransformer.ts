@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { normalizeDialectReadValue, normalizeDialectWriteValue } from '../schema/normalization'
+import { normalizeDialectReadValue, normalizeDialectWriteValue, parseCalendarDay } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -221,6 +221,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'json':
           return typeof value === 'string' ? JSON.parse(value) : value
         case 'date':
+          return value == null || value instanceof Date ? value : parseCalendarDay(this.getSchemaDialectName(), value)
         case 'datetime':
         case 'timestamp':
           return value == null || value instanceof Date ? value : new Date(String(value))

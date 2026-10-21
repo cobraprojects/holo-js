@@ -312,6 +312,20 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
           { id: 12, day: '2011-12-30' },
           { id: 13, day: '2011-12-31' },
         ])
+
+        const Casted = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'day'], casts: { day: 'date' } })
+        for (const id of [1, 2, 3]) {
+          const loaded = await Casted.find(id)
+          await Casted.create({ id: id + 20, day: loaded!.day } as never)
+        }
+
+        expect((await adapter.query<{ id: number, day: string }>(
+          `SELECT id, DATE_FORMAT(day, '%Y-%m-%d') AS day FROM ${table} WHERE id > 20 ORDER BY id`,
+        )).rows).toEqual([
+          { id: 21, day: '2011-12-29' },
+          { id: 22, day: '2011-12-30' },
+          { id: 23, day: '2011-12-31' },
+        ])
       } finally {
         resetDB()
         await adapter.execute(`DROP TABLE IF EXISTS ${table}`)

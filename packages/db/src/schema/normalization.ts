@@ -72,7 +72,7 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
-function parseCalendarDay(dialect: SchemaDialectName, value: unknown): unknown {
+export function parseCalendarDay(dialect: SchemaDialectName, value: unknown): unknown {
   if (value == null || value instanceof Date || dialect === 'sqlite') {
     return parseDateLike(value)
   }
