@@ -90,8 +90,22 @@ export function canonicalStoredKey(value: unknown): unknown {
       return `bigint:${value}`
     case 'boolean':
       return `boolean:${value}`
+    case 'object':
+      return canonicalObjectKey(value)
     default:
       return value
+  }
+}
+
+function canonicalObjectKey(value: object | null): unknown {
+  if (value === null) {
+    return value
+  }
+
+  try {
+    return `json:${JSON.stringify(value)}`
+  } catch {
+    return value
   }
 }
 

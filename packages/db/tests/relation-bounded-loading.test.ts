@@ -317,6 +317,27 @@ describe('bounded relation loading', () => {
     expect(canonicalStoredKey(Buffer.from('ab'))).not.toBe(canonicalStoredKey(Buffer.from('ac')))
     expect(canonicalStoredKey(1)).not.toBe(canonicalStoredKey('1'))
     expect(canonicalStoredKey('binary:6162')).not.toBe(canonicalStoredKey(Buffer.from('ab')))
+    expect(canonicalStoredKey({ a: [1, 2] })).toBe(canonicalStoredKey({ a: [1, 2] }))
+    expect(canonicalStoredKey({ a: [1, 2] })).not.toBe(canonicalStoredKey({ a: [2, 1] }))
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    expect(canonicalStoredKey(circular)).toBe(circular)
+  })
+
+  it('returns one row per stored JSON primary key on SQLite when equal object keys fall into different findMany chunks', async () => {
+    const db = openSQLite()
+    const docs = defineTable('docs', { key: column.json<number[]>().primaryKey(), label: column.string() })
+    await createTestTable(db, docs)
+    await db.table(docs).insert([
+      { key: [1, 2], label: 'stored' },
+      ...Array.from({ length: 255 }, (_, index) => ({ key: [1000 + index], label: `row ${index}` })),
+    ])
+
+    const Doc = defineModelFromTable(docs)
+    const keys: number[][] = [[1, 2], ...Array.from({ length: 255 }, (_, index) => [1000 + index]), [1, 2]]
+    const found = await Doc.findMany(keys)
+
+    expect(found).toHaveLength(256)
   })
 
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {

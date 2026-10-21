@@ -220,3 +220,29 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('findMany string key
   })
 })
 
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('findMany JSON keys on postgres', () => {
+  it('returns one row per stored JSON key when equal object keys fall into different findMany chunks', async () => {
+    const { db, schema } = await openDatabase('postgres')
+    const name = `holo_find_many_docs_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.json('key').primaryKey()
+      table.string('label')
+    })
+
+    try {
+      const docs = defineTable(name, { key: column.json<Record<string, number>>().primaryKey(), label: column.string() })
+      await db.table(docs).insert([
+        { key: { a: 1 }, label: 'stored' },
+        ...Array.from({ length: 255 }, (_, index) => ({ key: { b: index }, label: `row ${index}` })),
+      ])
+
+      const Doc = defineModelFromTable(docs)
+      const keys = [{ a: 1 }, ...Array.from({ length: 255 }, (_, index) => ({ b: index })), { a: 1 }]
+
+      expect(await Doc.findMany(keys as never)).toHaveLength(256)
+    } finally {
+      await schema.dropTable(name)
+    }
+  })
+})
+
