@@ -229,6 +229,10 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   }
 }
 
+// H98-DEBUG-START (temporary instrumentation; removed before the fix lands)
+const H98_TIMING = process.env.H98_TIMING === '1'
+function h98(line: string): void { if (H98_TIMING) process.stderr.write(`H98 ${line}\n`) }
+// H98-DEBUG-END
 const RECORD_LOCK_TOMBSTONE_SUFFIX = '.released'
 const TOMBSTONE_RETRY_FIRST_MS = 50
 const TOMBSTONE_RETRY_MAX_MS = 1_000
@@ -261,7 +265,9 @@ async function removeTombstone(tombstonePath: string): Promise<void> {
 async function drainTombstoneRemovals(): Promise<void> {
   let tombstonePath = pendingTombstoneRemovals.shift()
   while (tombstonePath !== undefined) {
+    const t0 = performance.now()
     await removeTombstone(tombstonePath).catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
+    h98(`drain-unlink ms=${(performance.now() - t0).toFixed(1)} queueLeft=${pendingTombstoneRemovals.length}`)
     tombstonePath = pendingTombstoneRemovals.shift()
   }
   tombstoneDrain = undefined
@@ -283,15 +289,21 @@ async function removeLeftoverTombstone(tombstonePath: string): Promise<void> {
 
 async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Promise<'retired' | 'absent' | 'busy'> {
   const tombstonePath = recordLockTombstonePath(lockPath, owner)
+  const t0 = performance.now()
   try {
     await rename(join(lockPath, recordLockOwnerFileName(owner)), tombstonePath)
   } catch (error) {
+    h98(`rename-failed ms=${(performance.now() - t0).toFixed(1)} code=${errorCode(error)}`)
     if (isMissingFileError(error)) return 'absent'
     if (isBusyFileError(error)) return 'busy'
     throw error
   }
+  const t1 = performance.now()
   scheduleTombstoneRemoval(tombstonePath)
-  await removeRecordLock(lockPath)
+  const t2 = performance.now()
+  const removed = await removeRecordLock(lockPath)
+  const t3 = performance.now()
+  h98(`retire rename=${(t1 - t0).toFixed(1)} schedule=${(t2 - t1).toFixed(2)} rmdir=${(t3 - t2).toFixed(1)} rmdirOk=${removed} queue=${pendingTombstoneRemovals.length}`)
   return 'retired'
 }
 
