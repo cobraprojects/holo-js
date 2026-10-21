@@ -84,10 +84,11 @@ describe('runtime database budgets', () => {
       await release
     })
     await started
-    const held = await observer.query<{ pid: number }>('SELECT pid FROM pg_stat_activity WHERE application_name = $1', [applicationName])
-    const heldPid = held.rows[0]?.pid
-    expect(held.rows).toHaveLength(1)
+    let heldPid: number | undefined
     try {
+      const held = await observer.query<{ pid: number }>('SELECT pid FROM pg_stat_activity WHERE application_name = $1', [applicationName])
+      heldPid = held.rows[0]?.pid
+      expect(held.rows).toHaveLength(1)
       await expect(session()).rejects.toThrow('timeout')
     } finally {
       releaseTransaction()
