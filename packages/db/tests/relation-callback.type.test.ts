@@ -166,11 +166,33 @@ it('accepts generic relation maps forwarded into eager-load and count callbacks'
     function forwardLoads<TRelations extends RelationMap>(
       query: ModelQueryBuilder<TableDefinition, TRelations>,
       loads: Readonly<Partial<Record<ModelRelationPath<TRelations>, () => void>>>,
+      counts: Readonly<Partial<Record<Extract<keyof TRelations, string>, () => void>>>,
     ) {
       query.with(loads)
+      query.withCount(counts)
+      query.withExists(counts)
+      // @ts-expect-error aggregate relations must be top-level names
       query.withCount(loads)
-      query.withExists(loads)
     }
     void forwardLoads
+  }
+})
+
+it('restricts aggregate helpers to top-level relation names', () => {
+  if (false) {
+    // @ts-expect-error aggregate relations must be top-level names
+    User.withSum('posts.comments', 'body')
+    // @ts-expect-error aggregate relations must be top-level names
+    User.withCount('posts.comments')
+    // @ts-expect-error aggregate relations must be top-level names
+    User.query().withExists({ 'posts.comments': () => {} })
+    User.withSum('posts', 'title')
+    User.query().withAvg('posts', 'title')
+    User.withCount('posts')
+    User.query().withExists({
+      posts: (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    })
   }
 })

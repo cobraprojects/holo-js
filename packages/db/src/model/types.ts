@@ -423,6 +423,19 @@ export type RelationConstraintMap<TRelations extends RelationMap> = {
   readonly [TPath in ModelRelationPath<TRelations>]?: RelationConstraintFor<TRelations, TPath>
 }
 
+export type RelationNameConstraintMap<TRelations extends RelationMap> = {
+  readonly [TName in ModelRelationName<TRelations>]?: RelationConstraintFor<TRelations, TName>
+}
+
+export type RelationNameConstraintRecord<TRelations extends RelationMap> = Readonly<
+  Partial<Record<ModelRelationName<TRelations>, RelationConstraintDefinition>>
+>
+
+export type RelationNameConstraintMapGuarded<
+  TRelations extends RelationMap,
+  TConstraints,
+> = RelationNameConstraintMap<TRelations> & (keyof TConstraints extends ModelRelationName<TRelations> ? RelationNameConstraintMap<TRelations> : never)
+
 export type RelationConstraintMapGuarded<
   TRelations extends RelationMap,
   TConstraints,

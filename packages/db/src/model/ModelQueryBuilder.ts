@@ -51,12 +51,16 @@ import type {
   ModelJsonColumnPath,
   ModelDefinitionLike,
   ModelRecord,
+  ModelRelationName,
   ModelRelationPath,
   ModelSelectableColumn,
   RelatedColumnNameForRelationPath,
+  RelatedColumnNameOfRelation,
   RelationConstraintFor,
   RelationConstraintMapGuarded,
   RelationConstraintRecord,
+  RelationNameConstraintRecord,
+  RelationNameConstraintMapGuarded,
   RelationDefinition,
   RelationMap,
   ResolveEagerLoads,
@@ -874,37 +878,37 @@ export class ModelQueryBuilder<
       : this.whereHas(relation).with(relation)) as ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
   }
 
-  withCount(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withCount<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withCount(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withCount<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   withCount(
-    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
-    ...rest: readonly ModelRelationPath<TRelations>[]
+    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
+    ...rest: readonly ModelRelationName<TRelations>[]
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('count', first, rest))
   }
 
-  withExists(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withExists<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withExists(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withExists<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
   withExists(
-    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
-    ...rest: readonly ModelRelationPath<TRelations>[]
+    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
+    ...rest: readonly ModelRelationName<TRelations>[]
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('exists', first, rest))
   }
 
-  withSum<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withSum<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('sum', first, column, rest))
   }
 
-  withAvg<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withAvg<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('avg', first, column, rest))
   }
 
-  withMin<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withMin<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('min', first, column, rest))
   }
 
-  withMax<TRelationPath extends ModelRelationPath<TRelations>>(first: TRelationPath | RelationConstraintRecord<TRelations>, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, ...rest: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withMax<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('max', first, column, rest))
   }
 
@@ -1562,8 +1566,8 @@ export class ModelQueryBuilder<
 
   private normalizeAggregateLoads(
     kind: AggregateLoad['kind'],
-    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
-    rest: readonly ModelRelationPath<TRelations>[] = [],
+    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
+    rest: readonly ModelRelationName<TRelations>[] = [],
   ): readonly AggregateLoad[] {
     if (typeof first === 'string') {
       return [first, ...rest].map((relation) => {
@@ -1735,9 +1739,9 @@ export class ModelQueryBuilder<
 
   private normalizeColumnAggregateLoads(
     kind: Extract<AggregateLoad['kind'], 'sum' | 'avg' | 'min' | 'max'>,
-    first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations>,
+    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
     column: string,
-    rest: readonly ModelRelationPath<TRelations>[] = [],
+    rest: readonly ModelRelationName<TRelations>[] = [],
   ): readonly AggregateLoad[] {
     return this.normalizeAggregateLoads(kind, first, rest).map(load => ({
       ...load,
