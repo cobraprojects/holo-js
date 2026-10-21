@@ -173,6 +173,7 @@
 ### Fixed
 
 - PostgreSQL model and query-builder writes of `Date` values, Holo's auth and notification timestamps, and `Date` defaults on PostgreSQL columns use `app.timezone`, as MySQL does. Before, a `timestamp` column stored them as UTC wall-clock time, so in an app whose `app.timezone` is not UTC, password-reset, email-verification, access-token, and database-session expiries were off by the zone offset. ISO text with a `Z` or an offset is written as its instant in `app.timezone`, and text without a zone is written unchanged. `timestamptz` columns still store the exact instant. The PostgreSQL expiry check for password-reset and email-verification tokens compares against the current time in `app.timezone`, not UTC.
+- PostgreSQL and MySQL `date` values on a day that `app.timezone` skipped entirely, such as 2011-12-30 in `Pacific/Apia`, round-trip by calendar day. Before, the day has no midnight, so a loaded `Date` formatted as the following day and a save stored that day. Such a value now reads back as its `YYYY-MM-DD` text, and so do zero dates and impossible dates such as `2024-02-30` on the model. See [PostgreSQL dates and time zones](apps/docs/docs/database/index.md#postgresql-dates-and-time-zones).
 - `@holo-js/kernel` declares `file-type` as a regular dependency. Before, it was an optional peer, but file-content checks import it unconditionally, so installs that couldn't resolve it from kernel's location failed every S3 write and every file-content check, such as `stat()` and file validation.
 
 ### Compatibility and upgrade requirements

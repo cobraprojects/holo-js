@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { formatWithOffset } from '../applicationTime'
+import { formatWithOffset, parseCalendarDate } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { AnyColumnDefinition } from './types'
 import type { SchemaDialectName } from './typeMapping'
@@ -70,6 +70,14 @@ function parseDateLike(value: unknown): unknown {
   }
 
   return new Date(String(value))
+}
+
+function parseCalendarDay(value: unknown): unknown {
+  if (value == null || value instanceof Date) {
+    return value
+  }
+
+  return parseCalendarDate(String(value), getApplicationTimezone()) ?? parseDateLike(value)
 }
 
 const ISO_INSTANT_TEXT = /^((\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)(Z|[+-](\d{2}):?(\d{2}))$/i
@@ -218,6 +226,7 @@ export function normalizeDialectReadValue(
     case 'json':
       return parseJson(value)
     case 'date':
+      return parseCalendarDay(value)
     case 'datetime':
     case 'timestamp':
       return parseDateLike(value)

@@ -157,4 +157,35 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
       }
     })
   })
+
+  it('round-trips a DATE on a day the app timezone skipped entirely, by calendar day', async () => {
+    await withAppTimezone('Pacific/Apia', async () => {
+      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const table = `holo_pg_gap_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, day DATE NOT NULL)`)
+        await adapter.execute(`INSERT INTO ${table} (id, day) VALUES (1, '2011-12-29'), (2, '2011-12-30'), (3, '2011-12-31')`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('postgres') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), day: column.date() })
+        const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'day'] })
+
+        for (const id of [1, 2, 3]) {
+          const loaded = await Model.find(id)
+          await Model.create({ id: id + 10, day: loaded!.day } as never)
+        }
+
+        expect((await adapter.query<{ id: number, day: string }>(
+          `SELECT id, to_char(day, 'YYYY-MM-DD') AS day FROM ${table} WHERE id > 10 ORDER BY id`,
+        )).rows).toEqual([
+          { id: 11, day: '2011-12-29' },
+          { id: 12, day: '2011-12-30' },
+          { id: 13, day: '2011-12-31' },
+        ])
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
 })

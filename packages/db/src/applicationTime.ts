@@ -86,11 +86,11 @@ function astronomicalYear(year: number, era: string | undefined): number {
   return era === 'BC' ? 1 - year : year
 }
 
-export function parseCalendarDate(value: string, timeZone: string): Date | undefined {
+export function parseCalendarDate(value: string, timeZone: string): Date | string | undefined {
   const match = CALENDAR_DATE.exec(value)
   if (!match) return undefined
 
-  return instantOfWallClock({
+  const wall: WallClock = {
     year: astronomicalYear(Number(match[1]), match[4] ? 'BC' : undefined),
     month: Number(match[2]),
     day: Number(match[3]),
@@ -98,7 +98,12 @@ export function parseCalendarDate(value: string, timeZone: string): Date | undef
     minute: 0,
     second: 0,
     millisecond: 0,
-  }, timeZone, 'later')
+  }
+  const instant = instantOfWallClock(wall, timeZone, 'later')
+  const landed = wallClockAt(instant, timeZone)
+  if (landed.year !== wall.year || landed.month !== wall.month || landed.day !== wall.day) return value
+
+  return instant
 }
 
 export function parseWallClockTimestamp(value: string, timeZone: string, ambiguity: WallClockAmbiguity): Date | undefined {
