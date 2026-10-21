@@ -7,16 +7,24 @@ export type PinnedConnection = {
   tail: Promise<void>
 }
 
+type PinnedConnectionSlot = {
+  readonly pinned: PinnedConnection
+  open: boolean
+}
+
 const pinnedConnections = new AsyncLocalStorage<ReadonlyMap<DriverAdapter, PinnedConnection>>()
-const heldPinnedConnections = new AsyncLocalStorage<ReadonlySet<PinnedConnection>>()
+const pinnedConnectionSlots = new AsyncLocalStorage<ReadonlySet<PinnedConnectionSlot>>()
 
 export function currentPinnedConnection(adapter: DriverAdapter): PinnedConnection | undefined {
   const pinned = pinnedConnections.getStore()?.get(adapter)
   return pinned?.active ? pinned : undefined
 }
 
-export function isPinnedConnectionHeld(pinned: PinnedConnection): boolean {
-  return heldPinnedConnections.getStore()?.has(pinned) === true
+export function isInPinnedConnectionSlot(pinned: PinnedConnection): boolean {
+  for (const slot of pinnedConnectionSlots.getStore() ?? []) {
+    if (slot.open && slot.pinned === pinned) return true
+  }
+  return false
 }
 
 export function runPinnedConnection<T>(adapter: DriverAdapter, callback: () => Promise<T>): Promise<T> {
@@ -40,9 +48,14 @@ export async function serializeOnPinnedConnection<T>(
     if (!pinned.active) {
       throw new TransactionError('A transaction started inside withoutForeignKeyConstraints() must finish before the callback returns.')
     }
-    const held = new Set<PinnedConnection>(heldPinnedConnections.getStore())
-    held.add(pinned)
-    return await heldPinnedConnections.run(held, callback)
+    const slot: PinnedConnectionSlot = { pinned, open: true }
+    const slots = new Set<PinnedConnectionSlot>(pinnedConnectionSlots.getStore())
+    slots.add(slot)
+    try {
+      return await pinnedConnectionSlots.run(slots, callback)
+    } finally {
+      slot.open = false
+    }
   } finally {
     release()
   }

@@ -7,7 +7,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
-import { currentPinnedConnection, isPinnedConnectionHeld, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { currentPinnedConnection, isInPinnedConnectionSlot, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
@@ -777,7 +777,7 @@ export class DatabaseContext {
     options?: DatabaseOperationOptions,
   ): Promise<TResult> {
     const pinned = currentPinnedConnection(this._adapter)
-    if (pinned && !isPinnedConnectionHeld(pinned)) {
+    if (pinned && !isInPinnedConnectionSlot(pinned)) {
       return serializeOnPinnedConnection(pinned, () => this._runLogged(kind, statement, runner, options))
     }
 

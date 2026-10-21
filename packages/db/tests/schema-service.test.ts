@@ -221,6 +221,29 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 2 }])
     })
 
+    it('keeps a write scheduled from a finished transaction out of a later transaction on the pinned connection', async () => {
+      const { db, schema, table } = await openDatabase(driver)
+      let releaseStray!: () => void
+      const strayReleased = new Promise<void>(resolve => { releaseStray = resolve })
+      let stray!: Promise<unknown>
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        await db.transaction(async tx => {
+          await tx.table(table).insert({ id: 1, name: 'first' })
+          stray = strayReleased.then(() => db.table(table).insert({ id: 2, name: 'stray' }))
+        })
+        await expect(db.transaction(async tx => {
+          await tx.table(table).insert({ id: 3, name: 'second' })
+          releaseStray()
+          await new Promise(resolve => { setTimeout(resolve, 20) })
+          throw new Error('second failed')
+        })).rejects.toThrow('second failed')
+        await stray
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }, { id: 2 }])
+    })
+
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
         const { db, schema } = await openDatabase(driver)
