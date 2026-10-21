@@ -14,8 +14,9 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
     return `LATERAL ${subquery} AS ${this.quoteIdentifier(alias)}`
   }
 
-  protected override compileLockClause(lockMode: QueryLockMode): string {
-    return lockMode === 'update' ? 'FOR UPDATE' : 'FOR SHARE'
+  protected override compileLockClause(lockMode: QueryLockMode, lockOf?: string): string {
+    const clause = lockMode === 'update' ? 'FOR UPDATE' : 'FOR SHARE'
+    return lockOf === undefined ? clause : `${clause} OF ${lockOf}`
   }
 
   protected override compileInsertSuffix(plan: InsertQueryPlan): string {

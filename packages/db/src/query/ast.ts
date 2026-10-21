@@ -501,6 +501,19 @@ export function withGroupBy(
   })
 }
 
+const oneOfManyAggregateMarker = Symbol('holo.oneOfManyAggregate')
+
+export function withOneOfManyAggregateMarker(plan: SelectQueryPlan): SelectQueryPlan {
+  return Object.freeze({
+    ...plan,
+    [oneOfManyAggregateMarker]: true,
+  })
+}
+
+export function isOneOfManyAggregatePlan(plan: SelectQueryPlan): boolean {
+  return (plan as SelectQueryPlan & Record<typeof oneOfManyAggregateMarker, unknown>)[oneOfManyAggregateMarker] === true
+}
+
 export function withLockMode(
   plan: SelectQueryPlan,
   lockMode?: QueryLockMode,

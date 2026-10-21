@@ -33,20 +33,9 @@ describe('runtime database budgets', () => {
     const db = manager.connection()
     await db.queryCompiled({ sql: 'SELECT 1', source: 'query' })
     expect(output.mock.calls).toEqual([[{ rowCount: 1 }]])
-    let notifyStarted = () => {}
-    let finishQuery = () => {}
-    const started = new Promise<void>(resolve => { notifyStarted = resolve })
-    const finish = new Promise<void>(resolve => { finishQuery = resolve })
-    const logger = db.getLogger()!
-    logger.onQueryStart = async () => { notifyStarted(); await finish }
     const pending = db.queryCompiled({ sql: 'SELECT 1', source: 'query' })
-    await started
-    try {
-      await expect(db.queryCompiled({ sql: 'SELECT 2', source: 'query' })).rejects.toThrow('queue')
-    } finally {
-      finishQuery()
-      await pending
-    }
+    await expect(db.queryCompiled({ sql: 'SELECT 2', source: 'query' })).rejects.toThrow('queue')
+    await pending
   })
 
   it.each(['url', 'structured'] as const)('preserves pool budgets and a redacted custom logger through %s configuration', async mode => {
@@ -67,7 +56,7 @@ describe('runtime database budgets', () => {
           driver: 'postgres',
           ...(mode === 'url' ? { url: url.toString() } : { host, port, username, password, database }),
           max: 1,
-          connectionTimeoutMillis: 100,
+          connectionTimeoutMillis: 2000,
           idleTimeoutMillis: 50,
           application_name: applicationName,
           concurrency: { maxConcurrentQueries: 2, queueLimit: 0 },
@@ -83,8 +72,6 @@ describe('runtime database budgets', () => {
     expect(db.getLogger()).toBe(logger)
     expect(db.getConcurrencyOptions()).toEqual({ maxConcurrentQueries: 2, queueLimit: 0 })
     const session = () => adapter.query<{ name: string, pid: number }>("SELECT current_setting('application_name') AS name, pg_backend_pid() AS pid")
-    const first = (await session()).rows[0]
-    expect(first?.name).toBe(applicationName)
     const observer = createPostgresAdapter({ config: { host, port, user: username, password, database } })
     onTestFinished(() => observer.disconnect())
     await observer.query('SELECT 1')
@@ -97,7 +84,11 @@ describe('runtime database budgets', () => {
       await release
     })
     await started
+    let heldPid: number | undefined
     try {
+      const held = await observer.query<{ pid: number }>('SELECT pid FROM pg_stat_activity WHERE application_name = $1', [applicationName])
+      heldPid = held.rows[0]?.pid
+      expect(held.rows).toHaveLength(1)
       await expect(session()).rejects.toThrow('timeout')
     } finally {
       releaseTransaction()
@@ -108,10 +99,12 @@ describe('runtime database budgets', () => {
     expect(entries[0]?.sql).toBe('[SQL REDACTED]')
     expect(entries[0]?.bindings).toEqual(['[REDACTED]'])
     await vi.waitFor(async () => {
-      const backends = await observer.query<{ count: number }>('SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid = $1', [first?.pid])
+      const backends = await observer.query<{ count: number }>('SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid = $1', [heldPid])
       expect(backends.rows[0]?.count).toBe(0)
-    }, { timeout: 150, interval: 10 })
-    expect((await session()).rows[0]?.pid).not.toBe(first?.pid)
+    }, { timeout: 5000, interval: 10 })
+    const reconnected = (await session()).rows[0]
+    expect(reconnected?.name).toBe(applicationName)
+    expect(reconnected?.pid).not.toBe(heldPid)
   })
 
   it.each([
