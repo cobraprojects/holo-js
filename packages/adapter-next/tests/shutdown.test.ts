@@ -1,12 +1,132 @@
 import { spawn } from 'node:child_process'
-import { resolve } from 'node:path'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { resolveGeneratedProjectRegistryPath } from '@holo-js/core'
 import { installNextShutdown } from '../src/shutdown'
 
 const shutdownSource = pathToFileURL(resolve(import.meta.dirname, '../src/shutdown.ts')).href
 const runtimeSource = pathToFileURL(resolve(import.meta.dirname, '../src/runtime.ts')).href
 const blogNextRoot = resolve(import.meta.dirname, '../../../apps/blog-next')
+const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const databaseConfigEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/databaseConfig.ts'))
+const tempRoots: string[] = []
+
+afterEach(async () => {
+  for (const root of tempRoots.splice(0)) await rm(root, { recursive: true, force: true })
+})
+
+// A project whose plugin boot waits on a gate the child process controls, so initialization can be held open.
+async function createHeldBootProject(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'holo-next-held-boot-'))
+  tempRoots.push(root)
+  await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../../config'), join(root, 'node_modules/@holo-js/config'))
+  await mkdir(join(root, 'config'), { recursive: true })
+  await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${configEntry}
+
+export default defineAppConfig({
+  name: 'Next App',
+  key: 'base64:key',
+  url: 'https://next.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-held-boot'],
+})
+`, 'utf8')
+  await writeFile(join(root, 'config/database.ts'), `
+import { defineDatabaseConfig } from ${databaseConfigEntry}
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: {
+      driver: 'sqlite',
+      url: ':memory:',
+      logging: false,
+    },
+  },
+})
+`, 'utf8')
+  const registryPath = resolveGeneratedProjectRegistryPath(root)
+  await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+  await writeFile(registryPath, `${JSON.stringify({
+    version: 1,
+    generatedAt: '2026-03-31T00:00:00.000Z',
+    paths: {
+      models: 'server/models',
+      migrations: 'server/db/migrations',
+      seeders: 'server/db/seeders',
+      commands: 'server/commands',
+      jobs: 'server/jobs',
+      events: 'server/events',
+      listeners: 'server/listeners',
+      generatedSchema: 'server/db/schema.ts',
+    },
+    models: [],
+    migrations: [],
+    seeders: [],
+    commands: [],
+    jobs: [],
+    events: [],
+    listeners: [],
+  }, null, 2)}\n`, 'utf8')
+  const packageRoot = join(root, 'node_modules/holo-plugin-held-boot')
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+    name: 'holo-plugin-held-boot',
+    type: 'module',
+    holo: { plugin: './plugin.mjs' },
+  }, null, 2), 'utf8')
+  await writeFile(join(packageRoot, 'plugin.mjs'), `
+export default {
+  id: 'held-boot',
+  name: 'Held Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, 'utf8')
+  await writeFile(join(packageRoot, 'boot.mjs'), `
+export default async function boot() {
+  const outcome = await globalThis.__holoBootGate__
+  if (outcome === 'fail') throw new Error('held boot failed')
+  globalThis.__holoBooted__ = true
+}
+`, 'utf8')
+  return root
+}
+
+// Starts Next-style initialization through the public helpers, holds it open, then delivers SIGTERM
+// and exits the way Next does: the process exit happens before the held initialization is released.
+function heldInitScript(projectRoot: string, outcome: 'ok' | 'fail'): string {
+  return `
+    const { createNextHoloHelpers } = await import(${JSON.stringify(runtimeSource)})
+    const { peekHolo } = await import('@holo-js/core/runtime')
+    globalThis.__holoBootGate__ = new Promise(resolve => { globalThis.__holoRelease__ = resolve })
+    const listenersBefore = process.listenerCount('SIGTERM')
+    const holo = createNextHoloHelpers({ projectRoot: ${JSON.stringify(projectRoot)} })
+    holo.getApp().then(() => console.log('init:resolved'), error => console.log('init:rejected', error.message))
+    void holo.getApp().catch(() => {})
+    console.log('listeners:' + (process.listenerCount('SIGTERM') - listenersBefore))
+    console.log('ready')
+    process.on('SIGTERM', () => {
+      console.log('signal')
+      setTimeout(() => {
+        console.log('released')
+        globalThis.__holoRelease__(${JSON.stringify(outcome)})
+      }, 50)
+      setTimeout(() => process.exit(143), 20)
+    })
+    process.on('exit', () => console.log('exit booted:' + Boolean(globalThis.__holoBooted__) + ' open:' + Boolean(peekHolo())))
+    setInterval(() => {}, 1000)
+  `
+}
 
 type ChildResult = {
   readonly code: number | null
@@ -235,4 +355,34 @@ describe('Next termination shutdown', () => {
     expect(result.stdout).toContain('runtime:closed-at-exit')
     expect(result.code).toBe(143)
   }, 60_000)
+
+  it('shuts the runtime down when a termination signal arrives while initialization is still held open', async () => {
+    const root = await createHeldBootProject()
+    const result = await runChild(heldInitScript(root, 'ok'), { signalAfterReady: 'SIGTERM' })
+
+    expect(result.stdout.trim().split('\n').filter(line => !line.startsWith('init:'))).toEqual([
+      'listeners:1',
+      'ready',
+      'signal',
+      'released',
+      'exit booted:true open:false',
+    ])
+    expect(result.code).toBe(143)
+  }, 20_000)
+
+  it('exits cleanly when a termination signal arrives while initialization is held open and then rejects', async () => {
+    const root = await createHeldBootProject()
+    const result = await runChild(heldInitScript(root, 'fail'), { signalAfterReady: 'SIGTERM' })
+
+    expect(result.stdout).toContain('init:rejected held boot failed')
+    expect(result.stdout.trim().split('\n').filter(line => !line.startsWith('init:'))).toEqual([
+      'listeners:1',
+      'ready',
+      'signal',
+      'released',
+      'exit booted:false open:false',
+    ])
+    expect(result.stderr).not.toContain('Unhandled')
+    expect(result.code).toBe(143)
+  }, 20_000)
 })

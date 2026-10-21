@@ -271,7 +271,7 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
 ) {
   const authRequest = options.authRequest ?? resolveNextAuthRequestAccessors(options.projectRoot)
   const resolveRuntime = async () => {
-    const runtime = await initializeHolo<TCustom>(options.projectRoot, {
+    const pendingRuntime = initializeHolo<TCustom>(options.projectRoot, {
       ...options,
       authRequest,
       authorizationError: options.authorizationError ?? {
@@ -284,8 +284,20 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
         },
       },
     })
+    // Installed before initialization settles so a termination signal during startup still closes what init opens.
+    // A rejected initialization opened nothing that needs closing.
+    let report: ReturnType<typeof captureErrorReporter> | undefined
+    installNextShutdown({
+      close: async () => {
+        const runtime = await pendingRuntime.catch(() => undefined)
+        if (!runtime) return
+        report = captureErrorReporter()
+        await runtime.shutdown()
+      },
+      report: (error, context) => (report ?? captureErrorReporter())(error, context),
+    })
+    const runtime = await pendingRuntime
     setNextAuthRequestRunner(callback => runtime.runWithAuthRequestAccessors(authRequest, callback))
-    installNextShutdown({ close: () => runtime.shutdown(), report: captureErrorReporter() })
     return runtime
   }
 
