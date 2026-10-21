@@ -3,6 +3,7 @@ import { constants as fsConstants, type Dir } from 'node:fs'
 import { mkdir as defaultMkdir, lstat, open, opendir, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
 
@@ -229,8 +230,74 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   }
 }
 
+const RECORD_LOCK_TOMBSTONE_SUFFIX = '.released'
+const TOMBSTONE_RETRY_FIRST_MS = 50
+const TOMBSTONE_RETRY_MAX_MS = 1_000
+const TOMBSTONE_RETRY_BUDGET_MS = 5_000
+const TOMBSTONE_QUEUE_LIMIT = 256
+const pendingTombstoneRemovals: string[] = []
+let tombstoneDrain: Promise<void> | undefined
+
+function recordLockTombstonePath(lockPath: string, owner: RecordLockOwner): string {
+  return `${lockPath}.${owner.token}${RECORD_LOCK_TOMBSTONE_SUFFIX}`
+}
+
+async function removeTombstone(tombstonePath: string): Promise<void> {
+  const deadline = Date.now() + TOMBSTONE_RETRY_BUDGET_MS
+  let delayMs = TOMBSTONE_RETRY_FIRST_MS
+  for (;;) {
+    try {
+      await unlink(tombstonePath)
+      return
+    } catch (error) {
+      if (isMissingFileError(error)) return
+      if (!isBusyFileError(error)) throw error
+      if (Date.now() + delayMs > deadline) return
+      await delay(delayMs, undefined, { ref: false })
+      delayMs = Math.min(delayMs * 2, TOMBSTONE_RETRY_MAX_MS)
+    }
+  }
+}
+
+async function drainTombstoneRemovals(): Promise<void> {
+  let tombstonePath = pendingTombstoneRemovals.shift()
+  while (tombstonePath !== undefined) {
+    await removeTombstone(tombstonePath).catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
+    tombstonePath = pendingTombstoneRemovals.shift()
+  }
+  tombstoneDrain = undefined
+}
+
+function scheduleTombstoneRemoval(tombstonePath: string): void {
+  if (pendingTombstoneRemovals.length >= TOMBSTONE_QUEUE_LIMIT) return
+  pendingTombstoneRemovals.push(tombstonePath)
+  tombstoneDrain ??= drainTombstoneRemovals()
+}
+
+async function removeLeftoverTombstone(tombstonePath: string): Promise<void> {
+  try {
+    await unlink(tombstonePath)
+  } catch (error) {
+    if (!isMissingFileError(error) && !isBusyFileError(error)) throw error
+  }
+}
+
+async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Promise<'retired' | 'absent' | 'busy'> {
+  const tombstonePath = recordLockTombstonePath(lockPath, owner)
+  try {
+    await rename(join(lockPath, recordLockOwnerFileName(owner)), tombstonePath)
+  } catch (error) {
+    if (isMissingFileError(error)) return 'absent'
+    if (isBusyFileError(error)) return 'busy'
+    throw error
+  }
+  scheduleTombstoneRemoval(tombstonePath)
+  await removeRecordLock(lockPath)
+  return 'retired'
+}
+
 async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+  if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
   if (await markRecordLockReleased(lockPath, owner)) return
   reportError(
     new Error(`[@holo-js/session] Could not release file session lock for "${recordPath}" on the scheduled retry; other processes can reclaim it only after this process reclaims it or exits.`),
@@ -250,15 +317,15 @@ function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, ow
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
   try {
-    let removalFailure: { readonly error: unknown } | undefined
+    let retirementFailure: { readonly error: unknown } | undefined
     try {
-      if (await removeRecordLock(lockPath, recordLockOwnerFileName(owner), BUSY_FILE_RETRY_MS)) return
+      if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
     } catch (error) {
-      removalFailure = { error }
+      retirementFailure = { error }
     }
     const published = await markRecordLockReleased(lockPath, owner)
     if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
-    if (removalFailure) throw removalFailure.error
+    if (retirementFailure) throw retirementFailure.error
     reportError(
       new Error(published
         ? `[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`
@@ -495,7 +562,12 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
           await closeDirectory()
           break
         }
-        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+        if (!entry.isFile()) continue
+        if (entry.name.endsWith(RECORD_LOCK_TOMBSTONE_SUFFIX)) {
+          await removeLeftoverTombstone(join(root, entry.name))
+          continue
+        }
+        if (!entry.name.endsWith('.json')) continue
         const recordPath = join(root, entry.name)
         try {
           if (!(await lstat(recordPath)).isFile()) continue
@@ -674,6 +746,8 @@ export function createFileSessionStore(root: string): SessionStore {
 export const fileSessionDriverInternals = {
   heldRecordLockTokens,
   pendingRecordLockReleaseRetries,
+  pendingTombstoneRemovals,
+  tombstoneQueueLimit: TOMBSTONE_QUEUE_LIMIT,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,
