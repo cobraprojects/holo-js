@@ -199,9 +199,19 @@ export class ModelRepository<
   }
 
   createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem, TScopes> {
+    this.assertOwnedEntities(items)
     return this.definition.collection
       ? this.definition.collection(items) as ModelCollection<TTable, RelationMap, TItem, TScopes>
       : createModelCollection<TTable, RelationMap, TItem, TScopes>(items)
+  }
+
+  private assertOwnedEntities(entities: readonly Entity<TTable>[]): void {
+    for (const entity of entities) {
+      const owner = entity.getRepository().definition
+      if (owner !== this.definition) {
+        throw new HydrationError(`Cannot create a ${this.definition.name} collection from a ${owner.name} entity.`)
+      }
+    }
   }
 
   query(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
@@ -1347,6 +1357,7 @@ export class ModelRepository<
   async saveMany(
     entities: readonly Entity<TTable>[],
   ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
+    this.assertOwnedEntities(entities)
     const saved: Entity<TTable>[] = []
     for (const entity of entities) {
       saved.push(await entity.save())
